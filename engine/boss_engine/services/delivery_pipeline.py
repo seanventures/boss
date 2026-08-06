@@ -44,10 +44,12 @@ def target_for(connection, project_id: str, repo: str, environment: str) -> Opti
     must stay silent: a repo with no target is not a failure, it is a repo nobody asked to
     deploy.
     """
+    # SELECT * rather than a column list. The list version omitted `required_resources` in
+    # execute_deployment and silently stranded the target's declared port; the same list here
+    # would have omitted `auto_deploy` and made this function permanently answer "not
+    # automatic". A projection that must be extended per new consumer will eventually not be.
     row = connection.execute(
-        sql("SELECT id, app_name, environment, repo, target_kind, target_ref, "
-            "       health_checks, rollback_points, status "
-            "FROM deployment_targets "
+        sql("SELECT * FROM deployment_targets "
             "WHERE project_id = :p AND repo = :r AND environment = :e "
             "  AND status = 'active' "
             "ORDER BY created_at DESC LIMIT 1"),
@@ -79,6 +81,23 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                            {"why": "no active staging deployment_target for this repo",
                             "repo": repo})
                 return result
+
+            if not target.get("auto_deploy"):
+                # A target that has not opted in is planned-only, exactly as before. Silent
+                # rather than alarming: most repos never asked to deploy on merge.
+                emit_event(c, project_id, "delivery.not_auto", actor, "code_task_run", run_id,
+                           {"why": "auto_deploy is off for this target",
+                            "target": target["id"]})
+                return {"status": "skipped", "reason": "auto_deploy is off",
+                        "target_id": target["id"]}
+
+            if target.get("paused"):
+                # Paused is louder than not-configured: someone turned this OFF deliberately
+                # and will want to know a merge went by while it was.
+                emit_event(c, project_id, "delivery.paused", actor, "code_task_run", run_id,
+                           {"why": "auto-deploy is paused", "target": target["id"],
+                            "commit_ref": commit_ref})
+                return {"status": "paused", "target_id": target["id"]}
 
             if target["environment"] not in AUTO_DEPLOY_ENVIRONMENTS:
                 emit_event(c, project_id, "delivery.gated", actor, "code_task_run", run_id,
@@ -112,10 +131,13 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                         or planned.get("id"),
                         "environment": target["environment"], "target": target["id"],
                         "commit_ref": commit_ref})
+            deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
+            c.execute(sql("UPDATE deployment_runs SET trigger = 'merge' WHERE id = :i"),
+                      {"i": deployment_run_id})
             result = {"status": "planned", "environment": target["environment"],
                       "target_id": target["id"],
-                      "deployment_run_id": planned.get("deployment_run_id")
-                      or planned.get("id")}
+                      "deployment_run_id": deployment_run_id}
+
     except Exception as exc:  # noqa: BLE001
         # A delivery failure must never un-merge a PR or fail a completed code task.
         try:
@@ -125,6 +147,22 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
         except Exception:  # noqa: BLE001
             pass
         result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:300]}
+
+    # Execute OUTSIDE the transaction above, and outside the merge's own transaction: a deploy
+    # takes minutes, does network I/O, and must not hold a database lock or be rolled back by
+    # something unrelated finishing badly. Until this existed, a merge planned a deployment and
+    # nothing ever ran it — the row simply sat there, which is why every deployment so far was
+    # started by hand. That is the whole of the missing "continuous".
+    if result.get("status") == "planned" and result.get("deployment_run_id"):
+        try:
+            outcome = execute_deployment(engine, settings, result["deployment_run_id"],
+                                         actor=actor)
+            result = {**result, "status": "executed", "deployment": outcome}
+        except Exception as exc:  # noqa: BLE001
+            # Still never raises: the PR has merged, and a delivery failure must not be
+            # reported as a failure of work that already shipped.
+            result = {**result, "status": "execute_failed",
+                      "error": f"{type(exc).__name__}: {exc}"[:300]}
     return result
 
 

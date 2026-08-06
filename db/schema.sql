@@ -2085,6 +2085,17 @@ CREATE INDEX IF NOT EXISTS idx_deployment_runs_project
   ON deployment_runs(project_id, status, created_at DESC);
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS decision_id TEXT REFERENCES decisions(id);
 
+-- Whether a merge to this target's repo deploys by itself, and whether that is currently
+-- paused. Defaults to FALSE so that shipping this feature does not silently turn every
+-- existing target into one that deploys on merge — enabling it stays a deliberate act.
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS auto_deploy BOOLEAN NOT NULL DEFAULT FALSE;
+-- Separate from auto_deploy on purpose: during an incident an operator wants automation to stop
+-- WITHOUT losing the configuration that says this target is normally automatic.
+ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE;
+-- What caused a deployment: merge | manual | promotion | redeploy. "Why is this running in
+-- staging" must be answerable from the row itself.
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
+
 -- Health of what BOSS has DEPLOYED, sampled over time.
 --
 -- deployment_runs records the ACT of deploying; it says nothing about whether the thing is

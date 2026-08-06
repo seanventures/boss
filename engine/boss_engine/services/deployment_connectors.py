@@ -21,6 +21,7 @@ generalisation came before one working case.
 from __future__ import annotations
 
 import os
+import shlex
 import urllib.error
 import urllib.request
 from typing import Any, Optional, Protocol
@@ -39,6 +40,8 @@ class DeploymentConnector(Protocol):
 
     def required_secrets(self) -> list[SecretRequirement]: ...
     def validate(self, target: dict, settings: Settings, connection=None) -> list[str]: ...
+    def bootstrap(self, target: dict, settings: Settings,
+                  connection=None) -> dict[str, Any]: ...
     def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict: ...
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None) -> dict: ...
@@ -256,6 +259,103 @@ class SSHContainerConnector:
         if "DOCKER_OK" not in out:
             problems.append(f"docker is not on PATH for {user}@{host}")
         return problems
+
+    # -- bootstrap --------------------------------------------------------------
+    def bootstrap(self, target: dict, settings: Settings, connection=None) -> dict[str, Any]:
+        """Prepare the host so a deployment can succeed, and choose a free port.
+
+        These are the steps a human ran over SSH to onboard the first two apps: create the
+        deploy directory, confirm docker, and hunt for a port nothing else was using. The port
+        hunt is the one that actually bit — the connector defaulted to 8080, which another
+        service already held, and the deployment failed after the build was paid for.
+
+        Idempotent and non-destructive: it creates and verifies. It never removes anything,
+        because on a shared host the things it would remove belong to someone else.
+        """
+        from .deploy_service import (REMOTE_BASE, _app_name, _discard_key_file,
+                                     _materialise_key, _ssh, _ssh_key_file)
+        from .secret_backends import SecretUnavailable, resolve_target_secret
+
+        user, host, port = _split_ref(target.get("target_ref", ""))
+        app_dir = f"{REMOTE_BASE}/{_app_name(target.get('repo') or '', target.get('app_name'))}"
+        ephemeral = None
+        try:
+            material = (resolve_target_secret(connection, target, "ssh_key", settings)
+                        if connection is not None else None)
+            key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
+        except (SecretUnavailable, Exception) as exc:  # noqa: BLE001
+            return {"ok": False, "problems": [f"ssh key unusable: {exc}"], "changed": []}
+
+        try:
+            # `sudo -n` so a host without passwordless sudo fails fast with an instruction
+            # rather than hanging on a password prompt nobody can answer.
+            script = (
+                f"set -e; "
+                f"if [ ! -d {REMOTE_BASE} ] || [ ! -w {REMOTE_BASE} ]; then "
+                f"  sudo -n mkdir -p {REMOTE_BASE} && sudo -n chown {user} {REMOTE_BASE} "
+                f"    && echo CREATED_BASE || echo NEED_SUDO; "
+                f"else echo BASE_OK; fi; "
+                f"mkdir -p {app_dir}/data 2>/dev/null && echo APP_OK || echo APP_NO; "
+                f"command -v docker >/dev/null && echo DOCKER_OK || echo DOCKER_NO; "
+                # Ports this app's OWN container publishes. A live target legitimately holds
+                # its port, and counting that as a conflict would move a healthy app to a new
+                # port every time someone re-ran bootstrap.
+                f"echo OWN_BEGIN; "
+                f"docker port {shlex.quote(_app_name(target.get('repo') or '', target.get('app_name')))} "
+                f"  2>/dev/null | sed 's/.*://' | sort -n | uniq; "
+                f"echo PORTS_BEGIN; "
+                f"(ss -lntH 2>/dev/null || netstat -lnt 2>/dev/null) "
+                f"  | awk '{{print $4}}' | sed 's/.*://' | sort -n | uniq")
+            res = _ssh(key, host, user, port, script, timeout=45)
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
+
+        if res.returncode != 0:
+            return {"ok": False, "changed": [],
+                    "problems": [f"ssh to {user}@{host} failed: "
+                                 f"{(res.stderr or res.stdout or '').strip()[:200]}"]}
+
+        out = res.stdout or ""
+        changed, problems = [], []
+        if "CREATED_BASE" in out:
+            changed.append(f"created {REMOTE_BASE} owned by {user}")
+        if "NEED_SUDO" in out:
+            problems.append(
+                f"{REMOTE_BASE} is missing and passwordless sudo is unavailable; run once: "
+                f"sudo mkdir -p {REMOTE_BASE} && sudo chown {user} {REMOTE_BASE}")
+        if "APP_NO" in out:
+            problems.append(f"cannot create {app_dir} as {user}")
+        elif "APP_OK" in out:
+            changed.append(f"ensured {app_dir}/data")
+        if "DOCKER_OK" not in out:
+            problems.append(f"docker is not on PATH for {user}@{host}")
+
+        def _ports(section: str) -> set[int]:
+            if section not in out:
+                return set()
+            body = out.split(section, 1)[1].split("PORTS_BEGIN", 1)[0] \
+                if section == "OWN_BEGIN" else out.split(section, 1)[1]
+            return {int(t) for t in (ln.strip() for ln in body.splitlines()) if t.isdigit()}
+
+        own = _ports("OWN_BEGIN")
+        # This app's own published ports are not conflicts — they are the status quo.
+        taken = _ports("PORTS_BEGIN") - own
+
+        chosen = _app_port(target, default=0) or None
+        if chosen and chosen in taken:
+            problems.append(f"port {chosen} is already in use on {host}")
+            chosen = None
+        if not chosen:
+            # A high, unremarkable range: low ports collide with the services a shared host
+            # already runs, which is precisely how the 8080 collision happened.
+            chosen = next((p for p in range(3010, 3200) if p not in taken), None)
+            if chosen:
+                changed.append(f"selected free port {chosen}")
+
+        return {"ok": not problems, "problems": problems, "changed": changed,
+                "app_dir": app_dir, "suggested_port": chosen,
+                "ports_in_use": sorted(taken)[:40]}
 
     # -- plan -------------------------------------------------------------------
     def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict:

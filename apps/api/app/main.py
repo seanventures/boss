@@ -5542,6 +5542,252 @@ def delivery_execute_endpoint(deployment_run_id: str):
     return result
 
 
+# --------------------------------------------------------------------------- #
+# Deployment targets — onboarding an app without hand-written SQL
+# --------------------------------------------------------------------------- #
+@app.post("/v1/deployment-targets", status_code=201)
+def create_deployment_target_endpoint(payload: dict):
+    """Register where an app is deployed. This is the whole of onboarding.
+
+    Both existing targets were inserted by a hand-run script; that is the step this replaces.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.core import make_id
+    from .services.deployment_connectors import connector_for, supported_kinds
+
+    required = ("project_id", "app_name", "repo", "environment", "target_kind", "target_ref")
+    for field in required:
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    if connector_for({"target_kind": payload["target_kind"]}) is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown target_kind {payload['target_kind']!r}; have {supported_kinds()}")
+
+    app_port = payload.get("app_port")
+    resources = [{"kind": "container_runtime", "name": "docker"}]
+    if app_port:
+        resources.append({"kind": "app_port", "name": str(int(app_port))})
+
+    target_id = payload.get("id") or make_id("deptgt")
+    with begin(engine) as connection:
+        connection.execute(text("""
+            INSERT INTO deployment_targets
+              (id, project_id, app_name, repo, environment, target_kind, target_ref,
+               domains, required_resources, secret_refs, health_checks, status, created_by,
+               created_at, updated_at)
+            VALUES (:id,:p,:app,:repo,:env,:kind,:ref,
+                    CAST(:dom AS JSONB), CAST(:req AS JSONB), CAST(:sec AS JSONB),
+                    CAST(:hc AS JSONB), :status, :by, now(), now())
+        """), {
+            "id": target_id, "p": payload["project_id"], "app": payload["app_name"],
+            "repo": payload["repo"], "env": payload["environment"],
+            "kind": payload["target_kind"], "ref": payload["target_ref"],
+            "dom": json.dumps(payload.get("domains") or []),
+            "req": json.dumps(resources),
+            "sec": json.dumps(payload.get("secret_refs") or []),
+            "hc": json.dumps(payload.get("health_checks")
+                             or [{"kind": "http", "path": "/", "expect": 200,
+                                  "scheme": payload.get("scheme") or "https"}]),
+            "status": payload.get("status") or "active",
+            "by": str(payload.get("actor") or "operator"),
+        })
+        row = connection.execute(
+            text("SELECT * FROM deployment_targets WHERE id=:i"), {"i": target_id}
+        ).mappings().first()
+    return dict(row)
+
+
+@app.patch("/v1/deployment-targets/{target_id}")
+def update_deployment_target_endpoint(target_id: str, payload: dict):
+    """Change a target in place — port, domain, health check, status, auto-deploy."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    sets, params = [], {"i": target_id}
+    for field, column in (("target_ref", "target_ref"), ("status", "status"),
+                          ("environment", "environment"), ("app_name", "app_name")):
+        if payload.get(field) is not None:
+            sets.append(f"{column} = :{field}")
+            params[field] = payload[field]
+    for field, column in (("domains", "domains"), ("health_checks", "health_checks"),
+                          ("secret_refs", "secret_refs")):
+        if payload.get(field) is not None:
+            sets.append(f"{column} = CAST(:{field} AS JSONB)")
+            params[field] = json.dumps(payload[field])
+    if payload.get("app_port") is not None:
+        sets.append("required_resources = CAST(:rr AS JSONB)")
+        params["rr"] = json.dumps([{"kind": "container_runtime", "name": "docker"},
+                                   {"kind": "app_port",
+                                    "name": str(int(payload["app_port"]))}])
+    if not sets:
+        raise HTTPException(status_code=422, detail="nothing to update")
+
+    with begin(engine) as connection:
+        result = connection.execute(
+            text(f"UPDATE deployment_targets SET {', '.join(sets)}, updated_at = now() "
+                 f"WHERE id = :i"), params)
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+    return dict(row)
+
+
+@app.delete("/v1/deployment-targets/{target_id}", status_code=200)
+def retire_deployment_target_endpoint(target_id: str):
+    """Retire a target. Deliberately a status change, not a delete.
+
+    Deployment runs reference it, and health samples reference it. Removing the row would erase
+    the history of everything ever shipped there, which is the opposite of what an operator
+    retiring an app wants.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        result = connection.execute(
+            text("UPDATE deployment_targets SET status='retired', updated_at=now() "
+                 "WHERE id=:i"), {"i": target_id})
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+    return {"target_id": target_id, "status": "retired"}
+
+
+@app.post("/v1/deployment-targets/{target_id}/bootstrap")
+def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict] = None):
+    """Have BOSS prepare the host: deploy directory, docker check, and a free port.
+
+    These were manual SSH steps for the first two apps. Idempotent and non-destructive — on a
+    shared host, anything it would remove belongs to someone else.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_connectors import connector_for
+
+    apply_port = bool((payload or {}).get("apply_port", True))
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+        conn = connector_for(target)
+        if conn is None:
+            raise HTTPException(status_code=422, detail="no connector for this target_kind")
+        report = conn.bootstrap(target, settings, connection)
+
+        # Write the chosen port back, so the operator does not have to copy it by hand — which
+        # is exactly the transcription step that produced the 8080 collision.
+        if apply_port and report.get("suggested_port"):
+            connection.execute(
+                text("UPDATE deployment_targets SET required_resources = CAST(:rr AS JSONB), "
+                     "updated_at = now() WHERE id = :i"),
+                {"rr": json.dumps([{"kind": "container_runtime", "name": "docker"},
+                                   {"kind": "app_port",
+                                    "name": str(report["suggested_port"])}]),
+                 "i": target_id})
+            report["applied_port"] = report["suggested_port"]
+    return report
+
+
+# --------------------------------------------------------------------------- #
+# Secrets — write-through. No endpoint in this section returns a secret value.
+# --------------------------------------------------------------------------- #
+@app.get("/v1/secrets")
+def list_secrets_endpoint(project_id: str):
+    """Secret METADATA: name, backend, kind, fingerprint, last4, status, what it is bound to.
+
+    There is deliberately no variant that includes values. An endpoint that can return a secret
+    eventually returns one to the wrong reader.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import list_secrets
+    with begin(engine) as connection:
+        return {"project_id": project_id, "secrets": list_secrets(connection, project_id)}
+
+
+@app.post("/v1/secrets", status_code=201)
+def put_secret_endpoint(payload: dict):
+    """Upload a value: it is written THROUGH to the backend and not retained by BOSS."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_backends import SecretUnavailable
+    from .services.secrets_service import put_secret
+
+    for field in ("project_id", "name", "value"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    try:
+        with begin(engine) as connection:
+            return put_secret(
+                connection, settings,
+                project_id=payload["project_id"], name=payload["name"],
+                value=payload["value"],
+                secret_kind=payload.get("secret_kind") or "api_token",
+                backend=payload.get("backend") or "platform_secret_store",
+                scope_id=payload.get("scope_id"),
+                actor=str(payload.get("actor") or "operator"))
+    except SecretUnavailable as exc:
+        # A backend that cannot accept the write is a configuration problem, not a server bug.
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/secrets/keypair", status_code=201)
+def generate_keypair_endpoint(payload: dict):
+    """Generate a keypair. The private half goes to the backend; only the PUBLIC half returns."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_backends import SecretUnavailable
+    from .services.secrets_service import generate_keypair
+
+    for field in ("project_id", "name"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    try:
+        with begin(engine) as connection:
+            return generate_keypair(
+                connection, settings,
+                project_id=payload["project_id"], name=payload["name"],
+                algorithm=payload.get("algorithm") or "ed25519",
+                backend=payload.get("backend") or "platform_secret_store",
+                scope_id=payload.get("scope_id"), comment=payload.get("comment"),
+                actor=str(payload.get("actor") or "operator"))
+    except (SecretUnavailable, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/secrets/{secret_ref_id}/verify")
+def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
+    """Prove the reference still resolves — a row saying 'active' proves only that nobody
+    marked it otherwise."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import verify_secret
+    with begin(engine) as connection:
+        return verify_secret(connection, settings, secret_ref_id,
+                             actor=str((payload or {}).get("actor") or "operator"))
+
+
+@app.post("/v1/deployment-targets/{target_id}/secrets")
+def bind_secret_endpoint(target_id: str, payload: dict):
+    """Point one of a target's declared requirements at a stored secret."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import bind_secret_to_target
+    for field in ("project_id", "name", "secret_ref_id"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    try:
+        with begin(engine) as connection:
+            return bind_secret_to_target(
+                connection, target_id=target_id, name=payload["name"],
+                secret_ref_id=payload["secret_ref_id"], project_id=payload["project_id"],
+                actor=str(payload.get("actor") or "operator"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
 @app.get("/v1/delivery/health")
 def delivery_health_endpoint(project_id: str):
     """Health of everything BOSS has deployed for this project.
@@ -5567,6 +5813,82 @@ def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.deployment_health import sweep
     return sweep(engine, settings, project_id=project_id)
+
+
+@app.post("/v1/delivery/deploy")
+def delivery_deploy_endpoint(payload: dict):
+    """Deploy a target at a chosen ref, without waiting for a merge.
+
+    The manual half of the trigger story: automatic on merge, this for everything else
+    (shipping a hotfix, re-shipping after a host fix, deploying a target that was onboarded
+    after its last merge).
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_pipeline import execute_deployment
+    from .services.resource_plane import ResourcePlaneService
+
+    target_id = payload.get("target_id")
+    if not target_id:
+        raise HTTPException(status_code=422, detail="target_id is required")
+    actor = str(payload.get("actor") or "operator")
+
+    with begin(engine) as connection:
+        target = connection.execute(
+            text("SELECT * FROM deployment_targets WHERE id=:i"),
+            {"i": target_id}).mappings().first()
+        if not target:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        if target["status"] != "active":
+            raise HTTPException(status_code=409,
+                                detail=f"target is {target['status']}, not active")
+        planned = ResourcePlaneService(settings).plan_deployment_run(
+            connection,
+            project_id=target["project_id"], deployment_target_id=target_id,
+            commit_ref=payload.get("ref") or payload.get("commit_ref"),
+            release_packet={"source": "manual_deploy", "repo": target["repo"],
+                            "requested_by": actor},
+            expected_cost_usd_micros=0, reservation_id=None, actor=actor)
+        run_id = planned.get("deployment_run_id") or planned.get("id")
+        connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
+                           {"i": run_id})
+
+    if payload.get("plan_only"):
+        return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual"}
+    return {"deployment_run_id": run_id,
+            **execute_deployment(engine, settings, run_id, actor=actor)}
+
+
+@app.post("/v1/deployment-targets/{target_id}/auto-deploy")
+def set_auto_deploy_endpoint(target_id: str, payload: dict):
+    """Turn deploy-on-merge on/off, or pause it.
+
+    `paused` is separate from `auto_deploy` on purpose: during an incident an operator wants
+    automation to stop without losing the configuration that says this target is normally
+    automatic — and without having to remember to turn it back on correctly.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    sets, params = [], {"i": target_id}
+    if payload.get("auto_deploy") is not None:
+        sets.append("auto_deploy = :a")
+        params["a"] = bool(payload["auto_deploy"])
+    if payload.get("paused") is not None:
+        sets.append("paused = :pz")
+        params["pz"] = bool(payload["paused"])
+    if not sets:
+        raise HTTPException(status_code=422, detail="auto_deploy or paused is required")
+
+    with begin(engine) as connection:
+        result = connection.execute(
+            text(f"UPDATE deployment_targets SET {', '.join(sets)}, updated_at=now() "
+                 f"WHERE id=:i"), params)
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        row = connection.execute(
+            text("SELECT id, app_name, auto_deploy, paused FROM deployment_targets WHERE id=:i"),
+            {"i": target_id}).mappings().first()
+    return dict(row)
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")

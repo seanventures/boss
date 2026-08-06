@@ -2387,6 +2387,92 @@ export async function getDeliveryPipelineAction(projectId?: string): Promise<any
   }
 }
 
+// --- Delivery management: onboarding, secrets, triggers ---------------------
+// Server actions rather than browser fetches: the API has no CORS headers, and routing these
+// through the server also keeps the API key out of the browser.
+
+async function post(path: string, body: unknown): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: typeof out?.detail === "string" ? out.detail : `${res.status}` };
+    return out;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function get(path: string): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, { headers: authHeaders(), cache: "no-store" });
+    if (!res.ok) return { error: `${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function listSecretsAction(projectId?: string): Promise<any> {
+  return get(`/v1/secrets?project_id=${encodeURIComponent(projectId || PROJECT_ID)}`);
+}
+
+/** Upload a secret. The value is written through to a backend; nothing returns it afterwards. */
+export async function putSecretAction(input: {
+  name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string;
+}): Promise<any> {
+  return post("/v1/secrets", { project_id: PROJECT_ID, actor: "operator", ...input });
+}
+
+/** Generate a keypair. Only the PUBLIC half comes back — the private half never leaves the backend. */
+export async function generateKeypairAction(input: {
+  name: string; algorithm?: string; backend?: string; scope_id?: string; comment?: string;
+}): Promise<any> {
+  return post("/v1/secrets/keypair", { project_id: PROJECT_ID, actor: "operator", ...input });
+}
+
+export async function verifySecretAction(secretRefId: string): Promise<any> {
+  return post(`/v1/secrets/${encodeURIComponent(secretRefId)}/verify`, { actor: "operator" });
+}
+
+export async function createTargetAction(input: Record<string, unknown>): Promise<any> {
+  return post("/v1/deployment-targets", { project_id: PROJECT_ID, actor: "operator", ...input });
+}
+
+export async function bindSecretAction(targetId: string, name: string,
+                                       secretRefId: string): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/secrets`,
+              { project_id: PROJECT_ID, name, secret_ref_id: secretRefId, actor: "operator" });
+}
+
+/** Have BOSS prepare the host: deploy directory, docker check, and a free port. */
+export async function bootstrapTargetAction(targetId: string, applyPort = true): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/bootstrap`,
+              { apply_port: applyPort });
+}
+
+export async function preflightTargetAction(targetId: string): Promise<any> {
+  return get(`/v1/delivery/targets/${encodeURIComponent(targetId)}/preflight`
+             + `?project_id=${encodeURIComponent(PROJECT_ID)}`);
+}
+
+export async function setAutoDeployAction(targetId: string,
+                                          input: { auto_deploy?: boolean; paused?: boolean }): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/auto-deploy`, input);
+}
+
+/** Deploy a target at a chosen ref without waiting for a merge. */
+export async function deployTargetAction(targetId: string, ref?: string,
+                                         planOnly = false): Promise<any> {
+  return post("/v1/delivery/deploy",
+              { target_id: targetId, ref: ref || undefined, plan_only: planOnly,
+                actor: "operator" });
+}
+
 /** Health of everything BOSS has deployed — distinct from whether the deploy succeeded. */
 export async function getDeploymentHealthAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;

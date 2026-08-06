@@ -18,6 +18,7 @@
 import { useState, useTransition } from "react";
 
 import { executeDeploymentAction, redeployAction } from "./actions";
+import { OnboardWizard, SecretsPanel, TargetControls, type SecretsView } from "./delivery-manage";
 
 type Stage = {
   run_id: string; title: string; run_status: string;
@@ -32,6 +33,7 @@ type Stage = {
 type Target = {
   id: string; app_name: string; environment: string; repo: string;
   target_kind: string; target_ref: string; status: string;
+  auto_deploy?: boolean; paused?: boolean;
 };
 export type Pipeline = {
   project_id: string; stages: Stage[]; targets: Target[]; configured: boolean;
@@ -249,7 +251,9 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
   );
 }
 
-export function DeliveryPipeline({ initial, health }: { initial?: Pipeline | null; health?: Health | null }) {
+export function DeliveryPipeline({ initial, health, secrets }: {
+  initial?: Pipeline | null; health?: Health | null; secrets?: SecretsView | null;
+}) {
   const data = initial;
 
   if (!data) return <div className="detail">Loading delivery pipeline…</div>;
@@ -261,6 +265,10 @@ export function DeliveryPipeline({ initial, health }: { initial?: Pipeline | nul
     <div style={{ display: "grid", gap: 18 }}>
       {/* Health first: "is it working right now" outranks "did the deploy succeed". */}
       <DeploymentHealth health={health} />
+
+      {/* Onboarding and credentials: the steps that used to be SQL and ssh-keygen. */}
+      <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
+      <SecretsPanel initial={secrets} />
 
       {/* ---- targets: where anything could go at all ---- */}
       <section className="ct-block">
@@ -278,6 +286,7 @@ export function DeliveryPipeline({ initial, health }: { initial?: Pipeline | nul
             </tr></thead>
             <tbody>
               {data.targets.map((t) => (
+                <>
                 <tr key={t.id} style={{ borderTop: "1px solid rgba(255,255,255,.07)" }}>
                   <td>{t.app_name}</td>
                   <td><span className="cap-badge tone-blue">{t.environment}</span></td>
@@ -286,6 +295,14 @@ export function DeliveryPipeline({ initial, health }: { initial?: Pipeline | nul
                   <td className="detail">{t.target_ref}</td>
                   <td style={{ color: t.status === "active" ? "#3fb950" : "#8b949e" }}>{t.status}</td>
                 </tr>
+                <tr key={`${t.id}-controls`}>
+                  {/* Trigger controls sit with the target they act on, so "deploys on merge"
+                      is read in the same glance as which host it deploys to. */}
+                  <td colSpan={6} style={{ paddingBottom: 10 }}>
+                    <TargetControls target={t} />
+                  </td>
+                </tr>
+                </>
               ))}
             </tbody>
           </table>
