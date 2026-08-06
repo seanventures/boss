@@ -5852,6 +5852,65 @@ def bind_secret_endpoint(target_id: str, payload: dict):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+# --------------------------------------------------------------------------- #
+# Observability — the collector/store/dashboards BOSS deploys beside the apps
+# --------------------------------------------------------------------------- #
+@app.get("/v1/observability/stack")
+def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] = None):
+    """What the stack WOULD monitor, plus whether it is currently running.
+
+    The app list is derived from `deployment_targets`, so this also answers "will my new app
+    appear on a dashboard?" before the stack is redeployed.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.observability_stack import (DEFAULT_PORTS, grafana_url, scrape_targets,
+                                               stack_status)
+    with begin(engine) as connection:
+        targets = scrape_targets(connection, project_id)
+        source = connection.execute(
+            text("SELECT id, config FROM telemetry_sources WHERE project_id=:p "
+                 "AND kind='prometheus' AND name='boss-prometheus'"),
+            {"p": project_id}).mappings().first()
+
+    status = (stack_status(engine, settings, host_target_id=host_target_id)
+              if host_target_id else {"running": None})
+    host = status.get("host") or ""
+    base = f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else ""
+    return {
+        "project_id": project_id,
+        "deployed": bool(source),
+        "prometheus": (source or {}).get("config"),
+        "grafana_url": base,
+        "status": status,
+        "apps": [{**t, "dashboard_url": grafana_url(base, t["app"]) if base else None}
+                 for t in targets],
+    }
+
+
+@app.post("/v1/observability/stack/deploy")
+def deploy_observability_stack_endpoint(payload: dict):
+    """Render the collector/Prometheus/Grafana stack from the registry and put it on the host.
+
+    Re-running is how a newly onboarded app gets a dashboard: the scrape config is regenerated
+    from `deployment_targets` every time, so the two cannot drift.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.observability_stack import deploy_stack
+
+    for field in ("project_id", "host_target_id"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    result = deploy_stack(engine, settings, project_id=payload["project_id"],
+                          host_target_id=payload["host_target_id"],
+                          ports=payload.get("ports"),
+                          actor=str(payload.get("actor") or "operator"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result)
+    return result
+
+
 @app.get("/v1/delivery/health")
 def delivery_health_endpoint(project_id: str):
     """Health of everything BOSS has deployed for this project.

@@ -19,7 +19,8 @@
 import { useEffect, useState, useTransition } from "react";
 
 import {
-  bindSecretAction, bootstrapTargetAction, createTargetAction, deployTargetAction,
+  bindSecretAction, bootstrapTargetAction, createTargetAction, deployObservabilityAction,
+  deployTargetAction,
   generateKeypairAction, preflightTargetAction, putSecretAction, reactivateTargetAction,
   setAutoDeployAction,
   teardownTargetAction, verifySecretAction,
@@ -211,6 +212,116 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
           ))}
         </tbody>
       </table>
+    </section>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Monitoring — the observability stack and a way into each app's dashboard
+// --------------------------------------------------------------------------- //
+type ObsApp = {
+  app: string; environment: string; port: number; dashboard_url: string | null;
+  scrape_url: string;
+};
+export type Observability = {
+  deployed: boolean; grafana_url: string; apps: ObsApp[];
+  status: { running: boolean | null; containers?: { name: string; status: string }[];
+            error?: string };
+  error?: string;
+};
+
+export function MonitoringPanel({ initial, hostTargetId }: {
+  initial?: Observability | null; hostTargetId?: string;
+}) {
+  const [pending, start] = useTransition();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const data = initial;
+
+  if (!data || data.error) {
+    return (
+      <section className="ct-block">
+        <div className="ct-block-title">Monitoring</div>
+        <div className="detail" style={{ color: data?.error ? "#f85149" : undefined }}>
+          {data?.error ? `Monitoring: ${data.error}` : "Loading…"}
+        </div>
+      </section>
+    );
+  }
+
+  const running = data.status?.running;
+  return (
+    <section className="ct-block">
+      <div className="ct-block-title">
+        Monitoring{" "}
+        <span style={{ fontSize: 12,
+                       color: running ? "#3fb950" : running === false ? "#d29922" : "#8b949e" }}>
+          ● {running ? "stack running" : running === false ? "stack not running" : "unknown"}
+        </span>
+      </div>
+
+      <div className="detail" style={{ marginBottom: 10 }}>
+        One OpenTelemetry collector, one Prometheus and one Grafana for every app.
+        {" "}The scrape config is generated from the deployment targets below — onboarding an app
+        is what puts it on a dashboard, so the two cannot drift.
+      </div>
+
+      <div style={{ ...box, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button style={btn} disabled={pending || !hostTargetId}
+                title={hostTargetId ? "Regenerate the config from the registry and deploy"
+                                    : "needs an active target to borrow a host and credential"}
+                onClick={() => start(async () => {
+                  setMsg(null); setBusy("Deploying stack");
+                  let out: any;
+                  try { out = await deployObservabilityAction(hostTargetId!); }
+                  finally { setBusy(null); }
+                  setMsg(out?.error
+                    ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 200)}`
+                    : `stack deployed — ${out.apps?.length ?? 0} app(s) on ${out.grafana_url}`);
+                })}>
+          {data.deployed ? "Redeploy stack" : "Deploy monitoring stack"}
+        </button>
+        {data.grafana_url && (
+          <a href={data.grafana_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+            Open Grafana ↗
+          </a>
+        )}
+        {busy && <Working label={busy} />}
+        {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+
+      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", marginTop: 12 }}>
+        <thead><tr style={{ textAlign: "left", opacity: .7 }}>
+          <th>app</th><th>environment</th><th>scraped at</th><th>dashboard</th>
+        </tr></thead>
+        <tbody>
+          {data.apps.length === 0 && (
+            <tr><td colSpan={4} className="detail">
+              No active deployment targets, so there is nothing to monitor yet.
+            </td></tr>
+          )}
+          {data.apps.map((a) => (
+            <tr key={a.app} style={{ borderTop: "1px solid rgba(255,255,255,.07)" }}>
+              <td>{a.app}</td>
+              <td><span className="cap-badge tone-blue">{a.environment}</span></td>
+              <td className="detail" style={{ fontFamily: "monospace" }}>
+                {a.scrape_url}/metrics
+              </td>
+              <td>
+                {a.dashboard_url
+                  ? <a href={a.dashboard_url} target="_blank" rel="noreferrer">Open dashboard ↗</a>
+                  : <span className="detail">deploy the stack first</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {data.status?.containers && data.status.containers.length > 0 && (
+        <div className="detail" style={{ fontSize: 11, marginTop: 8 }}>
+          {data.status.containers.map((c) => `${c.name}: ${c.status}`).join(" · ")}
+        </div>
+      )}
     </section>
   );
 }

@@ -128,7 +128,7 @@ import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
-import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction } from "./actions";
+import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction } from "./actions";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
@@ -505,6 +505,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const deliveryPipeline = await getDeliveryPipelineAction().catch(() => null);
   const deploymentHealth = await getDeploymentHealthAction().catch(() => null);
   const deliverySecrets = await listSecretsAction().catch(() => null);
+  // The host target is whichever active target we can borrow a host+credential from; the stack
+  // is one per host, not one per app.
+  const obsHost = (deliveryPipeline?.targets || []).find((t: any) => t.status === "active")?.id;
+  const observability = await getObservabilityAction(obsHost).catch(() => null);
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
@@ -6214,7 +6218,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <DeliveryPipeline initial={deliveryPipeline} health={deploymentHealth}
-                            secrets={deliverySecrets} />
+                            secrets={deliverySecrets} observability={observability} />
         </section>
 
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">

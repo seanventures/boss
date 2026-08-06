@@ -2499,6 +2499,19 @@ export async function teardownTargetAction(targetId: string, input: {
               { actor: "operator", ...input });
 }
 
+/** What the observability stack monitors, and whether it is up. */
+export async function getObservabilityAction(hostTargetId?: string): Promise<any> {
+  const q = `project_id=${encodeURIComponent(PROJECT_ID)}`
+    + (hostTargetId ? `&host_target_id=${encodeURIComponent(hostTargetId)}` : "");
+  return get(`/v1/observability/stack?${q}`);
+}
+
+/** Render and deploy the collector/Prometheus/Grafana stack from the live target registry. */
+export async function deployObservabilityAction(hostTargetId: string): Promise<any> {
+  return post("/v1/observability/stack/deploy",
+              { project_id: PROJECT_ID, host_target_id: hostTargetId, actor: "operator" });
+}
+
 /** Health of everything BOSS has deployed — distinct from whether the deploy succeeded. */
 export async function getDeploymentHealthAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;

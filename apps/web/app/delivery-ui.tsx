@@ -18,7 +18,8 @@
 import { useState, useTransition } from "react";
 
 import { executeDeploymentAction, redeployAction } from "./actions";
-import { OnboardWizard, SecretsPanel, TargetControls, type SecretsView } from "./delivery-manage";
+import { MonitoringPanel, OnboardWizard, SecretsPanel, TargetControls,
+         type Observability, type SecretsView } from "./delivery-manage";
 
 type Stage = {
   run_id: string; title: string; run_status: string;
@@ -251,8 +252,9 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
   );
 }
 
-export function DeliveryPipeline({ initial, health, secrets }: {
+export function DeliveryPipeline({ initial, health, secrets, observability }: {
   initial?: Pipeline | null; health?: Health | null; secrets?: SecretsView | null;
+  observability?: Observability | null;
 }) {
   const data = initial;
 
@@ -265,6 +267,11 @@ export function DeliveryPipeline({ initial, health, secrets }: {
     <div style={{ display: "grid", gap: 18 }}>
       {/* Health first: "is it working right now" outranks "did the deploy succeed". */}
       <DeploymentHealth health={health} />
+
+      {/* Monitoring sits with delivery on purpose: "what did I ship" and "how is it doing"
+          are the same question ten minutes apart. */}
+      <MonitoringPanel initial={observability}
+                       hostTargetId={data.targets.find((t) => t.status === "active")?.id} />
 
       {/* Onboarding and credentials: the steps that used to be SQL and ssh-keygen. */}
       <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
