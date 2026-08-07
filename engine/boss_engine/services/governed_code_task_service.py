@@ -557,9 +557,23 @@ def _ctx_block(title, instructions, criteria) -> str:
     launched back-to-back (within the cache TTL) re-READ this block from cache instead
     of cold-ingesting it in each fresh session. Keep all stage-specific text AFTER it."""
     crit = "\n".join(f"- {c}" for c in criteria or []) or "- (none specified)"
+
+    # Standards the PLATFORM requires, as distinct from the ones `_standards_prompt` infers by
+    # reading the repo. An agent cannot discover "expose /metrics in this shape" from a codebase
+    # that has never done it, so BOSS has to say so — otherwise the rule lives in whichever
+    # task's prose someone remembered to write it into, which is exactly what happened with the
+    # first instrumented app.
+    #
+    # Added HERE rather than to one stage because a standard read only during design is
+    # forgotten by the time code is written; this block is shared verbatim by every stage, and
+    # stays byte-identical across them, so the prompt cache is unaffected.
+    from .platform_standards import platform_standards
+
+    standards = platform_standards(f"{title}\n{instructions}")
     return (
         "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
         f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
+        f"{standards}\n"
         "=== END TASK CONTEXT ===\n\n"
     )
 
