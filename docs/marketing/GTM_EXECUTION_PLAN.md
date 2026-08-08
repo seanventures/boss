@@ -47,7 +47,7 @@ See [`GTM_GAP_ANALYSIS.md`](./GTM_GAP_ANALYSIS.md). Launch-critical: licensing d
 
 ## Sequencing
 
-1. **Decisions first:** #300 licensing, #296 community-UI scope, #304 lead surface.
+1. **Decisions first:** #300 licensing, #296 community-UI scope, #304 lead surface (apply [`GTM_DECK_REVISION_BRIEF.md`](./GTM_DECK_REVISION_BRIEF.md) to the editable deck).
 2. **Foundation:** #294 local verification → #291 private repo extraction → #297/#301 quickstart gaps.
 3. **Content:** blogs #285–287 briefs above → landing page #305.
 4. **Community:** #292 design partners → videos #288–290 → #293 public flip + launch.
