@@ -71,15 +71,21 @@ docker run -d --name boss-mcp --network boss -p 8791:8791 -e DATABASE_URL=$DB \
   boss-engine serve-mcp --http --read-only --host 0.0.0.0
 ~~~
 
-Use the client-specific guides in the monorepo:
+Configure the approved MCP client with the local HTTP endpoint
+`http://localhost:8791/mcp`. The endpoint speaks JSON-RPC over HTTP; this
+request is a client-independent proof before configuring a richer client:
 
-- [Claude Code](../docs/marketing/video/03-boss-via-mcp.md#claude-code)
-- [Cursor](../docs/marketing/video/03-boss-via-mcp.md#cursor)
-- [GitHub Copilot CLI](../docs/marketing/video/03-boss-via-mcp.md#github-copilot-cli)
+~~~bash
+curl -sS http://localhost:8791/mcp \
+  -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+~~~
 
 Run tools/list and one read request such as project_status. In read-only mode,
 a write tool such as create_code_task must be unavailable; that denial is
-expected evidence that the safety boundary is active.
+expected evidence that the safety boundary is active. Client-specific
+walkthroughs are maintained as a separate BOSS-290 launch asset so this
+private-engine onboarding contract remains independently usable.
 
 Stop the server when the evaluation ends:
 
