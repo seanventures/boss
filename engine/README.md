@@ -114,6 +114,14 @@ export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'
 with `BOSS_SPECPACK_ROOT=/path/to/specpack` (roles, skills, packs, policies) —
 otherwise it is resolved from the monorepo layout relative to the package.
 
+### Private design partners
+
+Before the public release, use the
+[design-partner onboarding pack](./DESIGN_PARTNER_ONBOARDING.md) to establish a
+safe local/MCP proof, the canonical sample-repository boundary, and
+evidence-backed feedback. It deliberately does not imply that the engine is
+publicly released or that hosted services are configured.
+
 ## Status: Phase 3 release-ready
 
 The service graph is physically owned by `boss_engine/services`. The API and
