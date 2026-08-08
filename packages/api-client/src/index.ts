@@ -1036,6 +1036,12 @@ export type CodeTaskRun = {
      *  rounds were spent. The retry uses these to decide which stages are actually stale. */
     failing_gates?: string[];
     advisory_failing_gates?: string[];
+    qa_benchmark?: {
+      id: string;
+      name: string;
+      verification_commands: string[];
+      completion_contract: string[];
+    };
   };
   reservation_id?: string | null;
   pull_request_url?: string | null;
@@ -1045,6 +1051,86 @@ export type CodeTaskRun = {
 };
 
 export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
+
+export type QaBenchmarkApp = {
+  id: string;
+  name: string;
+  tagline: string;
+  summary: string;
+  focus: string[];
+  acceptance_scenarios: string[];
+  completion_contract: string[];
+  verification_commands: string[];
+  scoring_dimensions: Array<{
+    id: string;
+    label: string;
+    weight: number;
+    evidence: string;
+  }>;
+  score_baselines: Record<string, number>;
+};
+
+export type QaBenchmarkAppsResponse = { benchmark_apps: QaBenchmarkApp[] };
+
+export type QaBenchmarkReport = {
+  run_id: string;
+  benchmark_id?: string;
+  benchmark_name?: string;
+  run_status: string;
+  completion_contract: string[];
+  required_verification_commands: string[];
+  results: Array<{
+    label: string;
+    command: string;
+    status: "pass" | "fail" | "not_recorded";
+    exit_code?: number | null;
+    timed_out?: boolean | null;
+  }>;
+  passed: boolean;
+  scorecard: {
+    version: string;
+    baselines: Record<string, number>;
+    dimensions: Array<{
+      id: string;
+      label: string;
+      weight: number;
+      evidence: string;
+      status: "scored" | "not_scored";
+      score: number | null;
+      reason?: string;
+    }>;
+    observed_weight: number;
+    evidence_coverage_pct: number;
+    overall_score: number | null;
+    overall_status: "provisional" | "complete";
+    tuning_note: string;
+  };
+  message: string;
+};
+
+export type QaBenchmarkTuningProposalRequest = {
+  project_id: string;
+  /** A developer-authored PR or configuration-diff reference. */
+  change_ref: string;
+  diff_summary: string;
+  actor?: string;
+  risk_tier?: number;
+};
+
+export type QaBenchmarkEvaluation = {
+  id: string;
+  project_id: string;
+  code_task_run_id: string;
+  benchmark_id: string;
+  scorecard_version: string;
+  status: "ready_for_candidate" | "not_ready";
+  overall_score: number | null;
+  observed_weight: number;
+  recommendation?: Record<string, unknown>;
+  evaluated_by: string;
+  created_at: string;
+  updated_at: string;
+};
 
 // One per-stage model call recorded for a code task (GET /v1/code-tasks/{id}/activity) —
 // the internal detail behind each phase: model, turns, latency, retries, cost, ok/error.
@@ -5550,6 +5636,58 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<CodeTasksResponse>("GET", "/v1/code-tasks", {
         query: { project_id: projectId, limit },
       });
+    },
+    getQaBenchmarkApps() {
+      return request<QaBenchmarkAppsResponse>("GET", "/v1/qa/benchmark-apps");
+    },
+    startQaBenchmarkApp(benchmarkId: string, payload: {
+      project_id: string;
+      actor?: string;
+      task_id?: string;
+      owner?: string;
+      repo?: string;
+      base_branch?: string;
+      profile?: string;
+    }) {
+      return request<{ status: string; run_id: string; benchmark: { id: string; name: string } }>(
+        "POST", `/v1/qa/benchmark-apps/${encodeURIComponent(benchmarkId)}/runs`, { body: payload },
+      );
+    },
+    getQaBenchmarkReport(runId: string) {
+      return request<QaBenchmarkReport>(
+        "GET", `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/report`,
+      );
+    },
+    listQaBenchmarkEvaluations(projectId: string, limit = 50) {
+      return request<{ project_id: string; items: QaBenchmarkEvaluation[] }>(
+        "GET",
+        "/v1/qa/benchmark-apps/evaluations",
+        { query: { project_id: projectId, limit } },
+      );
+    },
+    sweepQaBenchmarkEvaluations(payload?: {
+      project_id?: string;
+      limit?: number;
+      actor?: string;
+    }) {
+      return request<{
+        status: string;
+        project_id?: string | null;
+        checked_count: number;
+        changed_count: number;
+        ready_for_candidate_count: number;
+        items: QaBenchmarkEvaluation[];
+      }>("POST", "/v1/qa/benchmark-apps/tuning-sweep", { body: payload ?? {} });
+    },
+    createQaBenchmarkTuningProposal(
+      runId: string,
+      payload: QaBenchmarkTuningProposalRequest,
+    ) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/tuning-proposal`,
+        { body: payload },
+      );
     },
     getDiscoveries(projectId: string, limit = 50) {
       return request<DiscoveriesResponse>("GET", "/v1/discoveries", {

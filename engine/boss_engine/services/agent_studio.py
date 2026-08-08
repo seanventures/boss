@@ -50,6 +50,7 @@ class AgentStudioService:
     """
 
     AGENT_EXECUTION_MODES = {"deterministic_brief", "live_model"}
+    CATALOG_SMOKE_MAX_AGENTS = 100
     MODEL_SELECTION_MODES = {"router", "pinned", "local"}
     PANEL_TOPOLOGIES = {
         "panel",
@@ -575,6 +576,102 @@ class AgentStudioService:
             {"project_id": project_id},
         ).scalars().all()
         return [self.get_agent(connection, project_id, row) for row in rows]
+
+    def run_catalog_smoke(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        objective: str = "Prove this published agent can compile its bounded authority envelope.",
+    ) -> dict[str, Any]:
+        """Exercise every catalog entry with its deterministic AgentVersion test.
+
+        This deliberately runs no model, tool, provider, or job. It validates and
+        compiles every active immutable version, records one durable AgentTestRun per
+        agent, and makes missing/invalid catalog entries visible instead of skipping
+        them. Live model execution is a separate budgeted workflow.
+        """
+        agents = self.list_agents(connection, project_id)
+        if len(agents) > self.CATALOG_SMOKE_MAX_AGENTS:
+            raise ValueError(
+                "catalog smoke is bounded to "
+                f"{self.CATALOG_SMOKE_MAX_AGENTS} agents; split this catalog before running it."
+            )
+        suite_id = make_id("agentcatalog")
+        items: list[dict[str, Any]] = []
+        for agent in agents:
+            version = agent.get("active_version") or {}
+            version_id = version.get("id")
+            if not version_id:
+                items.append(
+                    {
+                        "agent_id": agent["id"],
+                        "agent_key": agent["agent_key"],
+                        "agent_name": agent["name"],
+                        "status": "blocked",
+                        "reason": "no_published_active_version",
+                    }
+                )
+                continue
+            test = self.run_agent_test(
+                connection,
+                project_id=project_id,
+                agent_version_id=version_id,
+                scenario={
+                    "kind": "agent_catalog_smoke",
+                    "suite_id": suite_id,
+                    "objective": objective[:2000],
+                    "agent_key": agent["agent_key"],
+                },
+                assertions=None,
+                actor=actor,
+            )
+            items.append(
+                {
+                    "agent_id": agent["id"],
+                    "agent_key": agent["agent_key"],
+                    "agent_name": agent["name"],
+                    "agent_version_id": version_id,
+                    "test_id": test["id"],
+                    "status": test["status"],
+                    "summary": (test.get("result") or {}).get("summary"),
+                }
+            )
+        passed = sum(item["status"] == "passed" for item in items)
+        blocked = sum(item["status"] == "blocked" for item in items)
+        failed = len(items) - passed - blocked
+        status = "passed" if items and passed == len(items) else "failed"
+        result = {
+            "suite_id": suite_id,
+            "status": status,
+            "agent_count": len(items),
+            "passed_count": passed,
+            "failed_count": failed,
+            "blocked_count": blocked,
+            "objective": objective[:2000],
+            "items": items,
+            "execution_mode": "deterministic_compile_only",
+            "model_calls": 0,
+            "tool_calls": 0,
+            "external_effects": 0,
+        }
+        emit_event(
+            connection,
+            project_id,
+            "agent_studio.catalog_smoke_completed",
+            actor,
+            "agent_catalog_smoke",
+            suite_id,
+            {
+                "status": status,
+                "agent_count": len(items),
+                "passed_count": passed,
+                "failed_count": failed,
+                "blocked_count": blocked,
+            },
+        )
+        return result
 
     def get_agent(
         self, connection: Connection, project_id: str, agent_id: str

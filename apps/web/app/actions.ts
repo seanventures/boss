@@ -2361,6 +2361,28 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export async function getQaBenchmarkReportAction(runId: string) {
+  try {
+    return await client.getQaBenchmarkReport(runId);
+  } catch {
+    return null;
+  }
+}
+
+export async function startQaBenchmarkAppAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const benchmarkId = String(formData.get("benchmark_id") ?? "").trim();
+  if (!benchmarkId) return;
+  await client.startQaBenchmarkApp(benchmarkId, {
+    project_id: projectId,
+    actor: getActor(formData),
+    owner: String(formData.get("owner") ?? "").trim() || undefined,
+    repo: String(formData.get("repo") ?? "").trim() || undefined,
+    base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+  });
+  revalidatePath("/");
+}
+
 // Per-stage model-call activity for a code task (the internal detail behind each phase).
 // Returns [] on any failure so the activity panel degrades gracefully in the UI.
 

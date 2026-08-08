@@ -2772,6 +2772,31 @@ CREATE TABLE IF NOT EXISTS code_task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_code_task_runs_project ON code_task_runs(project_id, status, updated_at DESC);
 
+-- Durable, versioned measurements derived from terminal QA benchmark runs.  These are
+-- analysis snapshots only: a low score may trigger a visible recommendation, but cannot
+-- alter a routing/workflow baseline or create an applied change by itself.
+CREATE TABLE IF NOT EXISTS qa_benchmark_evaluations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  code_task_run_id TEXT NOT NULL REFERENCES code_task_runs(id) ON DELETE CASCADE,
+  benchmark_id TEXT NOT NULL,
+  scorecard_version TEXT NOT NULL,
+  status TEXT NOT NULL, -- ready_for_candidate | not_ready
+  overall_score DOUBLE PRECISION,
+  observed_weight INTEGER NOT NULL DEFAULT 0,
+  report JSONB NOT NULL DEFAULT '{}'::jsonb,
+  recommendation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source_hash TEXT NOT NULL,
+  evaluated_by TEXT NOT NULL DEFAULT 'qa_benchmark_scheduler',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(code_task_run_id, scorecard_version)
+);
+CREATE INDEX IF NOT EXISTS idx_qa_benchmark_evaluations_project_created
+  ON qa_benchmark_evaluations(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_qa_benchmark_evaluations_benchmark_status
+  ON qa_benchmark_evaluations(project_id, benchmark_id, status, updated_at DESC);
+
 -- Fail-closed quality evidence for a governed coding-pipeline run (see QualityGate ObjectSpec).
 CREATE TABLE IF NOT EXISTS quality_gates (
   id TEXT PRIMARY KEY,

@@ -171,6 +171,15 @@ export async function testStudioAgent(
   });
 }
 
+export async function runStudioCatalogSmoke(
+  projectId: string,
+): Promise<StudioActionResult> {
+  return post("/v1/agent-studio/catalog-smoke", {
+    project_id: projectId,
+    actor: "vp_agents",
+  });
+}
+
 export async function runStudioAgent(
   projectId: string,
   versionId: string,

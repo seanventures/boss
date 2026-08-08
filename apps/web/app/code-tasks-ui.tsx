@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
-import type { CodeTaskRun, LlmCallRow, PreviewRec } from "@boss/api-client";
+import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
   confirmCodeTaskFeedbackAction,
   createCodeTaskAction,
+  getQaBenchmarkReportAction,
+  startQaBenchmarkAppAction,
   getCodeTaskActivityAction,
   startPreviewAction,
   retryCodeTaskWithStateAction,
@@ -321,6 +323,52 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
   );
 }
 
+function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaultRepo }: {
+  benchmarks: QaBenchmarkApp[];
+  projectId: string;
+  actor: string;
+  defaultOwner?: string;
+  defaultRepo?: string;
+}) {
+  if (!benchmarks.length) return null;
+  return (
+    <div className="ct-block" style={{ marginTop: 12 }}>
+      <div className="ct-block-title">End-to-end QA benchmarks</div>
+      <p className="detail" style={{ marginTop: 4 }}>
+        These are pinned product contracts, not canned demos. Launching one creates a strict governed code task with a durable plan, evidence bundle, and final verification report.
+      </p>
+      <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+        {benchmarks.map((benchmark) => (
+          <article key={benchmark.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, display: "grid", gap: 7 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+              <strong>{benchmark.name}</strong>
+              <span className="cap-badge tone-blue">{benchmark.tagline}</span>
+            </div>
+            <p className="detail" style={{ margin: 0 }}>{benchmark.summary}</p>
+            <p className="detail" style={{ margin: 0 }}>Exercises: {benchmark.focus.join(" · ")}</p>
+            <details>
+              <summary className="detail" style={{ cursor: "pointer" }}>Acceptance scenarios &amp; required evidence</summary>
+              <ul className="detail" style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+                {benchmark.acceptance_scenarios.map((scenario) => <li key={scenario}>{scenario}</li>)}
+              </ul>
+              <p className="detail" style={{ marginBottom: 0 }}>Verification: {benchmark.verification_commands.join(" · ")}</p>
+            </details>
+            <form action={startQaBenchmarkAppAction} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input type="hidden" name="project_id" value={projectId} />
+              <input type="hidden" name="actor" value={actor} />
+              <input type="hidden" name="benchmark_id" value={benchmark.id} />
+              <input type="hidden" name="owner" value={defaultOwner ?? ""} />
+              <input type="hidden" name="repo" value={defaultRepo ?? ""} />
+              <button className="cap-btn primary">Launch {benchmark.name}</button>
+              <span className="detail">Strict profile · starts a budgeted, review-gated task</span>
+            </form>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Three states, not two: passed (green ✓), failed (red ✗), or NOT RUN (muted –). A skipped
 // check must never read as a failure — that's what made a lean build look like it "failed".
 function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; note?: string; skipped?: boolean }) {
@@ -331,6 +379,65 @@ function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; no
       <span style={{ color, fontWeight: 700, width: 14, textAlign: "center" }}>{mark}</span>
       <span style={{ color: skipped ? "var(--muted)" : "var(--ink)" }}>{label}</span>
       <span className="detail">— {skipped ? (note && note !== "skipped" ? note : "not run at this rigor") : (note || (ok ? "passed" : "needs attention"))}</span>
+    </div>
+  );
+}
+
+function QaBenchmarkEvidence({ runId, benchmarkName }: { runId: string; benchmarkName: string }) {
+  const [report, setReport] = useState<QaBenchmarkReport | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void getQaBenchmarkReportAction(runId).then((value) => {
+      if (!cancelled) {
+        setReport(value);
+        setLoaded(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [runId]);
+  const tone = report?.passed ? "green" : "amber";
+  return (
+    <div className="ct-block">
+      <div className="ct-block-title">
+        QA benchmark evidence <span className={`cap-badge tone-${tone}`}>{report?.passed ? "certified" : "not certified"}</span>
+      </div>
+      <p className="detail" style={{ marginTop: 4 }}>
+        {benchmarkName} is certified only from recorded evidence; a completed run alone is insufficient.
+      </p>
+      {!loaded ? <p className="detail">Loading benchmark report…</p> : null}
+      {loaded && !report ? <p className="detail">Benchmark report is unavailable; no completion claim is shown.</p> : null}
+      {report ? (
+        <>
+          <div style={{ display: "grid", gap: 5, marginTop: 8 }}>
+            {report.results.map((result) => (
+              <GateRow key={result.command} label={result.label} ok={result.status === "pass"}
+                skipped={result.status === "not_recorded"}
+                note={`${result.command}${result.exit_code != null ? ` · exit ${result.exit_code}` : ""}`} />
+            ))}
+          </div>
+          <div style={{ marginTop: 12, display: "grid", gap: 5 }}>
+            <div className="ct-block-title" style={{ fontSize: 12.5 }}>
+              Benchmark scorecard <span className={`cap-badge tone-${report.scorecard.overall_score == null ? "muted" : report.scorecard.overall_status === "complete" ? "green" : "amber"}`}>
+                {report.scorecard.overall_score == null ? "unscored" : `${report.scorecard.overall_score}/100 · ${report.scorecard.overall_status}`}
+              </span>
+            </div>
+            <p className="detail" style={{ margin: 0 }}>
+              Evidence coverage: {report.scorecard.evidence_coverage_pct}% weighted. Missing dimensions stay unscored and do not improve the overall result.
+            </p>
+            {report.scorecard.dimensions.map((dimension) => (
+              <div key={dimension.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
+                <span>{dimension.label} <span className="detail">({dimension.weight}%)</span></span>
+                <span className={dimension.status === "scored" ? "detail" : "detail"}>
+                  {dimension.status === "scored" ? `${dimension.score}/100` : "not scored"}
+                </span>
+              </div>
+            ))}
+            <p className="detail" style={{ margin: 0 }}>{report.scorecard.tuning_note}</p>
+          </div>
+          <p className="detail" style={{ marginTop: 8 }}>{report.message}</p>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -485,6 +592,10 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             ? "Quality gate failed — the pipeline blocked the PR (fail-closed). See Review & quality gate below."
             : run.error}
         </div>
+      ) : null}
+
+      {run.finalize_ctx?.qa_benchmark ? (
+        <QaBenchmarkEvidence runId={run.id} benchmarkName={run.finalize_ctx.qa_benchmark.name} />
       ) : null}
 
       {hasGateEvidence ? (
@@ -669,12 +780,14 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   );
 }
 
-export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [] }: {
+export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], benchmarks = [], actor = "executive_console" }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
   apiReachable: boolean;
   previews?: PreviewRec[];
+  benchmarks?: QaBenchmarkApp[];
+  actor?: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -708,6 +821,14 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
       {showNew ? (
         <NewCodeTaskForm projectId={projectId} defaultOwner={lastRepo?.owner} defaultRepo={lastRepo?.repo} />
       ) : null}
+
+      <QaBenchmarkCatalog
+        benchmarks={benchmarks}
+        projectId={projectId}
+        actor={actor}
+        defaultOwner={lastRepo?.owner}
+        defaultRepo={lastRepo?.repo}
+      />
 
       {codeTasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>

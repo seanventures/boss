@@ -6572,6 +6572,98 @@ paths:
         '200': { description: Receipt-backed triage or review result }
         '409': { description: Worker lease is missing, expired, or owned by another worker }
         '422': { description: Job kind or normalized event payload is invalid }
+  /v1/qa/benchmark-apps:
+    get:
+      summary: List pinned full-stack QA benchmark application contracts
+      responses:
+        '200': { description: Benchmark catalog with acceptance scenarios and verification requirements }
+  /v1/qa/benchmark-apps/{benchmark_id}/runs:
+    post:
+      summary: Launch a benchmark through the strict governed code-task workflow
+      parameters:
+        - { name: benchmark_id, in: path, required: true, schema: { type: string, enum: [bugbox, hookwatch, approveit] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: executive_console }
+                task_id: { type: string }
+                owner: { type: string }
+                repo: { type: string }
+                base_branch: { type: string, default: main }
+                profile: { type: string, default: strict }
+      responses:
+        '201': { description: Budgeted benchmark code task queued }
+        '403': { description: Actor lacks task creation authority }
+        '404': { description: Unknown benchmark }
+        '422': { description: Invalid project or sandbox validation command }
+  /v1/qa/benchmark-apps/runs/{run_id}/report:
+    get:
+      summary: Read an evidence-backed benchmark completion report
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Durable observed evidence; incomplete checks remain not recorded }
+        '404': { description: Code task not found or is not a benchmark run }
+  /v1/qa/benchmark-apps/evaluations:
+    get:
+      summary: List durable benchmark scorecard and tuning-recommendation snapshots
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
+      responses:
+        '200': { description: Versioned terminal benchmark evidence snapshots }
+  /v1/qa/benchmark-apps/tuning-sweep:
+    post:
+      summary: Materialize changed terminal benchmark evidence for the tuning ledger
+      description: >
+        Worker-safe analysis-only sweep. It stores scorecard/recommendation snapshots but
+        does not call a model or provider, create a candidate diff, or apply a change.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id: { type: string }
+                limit: { type: integer, minimum: 1, maximum: 500, default: 100 }
+                actor: { type: string, default: qa_benchmark_scheduler }
+      responses:
+        '200': { description: Idempotent evidence-sweep result }
+        '422': { description: Invalid sweep limit }
+  /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal:
+    post:
+      summary: Create a decision-gated improvement proposal from benchmark evidence
+      description: >
+        Requires a developer-authored PR or configuration-diff reference. This endpoint
+        turns observed scorecard gaps into the existing governed self-improvement proposal
+        workflow; it never generates or applies the candidate change directly.
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, change_ref, diff_summary]
+              properties:
+                project_id: { type: string }
+                change_ref: { type: string, description: Developer-authored PR or config-diff reference }
+                diff_summary: { type: string }
+                actor: { type: string, default: vp_agents }
+                risk_tier: { type: integer, minimum: 1, maximum: 3, default: 2 }
+      responses:
+        '201': { description: Self-improvement proposal and its review decision created }
+        '403': { description: Actor lacks self-improvement management authority }
+        '404': { description: QA benchmark run not found }
+        '422': { description: Run has insufficient observed evidence or candidate change control is incomplete }
   /v1/code-tasks/{run_id}/feedback:
     get:
       summary: Read the durable feedback thread for a code-task lineage
@@ -6808,6 +6900,23 @@ paths:
         - { name: project_id, in: query, required: true, schema: { type: string } }
       responses:
         '200': { description: Agents, Panels, Workflow graphs/runs, tests, and A2A health/feed }
+  /v1/agent-studio/catalog-smoke:
+    post:
+      summary: Deterministically test every active Agent Studio catalog version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '200': { description: Per-agent durable test results, aggregate status, and zero-effect telemetry }
+        '403': { description: Actor lacks role-review authority }
+        '422': { description: Catalog is too large or an agent version is invalid }
   /v1/agent-studio/workflows/validate:
     post:
       summary: Validate and normalize a Workflow draft without publishing or executing it

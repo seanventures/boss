@@ -2539,6 +2539,29 @@ class SelfImprovementProposalCreateRequest(BaseModel):
         return self
 
 
+class QABenchmarkTuningProposalRequest(BaseModel):
+    """Create a governed improvement proposal from one benchmark report.
+
+    The caller must supply an already-authored candidate PR or configuration-diff
+    reference. Benchmark evidence may recommend a comparison, but it never creates
+    or applies a code/configuration change on its own.
+    """
+
+    project_id: str
+    change_ref: str
+    diff_summary: str
+    actor: str = "vp_agents"
+    risk_tier: int = Field(default=2, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def validate_change_control_fields(self) -> "QABenchmarkTuningProposalRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.change_ref = _require_text(self.change_ref, "change_ref")
+        self.diff_summary = _require_text(self.diff_summary, "diff_summary")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class SelfImprovementProposalSummary(BaseModel):
     id: str
     project_id: str

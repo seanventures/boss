@@ -435,6 +435,7 @@ from .schemas import (
     SecretRefListResponse,
     SecretRefSummary,
     SecretRefUpdateRequest,
+    QABenchmarkTuningProposalRequest,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -5380,6 +5381,202 @@ def build_web_app_endpoint(payload: dict):
         owner=payload.get("owner") or settings.target_github_owner,
         repo=payload.get("repo") or settings.target_github_repo,
         review=bool(payload.get("review", False)))
+
+
+@app.get("/v1/qa/benchmark-apps")
+def list_qa_benchmark_apps_endpoint():
+    """List pinned end-to-end application contracts used to evaluate BOSS itself.
+
+    Catalog reads are side-effect free. A benchmark is not a claimed result; it becomes
+    a governed code-task run only through the explicit launch endpoint below.
+    """
+    from boss_engine.services.benchmark_apps import list_benchmark_apps
+
+    return {"benchmark_apps": list_benchmark_apps()}
+
+
+@app.post("/v1/qa/benchmark-apps/{benchmark_id}/runs", status_code=201)
+def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
+    """Launch one pinned QA benchmark through the normal budgeted code-task workflow."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = str((payload or {}).get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required.")
+    from boss_engine.services.benchmark_apps import benchmark_task_input
+    from .services.code_task_service import start_code_task
+
+    try:
+        task = benchmark_task_input(benchmark_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    actor = str((payload or {}).get("actor") or "executive_console").strip()
+    try:
+        with begin(engine) as c:
+            require_project_actor(c, project_id, actor, "task_create")
+            run_id = start_code_task(
+                c,
+                project_id=project_id,
+                task_id=(payload or {}).get("task_id"),
+                title=task["title"],
+                instructions=task["instructions"],
+                acceptance_criteria=task["acceptance_criteria"],
+                test_commands=task["test_commands"],
+                owner=(payload or {}).get("owner") or settings.target_github_owner,
+                repo=(payload or {}).get("repo") or settings.target_github_repo,
+                base_branch=(payload or {}).get("base_branch") or "main",
+                finalize_ctx=task["finalize_ctx"],
+                jobs=jobs,
+                profile=(payload or {}).get("profile") or "strict",
+                risk_tier=2,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
+    }
+
+
+@app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
+def qa_benchmark_app_report_endpoint(run_id: str):
+    """Read the evidence-backed completion report for a benchmark run."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_apps import completion_report
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+        calls = c.execute(
+            text(
+                "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "
+                "FROM llm_calls WHERE code_task_run_id=:run_id ORDER BY created_at"
+            ),
+            {"run_id": run_id},
+        ).mappings().all()
+    if run is None:
+        raise HTTPException(status_code=404, detail="code task not found")
+    if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+        raise HTTPException(status_code=404, detail="code task is not a QA benchmark run")
+    return completion_report(run, llm_calls=[dict(call) for call in calls])
+
+
+@app.get("/v1/qa/benchmark-apps/evaluations")
+def list_qa_benchmark_evaluations(project_id: str, limit: int = 50):
+    """List durable scorecard snapshots produced by the benchmark tuning sweep."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_tuning import list_evaluations
+
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": list_evaluations(connection, project_id=project_id, limit=limit),
+        }
+
+
+@app.post("/v1/qa/benchmark-apps/tuning-sweep")
+def sweep_qa_benchmark_evaluations(payload: dict | None = None):
+    """Materialize changed terminal QA reports; safe for the worker's idle loop.
+
+    This performs no model, provider, SCM, or configuration write. It only stores
+    evidence snapshots and recommendation state, so a regular worker can safely
+    invoke it without gaining authority to approve or apply a tuning candidate.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    payload = payload or {}
+    project_id = str(payload.get("project_id") or "").strip() or None
+    limit = int(payload.get("limit") or 100)
+    actor = str(payload.get("actor") or "qa_benchmark_scheduler").strip()
+    from boss_engine.services.benchmark_tuning import sweep_terminal_benchmarks
+
+    try:
+        with begin(engine) as connection:
+            return sweep_terminal_benchmarks(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                limit=limit,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal",
+    response_model=SelfImprovementProposalDetail,
+    status_code=201,
+)
+def create_qa_benchmark_tuning_proposal(
+    run_id: str,
+    payload: QABenchmarkTuningProposalRequest,
+) -> SelfImprovementProposalDetail:
+    """Create a decision-gated tuning proposal from durable benchmark evidence.
+
+    The endpoint cannot generate or apply a candidate change. ``change_ref`` must
+    identify a developer-authored PR or configuration diff, and the resulting
+    proposal follows the established test, canary, approval, rollout, and rollback
+    state machine.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_apps import (
+        completion_report,
+        tuning_proposal_inputs,
+    )
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "self_improvement_manage",
+            )
+            run = load_code_task_run(connection, run_id)
+            if run is None or run.get("project_id") != payload.project_id:
+                raise HTTPException(status_code=404, detail="QA benchmark run not found.")
+            if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+                raise HTTPException(status_code=404, detail="Code task is not a QA benchmark run.")
+            calls = connection.execute(
+                text(
+                    "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "
+                    "FROM llm_calls WHERE code_task_run_id=:run_id ORDER BY created_at"
+                ),
+                {"run_id": run_id},
+            ).mappings().all()
+            report = completion_report(run, llm_calls=[dict(call) for call in calls])
+            proposal_input = tuning_proposal_inputs(
+                report,
+                change_ref=payload.change_ref,
+                diff_summary=payload.diff_summary,
+            )
+            row = self_improvement.create_proposal(
+                connection,
+                project_id=payload.project_id,
+                title=proposal_input["title"],
+                summary=proposal_input["summary"],
+                change_ref=proposal_input["change_ref"],
+                diff_summary=proposal_input["diff_summary"],
+                expected_impact=proposal_input["expected_impact"],
+                test_plan=proposal_input["test_plan"],
+                canary_scope=proposal_input["canary_scope"],
+                rollback_plan=proposal_input["rollback_plan"],
+                success_metrics=proposal_input["success_metrics"],
+                actor=payload.actor,
+                risk_tier=payload.risk_tier,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return self_improvement_detail_from_row(row)
 
 
 @app.get("/v1/pipeline-profiles")
@@ -15487,6 +15684,30 @@ def get_agent_studio_catalog(
                 "health": a2a.health(connection, project_id),
             },
         }
+
+
+@app.post("/v1/agent-studio/catalog-smoke")
+def run_agent_studio_catalog_smoke(
+    payload: AgentStudioActorRequest,
+) -> dict[str, Any]:
+    """Run the deterministic authority/contract check for every catalog agent.
+
+    The smoke suite is intentionally a fast, zero-model, zero-tool evaluation.
+    It records durable per-agent test evidence and never reclassifies an absent
+    active version as a pass.
+    """
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.run_catalog_smoke(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
 
 
 @app.post("/v1/agent-studio/workflows/validate")

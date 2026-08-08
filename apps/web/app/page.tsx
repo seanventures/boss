@@ -124,7 +124,7 @@ import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
-import { fetchCodeTasksFeed, fetchPreviews, structuredCodeTaskTests } from "../lib/code-tasks";
+import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
@@ -617,6 +617,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     codeTasksFeed,
     discoveryFeed,
     previewFeed,
+    qaBenchmarkApps,
     sandboxFeed,
     pipelineData,
     dashboardSnapshot,
@@ -695,6 +696,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCodeTasksFeed(activeProjectId),
       fetchDiscoveriesFeed(activeProjectId),
       fetchPreviews(activeProjectId),
+      fetchQaBenchmarkApps(),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
       fetchDashboard(activeProjectId),
@@ -6261,6 +6263,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
             previews={previewFeed}
+            benchmarks={qaBenchmarkApps}
+            actor={activeActorId}
           />
         </section>
 

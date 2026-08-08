@@ -3,6 +3,55 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — QA benchmark evidence and governed tuning loop
+
+- Extended BOSS-327 with a versioned, evidence-aware scorecard and a deterministic
+  all-agent catalog smoke test. Missing capability, browser, or independent-innovation
+  evidence remains explicitly unscored.
+- Added Plane issue `5c1eede4-a47f-4640-9902-23bd8efdf992` for the developer runner
+  and baseline-improvement loop, held In Progress pending PR merge.
+- Added `make qa-benchmark BENCHMARK=<id> PROJECT_ID=<id>` and
+  `scripts/run_qa_benchmark.py`, which launch through the BOSS control plane, wait for
+  durable completion, and export a JSON report without directly calling a provider,
+  model, sandbox, or SCM API.
+- Added `qa_benchmark_baseline_tuning`: scorecard gaps can become an existing
+  `ImprovementProposal` only with a developer-authored PR/config diff, isolated
+  comparable control, approval, QA-only canary, staged rollout, and rollback. It cannot
+  self-apply a candidate or silently normalize a degraded baseline.
+- Focused validation: 9 engine/API-boundary tests, workflow-runtime validation, Ruff,
+  145 web tests, web lint/typecheck, and production build pass. The API database fixture
+  was not available locally, so endpoint behavior is covered by an isolated boundary test
+  and will run in the normal Postgres suite.
+
+### Runtime completion follow-up
+
+- Added the durable `qa_benchmark_evaluations` ledger, keyed by terminal run and
+  scorecard revision. The scheduler records only changed evidence hashes and emits an
+  audit event; it cannot alter a baseline, route, workflow, or candidate change.
+- Wired the analysis-only tuning sweep into the idle worker loop and exposed list/sweep
+  control-plane APIs with typed client coverage.
+- Added `make qa-benchmark-e2e`, which drives queue → leased worker → terminal report
+  → durable evaluation ledger in a configured deployment. A supplied candidate reference
+  may continue to the existing decision-gated proposal path; no candidate is invented.
+- Validation follow-up: 42 focused Python tests, typed-client test, Ruff, and web
+  lint/typecheck pass. A real run still requires intentionally external model, budget,
+  sandbox, repository, Postgres, API, and worker configuration, so no synthetic pass is
+  recorded from this isolated worktree.
+
+---
+## 2026-08-08 — Codex — BOSS-327 governed QA benchmark apps
+
+- Added the pinned BugBox, HookWatch, and ApproveIt benchmark catalog so BOSS can evaluate
+  its own full-stack delivery path through the Code Tasks interface and governed code-task API,
+  rather than treating a generated screen as proof of delivery.
+- Each launch uses the normal task-create permission, budget reservation, leased code task,
+  strict review profile, durable plan, and authoritative verification evidence. The report endpoint
+  fails closed: absent plan or verification evidence remains `not_recorded`, never a pass.
+- Added typed API-client support, Mission Control launch controls, OpenAPI documentation, product
+  contract documentation, and focused catalog/evidence/client tests. API database-backed launch
+  testing remains dependent on a configured Postgres `DATABASE_URL` in the isolated worktree.
+
+---
 ## 2026-08-08 — Codex — GA security integration and release-gate reconciliation
 
 - Reconciled the critical security contributor stack without rewriting its

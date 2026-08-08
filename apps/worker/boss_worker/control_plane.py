@@ -164,6 +164,16 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def sweep_qa_benchmark_evaluations(self) -> dict[str, Any]:
+        """Persist changed terminal benchmark reports as tuning evidence snapshots.
+
+        Unlike an improvement rollout, this is analysis-only: the API does not create
+        a candidate diff, spend budget, or apply any configuration.
+        """
+        response = self._client.post("/v1/qa/benchmark-apps/tuning-sweep", json={})
+        response.raise_for_status()
+        return response.json()
+
     def create_infra_droplet(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/infra/droplets", json=payload)
         response.raise_for_status()

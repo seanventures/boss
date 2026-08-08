@@ -696,6 +696,37 @@ def test_agent_studio_catalog_api_exposes_seeded_objects(client):
     assert "health" in payload["a2a"]
 
 
+def test_agent_studio_catalog_smoke_checks_every_seeded_agent_without_external_effects(client):
+    settings = get_settings()
+
+    response = client.post(
+        "/v1/agent-studio/catalog-smoke",
+        json={"project_id": settings.default_project_id, "actor": "ceo"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["agent_count"] == 13
+    assert payload["passed_count"] + payload["failed_count"] + payload["blocked_count"] == 13
+    assert payload["execution_mode"] == "deterministic_compile_only"
+    assert payload["model_calls"] == payload["tool_calls"] == payload["external_effects"] == 0
+    assert {item["agent_key"] for item in payload["items"]} == {
+        "backend_engineer",
+        "cfo",
+        "chief_architect",
+        "chief_operator",
+        "database_administrator",
+        "devops_engineer",
+        "frontend_engineer",
+        "full_stack_engineer",
+        "product_manager",
+        "qa_engineer",
+        "security_engineer",
+        "ui_designer",
+        "ux_engineer",
+    }
+
+
 def test_agent_studio_validates_workflow_drafts_without_publishing(client):
     settings = get_settings()
     definitions_before = client.get(

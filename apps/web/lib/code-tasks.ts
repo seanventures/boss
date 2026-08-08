@@ -3,6 +3,7 @@ import {
   type CodeTaskRun,
   type CodeTaskTestResult,
   type PreviewRec,
+  type QaBenchmarkApp,
 } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
@@ -50,5 +51,13 @@ export async function fetchCodeTasksFeed(projectId = PROJECT_ID): Promise<CodeTa
       return emptyCodeTaskFeed(error.message, resolved);
     }
     return emptyCodeTaskFeed("API unreachable", resolved);
+  }
+}
+
+export async function fetchQaBenchmarkApps(): Promise<QaBenchmarkApp[]> {
+  try {
+    return (await client.getQaBenchmarkApps()).benchmark_apps ?? [];
+  } catch {
+    return [];
   }
 }

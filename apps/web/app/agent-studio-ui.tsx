@@ -33,6 +33,7 @@ import {
   createStudioWorkflow,
   publishStudioWorkflowVersion,
   runStudioAgent,
+  runStudioCatalogSmoke,
   runStudioPanel,
   runStudioWorkflow,
   testStudioAgent,
@@ -243,6 +244,13 @@ export function AgentStudio({
     });
   };
 
+  const runCatalogSmoke = () => {
+    setResult(undefined);
+    startTransition(async () => {
+      setResult(await runStudioCatalogSmoke(feed.projectId));
+    });
+  };
+
   const parseWorkflowSpec = (): Record<string, unknown> | undefined => {
     try {
       const parsed = JSON.parse(workflowSpec) as unknown;
@@ -344,6 +352,9 @@ export function AgentStudio({
             </small>
           </div>
         </div>
+        <button className="as-button primary" disabled={pending} onClick={runCatalogSmoke}>
+          <Flask /> {pending ? "Running catalog checks…" : `Smoke test all ${feed.agents.length} agents`}
+        </button>
       </header>
 
       <div className="as-metrics" aria-label="Agent Studio summary">
