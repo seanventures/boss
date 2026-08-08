@@ -221,10 +221,27 @@ def _ssh_key_file(settings: Settings) -> str:
 
 
 def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: int = 180):
-    return subprocess.run(
-        ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-         "-p", str(port), f"{user}@{host}", command],
-        capture_output=True, text=True, timeout=timeout)
+    """Run a command on the host. A host that does not answer is a RESULT, not an exception.
+
+    Every caller here checks `returncode` — bootstrap, destroy, the deploy itself. Only one
+    thing broke that contract: `subprocess.run` raises `TimeoutExpired` when the host hangs,
+    and nothing caught it. So tearing down a target whose box had gone away returned HTTP 500
+    with a subprocess traceback, when the honest answer is "the host did not respond in 180s".
+
+    `ConnectTimeout` bounds the TCP connect separately, so an unroutable address fails in
+    seconds instead of occupying the whole budget.
+    """
+    argv = ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+            "-o", f"ConnectTimeout={max(5, min(timeout, 20))}",
+            "-p", str(port), f"{user}@{host}", command]
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, returncode=124,   # the conventional timeout code, as `timeout(1)` uses
+            stdout="",
+            stderr=f"ssh to {user}@{host} did not respond within {timeout}s — the host may be "
+                   f"stopped, unreachable, or blocking port {port}.")
 
 
 def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_port: int,

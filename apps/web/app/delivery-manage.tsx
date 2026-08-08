@@ -16,7 +16,8 @@
  *     this is meant to remove.
  */
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   bindSecretAction, bootstrapTargetAction, createTargetAction, deployObservabilityAction,
@@ -174,7 +175,8 @@ function Field({ label, ...rest }: { label: string } & React.InputHTMLAttributes
 // Secrets
 // --------------------------------------------------------------------------- //
 export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
-  const [pending, start] = useTransition();
+  const { busy, run: perform } = useBusyAction();
+  const pending = !!busy;
   const [msg, setMsg] = useState<string | null>(null);
   const [publicKey, setPublicKey] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -184,26 +186,29 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
 
   const secrets = initial?.secrets ?? [];
 
-  const upload = () => start(async () => {
+  const upload = () => {
     const gaps = missingFields({ name, value });
     if (gaps.length) { setMsg(`fill in: ${gaps.join(", ")}`); return; }
-    setMsg("uploading…"); setPublicKey(null);
-    const out = await putSecretAction({ name, value, secret_kind: kind, backend });
+    setMsg(null); setPublicKey(null);
+    void perform("Uploading", async () => {
+    const out: any = await putSecretAction({ name, value, secret_kind: kind, backend });
     // The value is cleared immediately: it has been written through, and keeping it in a form
     // field is keeping a secret in the browser for no reason.
     setValue("");
     setMsg(out?.error ? `failed: ${out.error}` : `stored ${out.name} (${out.fingerprint || out.last4 || "recorded"})`);
-  });
+    }); };
 
-  const keygen = () => start(async () => {
+  const keygen = () => {
     const gaps = missingFields({ name });
     if (gaps.length) { setMsg(`fill in: ${gaps.join(", ")}`); return; }
-    setMsg("generating…"); setPublicKey(null);
-    const out = await generateKeypairAction({ name, backend });
-    if (out?.error) { setMsg(`failed: ${out.error}`); return; }
-    setPublicKey(out.public_key);
-    setMsg(`generated ${out.fingerprint} — install the PUBLIC key below on the host`);
-  });
+    setMsg(null); setPublicKey(null);
+    void perform("Generating", async () => {
+      const out: any = await generateKeypairAction({ name, backend });
+      if (out?.error) { setMsg(`failed: ${out.error}`); return; }
+      setPublicKey(out.public_key);
+      setMsg(`generated ${out.fingerprint} — install the PUBLIC key below on the host`);
+    });
+  };
 
   return (
     <section className="ct-block">
@@ -236,11 +241,11 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
         <Field label="value (write-only)" type="password" value={value}
                placeholder="paste — never shown again"
                onChange={(e) => setValue(e.target.value)} />
-        <button style={btn} disabled={pending} onClick={upload}>Upload</button>
-        <button style={btn} disabled={pending} onClick={keygen}
-                title="BOSS generates the pair, keeps the private half, and shows you the public one">
-          Generate keypair
-        </button>
+        <ActionButton label="Upload" busyLabel="Uploading" busy={busy === "Uploading"}
+                      onClick={upload} />
+        <ActionButton label="Generate keypair" busyLabel="Generating"
+                      busy={busy === "Generating"} onClick={keygen}
+                      title="BOSS generates the pair, keeps the private half, and shows you the public one" />
         {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
       </div>
 
@@ -281,8 +286,8 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
               <td style={{ color: s.status === "active" ? "#3fb950" : "#d29922" }}>{s.status}</td>
               <td>
                 <button style={btn} disabled={pending}
-                        onClick={() => start(async () => {
-                          const out = await verifySecretAction(s.secret_ref_id);
+                        onClick={() => void perform("Verifying", async () => {
+                          const out: any = await verifySecretAction(s.secret_ref_id);
                           setMsg(out?.resolvable
                             ? `${s.name}: resolves ✓${out.fingerprint_unchanged === false ? " (FINGERPRINT CHANGED)" : ""}`
                             : `${s.name}: ${out?.error || "cannot resolve"}`);
@@ -315,8 +320,7 @@ export type Observability = {
 export function MonitoringPanel({ initial, hostTargetId }: {
   initial?: Observability | null; hostTargetId?: string;
 }) {
-  const [pending, start] = useTransition();
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busy, run: perform } = useBusyAction();
   const [msg, setMsg] = useState<string | null>(null);
   const data = initial;
 
@@ -353,20 +357,19 @@ export function MonitoringPanel({ initial, hostTargetId }: {
                 label={data.deployed ? "Redeploy stack" : "Deploy monitoring stack"}
                 busyLabel="Deploying stack"
                 title="Regenerate the config from the registry and deploy"
-                onClick={() => start(async () => {
+                onClick={() => {
                   if (!hostTargetId) {
                     setMsg("no active deployment target — the stack borrows a host and "
                            + "credential from one, so onboard an app first");
                     return;
                   }
-                  setMsg(null); setBusy("Deploying stack");
-                  let out: any;
-                  try { out = await deployObservabilityAction(hostTargetId!); }
-                  finally { setBusy(null); }
+                  setMsg(null);
+                  void perform("Deploying stack", async () => {
+                  const out: any = await deployObservabilityAction(hostTargetId!);
                   setMsg(out?.error
                     ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 200)}`
                     : `stack deployed — ${out.apps?.length ?? 0} app(s) on ${out.grafana_url}`);
-                })} />
+                  }); }} />
         {data.grafana_url && (
           <a href={data.grafana_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
             Open Grafana ↗
@@ -417,10 +420,10 @@ export function MonitoringPanel({ initial, hostTargetId }: {
 // --------------------------------------------------------------------------- //
 export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const [open, setOpen] = useState(false);
-  const [pending, start] = useTransition();
+  const { busy, run: perform } = useBusyAction();
+  const pending = !!busy;
   const [step, setStep] = useState(1);
   const [log, setLog] = useState<string[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
   // What BOSS is configured to clone. Shown rather than assumed: the form used to take a bare
   // repo NAME and silently prepend an owner from config, so nothing on screen said which
   // GitHub repository would actually be fetched.
@@ -458,7 +461,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const say = (line: string) => setLog((l) => [...l, line]);
 
-  const create = () => start(async () => {
+  const create = () => { void perform("Creating target", async () => {
     // Normalise before validating, so a pasted URL is accepted rather than rejected for a
     // reason the operator cannot see.
     const user = form.target_ref.includes("@") ? form.target_ref.split("@")[0] : "";
@@ -484,8 +487,6 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
           + "or the deploy cannot tell them apart");
       return;
     }
-    setBusy("Creating target");
-    try {
     say("registering target…");
     const out = await createTargetAction({
       app_name: form.app_name, repo: form.repo, environment: form.environment,
@@ -504,12 +505,9 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
       say(bound?.error ? `binding failed: ${bound.error}` : "credential bound");
     }
     setStep(2);
-    } finally { setBusy(null); }
-  });
+  }); };
 
-  const bootstrap = () => start(async () => {
-    setBusy("Preparing host");
-    try {
+  const bootstrap = () => { void perform("Preparing host", async () => {
     if (!targetId) return;
     say("preparing the host…");
     const out = await bootstrapTargetAction(targetId, true);
@@ -518,29 +516,25 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
     if (out.applied_port) say(`port ${out.applied_port} written to the target`);
     setStep(3);
-    } finally { setBusy(null); }
-  });
+  }); };
 
-  const check = () => start(async () => {
-    setBusy("Running preflight");
-    try {
+  const check = () => { void perform("Running preflight", async () => {
     if (!targetId) return;
     say("preflight…");
     const out = await preflightTargetAction(targetId);
     setPreflight(out);
     (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
     if (out.ready) say("✓ ready to deploy");
-    } finally { setBusy(null); }
-  });
+  }); };
 
-  const finish = () => start(async () => {
+  const finish = () => { void perform("Finishing", async () => {
     if (!targetId) return;
     if (form.auto_deploy) {
       await setAutoDeployAction(targetId, { auto_deploy: true });
       say("auto-deploy on: merges to this repo will ship automatically");
     }
     say("onboarded — use Deploy to ship it now");
-  });
+  }); };
 
   if (!open) {
     return (
@@ -761,17 +755,58 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
 // --------------------------------------------------------------------------- //
 /** Removing an app. Kept behind a disclosure and a typed name, because a destructive action
  *  reachable by one click is a destructive action taken by accident. */
-function TeardownControls({ target }: { target: { id: string; app_name: string } }) {
+
+/**
+ * Run one action, and tell the truth about it while it runs.
+ *
+ * Two obligations that were being met separately and therefore inconsistently:
+ *
+ *   1. FEEDBACK STARTS ON THE CLICK. These handlers used `useTransition`, and a state update
+ *      made inside a transition is low priority — React is free to defer exactly the render
+ *      that would show the spinner. So `Destroy + data`, which takes ten to thirty seconds of
+ *      SSH, sat there looking like a dead button and then finished. The busy flag is now set
+ *      OUTSIDE any transition, so the first paint after the click already shows it.
+ *
+ *   2. THE PAGE REFRESHES AFTER. Every panel here is server-rendered from the API, so
+ *      destroying a target changed the database and left the table showing it as active. A
+ *      console that needs a manual reload to tell the truth is a console you cannot trust.
+ *      `router.refresh()` re-runs the server component with fresh data.
+ *
+ * Refreshing in `finally`: a failed destroy may still have removed the container, and showing
+ * the pre-click state after a partial failure is the worse of the two wrongs.
+ */
+function useBusyAction(onChanged?: () => void | Promise<void>) {
+  const router = useRouter();
+  const [busy, setBusy] = useState<string | null>(null);
+  const run = async (label: string, fn: () => Promise<unknown>): Promise<any> => {
+    setBusy(label);
+    try {
+      return await fn();
+    } finally {
+      setBusy(null);
+      // Both, and neither is redundant. `router.refresh()` updates every OTHER panel fed by
+      // the server render; `onChanged` re-fetches the one panel that owns this row, because
+      // the server refresh alone left a deleted target on screen until a manual reload.
+      router.refresh();
+      await onChanged?.();
+    }
+  };
+  return { busy, run };
+}
+
+function TeardownControls({ target, onChanged }: {
+  target: { id: string; app_name: string }; onChanged?: () => void | Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
-  const [pending, start] = useTransition();
   const [confirm, setConfirm] = useState("");
   const [withData, setWithData] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   // Which action is in flight, so the indicator says "Destroying" rather than a generic
   // "working" that could mean either verb.
-  const [busy, setBusy] = useState<string | null>(null);
+  const { busy, run: perform } = useBusyAction(onChanged);
+  const pending = !!busy;
 
-  const run = (mode: "stop" | "destroy") => start(async () => {
+  const run = async (mode: "stop" | "destroy") => {
     // Validate on CLICK rather than by disabling the button. A disabled control that explains
     // itself only in a tooltip is indistinguishable from a broken one: the click does nothing
     // and says nothing, which is exactly how this read the first time someone used it.
@@ -781,25 +816,19 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
       return;
     }
     setMsg(null);
-    setBusy(mode === "stop" ? "Stopping" : (withData ? "Destroying + data" : "Destroying"));
-    // finally, not a trailing call: an indicator that never stops asserts work is happening
-    // when it is not, which is a worse lie than showing nothing.
-    let out: any;
-    try {
-      out = await teardownTargetAction(target.id, {
-        stop_only: mode === "stop",
-        include_data: mode === "destroy" && withData,
-        confirm: mode === "stop" ? undefined : confirm,
-      });
-    } finally {
-      setBusy(null);
-    }
+    const label = mode === "stop" ? "Stopping"
+      : (withData ? "Destroying + data" : "Destroying");
+    const out: any = await perform(label, () => teardownTargetAction(target.id, {
+      stop_only: mode === "stop",
+      include_data: mode === "destroy" && withData,
+      confirm: mode === "stop" ? undefined : confirm,
+    }));
     if (out?.error) { setMsg(`failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 160)}`); return; }
     const freed = out.reclaimed_kb ? `${(out.reclaimed_kb / 1024).toFixed(1)} MB reclaimed` : "";
     setMsg(`${(out.removed || []).join("; ")}${freed ? ` — ${freed}` : ""}`
       + (out.data_kept_kb ? ` (data kept: ${(out.data_kept_kb / 1024).toFixed(1)} MB)` : ""));
     setConfirm("");
-  });
+  };
 
   if (!open) {
     return <button style={{ ...btn, borderColor: "rgba(248,81,73,.4)" }}
@@ -831,15 +860,19 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
   );
 }
 
-export function TargetControls({ target, shipped }: {
+export function TargetControls({ target, shipped, onChanged }: {
   shipped?: boolean;
+  onChanged?: () => void | Promise<void>;
   target: { id: string; app_name: string; status?: string; repo?: string;
             repo_owner?: string | null; auto_deploy?: boolean; paused?: boolean };
 }) {
-  const [pending, start] = useTransition();
   const [state, setState] = useState({ auto: !!target.auto_deploy, paused: !!target.paused });
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  // Feedback set outside any transition, and the page refreshed after — see useBusyAction.
+  // "Delete permanently" and "Destroy + data" both read as dead buttons without this: they do
+  // ten to thirty seconds of SSH work with the old state still on screen when they finish.
+  const { busy, run: perform } = useBusyAction(onChanged);
+  const pending = !!busy;
   const [confirm, setConfirm] = useState("");
   const [ref, setRef] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
@@ -876,23 +909,19 @@ export function TargetControls({ target, shipped }: {
         </span>
         <ActionButton label="Restore" busyLabel="Restoring" busy={busy === "Restoring"}
                 title="Reactivate, re-prepare the host, and deploy again"
-                onClick={() => start(async () => {
-                  setMsg(null); setBusy("Restoring");
-                  let back: any, boot: any;
-                  try {
-                  back = await reactivateTargetAction(target.id);
+                onClick={() => { setMsg(null); void perform("Restoring", async () => {
+                  const back: any = await reactivateTargetAction(target.id);
                   if (back?.error) { setMsg(`failed: ${back.error}`); return; }
                   // The host directories went with the destroy, so they have to be recreated
                   // before anything can be transferred into them.
-                  boot = await bootstrapTargetAction(target.id, false);
+                  const boot: any = await bootstrapTargetAction(target.id, false);
                   if (boot?.error || boot?.problems?.length) {
                     setMsg(`restored, but the host needs attention: `
                            + `${boot?.error || boot.problems.join("; ")}`);
                     return;
                   }
                   setMsg("restored and host prepared — press Deploy to ship it again");
-                  } finally { setBusy(null); }
-                })} />
+                }); }} />
         {/* Restore reuses the configuration and history; delete throws both away so the name
             is free again. Both are offered because "start from scratch" is a legitimate intent
             that restore cannot express. */}
@@ -903,32 +932,32 @@ export function TargetControls({ target, shipped }: {
                 busy={busy === "Deleting"}
                 style={{ opacity: confirm === target.app_name ? 1 : 0.65 }}
                 title="Delete this target and its deployment history so the name can be reused"
-                onClick={() => start(async () => {
+                onClick={() => {
                   if (confirm !== target.app_name) {
                     setMsg(`type “${target.app_name}” to delete it permanently — its deployment `
                            + `history goes with it`);
                     return;
                   }
-                  setMsg(null); setBusy("Deleting");
-                  let out: any;
-                  try { out = await purgeTargetAction(target.id, confirm); }
-                  finally { setBusy(null); }
+                  setMsg(null);
+                  void perform("Deleting", async () => {
+                  const out: any = await purgeTargetAction(target.id, confirm);
                   setMsg(out?.error
                     ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 180)}`
                     : `deleted — ${out.deployment_runs_deleted} run(s) and `
                       + `${out.health_samples_deleted} health sample(s) removed. The name is free.`);
-                })} />
+                  }); }} />
         {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
       </span>
     );
   }
 
-  const toggle = (patch: { auto_deploy?: boolean; paused?: boolean }) => start(async () => {
-    const out = await setAutoDeployAction(target.id, patch);
-    if (out?.error) { setMsg(out.error); return; }
-    setState({ auto: !!out.auto_deploy, paused: !!out.paused });
-    setMsg(null);
-  });
+  const toggle = (patch: { auto_deploy?: boolean; paused?: boolean }) =>
+    void perform("Saving", async () => {
+      const out: any = await setAutoDeployAction(target.id, patch);
+      if (out?.error) { setMsg(out.error); return; }
+      setState({ auto: !!out.auto_deploy, paused: !!out.paused });
+      setMsg(null);
+    });
 
   return (
    <div style={{ display: "grid", gap: 8 }}>
@@ -962,19 +991,16 @@ export function TargetControls({ target, shipped }: {
                 ? "Ship this target again — a new deployment run at the branch or sha above"
                 : "Ship this target for the first time"}
               busy={busy === "Deploying"}
-              onClick={() => start(async () => {
-                setMsg(null); setBusy("Deploying"); setRunId(null);
-                let out: any;
-                try {
-                  out = await deployTargetAction(target.id, ref);
-                } finally { setBusy(null); }
-                if (out?.error || !out?.deployment_run_id) {
-                  setMsg(`failed: ${out?.error || "no deployment was started"}`);
-                  return;
-                }
-                setRunId(out.deployment_run_id);
-              })} />
-      <TeardownControls target={target} />
+              onClick={() => { setMsg(null); setRunId(null);
+                void perform("Deploying", async () => {
+                  const out: any = await deployTargetAction(target.id, ref);
+                  if (out?.error || !out?.deployment_run_id) {
+                    setMsg(`failed: ${out?.error || "no deployment was started"}`);
+                    return;
+                  }
+                  setRunId(out.deployment_run_id);
+                }); }} />
+      <TeardownControls target={target} onChanged={onChanged} />
       {msg && <span className="detail">{msg}</span>}
     </div>
     {runId && (

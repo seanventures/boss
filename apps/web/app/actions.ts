@@ -2391,6 +2391,33 @@ export async function getDeliveryPipelineAction(projectId?: string): Promise<any
 // Server actions rather than browser fetches: the API has no CORS headers, and routing these
 // through the server also keeps the API key out of the browser.
 
+/** The reason a delivery call failed, as a sentence.
+ *
+ * FastAPI's `detail` is sometimes a string and sometimes a structure — teardown refuses with
+ * `{ok, removed, refused:[...]}`. The client only handled the string case, so a refusal that
+ * said "ssh key unusable: No SSH key configured" reached the operator as the text "409". The
+ * reason existed at every layer and was discarded at the last one.
+ */
+function failureText(detail: unknown, status: number): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as Record<string, unknown>;
+    for (const key of ["refused", "problems", "errors"]) {
+      const list = d[key];
+      if (Array.isArray(list) && list.length) return list.map(String).join("; ");
+    }
+    if (typeof d.reason === "string") return d.reason;
+    // Pydantic validation errors: [{loc, msg}, ...]
+    if (Array.isArray(detail)) {
+      return (detail as { loc?: unknown[]; msg?: string }[])
+        .map((e) => `${(e.loc || []).slice(-1)}: ${e.msg}`).join("; ");
+    }
+    const text = JSON.stringify(detail);
+    if (text && text !== "{}") return text.slice(0, 300);
+  }
+  return `${status}`;
+}
+
 async function post(path: string, body: unknown): Promise<any> {
   try {
     const res = await fetch(`${API_URL}${path}`, {
@@ -2400,7 +2427,7 @@ async function post(path: string, body: unknown): Promise<any> {
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: typeof out?.detail === "string" ? out.detail : `${res.status}` };
+    if (!res.ok) return { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
@@ -2456,7 +2483,7 @@ export async function reactivateTargetAction(targetId: string): Promise<any> {
       cache: "no-store",
     });
     const out = await res.json().catch(() => ({}));
-    if (!res.ok) return { error: typeof out?.detail === "string" ? out.detail : `${res.status}` };
+    if (!res.ok) return { error: failureText(out?.detail, res.status) };
     return out;
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };

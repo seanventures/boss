@@ -17,8 +17,9 @@
  * rendering an empty table that reads like a failure.
  */
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { getDeliveryPipelineAction } from "./actions";
 import { OnboardWizard, SecretsPanel, TargetControls, type SecretsView } from "./delivery-manage";
 import { DeployWizard, RecentDeployments } from "./deploy-ui";
 
@@ -233,7 +234,19 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
 export function DeliveryPipeline({ initial, secrets, deployments }: {
   initial?: Pipeline | null; secrets?: SecretsView | null; deployments?: any;
 }) {
-  const data = initial;
+  // The panel owns its data.
+  //
+  // `router.refresh()` alone was not enough: the server DID re-render (the API log shows the
+  // pipeline re-fetched immediately after a delete) but the client kept the old rows, so a
+  // purged target sat in the table until someone reloaded the page by hand. Holding the data
+  // in state and re-asking after a mutation does not depend on that reconciliation landing.
+  const [data, setData] = useState(initial);
+  useEffect(() => { setData(initial); }, [initial]);
+  const reload = useCallback(async () => {
+    const fresh = await getDeliveryPipelineAction();
+    if (fresh && !fresh.error) setData(fresh);
+  }, []);
+
   // Has this target ever shipped? Only used to LABEL the button — an app already running is
   // being replaced, and calling that "Deploy" reads like it might do nothing, or like there is
   // a separate redeploy elsewhere. There isn't: it is one action either way.
@@ -287,7 +300,8 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
                   {/* Trigger controls sit with the target they act on, so "deploys on merge"
                       is read in the same glance as which host it deploys to. */}
                   <td colSpan={6} style={{ paddingBottom: 10 }}>
-                    <TargetControls target={t} shipped={everShipped.has(t.app_name)} />
+                    <TargetControls target={t} shipped={everShipped.has(t.app_name)}
+                                    onChanged={reload} />
                   </td>
                 </tr>
                 </>
