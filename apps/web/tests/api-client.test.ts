@@ -9,6 +9,7 @@ describe("createBossApiClient", () => {
       { benchmark_apps: [{ id: "bugbox", name: "BugBox", tagline: "Mini issue tracker", summary: "CRUD", focus: [], acceptance_scenarios: [], completion_contract: [], verification_commands: [], scoring_dimensions: [], score_baselines: {} }] },
       { status: "queued", run_id: "crun_benchmark", benchmark: { id: "bugbox", name: "BugBox" } },
       { id: "imp_tuning" },
+      { status: "succeeded", checked_count: 1, changed_count: 1, ready_for_candidate_count: 1, items: [] },
     ];
     const client = createBossApiClient({
       baseUrl: "http://127.0.0.1:8000",
@@ -29,6 +30,9 @@ describe("createBossApiClient", () => {
       change_ref: "github://boss/pull/141",
       diff_summary: "Adjust strict repair policy.",
     });
+    const sweep = await client.sweepQaBenchmarkEvaluations({
+      project_id: "boss-dogfood",
+    });
 
     expect(catalog.benchmark_apps[0].id).toBe("bugbox");
     expect(launch.run_id).toBe("crun_benchmark");
@@ -39,6 +43,8 @@ describe("createBossApiClient", () => {
     });
     expect(proposal.id).toBe("imp_tuning");
     expect(calls[2].url).toBe("http://127.0.0.1:8000/v1/qa/benchmark-apps/runs/crun_benchmark/tuning-proposal");
+    expect(sweep.changed_count).toBe(1);
+    expect(calls[3].url).toBe("http://127.0.0.1:8000/v1/qa/benchmark-apps/tuning-sweep");
   });
 
   it("posts conversational turns through the agent contract", async () => {

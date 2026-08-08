@@ -23,6 +23,21 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
   was not available locally, so endpoint behavior is covered by an isolated boundary test
   and will run in the normal Postgres suite.
 
+### Runtime completion follow-up
+
+- Added the durable `qa_benchmark_evaluations` ledger, keyed by terminal run and
+  scorecard revision. The scheduler records only changed evidence hashes and emits an
+  audit event; it cannot alter a baseline, route, workflow, or candidate change.
+- Wired the analysis-only tuning sweep into the idle worker loop and exposed list/sweep
+  control-plane APIs with typed client coverage.
+- Added `make qa-benchmark-e2e`, which drives queue → leased worker → terminal report
+  → durable evaluation ledger in a configured deployment. A supplied candidate reference
+  may continue to the existing decision-gated proposal path; no candidate is invented.
+- Validation follow-up: 42 focused Python tests, typed-client test, Ruff, and web
+  lint/typecheck pass. A real run still requires intentionally external model, budget,
+  sandbox, repository, Postgres, API, and worker configuration, so no synthetic pass is
+  recorded from this isolated worktree.
+
 ---
 ## 2026-08-08 — Codex — BOSS-327 governed QA benchmark apps
 

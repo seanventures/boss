@@ -6610,6 +6610,33 @@ paths:
       responses:
         '200': { description: Durable observed evidence; incomplete checks remain not recorded }
         '404': { description: Code task not found or is not a benchmark run }
+  /v1/qa/benchmark-apps/evaluations:
+    get:
+      summary: List durable benchmark scorecard and tuning-recommendation snapshots
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
+      responses:
+        '200': { description: Versioned terminal benchmark evidence snapshots }
+  /v1/qa/benchmark-apps/tuning-sweep:
+    post:
+      summary: Materialize changed terminal benchmark evidence for the tuning ledger
+      description: >
+        Worker-safe analysis-only sweep. It stores scorecard/recommendation snapshots but
+        does not call a model or provider, create a candidate diff, or apply a change.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id: { type: string }
+                limit: { type: integer, minimum: 1, maximum: 500, default: 100 }
+                actor: { type: string, default: qa_benchmark_scheduler }
+      responses:
+        '200': { description: Idempotent evidence-sweep result }
+        '422': { description: Invalid sweep limit }
   /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal:
     post:
       summary: Create a decision-gated improvement proposal from benchmark evidence

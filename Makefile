@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e
 
 install: install-node install-python
 
@@ -114,6 +114,13 @@ qa-benchmark: install-python
 	@test -n "$(BENCHMARK)" || (echo "BENCHMARK is required (bugbox, hookwatch, or approveit)."; exit 2)
 	@test -n "$(PROJECT_ID)" || (echo "PROJECT_ID is required."; exit 2)
 	BOSS_PROJECT_ID="$(PROJECT_ID)" PYTHONPATH=.:engine $(PYTHON) scripts/run_qa_benchmark.py --benchmark "$(BENCHMARK)" $(if $(OWNER),--owner "$(OWNER)") $(if $(REPO),--repo "$(REPO)") $(if $(QA_BENCHMARK_OUTPUT),--output "$(QA_BENCHMARK_OUTPUT)")
+
+# End-to-end configured-deployment canary: queue -> leased worker -> terminal report -> durable tuning ledger.
+# Requires a running BOSS API/worker plus model, budget, sandbox, and repository configuration.
+qa-benchmark-e2e: install-python
+	@test -n "$(BENCHMARK)" || (echo "BENCHMARK is required (bugbox, hookwatch, or approveit)."; exit 2)
+	@test -n "$(PROJECT_ID)" || (echo "PROJECT_ID is required."; exit 2)
+	BOSS_PROJECT_ID="$(PROJECT_ID)" PYTHONPATH=.:engine $(PYTHON) scripts/run_qa_benchmark.py --benchmark "$(BENCHMARK)" --sweep-tuning $(if $(OWNER),--owner "$(OWNER)") $(if $(REPO),--repo "$(REPO)") $(if $(QA_BENCHMARK_OUTPUT),--output "$(QA_BENCHMARK_OUTPUT)")
 
 sandbox-template:
 	mkdir -p tmp

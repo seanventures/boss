@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 from apps.worker.boss_worker.control_plane import ControlPlaneClient, LeasedJob
+from apps.worker.boss_worker.main import _sweep_qa_benchmark_evaluations
 from apps.worker.boss_worker.runner import (
     AGENT_WORK_PRODUCT_STRATEGIES,
     agent_module_id_from_payload,
@@ -259,6 +260,19 @@ def test_control_plane_client_sends_bearer_api_key():
         assert client._client.headers["Authorization"] == "Bearer worker-secret"
     finally:
         client.close()
+
+
+def test_idle_worker_sweeps_terminal_benchmark_evidence_without_executing_a_change():
+    calls = []
+
+    class Client:
+        def sweep_qa_benchmark_evaluations(self):
+            calls.append("sweep")
+            return {"status": "succeeded", "changed_count": 0}
+
+    _sweep_qa_benchmark_evaluations(Client())
+
+    assert calls == ["sweep"]
 
 
 def test_worker_capabilities_include_infra_job_kinds():

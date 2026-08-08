@@ -10,6 +10,8 @@ from .runner import run_worker_cycle
 
 
 LOGGER = logging.getLogger("boss.worker")
+QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
+_last_qa_benchmark_sweep_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -38,6 +40,24 @@ def _sweep_deployment_health(client: ControlPlaneClient) -> None:
         client.sweep_deployment_health()
     except Exception:  # noqa: BLE001
         LOGGER.debug("health_sweep_failed", exc_info=True)
+
+
+def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
+    """Keep the benchmark evidence ledger current while the worker is idle.
+
+    The service compares report hashes and emits an event only when durable evidence
+    changed, so invoking it at the poll interval is inexpensive and cannot create a
+    tuning change or an external side effect.
+    """
+    global _last_qa_benchmark_sweep_monotonic
+    now = time.monotonic()
+    if now - _last_qa_benchmark_sweep_monotonic < QA_BENCHMARK_SWEEP_INTERVAL_SECONDS:
+        return
+    try:
+        client.sweep_qa_benchmark_evaluations()
+        _last_qa_benchmark_sweep_monotonic = now
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("qa_benchmark_sweep_failed", exc_info=True)
 
 
 def main() -> None:
@@ -90,6 +110,7 @@ def main() -> None:
                 continue
             if not ran_job:
                 _sweep_deployment_health(client)
+                _sweep_qa_benchmark_evaluations(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:
         client.close()

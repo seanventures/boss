@@ -65,6 +65,21 @@ export. `BOSS_API_URL` and `BOSS_API_KEY` select an authenticated control plane;
 are never placed in the output. `--no-wait` is available on `scripts/run_qa_benchmark.py`
 when an external worker will finish the run later.
 
+For a live, configured BOSS deployment, run the API and worker normally, then invoke:
+
+```bash
+python scripts/run_qa_benchmark.py --project-id <boss-project-id> \
+  --benchmark bugbox --sweep-tuning \
+  --output tmp/bugbox-e2e.json
+```
+
+That command proves the end-to-end control-plane path—queue, leased code-task execution,
+terminal report, and durable evaluation snapshot. It still requires an enabled coding model,
+budget, sandbox/repository configuration, and worker; BOSS deliberately fails visibly rather
+than faking a result when those prerequisites are absent. The worker also performs the
+idempotent, analysis-only tuning sweep from its idle loop, so completed reports stay current
+without an operator manually pressing refresh.
+
 The exported report is the input to a tuning comparison. It preserves the benchmark ID,
 scorecard version, observed-weight coverage, command evidence, cost/token telemetry, and
 unscored gaps, so a developer can compare like-for-like runs instead of optimizing from
@@ -89,6 +104,11 @@ The API endpoint is
 plan, and success metrics derived from the report. It does **not** choose a model, modify a
 workflow, alter a baseline, open a PR, or apply a change. A regression may not normalize the
 baseline: baseline version changes require the separate evidence-backed approval workflow.
+
+The runner can submit a known candidate in the same terminal flow with
+`--candidate-change-ref <PR-or-diff-ref> --candidate-diff-summary <summary>`. Those flags are
+intentionally mandatory as a pair: the system can discover an evidence gap autonomously, but
+it cannot invent or apply the proposed code/configuration change.
 
 ## Operator workflow
 

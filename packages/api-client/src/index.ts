@@ -1117,6 +1117,21 @@ export type QaBenchmarkTuningProposalRequest = {
   risk_tier?: number;
 };
 
+export type QaBenchmarkEvaluation = {
+  id: string;
+  project_id: string;
+  code_task_run_id: string;
+  benchmark_id: string;
+  scorecard_version: string;
+  status: "ready_for_candidate" | "not_ready";
+  overall_score: number | null;
+  observed_weight: number;
+  recommendation?: Record<string, unknown>;
+  evaluated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
 // One per-stage model call recorded for a code task (GET /v1/code-tasks/{id}/activity) —
 // the internal detail behind each phase: model, turns, latency, retries, cost, ok/error.
 export type LlmCallRow = {
@@ -5642,6 +5657,27 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<QaBenchmarkReport>(
         "GET", `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/report`,
       );
+    },
+    listQaBenchmarkEvaluations(projectId: string, limit = 50) {
+      return request<{ project_id: string; items: QaBenchmarkEvaluation[] }>(
+        "GET",
+        "/v1/qa/benchmark-apps/evaluations",
+        { query: { project_id: projectId, limit } },
+      );
+    },
+    sweepQaBenchmarkEvaluations(payload?: {
+      project_id?: string;
+      limit?: number;
+      actor?: string;
+    }) {
+      return request<{
+        status: string;
+        project_id?: string | null;
+        checked_count: number;
+        changed_count: number;
+        ready_for_candidate_count: number;
+        items: QaBenchmarkEvaluation[];
+      }>("POST", "/v1/qa/benchmark-apps/tuning-sweep", { body: payload ?? {} });
     },
     createQaBenchmarkTuningProposal(
       runId: string,

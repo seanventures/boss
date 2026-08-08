@@ -116,6 +116,22 @@ def parse_args() -> argparse.Namespace:
         help="Queue the durable run and print its ID without waiting for completion.",
     )
     parser.add_argument(
+        "--sweep-tuning",
+        action="store_true",
+        help="After terminal completion, materialize its scorecard in the durable tuning ledger.",
+    )
+    parser.add_argument(
+        "--candidate-change-ref",
+        help=(
+            "Developer-authored PR or configuration-diff reference to submit as a "
+            "decision-gated tuning candidate after terminal completion."
+        ),
+    )
+    parser.add_argument(
+        "--candidate-diff-summary",
+        help="Summary of the developer-authored candidate diff (required with --candidate-change-ref).",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Write the returned queue record or terminal evidence report to this JSON file.",
@@ -127,6 +143,14 @@ def main() -> int:
     args = parse_args()
     if args.poll_seconds <= 0 or args.timeout_seconds <= 0:
         raise SystemExit("--poll-seconds and --timeout-seconds must be positive.")
+    if bool(args.candidate_change_ref) != bool(args.candidate_diff_summary):
+        raise SystemExit(
+            "--candidate-change-ref and --candidate-diff-summary must be supplied together."
+        )
+    if args.no_wait and (args.sweep_tuning or args.candidate_change_ref):
+        raise SystemExit(
+            "--sweep-tuning and --candidate-change-ref require a terminal report; omit --no-wait."
+        )
 
     catalog = request_json(args.api_url, "GET", "/v1/qa/benchmark-apps", api_key=args.api_key)
     benchmark_ids = {
@@ -155,13 +179,38 @@ def main() -> int:
         api_key=args.api_key,
         body=run_payload,
     )
-    result = queued if args.no_wait else wait_for_report(
-        args.api_url,
-        str(queued["run_id"]),
-        api_key=args.api_key,
-        poll_seconds=args.poll_seconds,
-        timeout_seconds=args.timeout_seconds,
-    )
+    if args.no_wait:
+        result: dict[str, Any] = queued
+    else:
+        report = wait_for_report(
+            args.api_url,
+            str(queued["run_id"]),
+            api_key=args.api_key,
+            poll_seconds=args.poll_seconds,
+            timeout_seconds=args.timeout_seconds,
+        )
+        result = {"queue": queued, "report": report}
+        if args.sweep_tuning:
+            result["tuning_sweep"] = request_json(
+                args.api_url,
+                "POST",
+                "/v1/qa/benchmark-apps/tuning-sweep",
+                api_key=args.api_key,
+                body={"project_id": args.project_id},
+            )
+        if args.candidate_change_ref:
+            result["tuning_proposal"] = request_json(
+                args.api_url,
+                "POST",
+                f"/v1/qa/benchmark-apps/runs/{queued['run_id']}/tuning-proposal",
+                api_key=args.api_key,
+                body={
+                    "project_id": args.project_id,
+                    "actor": args.actor,
+                    "change_ref": args.candidate_change_ref,
+                    "diff_summary": args.candidate_diff_summary,
+                },
+            )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

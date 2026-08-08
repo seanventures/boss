@@ -5465,6 +5465,50 @@ def qa_benchmark_app_report_endpoint(run_id: str):
     return completion_report(run, llm_calls=[dict(call) for call in calls])
 
 
+@app.get("/v1/qa/benchmark-apps/evaluations")
+def list_qa_benchmark_evaluations(project_id: str, limit: int = 50):
+    """List durable scorecard snapshots produced by the benchmark tuning sweep."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_tuning import list_evaluations
+
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": list_evaluations(connection, project_id=project_id, limit=limit),
+        }
+
+
+@app.post("/v1/qa/benchmark-apps/tuning-sweep")
+def sweep_qa_benchmark_evaluations(payload: dict | None = None):
+    """Materialize changed terminal QA reports; safe for the worker's idle loop.
+
+    This performs no model, provider, SCM, or configuration write. It only stores
+    evidence snapshots and recommendation state, so a regular worker can safely
+    invoke it without gaining authority to approve or apply a tuning candidate.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    payload = payload or {}
+    project_id = str(payload.get("project_id") or "").strip() or None
+    limit = int(payload.get("limit") or 100)
+    actor = str(payload.get("actor") or "qa_benchmark_scheduler").strip()
+    from boss_engine.services.benchmark_tuning import sweep_terminal_benchmarks
+
+    try:
+        with begin(engine) as connection:
+            return sweep_terminal_benchmarks(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                limit=limit,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.post(
     "/v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal",
     response_model=SelfImprovementProposalDetail,
