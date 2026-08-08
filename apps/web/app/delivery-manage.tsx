@@ -424,6 +424,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const { busy, run: perform } = useBusyAction();
   const pending = !!busy;
   const [step, setStep] = useState(1);
+  const [deployRunId, setDeployRunId] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   // What BOSS is configured to clone. Shown rather than assumed: the form used to take a bare
   // repo NAME and silently prepend an owner from config, so nothing on screen said which
@@ -535,6 +536,23 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
     setPreflight(out);
     (out.problems || []).forEach((p: string) => say(`✗ ${p}`));
     if (out.ready) say("✓ ready to deploy");
+  }); };
+
+  /** Record the trigger choice, then ship it — the thing the operator came here to do. */
+  const deployNow = () => { void perform("Deploying", async () => {
+    if (!targetId) return;
+    if (form.auto_deploy) {
+      await setAutoDeployAction(targetId, { auto_deploy: true });
+      say("auto-deploy on: merges to this repo will ship automatically");
+    }
+    say("deploying…");
+    const out: any = await deployTargetAction(targetId);
+    if (out?.error || !out?.deployment_run_id) {
+      say(`failed to start: ${out?.error || "no deployment was started"}`);
+      return;
+    }
+    // Asynchronous: watch it rather than wait for it.
+    setDeployRunId(out.deployment_run_id);
   }); };
 
   const finish = () => { void perform("Finishing", async () => {
@@ -754,10 +772,22 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             Off by default. You can turn it on later, and pause it during an incident without
             losing the setting.
           </div>
-          <div>
-            <button style={btn} disabled={pending} onClick={finish}>Finish</button>
-            <button style={{ ...btn, marginLeft: 8 }} onClick={() => setOpen(false)}>Close</button>
+          {/* The last step of "Onboard an app" used to be a checkbox and Finish — which recorded
+              the trigger, printed "use Deploy to ship it now", and left the operator with a
+              registered destination and nothing running, hunting for a button in the table
+              below. A wizard whose last step is an instruction to go somewhere else has not
+              finished. Deploying is the point; it belongs here. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <ActionButton label="Deploy now →" busyLabel="Starting"
+                          busy={busy === "Deploying"} onClick={deployNow} />
+            <button style={btn} disabled={pending} onClick={finish}>
+              Finish without deploying
+            </button>
+            <button style={btn} onClick={() => setOpen(false)}>Close</button>
           </div>
+          {deployRunId && (
+            <div style={{ marginTop: 4 }}><LiveDeployment runId={deployRunId} /></div>
+          )}
         </div>
       )}
 
