@@ -1,5 +1,20 @@
 # Codex Handoff
 
+## 2026-08-08 BOSS-334 governed autonomous improvement
+
+- Branch `ai/codex/autonomous-improvement-loop` implements a BOSS-owned measured feedback
+  loop over the existing QA benchmark and self-improvement services. It does not generate,
+  merge, deploy, or self-apply changes.
+- `ImprovementProgram` pins the baseline/metric contract. `ImprovementTrial` requires one
+  mechanically observable configuration change and comparable evidence; only a deterministic
+  winner can create a hold-default proposal. The idle tuning sweep adopts a new measurement
+  baseline only after the linked proposal is already `rolled_out`.
+- OSS boundary decision: integrate Langfuse through OTel/API for analytics, allow DSPy behind
+  a candidate-generator adapter, and keep Temporal optional behind a future executor adapter.
+  External tools are projections/helpers, never canonical policy or promotion authorities.
+- Focused Python, worker, benchmark, real-Postgres API/state/event, bootstrap, Ruff, OpenAPI,
+  generated docs, and strict MkDocs checks are the required evidence before merge.
+
 ## 2026-08-08 GA security integration and release hold
 
 - Canonical `origin/main` is `8e8dd4e` after PR #136 integrated the critical

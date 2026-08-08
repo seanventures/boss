@@ -165,6 +165,8 @@ def clean_tables(engine):
             "feedback_messages",
             "feedback_threads",
             "app_previews",
+            "improvement_trials",
+            "improvement_programs",
             "qa_benchmark_evaluations",
             "code_task_runs",
             "meeting_runs",
