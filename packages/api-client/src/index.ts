@@ -6010,7 +6010,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     chatWithAgent(payload: AgentChatRequest) {
-      return request<AgentChatResponse>("POST", "/v1/agent/chat", {
+      return request<AgentChatResponse>("POST", "/v1/engine/agent/chat", {
         body: payload,
       });
     },

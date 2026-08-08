@@ -6373,7 +6373,7 @@ def get_deployment_run_endpoint(deployment_run_id: str):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.deployment_steps import STEP_LABELS, planned_steps
+    from .services.deployment_steps import planned_steps
 
     with begin(engine) as connection:
         row = connection.execute(

@@ -1,5 +1,21 @@
 # Codex Handoff
 
+## 2026-08-08 BOSS-310–311 GA baseline repair
+
+- Branch `ai/codex/boss-310-311-ga-baseline` restores two release gates from
+  `origin/main`: the API linter no longer imports unused `STEP_LABELS`, and the
+  typed API client now posts conversational turns to the canonical
+  `/v1/engine/agent/chat` route.
+- The deprecated `/v1/agent/chat` backend alias remains intact for backwards
+  compatibility; the product implementation status now distinguishes the
+  canonical route from that compatibility path.
+- This intentionally avoids the active security PR #114's hunks: it is based
+  on current `main`, while its same-file edits are in separate portions of
+  `main.py` and the API client. Rebase before merge if that PR lands first.
+- Required validation: focused client contract test, full web suite, API Ruff,
+  web lint/typecheck, and production build. Plane BOSS-310 and BOSS-311 remain
+  In Progress until the reviewable PR merges.
+
 ## 2026-07-27 BOSS-282 v0.9.1 budget settlement patch
 
 - Integrated contributor PR #98 on top of released v0.9.0 after verifying its

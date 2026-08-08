@@ -3,6 +3,18 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — BOSS-310–311 GA baseline repair
+
+- Opened a narrow GA-baseline branch from current `origin/main` after checking
+  the active security PR #114 for direct hunk overlap.
+- Restored API Ruff cleanliness by removing the unused deployment-step label
+  import, and aligned the typed Agent Chat client with its canonical backend
+  endpoint. The legacy endpoint remains a deprecated backend compatibility
+  alias.
+- Plane BOSS-310 and BOSS-311 advanced to In Progress. Validation and PR
+  evidence are required before either can move to Done.
+
+---
 ## 2026-07-27 — Codex — BOSS-282 v0.9.1 budget settlement patch
 
 - Integrated contributor PR #98 after proving its two commits were not present
