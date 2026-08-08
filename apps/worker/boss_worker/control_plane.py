@@ -174,6 +174,48 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def acquire_model_gateway_lease(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post("/v1/model-gateway/leases", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def heartbeat_model_gateway_lease(
+        self, lease_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/model-gateway/leases/{lease_id}/heartbeat", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def start_model_gateway_invocation(
+        self, lease_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/model-gateway/leases/{lease_id}/invocations", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def settle_model_gateway_invocation(
+        self, lease_id: str, invocation_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def release_model_gateway_lease(
+        self, lease_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/model-gateway/leases/{lease_id}/release", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def create_infra_droplet(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/infra/droplets", json=payload)
         response.raise_for_status()

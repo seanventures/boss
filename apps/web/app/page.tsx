@@ -54,6 +54,7 @@ import {
   updateEnterpriseSupportCaseAction,
   upsertOrgMemberAction,
   upsertWorkerPoolAction,
+  uploadModelCredentialAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
 import { AgentChat } from "./agent-ui";
@@ -5688,6 +5689,65 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             : "No runtime-backed models"}
                         </p>
                         <p className="detail">{entitlementDetail(source)}</p>
+                        {["api_key", "gateway_token"].includes(
+                          source.authMethod,
+                        ) ? (
+                          <form
+                            action={uploadModelCredentialAction}
+                            className="composer compact"
+                          >
+                            <input
+                              type="hidden"
+                              name="project_id"
+                              value={activeProjectId}
+                            />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <input
+                              type="hidden"
+                              name="source_id"
+                              value={source.sourceId}
+                            />
+                            <label className="field">
+                              <span>
+                                {source.credentialPresent
+                                  ? "Replace configured credential"
+                                  : "API or service credential"}
+                              </span>
+                              <input
+                                className="input"
+                                type="password"
+                                name="credential_value"
+                                autoComplete="new-password"
+                                placeholder="Write-only; never shown again"
+                                required
+                              />
+                            </label>
+                            <label className="field">
+                              <span>Secret backend</span>
+                              <select
+                                className="input"
+                                name="backend"
+                                defaultValue="platform_secret_store"
+                              >
+                                <option value="platform_secret_store">
+                                  Platform secret store
+                                </option>
+                                <option value="vault">Vault</option>
+                                <option value="local_runner">Local runner</option>
+                              </select>
+                            </label>
+                            <p className="detail">
+                              {source.multiTenantAllowed
+                                ? "Governed project capacity; jobs receive leases, never this value."
+                                : "Owner/single-tenant capacity; this value is never pooled."}
+                            </p>
+                            <button className="button secondary" type="submit">
+                              {source.credentialPresent
+                                ? "Rotate credential"
+                                : "Store credential"}
+                            </button>
+                          </form>
+                        ) : null}
                         {source.authMethod.includes("oauth") ? (
                           source.connectionStatus === "connected" ? (
                             <form

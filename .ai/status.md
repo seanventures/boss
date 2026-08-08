@@ -3,7 +3,7 @@
 **Last updated**: 2026-08-08 (GA readiness evidence refresh)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current integration baseline**: `origin/main` at `8e8dd4e` (security-hardened)
+**Current integration baseline**: `origin/main` at `32d6d9d` (v0.10.0)
 **Base branch**: origin/main; use focused `ai/codex/*` branches for new work
 **Product**: BOSS v0.9.1 released; GA closure remains in progress (no new GA release published)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
@@ -14,6 +14,12 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- **BOSS-335 model gateway is implementation-complete pending merge.** The
+  focused branch adds SecretRef-bound API/service credentials, owner-only
+  official subscription sessions, job-subordinate model leases with TTL,
+  heartbeat, fencing and concurrency, pre-spend reservations, effect Receipts,
+  invocation settlement, capacity/cost/token telemetry, and explicit expiry
+  reaping. Provider credentials are never returned to agents or public APIs.
 - **2026-08-08 GA truth.** PR #136 (`8e8dd4e`) is the canonical integration
   of the critical authorization, secret-binding, delivery-verdict, and MCP
   HTTP hardening that superseded contributor PRs #105–#114. Full local

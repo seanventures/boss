@@ -20,6 +20,7 @@ export type EntitlementSourceFeedItem = {
   connectionMetadata: Record<string, unknown>;
   runtimeSupported: boolean;
   credentialPresent: boolean;
+  multiTenantAllowed: boolean;
   capacityState: string;
   capacityResetAt?: string;
   observedAt?: string;
@@ -68,6 +69,7 @@ function mapSource(payload: EntitlementSourceSummary): EntitlementSourceFeedItem
     connectionMetadata: payload.connection_metadata,
     runtimeSupported: payload.runtime_supported,
     credentialPresent: Boolean(payload.observed_capacity?.credential_present),
+    multiTenantAllowed: payload.multi_tenant_allowed,
     capacityState:
       typeof payload.observed_capacity?.capacity_state === "string"
         ? payload.observed_capacity.capacity_state

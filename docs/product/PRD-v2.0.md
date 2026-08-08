@@ -74,7 +74,7 @@ Owns provider accounts, resource inventory, provider capabilities, resource grap
 
 ### Model Entitlement Broker / AI Capacity Router
 
-Owns local models, official CLI adapters, official API adapters, provider health, entitlement/capacity pools, usage/cooldown tracking, routing decisions, fallback decisions, and no-paid-API-without-budget policy.
+Owns local models, official CLI adapters, official API adapters, provider health, entitlement/capacity pools, usage/cooldown tracking, routing decisions, fallback decisions, and no-paid-API-without-budget policy. A route decision is advisory until a leased worker acquires a fenced `ModelGatewayLease`; agents receive an opaque capacity lease, never raw provider credentials. Every external invocation starts a `Receipt`, every paid lease reserves budget before use, and completion settles usage, cost, capacity, and telemetry evidence.
 
 ### Skills Registry
 
@@ -452,6 +452,8 @@ Requirements:
 - `EntitlementConnectionSession` objects for official CLI/OAuth subscription connection attempts.
 - `CapacityReceipt` objects.
 - `ModelRouteDecision` objects.
+- `ModelGatewayLease` objects with TTL, heartbeat, source concurrency, fencing token, job-lease parent authority, and optional BudgetReservation.
+- `ModelGatewayInvocation` objects that retain request hashes and non-secret telemetry, never prompts or credential material.
 - Provider cooldowns.
 - Usage/rate-limit state.
 - Subscription-first mode for personal dogfood.
@@ -462,6 +464,7 @@ Requirements:
 - No account pooling.
 - No rate-limit circumvention.
 - No personal subscription use for multi-tenant customer workloads.
+- API/service credentials are write-through SecretRefs. They can back shared project capacity only when the source policy allows multi-tenancy; subscription OAuth sessions remain local and owner-scoped.
 
 Routing modes: `subscription_first`, `quality_first`, `budget_safe`, `parallel_sprint`, `local_first`, `enterprise_policy`.
 
@@ -473,6 +476,9 @@ Acceptance criteria:
 4. BOSS writes CapacityReceipt for subscription/CLI work.
 5. BOSS writes CostReceipt for API work.
 6. BOSS falls back safely when a provider is rate-limited or unhealthy.
+7. A worker cannot acquire, heartbeat, invoke, settle, or release model capacity without its active parent job lease.
+8. Provider effects have deduplicated Receipts, paid calls have consumed CostReceipts, and every settled call updates capacity and LLM usage telemetry.
+9. Public APIs never return provider secret values or stored model-lease token hashes.
 7. BOSS never calls a paid API fallback without an approved budget reservation when policy requires approval.
 
 ## Budget Governor / Budget Slider

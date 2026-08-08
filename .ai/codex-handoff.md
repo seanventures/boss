@@ -863,3 +863,29 @@ Slice complete; accelerating full product with parallel agents.
   Ruff, TypeScript, generated-doc parity, strict docs, the production build,
   and a real browser create/validate/publish/refresh journey.
 - Plane BOSS-268 is In Progress on the existing draft PR #88 until merge.
+
+## Codex handoff — BOSS-335 unified model gateway (2026-08-08)
+
+- Active branch: `ai/codex/unified-model-gateway`, independently based on
+  `origin/main` `32d6d9d`; it does not include the separate autonomous
+  improvement PR #142.
+- Delivered canonical SecretRef bindings and write-through credential upload
+  for OpenAI, Anthropic, Google, xAI, Cursor and BOSS gateway sources. Official
+  subscription sessions remain local/owner-scoped and cannot be uploaded or
+  pooled as backend tokens.
+- Delivered route-to-execution control: an active Job lease is mandatory for
+  ModelGatewayLease acquire/heartbeat/invoke/settle/release; leases carry TTL,
+  monotonic source fence, concurrency slot, usage ceiling and reservation.
+- Every provider attempt starts a deduplicated Receipt before execution.
+  Settlement records provider reference, success/failure, CostReceipt or
+  release, CapacityReceipt, `llm_calls` usage/cost, overrun evidence and audit
+  events. A reaper closes expired leases and releases unused reservations.
+- Public APIs expose operational lease/invocation state but never raw provider
+  values, lease token hashes, prompt content, or OAuth caches. The sole
+  credential resolver is an unmounted internal adapter method guarded by both
+  job and model leases.
+- Validation: 6 focused model-gateway tests, 28 widened entitlement/routing/
+  worker tests, and all 146 web tests pass; fresh schema boots twice;
+  repository lint, production build, focused Ruff, OpenAPI new-route parity,
+  strict docs, YAML, compile, and diff checks pass.
+- Plane BOSS-335 remains In Progress until the focused draft PR merges.

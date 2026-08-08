@@ -18,6 +18,7 @@ providers:
         multi_tenant_allowed: false
         supported_models: [codex]
         task_strengths: [coding, refactor, review]
+        limit_shape: {max_concurrent: 1}
         policy_notes:
           - Codex usage depends on the ChatGPT plan and counts toward agentic usage.
           - API billing is managed separately from ChatGPT billing.
@@ -32,6 +33,7 @@ providers:
         multi_tenant_allowed: true
         supported_models: [gpt-5.2-codex, gpt-5.2-codex-coder]
         task_strengths: [coding, planning, summarization]
+        limit_shape: {max_concurrent: 128}
         policy_notes:
           - API usage requires separate billing and rate-limit governance.
   - id: anthropic
@@ -53,6 +55,7 @@ providers:
         multi_tenant_allowed: false
         supported_models: [claude-sonnet, claude-opus]
         task_strengths: [coding, review, planning]
+        limit_shape: {max_concurrent: 1}
         policy_notes:
           - Claude Code usage shares limits with Claude product usage.
       - source_id: anthropic_api
@@ -65,6 +68,7 @@ providers:
         multi_tenant_allowed: true
         supported_models: [claude-sonnet, claude-opus]
         task_strengths: [coding, reasoning, review]
+        limit_shape: {max_concurrent: 128}
   - id: google
     allowed: true
     description: Real Google access through Gemini CLI, Code Assist, and approved APIs.
@@ -75,12 +79,18 @@ providers:
         auth_method: official_cli_oauth
         connection_status: not_connected
         connection_ref: GOOGLE_GEMINI_CLI_SESSION
+        connection_metadata:
+          login_command: gemini
+          supported_connection_modes: [browser_oauth]
+          official_auth_surface: Gemini CLI Sign in with Google prompt
         workload_classes_allowed: [owner_sandbox, single_tenant_customer]
         multi_tenant_allowed: false
         supported_models: [gemini-cli]
         task_strengths: [coding, planning]
+        limit_shape: {max_concurrent: 1}
         policy_notes:
           - Gemini Code Assist agent-mode and Gemini CLI quotas are combined.
+          - The official CLI OAuth session may be used only by the local Gemini CLI; never expose or proxy its cached credentials to another agent runtime.
       - source_id: google_api
         source_kind: official_api
         entitlement_kind: usage_based_api
@@ -91,6 +101,7 @@ providers:
         multi_tenant_allowed: true
         supported_models: [gemini-pro, gemini-flash]
         task_strengths: [coding, planning, multimodal]
+        limit_shape: {max_concurrent: 128}
   - id: cursor
     allowed: true
     description: Real Cursor CLI access for owner-authenticated automation workflows.
@@ -101,14 +112,34 @@ providers:
         auth_method: official_cli_oauth
         connection_status: not_connected
         connection_ref: BOSS_CURSOR_CLI_ENABLED
+        connection_metadata:
+          login_command: cursor-agent login
+          status_command: cursor-agent status
+          supported_connection_modes: [browser_oauth]
+          official_auth_surface: Cursor Agent CLI browser login
         workload_classes_allowed: [owner_sandbox, single_tenant_customer]
         multi_tenant_allowed: false
         supported_models: [cursor-auto, openai, anthropic, google, xai]
         task_strengths: [coding, automation, review]
+        limit_shape: {max_concurrent: 1}
         policy_notes:
           - Cursor markets the CLI for scripts and automation workflows.
           - Cursor states that multiple agents can run in parallel.
           - Do not treat a personal Cursor subscription as multi-tenant backend capacity.
+      - source_id: cursor_api
+        source_kind: official_coding_agent
+        entitlement_kind: api_key_capacity
+        auth_method: api_key
+        connection_status: not_connected
+        connection_ref: CURSOR_API_KEY
+        workload_classes_allowed: [owner_sandbox, single_tenant_customer]
+        multi_tenant_allowed: false
+        supported_models: [cursor-auto]
+        task_strengths: [coding, automation, review]
+        limit_shape: {max_concurrent: 8}
+        policy_notes:
+          - Cursor API keys are accepted only through SecretRef-backed storage and are never returned to agents.
+          - Cursor capacity remains owner or single-tenant scoped unless an enterprise agreement explicitly authorizes broader use.
   - id: xai
     allowed: true
     description: Real xAI access through the official Grok Build CLI/OIDC and API surfaces.
@@ -128,6 +159,7 @@ providers:
         multi_tenant_allowed: false
         supported_models: [grok-4.3, grok-code-fast]
         task_strengths: [coding, reasoning]
+        limit_shape: {max_concurrent: 1}
         policy_notes:
           - Grok Build supports browser OIDC and device-code authentication for official CLI sessions.
           - Grok/X consumer subscription benefits are separate from xAI API billing.
@@ -142,6 +174,7 @@ providers:
         multi_tenant_allowed: true
         supported_models: [grok-4.3, grok-code-fast]
         task_strengths: [coding, reasoning]
+        limit_shape: {max_concurrent: 128}
         policy_notes:
           - xAI API rate limits are per model and measured in RPM and TPM.
           - Consumer services may be rate-limited at xAI's discretion.
@@ -159,6 +192,7 @@ providers:
         multi_tenant_allowed: false
         supported_models: [approved-local]
         task_strengths: [privacy_sensitive, offline, low_cost_batch]
+        limit_shape: {max_concurrent: 8}
         policy_notes:
           - Local capacity requires explicit approval, observability, and reservation accounting.
   - id: boss
@@ -178,6 +212,7 @@ providers:
         allowed_data_boundaries: [public, internal, confidential, restricted]
         supported_models: [enterprise-gateway-auto]
         task_strengths: [coding, planning, reasoning, review, privacy_sensitive]
+        limit_shape: {max_concurrent: 256}
         risk_tier_max: 3
         connection_metadata:
           required_env:
@@ -203,6 +238,7 @@ providers:
         allowed_data_boundaries: [public, internal, confidential]
         supported_models: [managed-cloud-gateway-auto]
         task_strengths: [coding, planning, reasoning, review, summarization]
+        limit_shape: {max_concurrent: 256}
         risk_tier_max: 3
         connection_metadata:
           required_env:
@@ -224,6 +260,48 @@ models:
     provider: openai
     tier: cheap
     strengths: [code, tests]
+    cost_class: token_metered
+    enabled: true
+  - id: anthropic:claude-sonnet
+    provider: anthropic
+    tier: mid
+    strengths: [coding, reasoning, review]
+    cost_class: token_metered
+    enabled: true
+  - id: anthropic:claude-opus
+    provider: anthropic
+    tier: mid
+    strengths: [coding, reasoning, review]
+    cost_class: token_metered
+    enabled: true
+  - id: google:gemini-pro
+    provider: google
+    tier: mid
+    strengths: [coding, planning, multimodal]
+    cost_class: token_metered
+    enabled: true
+  - id: google:gemini-flash
+    provider: google
+    tier: cheap
+    strengths: [coding, planning, summarization]
+    cost_class: token_metered
+    enabled: true
+  - id: cursor:cursor-auto
+    provider: cursor
+    tier: mid
+    strengths: [coding, automation, review]
+    cost_class: subscription_or_token_metered
+    enabled: true
+  - id: xai:grok-4.3
+    provider: xai
+    tier: mid
+    strengths: [coding, reasoning]
+    cost_class: token_metered
+    enabled: true
+  - id: xai:grok-code-fast
+    provider: xai
+    tier: cheap
+    strengths: [coding, tests]
     cost_class: token_metered
     enabled: true
   - id: boss:enterprise-gateway-auto

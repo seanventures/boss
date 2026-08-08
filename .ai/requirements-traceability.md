@@ -5,6 +5,12 @@
 **Status key**: Implemented (full vertical + tests + states + audit + DoD), Partial, Planned, Blocked (external per real-only), In-Progress (this session).
 **DoD reminder**: Requirement complete only when traced, full journey, UI nav, backend, persistence, auth server+client, validations, loading/empty/error/success, edges, mobile/a11y basics, security/arch/QA review, tests pass, lint/build, docs updated, NO mocks/fakes/TODOs for required behavior.
 
+## 2026-08-08 Unified model gateway trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-335 / MEB-003 | System-wide subscription/API authentication and governed model capacity shared across jobs/agents | official owner-scoped CLI/OAuth sessions; write-through SecretRef API/service credentials; route-to-lease conversion subordinate to live job lease; source lock/concurrency and fencing; budget reservation; receipted invocation lifecycle; cost/capacity/token telemetry; expiry reaper; operational list APIs | 6 model-gateway E2E/policy tests; 28 widened entitlement/routing/worker tests; 146 web tests; fresh schema twice; repository lint, production build, Ruff, OpenAPI new-route parity, strict docs | Implemented; pending PR merge |
+
 ## 2026-07-26 Work Orchestration and Delivery Presence trace
 
 | Plane | Requirement | Implementation | Verification | Status |

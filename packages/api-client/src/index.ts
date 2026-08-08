@@ -3692,6 +3692,7 @@ export type EntitlementSourceSummary = {
   workload_classes_allowed: string[];
   multi_tenant_allowed: boolean;
   credential_ref?: string;
+  credential_secret_ref_id?: string;
   cost_mode: string;
   limit_shape: Record<string, unknown>;
   supported_models: string[];
@@ -3758,6 +3759,22 @@ export type EntitlementSourceDisconnectRequest = {
   project_id: string;
   reason?: string;
   actor?: string;
+};
+
+export type ModelCredentialUploadRequest = {
+  project_id: string;
+  value: string;
+  backend?: "platform_secret_store" | "vault" | "local_runner";
+  actor?: string;
+};
+
+export type ModelCredentialWriteSummary = {
+  source: EntitlementSourceSummary;
+  secret_ref_id: string;
+  backend: string;
+  fingerprint?: string;
+  last4?: string;
+  raw_secret_stored: false;
 };
 
 export type EntitlementConnectionSessionSummary = {
@@ -6640,6 +6657,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
         {
           body: payload,
         },
+      );
+    },
+    uploadModelCredential(
+      sourceId: string,
+      payload: ModelCredentialUploadRequest,
+    ) {
+      return request<ModelCredentialWriteSummary>(
+        "POST",
+        `/v1/entitlements/sources/${encodeURIComponent(sourceId)}/credential`,
+        { body: payload },
       );
     },
     listEntitlementConnectionSessions(

@@ -147,6 +147,8 @@ def clean_tables(engine):
             "github_branch_policies",
             "github_repository_bindings",
             "github_connections",
+            "model_gateway_invocations",
+            "model_gateway_leases",
             "secret_refs",
             "resource_policies",
             "capacity_receipts",
@@ -165,6 +167,8 @@ def clean_tables(engine):
             "feedback_messages",
             "feedback_threads",
             "app_previews",
+            "improvement_trials",
+            "improvement_programs",
             "qa_benchmark_evaluations",
             "code_task_runs",
             "meeting_runs",
@@ -202,10 +206,10 @@ def clean_tables(engine):
             "work_items",
             "tasks",
         ]:
-            try:
+            if connection.execute(
+                text("SELECT to_regclass(:table_name)"), {"table_name": tbl}
+            ).scalar_one() is not None:
                 connection.execute(text(f"DELETE FROM {tbl}"))
-            except Exception:
-                pass  # table absent in this schema (e.g. no commercial tables)
         specpack.install_pack(
             connection,
             settings.default_project_id,

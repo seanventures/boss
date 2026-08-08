@@ -524,11 +524,14 @@ class EntitlementBrokerService:
             row["source_id"]
         )
         observed_capacity = row.get("observed_capacity") or {}
-        runtime_supported = bool(row.get("runtime_supported", False)) or bool(
+        bound_secret = bool(row.get("credential_secret_ref_id"))
+        runtime_supported = bound_secret or bool(row.get("runtime_supported", False)) or bool(
             computed_runtime_supported
         )
-        credential_present = bool(observed_capacity.get("credential_present", False)) or bool(
-            computed_credential_present
+        credential_present = (
+            bound_secret
+            or bool(observed_capacity.get("credential_present", False))
+            or bool(computed_credential_present)
         )
         return runtime_supported, credential_present
 
@@ -695,7 +698,7 @@ class EntitlementBrokerService:
                         "connection_metadata", {}
                     ),
                     "cost_mode": source_defaults.get("entitlement_kind", "usage_based_api"),
-                    "limit_shape": {},
+                    "limit_shape": source_defaults.get("limit_shape", {}),
                     "supported_models": self._runtime_supported_models(
                         source_id, source_defaults
                     ),
@@ -730,7 +733,7 @@ class EntitlementBrokerService:
                 """
                 SELECT id, project_id, provider, source_id, source_kind, entitlement_kind,
                        owner_type, owner_id, workload_classes_allowed, multi_tenant_allowed,
-                       credential_ref, cost_mode, limit_shape, supported_models,
+                       credential_ref, credential_secret_ref_id, cost_mode, limit_shape, supported_models,
                        task_strengths, risk_tier_max, status, policy_notes,
                        auth_method, connection_status, connection_ref, oauth_scopes,
                        connection_metadata, observed_capacity, runtime_supported,
@@ -979,12 +982,15 @@ class EntitlementBrokerService:
         computed_runtime_supported, computed_credential_present = self._runtime_flags(
             record["source_id"]
         )
-        runtime_supported = bool(record.get("runtime_supported", False)) or bool(
+        bound_secret = bool(record.get("credential_secret_ref_id"))
+        runtime_supported = bound_secret or bool(record.get("runtime_supported", False)) or bool(
             computed_runtime_supported
         )
         observed_capacity = record.get("observed_capacity", {}) or {}
-        credential_present = bool(observed_capacity.get("credential_present", False)) or bool(
-            computed_credential_present
+        credential_present = (
+            bound_secret
+            or bool(observed_capacity.get("credential_present", False))
+            or bool(computed_credential_present)
         )
         source_pk = f"src_{record['project_id']}_{record['source_id']}"
         auth_method = record.get("auth_method", "api_key")
@@ -997,7 +1003,7 @@ class EntitlementBrokerService:
                 INSERT INTO entitlement_sources (
                     id, project_id, provider, source_id, source_kind, entitlement_kind,
                     owner_type, owner_id, workload_classes_allowed, multi_tenant_allowed,
-                    credential_ref, cost_mode, limit_shape, supported_models, task_strengths,
+                    credential_ref, credential_secret_ref_id, cost_mode, limit_shape, supported_models, task_strengths,
                     risk_tier_max, status, auth_method, connection_status, connection_ref,
                     oauth_scopes, connection_metadata, policy_notes, observed_capacity,
                     runtime_supported
@@ -1005,7 +1011,7 @@ class EntitlementBrokerService:
                 VALUES (
                     :id, :project_id, :provider, :source_id, :source_kind, :entitlement_kind,
                     :owner_type, :owner_id, CAST(:workload_classes_allowed AS JSONB),
-                    :multi_tenant_allowed, :credential_ref, :cost_mode,
+                    :multi_tenant_allowed, :credential_ref, :credential_secret_ref_id, :cost_mode,
                     CAST(:limit_shape AS JSONB), CAST(:supported_models AS JSONB),
                     CAST(:task_strengths AS JSONB), :risk_tier_max, :status,
                     :auth_method, :connection_status, :connection_ref,
@@ -1022,6 +1028,10 @@ class EntitlementBrokerService:
                     workload_classes_allowed = EXCLUDED.workload_classes_allowed,
                     multi_tenant_allowed = EXCLUDED.multi_tenant_allowed,
                     credential_ref = EXCLUDED.credential_ref,
+                    credential_secret_ref_id = COALESCE(
+                        EXCLUDED.credential_secret_ref_id,
+                        entitlement_sources.credential_secret_ref_id
+                    ),
                     cost_mode = EXCLUDED.cost_mode,
                     limit_shape = EXCLUDED.limit_shape,
                     supported_models = EXCLUDED.supported_models,
@@ -1055,6 +1065,7 @@ class EntitlementBrokerService:
                     record.get("multi_tenant_allowed", False)
                 ),
                 "credential_ref": record.get("credential_ref"),
+                "credential_secret_ref_id": record.get("credential_secret_ref_id"),
                 "cost_mode": record.get("cost_mode", "usage_based_api"),
                 "limit_shape": json.dumps(record.get("limit_shape", {})),
                 "supported_models": json.dumps(record.get("supported_models", [])),
