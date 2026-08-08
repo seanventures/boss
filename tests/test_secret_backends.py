@@ -54,8 +54,6 @@ class _FakeConn:
 
     def execute(self, _stmt, params):
         row = self._rows.get(params.get("i"))
-        outer = self
-
         class R:
             def mappings(self_inner):
                 class M:
