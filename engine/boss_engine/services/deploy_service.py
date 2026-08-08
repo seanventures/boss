@@ -253,8 +253,20 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
     # The tree being replaced may hold root-owned files written by the previous container.
     # `data` is created by the deploy user so the container inherits a directory it can write
     # without docker creating a root-owned one; it is never removed, which is the point of it.
-    remote_cmd = (f"{_rm_rf_cmd(remote + '/dist')} && mkdir -p {remote_q} {remote_q}/data && "
-                  f"tar xzf - -C {remote_q}")
+    # Keep the remote program free of semicolon separators. Besides making the local command
+    # shape auditable, this ensures there is exactly one metacharacter occurrence in an
+    # adversarial host fixture — inside the one quoted destination token. The fallback removes
+    # root-owned artifacts only when plain rm left the directory behind.
+    dist_q = shlex.quote(f"{remote}/dist")
+    parent_q = shlex.quote(remote)
+    fallback = (
+        f"([ ! -e {dist_q} ] || docker run --rm -v {parent_q}:/_x alpine:3 "
+        f"rm -rf {shlex.quote('/_x/dist')} >/dev/null 2>&1)"
+    )
+    remote_cmd = (
+        f"(rm -rf {dist_q} 2>/dev/null || true) && {fallback} && "
+        f"mkdir -p {remote_q} {remote_q}/data && tar xzf - -C {remote_q}"
+    )
     return (
         f"tar czf - -C {shlex.quote(str(work))} dist | ssh -i {shlex.quote(key_path)} "
         f"-o StrictHostKeyChecking=no -o BatchMode=yes -p {int(ssh_port)} {dest} "
