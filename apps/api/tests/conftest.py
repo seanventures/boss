@@ -17,6 +17,7 @@ from apps.api.app.services.event_dispatch import invalidate_subscription_cache
 from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.skill_registry import seed_system_skills
 from apps.api.app.services.specpack import SpecPackService
+from apps.api.app.services.toolchain_registry import ToolchainRegistryService
 
 # Build the test app with the complete enterprise route/adapter surface, then
 # restore the product's historical Community baseline before seeding and test
@@ -161,6 +162,9 @@ def clean_tables(engine):
             "canary_runs",
             "eval_runs",
             "project_skills",
+            "toolchain_candidates",
+            "toolchain_import_runs",
+            "toolchain_sources",
             "quality_gates",
             "feedback_messages",
             "feedback_threads",
@@ -226,6 +230,11 @@ def clean_tables(engine):
             connection,
             settings.default_project_id,
             entitlements.list_skills(),
+            "test-reset",
+        )
+        ToolchainRegistryService(settings).seed_sources(
+            connection,
+            settings.default_project_id,
             "test-reset",
         )
         members.seed_default_members(

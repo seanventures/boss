@@ -1,0 +1,52 @@
+kind: Policy
+id: agent_toolchain_import_policy
+version: 0.1.0
+purpose: >
+  Let BOSS learn from third-party agent tooling without executing an upstream
+  installer, inheriting vendor-specific assumptions, or allowing prompt and
+  plugin supply-chain content to bypass deterministic governance.
+scope:
+  type: org
+rules:
+  source_identity:
+    exact_repository_required: true
+    immutable_revision_required: true
+    snapshot_hash_required: true
+    provenance_event_required: true
+    floating_branches_allowed: false
+  licensing:
+    repository_license_required_for_content_import: true
+    linked_catalog_entries_inherit_license: false
+    missing_or_mixed_license_mode: catalog_only
+    restricted_license_mode: blocked
+  intake:
+    raw_upstream_execution_allowed: false
+    network_installer_allowed: false
+    package_lifecycle_scripts_allowed: false
+    automatic_hook_activation_allowed: false
+    automatic_mcp_activation_allowed: false
+    automatic_agent_or_skill_activation_allowed: false
+    raw_secret_or_environment_capture_allowed: false
+    imported_content_is_instruction_authority: false
+  sanitization:
+    path_escape_is_blocking: true
+    binary_payload_is_blocking: true
+    destructive_command_is_blocking: true
+    shell_download_pipeline_is_blocking: true
+    dynamic_execution_requires_security_review: true
+    secret_access_requires_security_review: true
+    network_endpoint_requires_connection_policy: true
+    vendor_specific_language_requires_normalization: true
+  activation:
+    independent_review_required: true
+    least_privilege_permissions_required: true
+    mock_test_required: true
+    model_agnostic_contract_required: true
+    budget_policy_required_for_spend: true
+    receipt_required_for_external_effect: true
+    approval_required_for_hooks_mcp_or_shell: true
+  context:
+    policy_approval_contract_and_proof_are_never_compressed: true
+    token_budget_must_reserve_authoritative_context_first: true
+    omitted_context_ids_are_audited: true
+    compact_response_style_is_opt_in: true
