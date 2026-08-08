@@ -15,7 +15,7 @@ authors = [{ name = "BOSS" }]
 # while the HTTP API and web console remain outside this distribution.
 dependencies = [
     "boto3>=1.43,<2",
-    "cryptography>=48,<49",
+    "cryptography>=50,<51",
     "httpx>=0.28,<1",
     "markdown>=3.9,<4",
     "openai>=1.93,<2",
