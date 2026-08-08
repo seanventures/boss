@@ -92,9 +92,9 @@ def test_rolled_back_apply_is_failed_not_succeeded() -> None:
     # Previous build is healthy — this is exactly the trap.
     fake_connector.observe.return_value = {"healthy": True, "checks": []}
 
-    with patch.object(dp, "begin", _ConnCtx()), \
-         patch.object(dp, "preflight", return_value={"ready": True, "problems": []}), \
-         patch.object(dp, "connector_for", return_value=fake_connector), \
+    with patch("boss_engine.db.begin", _ConnCtx()), \
+         patch("boss_engine.services.deployment_connectors.preflight", return_value={"ready": True, "problems": []}), \
+         patch("boss_engine.services.deployment_connectors.connector_for", return_value=fake_connector), \
          patch.object(dp, "emit_event"):
         result = dp.execute_deployment(engine, SimpleNamespace(), "drun_1")
 
@@ -134,9 +134,9 @@ def test_deployed_then_unhealthy_observe_is_failed() -> None:
     }
     fake_connector.observe.return_value = {"healthy": False, "checks": [{"ok": False}]}
 
-    with patch.object(dp, "begin", _ConnCtx()), \
-         patch.object(dp, "preflight", return_value={"ready": True, "problems": []}), \
-         patch.object(dp, "connector_for", return_value=fake_connector), \
+    with patch("boss_engine.db.begin", _ConnCtx()), \
+         patch("boss_engine.services.deployment_connectors.preflight", return_value={"ready": True, "problems": []}), \
+         patch("boss_engine.services.deployment_connectors.connector_for", return_value=fake_connector), \
          patch.object(dp, "emit_event"):
         result = dp.execute_deployment(SimpleNamespace(), SimpleNamespace(), "drun_2")
 
