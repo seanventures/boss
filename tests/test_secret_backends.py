@@ -54,8 +54,6 @@ class _FakeConn:
 
     def execute(self, _stmt, params):
         row = self._rows.get(params.get("i"))
-        outer = self
-
         class R:
             def mappings(self_inner):
                 class M:
@@ -96,6 +94,34 @@ def test_unbound_target_falls_back_so_live_deploys_keep_working() -> None:
     check("no binding resolves to None, not an error",
           sb.resolve_target_secret(conn, {"secret_refs": []}, "ssh_key", _Settings()) is None,
           "None is what lets an un-migrated target fall back to the global setting")
+
+
+def test_api_string_binding_resolves_secret_ref() -> None:
+    """POST /v1/deployments stores secret_refs as list[str] — that shape must resolve.
+
+    Phase 1's first resolver only understood dicts, so an API-onboarded target silently
+    fell through to the global key (wrong-secret for every second host).
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "a.pem"
+        p.write_text(KEY_A)
+        p.chmod(0o600)
+        conn = _FakeConn({"sref_a": {"ref_kind": "file", "ref_key": str(p),
+                                     "storage_backend": "file", "status": "active"}})
+        got = sb.resolve_target_secret(
+            conn, {"secret_refs": ["sref_a"]}, "ssh_key", _Settings())
+        check("bare sref string resolves", got == KEY_A)
+
+
+def test_bound_but_unusable_ref_does_not_silently_use_global() -> None:
+    """A declared binding that cannot resolve must raise, not return None (global fallback)."""
+    target = {"secret_refs": [{"name": "ssh_key", "ref": "BOSS_MISSING_KEY_FILE_XYZ"}]}
+    try:
+        sb.resolve_target_secret(_FakeConn({}), target, "ssh_key", _Settings())
+        check("unset legacy ref refuses global fallback", False, "returned instead of raising")
+    except sb.SecretUnavailable as exc:
+        check("unset legacy ref refuses global fallback", "refusing" in str(exc).lower()
+              or "unset" in str(exc).lower(), str(exc)[:120])
 
 
 def test_revoked_secret_is_refused() -> None:
@@ -224,6 +250,8 @@ if __name__ == "__main__":
                test_a_named_secret_never_lands_in_the_working_directory,
                test_generated_private_key_is_not_left_on_the_boss_host,
                test_unbound_target_falls_back_so_live_deploys_keep_working,
+               test_api_string_binding_resolves_secret_ref,
+               test_bound_but_unusable_ref_does_not_silently_use_global,
                test_revoked_secret_is_refused,
                test_world_readable_key_is_refused,
                test_errors_never_carry_secret_material,

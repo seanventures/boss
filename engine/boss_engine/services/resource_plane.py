@@ -1560,6 +1560,9 @@ class ResourcePlaneService:
             self.get_provider_account(connection, project_id, provider_account_id)
         normalized_environment = self._normalize_deployment_environment(environment)
         target_id = make_id("deptgt")
+        # Preserve dict bindings ({name, secret_ref_id}). _normalize_string_list used to
+        # strip them, so POST /v1/deployments could never store a Phase 1 credential binding.
+        normalized_secret_refs = self._normalize_secret_ref_bindings(secret_refs)
         connection.execute(
             text(
                 """
@@ -1600,7 +1603,7 @@ class ResourcePlaneService:
                 "target_ref": self._require_text(target_ref, "target_ref"),
                 "domains": json.dumps(self._normalize_string_list(domains)),
                 "required_resources": json.dumps(required_resources),
-                "secret_refs": json.dumps(self._normalize_deployment_secret_refs(secret_refs)),
+                "secret_refs": json.dumps(normalized_secret_refs),
                 "health_checks": json.dumps(health_checks),
                 "rollback_points": json.dumps(rollback_points),
                 "actor": actor,
@@ -8316,19 +8319,30 @@ class ResourcePlaneService:
     def _normalize_string_list(self, values: list[str]) -> list[str]:
         return [item.strip() for item in values if isinstance(item, str) and item.strip()]
 
-    def _normalize_deployment_secret_refs(
+    def _normalize_secret_ref_bindings(
         self, values: list[str | dict[str, Any]]
     ) -> list[str | dict[str, Any]]:
-        """Keep legacy secret-ref strings and structured requirement bindings intact."""
-        normalized: list[str | dict[str, Any]] = []
-        for item in values:
+        """Keep Phase 1 dict bindings and bare string refs; drop empties only."""
+        out: list[str | dict[str, Any]] = []
+        for item in values or []:
             if isinstance(item, str):
-                cleaned = item.strip()
-                if cleaned:
-                    normalized.append(cleaned)
+                token = item.strip()
+                if token:
+                    out.append(token)
             elif isinstance(item, dict):
-                normalized.append(item)
-        return normalized
+                name = str(item.get("name") or "").strip()
+                ref_id = str(item.get("secret_ref_id") or "").strip()
+                legacy = str(item.get("ref") or "").strip()
+                if not name:
+                    continue
+                binding: dict[str, str] = {"name": name}
+                if ref_id:
+                    binding["secret_ref_id"] = ref_id
+                if legacy:
+                    binding["ref"] = legacy
+                if "secret_ref_id" in binding or "ref" in binding:
+                    out.append(binding)
+        return out
 
     def _require_text(self, value: str, field_name: str) -> str:
         cleaned = value.strip()

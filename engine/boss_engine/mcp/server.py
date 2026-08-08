@@ -119,7 +119,10 @@ class MCPServer:
 
     def _tools_call(self, rid: Any, params: dict) -> dict:
         name = params.get("name")
-        args = params.get("arguments") or {}
+        # Session project_id is authoritative — never let tool arguments override
+        # into another tenant (write tools historically honored args.project_id).
+        args = dict(params.get("arguments") or {})
+        args.pop("project_id", None)
         if not name:
             return _err(rid, -32602, "tools/call requires a tool name")
         if not self._tool_allowed(name):

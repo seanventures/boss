@@ -8,7 +8,13 @@
 """
 from __future__ import annotations
 
-from .builtin import build_default_registry
+from .builtin import build_default_registry, build_discuss_read_registry
 from .registry import ToolError, ToolRegistry, ToolSpec
 
-__all__ = ["ToolRegistry", "ToolSpec", "ToolError", "build_default_registry"]
+__all__ = [
+    "ToolRegistry",
+    "ToolSpec",
+    "ToolError",
+    "build_default_registry",
+    "build_discuss_read_registry",
+]

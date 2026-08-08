@@ -132,19 +132,22 @@ class IntentRouter:
         """A read-only, tool-grounded agent used by the DISCUSS/answer path so the
         one chat interface can answer 'what's running / preview this / query the DB'
         with REAL engine data — not a blind LLM reply. Built once, lazily; imported
-        inside the method to avoid any services<->agent import cycle."""
+        inside the method to avoid any services<->agent import cycle.
+
+        Uses ``build_discuss_read_registry`` (not the full read set): unrestricted
+        ``query_db`` and cross-project ``project_id`` overrides are excluded so a
+        chat actor authorized for one project cannot read another tenant.
+        """
         if self._answer_agent_obj is None:
             from ..agent.engine_agent import EngineAgent
             from ..context import EngineContext
             from ..db import get_engine
-            from ..tools import ToolRegistry, build_default_registry
+            from ..tools import build_discuss_read_registry
 
             ctx = EngineContext(settings=self.settings, engine=get_engine(self.settings))
-            # read-only view of the tool layer (no write tools on the discuss path)
-            read_only = ToolRegistry()
-            for spec in build_default_registry().specs(kind="read"):
-                read_only.register(spec)
-            self._answer_agent_obj = EngineAgent(ctx, registry=read_only)
+            self._answer_agent_obj = EngineAgent(
+                ctx, registry=build_discuss_read_registry()
+            )
         return self._answer_agent_obj
 
     def route_turn(
@@ -259,8 +262,8 @@ class IntentRouter:
             "You are BOSS, the assistant for an autonomous software factory. Answer the user's "
             "question or discuss their request clearly and concisely, grounded in the conversation. "
             "You have READ-ONLY tools into the live engine — USE them to ground factual answers "
-            "(what's running, a task's status/PR, live preview links, the microVM fleet, arbitrary "
-            "data) instead of guessing. If they clearly want you to BUILD or CHANGE something, "
+            "(what's running, a task's status/PR, live preview links, the microVM fleet) "
+            "instead of guessing. If they clearly want you to BUILD or CHANGE something, "
             "briefly say what you'd do and that you'll start once they confirm (e.g. 'build it' / "
             "'go') — do NOT claim you already started anything, and do NOT invent facts."
         )

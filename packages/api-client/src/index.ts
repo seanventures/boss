@@ -5581,9 +5581,10 @@ export function createBossApiClient(config: BossApiClientConfig) {
     createCodeTask(payload: CodeTaskCreatePayload) {
       return request<{ status: string; run_id: string }>("POST", "/v1/code-tasks", { body: payload });
     },
-    retryCodeTask(runId: string, fixNote?: string) {
+    retryCodeTask(runId: string, fixNote?: string, actor = "executive_console") {
       return request<{ status: string; run_id: string; attempt: number }>(
-        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`, { body: { fix_note: fixNote ?? "" } });
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`,
+        { body: { fix_note: fixNote ?? "", actor } });
     },
     submitCodeTaskFeedback(runId: string, payload: {
       message: string;
@@ -5601,12 +5602,17 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", `/v1/feedback-threads/${encodeURIComponent(threadId)}/confirm`,
         { body: { actor } });
     },
-    overrideCodeTask(runId: string, waiveGates: string[], reason?: string) {
+    overrideCodeTask(
+      runId: string,
+      waiveGates: string[],
+      reason?: string,
+      actor = "executive_console",
+    ) {
       return request<{ status: string; pull_request_url?: string; pull_request_number?: number }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/override`,
-        { body: { waive_gates: waiveGates, reason: reason ?? "" } });
+        { body: { waive_gates: waiveGates, reason: reason ?? "", actor } });
     },
-    startPreview(runId: string, ttlMinutes?: number) {
+    startPreview(runId: string, ttlMinutes?: number, actor = "executive_console") {
       return request<{
         id: string; status: string; url?: string; error?: string;
         // library/CLI builds have no live URL — they are "run" by executing their tests:
@@ -5614,7 +5620,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
         passed?: boolean; output?: string; message?: string;
       }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/preview`,
-        { body: { ttl_minutes: ttlMinutes ?? 60 } });
+        { body: { ttl_minutes: ttlMinutes ?? 60, actor } });
+    },
+    stopPreview(previewId: string, actor = "executive_console") {
+      return request<{ status: string }>(
+        "POST", `/v1/previews/${encodeURIComponent(previewId)}/stop`,
+        { body: { actor } });
     },
     getPreviews(projectId: string, limit = 50) {
       return request<{ previews: PreviewRec[] }>(

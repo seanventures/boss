@@ -5459,16 +5459,23 @@ def code_task_steer_endpoint(run_id: str, payload: dict):
     guidance = str((payload or {}).get("guidance") or "").strip()
     if not guidance:
         raise HTTPException(status_code=422, detail="guidance is required")
-    actor = str((payload or {}).get("actor") or "operator")
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     from datetime import datetime as _dt, timezone as _tz
     entry = {"text": guidance[:4000], "actor": actor,
              "at": _dt.now(_tz.utc).isoformat()}
     with begin(engine) as connection:
         row = connection.execute(
-            text("SELECT status FROM code_task_runs WHERE id=:id"), {"id": run_id}
+            text("SELECT project_id, status FROM code_task_runs WHERE id=:id"),
+            {"id": run_id},
         ).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail=f"no code task run {run_id}")
+        # Steering injects an OPERATOR OVERRIDE into the next stage prompt — same bar as
+        # starting/waiving work. Without this, knowing a run_id was enough to redirect any
+        # tenant's running task (including "delete the app" / "exfiltrate secrets").
+        require_project_actor(connection, row["project_id"], actor, "task_create")
         if row["status"] in ("completed", "failed", "cancelled"):
             raise HTTPException(
                 status_code=409,
@@ -5477,8 +5484,8 @@ def code_task_steer_endpoint(run_id: str, payload: dict):
             text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
                  "|| jsonb_build_object('pending_guidance', "
                  "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
-                 "updated_at=now() WHERE id=:id"),
-            {"e": json.dumps([entry]), "id": run_id})
+                 "updated_at=now() WHERE id=:id AND project_id=:p"),
+            {"e": json.dumps([entry]), "id": run_id, "p": row["project_id"]})
     return {"status": "queued", "run_id": run_id,
             "applies": "at the next stage boundary", "guidance": guidance[:200]}
 
@@ -5535,7 +5542,7 @@ def code_task_activity_endpoint(run_id: str):
 
 
 @app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
-def delivery_execute_endpoint(deployment_run_id: str):
+def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Tell BOSS to carry out a planned deployment: plan -> apply -> observe.
 
     The operator supplies the destination and a credential reference; BOSS does the work. This
@@ -5543,17 +5550,24 @@ def delivery_execute_endpoint(deployment_run_id: str):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    # Existence is checked HERE so an unknown id is still a 404. Once the run is known to exist
-    # the work goes to the background, like every other way of starting a deployment — the
-    # retry button should not be the one control that hangs the browser for a minute.
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
     with begin(engine) as connection:
-        known = connection.execute(
-            text("SELECT 1 FROM deployment_runs WHERE id = :i"),
-            {"i": deployment_run_id}).first()
-    if not known:
-        raise HTTPException(status_code=404,
-                            detail=f"no deployment run {deployment_run_id}")
-    return _start_deployment_in_background(deployment_run_id, "operator", trigger="retry")
+        run_row = connection.execute(
+            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404,
+                                detail=f"no deployment run {deployment_run_id}")
+        # Execute places artifacts on a real host. Knowing a deployment_run_id must not be
+        # enough to push arbitrary commits to another tenant's staging box.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "providerops_manage"
+        )
+    return _start_deployment_in_background(deployment_run_id, actor, trigger="retry")
 
 
 # --------------------------------------------------------------------------- #
@@ -6417,6 +6431,20 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail=p.get("reason")
+                                or f"no deployment run {deployment_run_id}")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "providerops_manage"
+        )
     from .services.delivery_pipeline import redeploy
     actor = str(p.get("actor") or "operator")
     # Planned here, executed off-request — same contract as Deploy, so the console watches one
@@ -6560,9 +6588,25 @@ def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     findings forward so the agent fixes the identified issues instead of regenerating from scratch."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        # Retry enqueues a new governed attempt (budget + jobs) under the victim run's
+        # project. Without this gate, knowing a run_id was enough to spend another
+        # tenant's budget and mutate their lineage.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "task_create"
+        )
     from .services.code_task_service import retry_code_task
     try:
-        p = payload or {}
         rr = p.get("repair_retries")
         # profile/repair_retries were accepted by retry_code_task() and DROPPED here, so a
         # caller asking to "retry this in lean mode" silently got the project default. The
@@ -6625,16 +6669,31 @@ def confirm_code_task_feedback_endpoint(thread_id: str, payload: Optional[dict] 
 
 
 @app.post("/v1/code-tasks/{run_id}/override")
-def override_code_task_endpoint(run_id: str, payload: dict):
+def override_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Human gate override: waive the named failed gate(s) + open the PR from the preserved diff
     (no re-run). Gates not waived still block; the PR keeps its own merge-gate Decision."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        # Waiving failed gates and opening a PR is a governed write — same bar as starting work.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "task_create"
+        )
     from .services.code_task_service import override_code_task
     try:
         return override_code_task(engine, settings, jobs, run_id,
-            waive_gates=payload.get("waive_gates") or [],
-            actor=payload.get("actor") or "operator", reason=payload.get("reason") or "")
+            waive_gates=p.get("waive_gates") or [],
+            actor=actor, reason=p.get("reason") or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -6649,6 +6708,19 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "infra_provision"
+        )
     mode = str(p.get("mode", "dry_run")).lower()
     from .services.deploy_service import deploy_ssh, plan_ssh_deploy, render_plan_markdown
     try:
@@ -6688,6 +6760,19 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "task_create"
+        )
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
     from .services.preview_service import (
@@ -6858,10 +6943,24 @@ async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: s
 
 
 @app.post("/v1/previews/{preview_id}/stop")
-def stop_preview_endpoint(preview_id: str):
+def stop_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
     """Tear down a running preview."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        preview_row = connection.execute(
+            text("SELECT project_id FROM app_previews WHERE id = :preview_id"),
+            {"preview_id": preview_id},
+        ).mappings().first()
+        if not preview_row:
+            raise HTTPException(status_code=404, detail="Preview not found.")
+        require_project_actor(
+            connection, preview_row["project_id"], actor, "task_create"
+        )
     from .services.preview_service import stop_preview
     try:
         return stop_preview(engine, preview_id, settings)

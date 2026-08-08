@@ -2846,12 +2846,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Fallback 2 (not 0): a missing/blank config field must never SILENTLY disable the moat.
             max_repair_rounds = max(0, int(getattr(settings, "code_review_repair_max_rounds", 2) or 2))
             gate_faults = classify_gate_faults(failing=failing, evidence=evidence)
+            # Non-final decomposition slices suppress the PR and advance the chain on
+            # completed_no_pr. They must NOT take ship_with_dissent: that path marks the
+            # slice completed, skips the deferred-findings follow-up (spawned only after a
+            # PR opens), and lets advance_decomposition build the next slice on unresolved
+            # security/test failures. Treat them like open_pr=false for gate disposition.
+            _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
+            _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
+                               and _dtot > 1 and _didx < _dtot)
+            _can_ship_pr = spec.get("open_pr", True) is not False and not _nonfinal_slice
             action = resolve_gate_failure_action(
                 failing=failing,
                 advisory_gate=advisory_gate,
                 rounds_used=rounds_used,
                 max_repair_rounds=max_repair_rounds,
-                open_pr=spec.get("open_pr", True) is not False,
+                open_pr=_can_ship_pr,
                 never_block=bool(getattr(settings, "code_gate_never_block", True)),
                 faults=gate_faults,
             )
@@ -2907,14 +2916,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     action = resolve_gate_failure_action(
                         failing=failing, advisory_gate=advisory_gate,
                         rounds_used=rounds_used, max_repair_rounds=max_repair_rounds,
-                        open_pr=spec.get("open_pr", True) is not False,
+                        open_pr=_can_ship_pr,
                         never_block=bool(getattr(settings, "code_gate_never_block", True)),
                         faults=gate_faults)
                 if action == "inconclusive":
                     # Escalations exhausted: ship, recording that the code was NOT reviewed.
+                    # Still respect _can_ship_pr — a non-final slice / open_pr=false run must
+                    # not ship_with_dissent and advance broken mid-chain work.
                     action = ("ship_with_dissent"
                               if (bool(getattr(settings, "code_gate_never_block", True))
-                                  and spec.get("open_pr", True) is not False)
+                                  and _can_ship_pr)
                               else "block")
             if action == "ship" and failing and advisory_gate:
                 # ADVISORY first pass: surface the failing checks (their verdicts are already
@@ -3074,6 +3085,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # human approval on every slice is what a customer never wants — 6 tasks, 6 PRs, 6 gates
         # for one website. So only the FINAL slice opens a PR (the whole accumulated site, one
         # approval); earlier slices complete silently on the shared branch and advance the chain.
+        # Recompute for the happy path (gate-failure branch may not have run).
         _didx, _dtot = fctx.get("decomposition_index"), fctx.get("decomposition_total")
         _nonfinal_slice = (isinstance(_didx, int) and isinstance(_dtot, int)
                            and _dtot > 1 and _didx < _dtot)

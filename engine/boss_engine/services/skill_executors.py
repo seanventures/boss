@@ -300,8 +300,6 @@ def execute_model_generate_code(
     plan, per the SkillSpec output schema. It never touches a repo — the patch
     is an artifact for the software-factory gates to validate. Receipt-backed
     so the budget reservation settles with the real token cost."""
-    import hashlib
-
     from .claude_cli_adapter import make_chat_adapter
     from .core import create_artifact
     from .openai_adapter import estimate_cost_usd_micros
@@ -311,9 +309,9 @@ def execute_model_generate_code(
     constraints = [str(item) for item in _optional_list(inputs, "constraints")]
 
     org_id, workspace_id = context.tenant_scope()
-    dedupe_key = "model.generate_code:" + hashlib.sha256(
-        f"{context.project_id}:{task_spec}:{repo_context}".encode()
-    ).hexdigest()
+    dedupe_key = _model_generate_code_dedupe_key(
+        context.project_id, task_spec, repo_context, constraints
+    )
     receipt, created = context.receipts.create_or_reuse(
         context.connection,
         org_id,
@@ -399,6 +397,27 @@ def execute_model_generate_code(
         "receipt_id": receipt["id"],
         "actual_cost_usd_micros": estimate_cost_usd_micros(usage),
     }
+
+
+def _model_generate_code_dedupe_key(
+    project_id: str,
+    task_spec: str,
+    repo_context: str,
+    constraints: list[str],
+) -> str:
+    """Stable receipt dedupe key for model.generate_code.
+
+    Constraints are part of the identity: omitting them caused silent wrong-reuse
+    when the same task/repo was re-invoked under different constraints.
+    """
+    import hashlib
+    import json
+
+    material = (
+        f"{project_id}:{task_spec}:{repo_context}\0"
+        f"{json.dumps(constraints, ensure_ascii=False)}"
+    )
+    return "model.generate_code:" + hashlib.sha256(material.encode()).hexdigest()
 
 
 def _split_patch_and_test_plan(content: str) -> tuple[str, str]:

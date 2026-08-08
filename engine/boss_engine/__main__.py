@@ -192,6 +192,16 @@ def _cmd_chat(args) -> int:
     return 0
 
 
+def _serve_mcp_read_only(args) -> bool:
+    """HTTP has no transport auth, so it defaults to read-only unless
+    ``--allow-writes`` is set. Stdio stays write-capable by default."""
+    if args.read_only:
+        return True
+    if args.http and not args.allow_writes:
+        return True
+    return False
+
+
 def _cmd_serve_mcp(args) -> int:
     from .mcp import MCPServer
 
@@ -199,15 +209,26 @@ def _cmd_serve_mcp(args) -> int:
     # A no-database process is intentionally an inspection/catalog endpoint;
     # advertising write tools there would invite a caller to take an action
     # that cannot create the required durable audit trail.
-    server = MCPServer(
-        ctx,
-        project_id=args.project,
-        read_only=args.read_only or not ctx.durable_workspace_configured,
-    )
+    read_only = _serve_mcp_read_only(args) or not ctx.durable_workspace_configured
+    if (
+        args.http
+        and args.allow_writes
+        and not read_only
+        and args.host not in ("127.0.0.1", "localhost", "::1")
+    ):
+        print(
+            "boss-engine: WARNING — serving WRITE tools over unauthenticated "
+            f"HTTP on {args.host}:{args.port}. Prefer stdio MCP, or bind "
+            "loopback, or pass --read-only.",
+            file=sys.stderr,
+        )
+
+    server = MCPServer(ctx, project_id=args.project, read_only=read_only)
     if args.http:
         import uvicorn  # lazy: only for HTTP transport
 
-        print(f"Mission Control (read-only): http://{args.host}:{args.port}/",
+        mode = "read-only" if read_only else "writes ENABLED"
+        print(f"Mission Control ({mode}): http://{args.host}:{args.port}/",
               file=sys.stderr)
         uvicorn.run(server.asgi_app(), host=args.host, port=args.port)
         return 0
@@ -246,6 +267,11 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--host", default="127.0.0.1")
     m.add_argument("--port", type=int, default=8791)
     m.add_argument("--read-only", action="store_true", help="expose read tools only")
+    m.add_argument(
+        "--allow-writes",
+        action="store_true",
+        help="HTTP only: expose write tools (off by default; HTTP has no auth)",
+    )
     m.set_defaults(func=_cmd_serve_mcp)
     return p
 

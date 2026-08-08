@@ -11,6 +11,7 @@
 # Serve MCP over stdio:    docker run -i --rm -e DATABASE_URL=... boss-engine:dev serve-mcp
 # Serve MCP over HTTP:     docker run --rm -p 8791:8791 -e DATABASE_URL=... \
 #                             boss-engine:dev serve-mcp --http --host 0.0.0.0
+#                             (HTTP is read-only by default; no auth on /mcp)
 # Ask the agent:           docker run --rm -e DATABASE_URL=... boss-engine:dev \
 #                             ask "how many tasks are running?"
 FROM python:3.12-slim
