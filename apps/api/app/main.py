@@ -5382,6 +5382,81 @@ def build_web_app_endpoint(payload: dict):
         review=bool(payload.get("review", False)))
 
 
+@app.get("/v1/qa/benchmark-apps")
+def list_qa_benchmark_apps_endpoint():
+    """List pinned end-to-end application contracts used to evaluate BOSS itself.
+
+    Catalog reads are side-effect free. A benchmark is not a claimed result; it becomes
+    a governed code-task run only through the explicit launch endpoint below.
+    """
+    from boss_engine.services.benchmark_apps import list_benchmark_apps
+
+    return {"benchmark_apps": list_benchmark_apps()}
+
+
+@app.post("/v1/qa/benchmark-apps/{benchmark_id}/runs", status_code=201)
+def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
+    """Launch one pinned QA benchmark through the normal budgeted code-task workflow."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = str((payload or {}).get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required.")
+    from boss_engine.services.benchmark_apps import benchmark_task_input
+    from .services.code_task_service import start_code_task
+
+    try:
+        task = benchmark_task_input(benchmark_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    actor = str((payload or {}).get("actor") or "executive_console").strip()
+    try:
+        with begin(engine) as c:
+            require_project_actor(c, project_id, actor, "task_create")
+            run_id = start_code_task(
+                c,
+                project_id=project_id,
+                task_id=(payload or {}).get("task_id"),
+                title=task["title"],
+                instructions=task["instructions"],
+                acceptance_criteria=task["acceptance_criteria"],
+                test_commands=task["test_commands"],
+                owner=(payload or {}).get("owner") or settings.target_github_owner,
+                repo=(payload or {}).get("repo") or settings.target_github_repo,
+                base_branch=(payload or {}).get("base_branch") or "main",
+                finalize_ctx=task["finalize_ctx"],
+                jobs=jobs,
+                profile=(payload or {}).get("profile") or "strict",
+                risk_tier=2,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
+    }
+
+
+@app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
+def qa_benchmark_app_report_endpoint(run_id: str):
+    """Read the evidence-backed completion report for a benchmark run."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_apps import completion_report
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="code task not found")
+    if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+        raise HTTPException(status_code=404, detail="code task is not a QA benchmark run")
+    return completion_report(run)
+
+
 @app.get("/v1/pipeline-profiles")
 def list_pipeline_profiles_endpoint(project_id: str):
     """List the cost/rigor profiles available to a project: built-in presets plus any custom

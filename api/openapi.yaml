@@ -6572,6 +6572,44 @@ paths:
         '200': { description: Receipt-backed triage or review result }
         '409': { description: Worker lease is missing, expired, or owned by another worker }
         '422': { description: Job kind or normalized event payload is invalid }
+  /v1/qa/benchmark-apps:
+    get:
+      summary: List pinned full-stack QA benchmark application contracts
+      responses:
+        '200': { description: Benchmark catalog with acceptance scenarios and verification requirements }
+  /v1/qa/benchmark-apps/{benchmark_id}/runs:
+    post:
+      summary: Launch a benchmark through the strict governed code-task workflow
+      parameters:
+        - { name: benchmark_id, in: path, required: true, schema: { type: string, enum: [bugbox, hookwatch, approveit] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: executive_console }
+                task_id: { type: string }
+                owner: { type: string }
+                repo: { type: string }
+                base_branch: { type: string, default: main }
+                profile: { type: string, default: strict }
+      responses:
+        '201': { description: Budgeted benchmark code task queued }
+        '403': { description: Actor lacks task creation authority }
+        '404': { description: Unknown benchmark }
+        '422': { description: Invalid project or sandbox validation command }
+  /v1/qa/benchmark-apps/runs/{run_id}/report:
+    get:
+      summary: Read an evidence-backed benchmark completion report
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Durable observed evidence; incomplete checks remain not recorded }
+        '404': { description: Code task not found or is not a benchmark run }
   /v1/code-tasks/{run_id}/feedback:
     get:
       summary: Read the durable feedback thread for a code-task lineage

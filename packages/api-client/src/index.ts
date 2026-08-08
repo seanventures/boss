@@ -1036,6 +1036,12 @@ export type CodeTaskRun = {
      *  rounds were spent. The retry uses these to decide which stages are actually stale. */
     failing_gates?: string[];
     advisory_failing_gates?: string[];
+    qa_benchmark?: {
+      id: string;
+      name: string;
+      verification_commands: string[];
+      completion_contract: string[];
+    };
   };
   reservation_id?: string | null;
   pull_request_url?: string | null;
@@ -1045,6 +1051,37 @@ export type CodeTaskRun = {
 };
 
 export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
+
+export type QaBenchmarkApp = {
+  id: string;
+  name: string;
+  tagline: string;
+  summary: string;
+  focus: string[];
+  acceptance_scenarios: string[];
+  completion_contract: string[];
+  verification_commands: string[];
+};
+
+export type QaBenchmarkAppsResponse = { benchmark_apps: QaBenchmarkApp[] };
+
+export type QaBenchmarkReport = {
+  run_id: string;
+  benchmark_id?: string;
+  benchmark_name?: string;
+  run_status: string;
+  completion_contract: string[];
+  required_verification_commands: string[];
+  results: Array<{
+    label: string;
+    command: string;
+    status: "pass" | "fail" | "not_recorded";
+    exit_code?: number | null;
+    timed_out?: boolean | null;
+  }>;
+  passed: boolean;
+  message: string;
+};
 
 // One per-stage model call recorded for a code task (GET /v1/code-tasks/{id}/activity) —
 // the internal detail behind each phase: model, turns, latency, retries, cost, ok/error.
@@ -5550,6 +5587,27 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<CodeTasksResponse>("GET", "/v1/code-tasks", {
         query: { project_id: projectId, limit },
       });
+    },
+    getQaBenchmarkApps() {
+      return request<QaBenchmarkAppsResponse>("GET", "/v1/qa/benchmark-apps");
+    },
+    startQaBenchmarkApp(benchmarkId: string, payload: {
+      project_id: string;
+      actor?: string;
+      task_id?: string;
+      owner?: string;
+      repo?: string;
+      base_branch?: string;
+      profile?: string;
+    }) {
+      return request<{ status: string; run_id: string; benchmark: { id: string; name: string } }>(
+        "POST", `/v1/qa/benchmark-apps/${encodeURIComponent(benchmarkId)}/runs`, { body: payload },
+      );
+    },
+    getQaBenchmarkReport(runId: string) {
+      return request<QaBenchmarkReport>(
+        "GET", `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/report`,
+      );
     },
     getDiscoveries(projectId: string, limit = 50) {
       return request<DiscoveriesResponse>("GET", "/v1/discoveries", {

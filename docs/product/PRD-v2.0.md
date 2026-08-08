@@ -523,6 +523,8 @@ Evidence bundles must include spec refs, task refs, diffs, test results, build l
 
 Definition of done: software work is complete only when objective evidence demonstrates builds pass, tests pass, runtime behavior satisfies acceptance criteria, required artifacts are attached, and required receipts exist.
 
+Software Factory QA must also maintain a pinned suite of small but cross-layer benchmark applications. Each benchmark enters through the same operator workflow and governed code-task APIs used by customer work, exercises planning, persistence, backend behavior, browser behavior, repair, and evidence reporting, and remains uncertified until its durable verification report contains the required plan and authoritative command result. The initial suite is BugBox (CRUD/persistence), HookWatch (ingestion/replay), and ApproveIt (role-gated state transitions/audit).
+
 ### GitHub Project Sync and Branch Orchestration
 
 GitHub connectivity is project-scoped durable state, not process-wide ambient

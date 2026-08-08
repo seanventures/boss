@@ -3,6 +3,19 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — BOSS-327 governed QA benchmark apps
+
+- Added the pinned BugBox, HookWatch, and ApproveIt benchmark catalog so BOSS can evaluate
+  its own full-stack delivery path through the Code Tasks interface and governed code-task API,
+  rather than treating a generated screen as proof of delivery.
+- Each launch uses the normal task-create permission, budget reservation, leased code task,
+  strict review profile, durable plan, and authoritative verification evidence. The report endpoint
+  fails closed: absent plan or verification evidence remains `not_recorded`, never a pass.
+- Added typed API-client support, Mission Control launch controls, OpenAPI documentation, product
+  contract documentation, and focused catalog/evidence/client tests. API database-backed launch
+  testing remains dependent on a configured Postgres `DATABASE_URL` in the isolated worktree.
+
+---
 ## 2026-08-08 — Codex — GA security integration and release-gate reconciliation
 
 - Reconciled the critical security contributor stack without rewriting its

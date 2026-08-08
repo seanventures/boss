@@ -3,6 +3,36 @@ import { describe, expect, it } from "vitest";
 import { createBossApiClient, BossApiError } from "@boss/api-client";
 
 describe("createBossApiClient", () => {
+  it("lists and launches QA benchmark apps through the governed API contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const responses = [
+      { benchmark_apps: [{ id: "bugbox", name: "BugBox", tagline: "Mini issue tracker", summary: "CRUD", focus: [], acceptance_scenarios: [], completion_contract: [], verification_commands: [] }] },
+      { status: "queued", run_id: "crun_benchmark", benchmark: { id: "bugbox", name: "BugBox" } },
+    ];
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(input), init });
+        return new Response(JSON.stringify(responses.shift()), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const catalog = await client.getQaBenchmarkApps();
+    const launch = await client.startQaBenchmarkApp("bugbox", {
+      project_id: "boss-dogfood", actor: "executive_console", repo: "boss-sandbox",
+    });
+
+    expect(catalog.benchmark_apps[0].id).toBe("bugbox");
+    expect(launch.run_id).toBe("crun_benchmark");
+    expect(calls[0].url).toBe("http://127.0.0.1:8000/v1/qa/benchmark-apps");
+    expect(calls[1].url).toBe("http://127.0.0.1:8000/v1/qa/benchmark-apps/bugbox/runs");
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      project_id: "boss-dogfood", actor: "executive_console", repo: "boss-sandbox",
+    });
+  });
+
   it("posts conversational turns through the agent contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
