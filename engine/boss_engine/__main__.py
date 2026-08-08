@@ -73,10 +73,10 @@ def _ctx():
             configure_engine_ports(EnginePorts.oss_defaults(ctx.settings))
     if not os.environ.get("DATABASE_URL"):
         print(
-            "boss-engine: DATABASE_URL is not set — running with the standalone "
-            "OSS ports (in-memory persistence, no-op budget). DB-backed tools "
-            "(status, query_db, list_*) need Postgres: set DATABASE_URL and run "
-            "`python -m boss_engine bootstrap` first.",
+            "boss-engine: DATABASE_URL is not set — running in catalog-only mode. "
+            "BOSS workflow commands require a self-hosted Postgres workspace so "
+            "tasks, Receipts, approvals, and leases are durable. Set DATABASE_URL "
+            "and run `python -m boss_engine bootstrap` before invoking workflow tools.",
             file=sys.stderr,
         )
     elif not ctx.database_reachable():
@@ -195,7 +195,15 @@ def _cmd_chat(args) -> int:
 def _cmd_serve_mcp(args) -> int:
     from .mcp import MCPServer
 
-    server = MCPServer(_ctx(), project_id=args.project, read_only=args.read_only)
+    ctx = _ctx()
+    # A no-database process is intentionally an inspection/catalog endpoint;
+    # advertising write tools there would invite a caller to take an action
+    # that cannot create the required durable audit trail.
+    server = MCPServer(
+        ctx,
+        project_id=args.project,
+        read_only=args.read_only or not ctx.durable_workspace_configured,
+    )
     if args.http:
         import uvicorn  # lazy: only for HTTP transport
 

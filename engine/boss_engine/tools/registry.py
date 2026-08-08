@@ -117,6 +117,18 @@ class ToolRegistry:
     # ---- invocation -------------------------------------------------------
     def invoke(self, name: str, ctx: Any, *, project_id: str, actor: str, args: dict) -> dict:
         spec = self.get(name)
+        if spec.kind == "write" and not getattr(ctx, "durable_workspace_configured", True):
+            return {
+                "ok": False,
+                "tool": name,
+                "status": "blocked",
+                "error": "durable_workspace_required",
+                "message": (
+                    "This BOSS command creates durable work, receipts, approvals, and leases. "
+                    "Configure DATABASE_URL for self-hosted Postgres and run "
+                    "`boss-engine bootstrap` before invoking write tools."
+                ),
+            }
         try:
             result = spec.handler(ctx, project_id=project_id, actor=actor, args=args or {})
         except ToolError:

@@ -52,6 +52,13 @@ def test_read_only_blocks_write_tool():
     assert resp["result"]["isError"] is True
 
 
+def test_catalog_only_context_hides_write_tools():
+    ctx = type("CatalogOnlyContext", (), {"durable_workspace_configured": False})()
+    srv = MCPServer(ctx=ctx, project_id="p", registry=_stub_registry())
+
+    assert {tool["name"] for tool in srv._tools()} == {"read_x"}
+
+
 def test_stdio_roundtrip():
     srv = MCPServer(ctx=None, project_id="p", registry=_stub_registry())
     stdin = io.StringIO(

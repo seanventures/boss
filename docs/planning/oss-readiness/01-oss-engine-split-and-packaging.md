@@ -130,7 +130,7 @@ class PersistencePort(Protocol):
     def save_run(self, run_id: str, state: dict) -> None: ...
     def transaction(self) -> ContextManager: ...
 ```
-OSS default `InMemoryPersistence` (or SQLite-file-backed) replaces `from ..db import begin` + raw `text()` SQL. The `with begin(engine) as c:` blocks in `governed_code_task_service.py:389`, `code_task_service.py:~250,~351` become `with self.persistence.transaction() as c:`.
+The OSS in-memory persistence seam replaces selected pipeline-local `from ..db import begin` + raw `text()` SQL. It is useful for isolated execution tests, but is not the community product datastore: running governed work requires the self-hosted Postgres workspace that durably records tasks, Receipts, approvals, and leases.
 
 **`EventSink`** (breaks Blocker 3):
 ```python
@@ -154,7 +154,7 @@ def build_ports(settings) -> EnginePorts:
                            entitlement=EntitlementBrokerService(settings),
                            persistence=PostgresPersistence(engine),
                            events=PostgresEventSink(engine))
-    return EnginePorts.oss_defaults()          # no-op budget, allow-all, in-memory, logging
+    return EnginePorts.oss_defaults()          # isolated pipeline/test composition only
 ```
 The FastAPI app calls `build_ports(settings)` once and injects the result into engine services. `boss_edition` now genuinely determines whether governance/Postgres are active. Enterprise routers (§3.4) are mounted only when edition == enterprise.
 
@@ -207,7 +207,7 @@ The community router set is what could ship in an OSS distribution *if* the stra
 - [x] Enterprise path still aborts mid-run on real budget exhaustion (regression test).
 
 ### SEAM-03 — PersistencePort to replace direct `db.begin` + raw SQL · size L
-**Scope:** Define `PersistencePort` with an `InMemory`/SQLite default. Replace `from ..db import begin` and raw `text()` SQL in engine services with port calls. This is the largest seam because run-state read/write is threaded through the pipelines and entangled with the budget transactions.
+**Scope:** Define `PersistencePort` with an in-memory test composition. Replace `from ..db import begin` and raw `text()` SQL in engine services with port calls. This is the largest seam because run-state read/write is threaded through the pipelines and entangled with the budget transactions. The production/community runtime continues to require self-hosted Postgres; a full SQLite runtime would be a separately governed product effort.
 **Key files:** `governed_code_task_service.py`, `code_task_service.py`, `software_factory.py` (all `with begin(engine)` blocks).
 **Acceptance:**
 - [x] The named code-task/software-factory pipeline services contain no direct `from ..db import` and no `text()` calls.
@@ -295,7 +295,7 @@ BLK-03 (parallel to SEAM work; needs BLK-02 for edition gating)
 
 3. **Does the community router set ship as OSS, or only the engine package?** If (1) resolves to engine-only, `routers/community.py` stays proprietary and the OSS surface is just `packages/engine` + `packages/specpack` + `packages/api-client`. If (1) resolves to the PRD plan, the community control plane also opens under AGPL. This determines how aggressively BLK-03 must clean the community router.
 
-4. **PersistencePort default: in-memory vs SQLite file.** In-memory is simplest for a stand-alone `pip install` demo; SQLite gives durable local runs without Postgres. Recommend SQLite-file default for a credible self-host OSS experience (affects SEAM-03 acceptance).
+4. **PersistencePort default: in-memory vs SQLite file.** Resolved for GA: self-hosted Postgres is the durable community runtime. In-memory is reserved for isolated tests and catalog-only setup; a SQLite runtime must not be implied until it can preserve BOSS's workflow, receipt, lease, and approval invariants.
 
 5. **API packaging scope.** Package only the engine (API stays flat `apps.api.app.main:app` + `requirements.txt`), or also give the API a `pyproject.toml`? Minimum viable is engine-only; revisit if the API is ever distributed.
 

@@ -74,7 +74,11 @@ class MCPServer:
         self.project_id = project_id
         self.actor = actor
         self.registry = registry or build_default_registry()
-        self.read_only = read_only
+        # Catalog-only contexts have no durable workspace in which to record a
+        # receipt, approval, lease, or task. Enforce read-only at the transport
+        # boundary as well as at invocation time so every MCP host advertises an
+        # honest capability set.
+        self.read_only = read_only or not getattr(ctx, "durable_workspace_configured", True)
 
     # ---- schema ----------------------------------------------------------
     def _tools(self) -> list[dict]:

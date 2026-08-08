@@ -54,6 +54,17 @@ A fresh database MUST be bootstrapped first — `bootstrap` creates the schema
 `core_v1` role pack and the default agent modules. Without it every DB-backed
 tool fails with `relation "code_task_runs" does not exist`.
 
+### Durable-workspace requirement
+
+The community engine has no hosted dependency: a self-hosted PostgreSQL
+database is its durable workspace. It is required before BOSS can create a
+task, Receipt, approval, lease, meeting, or other governed workflow record.
+Without `DATABASE_URL`, `boss-engine tools` remains useful for inspecting the
+catalog, and the MCP endpoint is read-only, but write tools fail closed with
+setup instructions. In-memory ports are an internal composition seam for
+isolated pipeline tests; they are not a substitute for the durable audit trail
+required by a running BOSS installation.
+
 ### Docker
 
 ```bash
