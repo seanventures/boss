@@ -452,6 +452,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const [form, setForm] = useState({
     app_name: "", repo: "", environment: "staging", target_kind: "ssh",
     target_ref: "", domain: "", scheme: "http", app_port: "", app_entry: "",
+    publishable_ports: "",
     secret_ref_id: "", auto_deploy: false,
   });
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
@@ -492,6 +493,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
       domains: domain ? [domain] : [],
       app_port: form.app_port ? Number(form.app_port) : undefined,
       app_entry: form.app_entry || undefined,
+      publishable_ports: form.publishable_ports || undefined,
       health_checks: [{ kind: "http", path: "/", expect: 200, scheme: form.scheme }],
     });
     if (out?.error) { say(`failed: ${out.error}`); return; }
@@ -607,6 +609,14 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             </label>
             <Field label="port (blank = BOSS picks)" value={form.app_port}
                    onChange={(e) => set("app_port", e.target.value)} placeholder="auto" />
+            {/* Free on the host is not the same as reachable from the internet. Without this,
+                BOSS picks a port the cloud firewall drops: the app runs, the health check times
+                out, and nothing in the failure names the security group. */}
+            <Field label="ports this host publishes (optional)"
+                   title="Comma-separated, ranges allowed — e.g. 3003,4000,10000-10001. BOSS will only pick from these."
+                   value={form.publishable_ports}
+                   onChange={(e) => set("publishable_ports", e.target.value)}
+                   placeholder="3003,4000,10000-10001" />
             <label style={{ display: "grid", gap: 3 }}>
               <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
                 app entry {appsAmbiguous ? "(required — this repo has several)" : "(optional)"}

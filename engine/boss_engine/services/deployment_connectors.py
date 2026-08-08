@@ -127,6 +127,40 @@ def _app_port(target: dict, default: int = 8080) -> int:
     return default
 
 
+def _render_pool(pool: list[int]) -> str:
+    """The pool as an operator wrote it — abbreviated, so a range does not print 500 numbers."""
+    return ", ".join(str(p) for p in pool[:8]) + ("…" if len(pool) > 8 else "")
+
+
+def _publishable_ports(target: dict) -> Optional[list[int]]:
+    """Ports on this host that are actually reachable from outside, if the target says.
+
+    BOSS was choosing "the first port nothing on the host is listening on", which is a correct
+    answer to the wrong question. A free port behind a closed firewall passes every check the
+    deployment can make locally — docker binds it, the transfer succeeds, preflight is happy —
+    and then the health check times out, with nothing in the failure naming the firewall. That
+    is what happened to nqueens-app on :3010: the app was running perfectly and unreachable.
+
+    Declared as `{"kind": "publishable_ports", "name": "3003,4000,10000-10001"}`. Optional:
+    with no pool the old scan applies, because most hosts publish freely and demanding this
+    everywhere would block onboarding on information the operator may not have.
+    """
+    raw = _resource(target, "publishable_ports")
+    if not raw:
+        return None
+    ports: list[int] = []
+    for chunk in str(raw).replace(" ", "").split(","):
+        if not chunk:
+            continue
+        if "-" in chunk:
+            lo, _, hi = chunk.partition("-")
+            if lo.isdigit() and hi.isdigit():
+                ports.extend(range(int(lo), min(int(hi), int(lo) + 500) + 1))
+        elif chunk.isdigit():
+            ports.append(int(chunk))
+    return ports or None
+
+
 def _resource(target: dict, kind: str) -> Optional[str]:
     """Read a declared resource off the target — one accessor, so a new kind cannot be read
     two slightly different ways."""
@@ -427,16 +461,36 @@ class SSHContainerConnector:
         # This app's own published ports are not conflicts — they are the status quo.
         taken = _ports("PORTS_BEGIN") - own
 
+        # Free on the host is NOT the same as reachable from outside. When the target declares
+        # which ports the host actually publishes, choose only from those — otherwise BOSS picks
+        # a port the firewall drops, and the deployment fails at the health check with nothing
+        # naming the cause.
+        pool = _publishable_ports(target)
         chosen = _app_port(target, default=0) or None
         if chosen and chosen in taken:
             problems.append(f"port {chosen} is already in use on {host}")
             chosen = None
+        if chosen and pool and chosen not in pool:
+            problems.append(
+                f"port {chosen} is not one this host publishes ({_render_pool(pool)}), so the "
+                f"app would run but be unreachable. Clear the port to let BOSS choose.")
+            chosen = None
         if not chosen:
-            # A high, unremarkable range: low ports collide with the services a shared host
-            # already runs, which is precisely how the 8080 collision happened.
-            chosen = next((p for p in range(3010, 3200) if p not in taken), None)
-            if chosen:
-                changed.append(f"selected free port {chosen}")
+            if pool:
+                chosen = next((p for p in pool if p not in taken), None)
+                if chosen:
+                    changed.append(f"selected published port {chosen}")
+                else:
+                    problems.append(
+                        f"every port this host publishes ({_render_pool(pool)}) is already in "
+                        f"use. Free one, or open another on the host's firewall.")
+            else:
+                # A high, unremarkable range: low ports collide with the services a shared host
+                # already runs, which is precisely how the 8080 collision happened.
+                chosen = next((p for p in range(3010, 3200) if p not in taken), None)
+                if chosen:
+                    changed.append(f"selected free port {chosen} (reachability not verified — "
+                                   f"declare publishable_ports to have BOSS check)")
 
         return {"ok": not problems, "problems": problems, "changed": changed,
                 "app_dir": app_dir, "suggested_port": chosen,
@@ -674,6 +728,66 @@ class SSHContainerConnector:
         return result
 
     # -- observe ----------------------------------------------------------------
+    def _why_unreachable(self, target: dict, settings: Settings) -> str:
+        """Is the app broken, or just unreachable? Ask the host.
+
+        Same symptom, opposite fixes. `curl localhost:PORT` over SSH answers it in one round
+        trip: serving locally means the firewall is dropping the port; not serving means the
+        container is the problem. Best-effort — a diagnosis that fails must not turn a health
+        verdict into an exception.
+        """
+        from .deploy_service import _app_name, _discard_key_file, _materialise_key, _ssh, \
+            _ssh_key_file
+
+        app_port = _app_port(target, default=0)
+        if not app_port:
+            return ""
+        user, host, port = _split_ref(target.get("target_ref", ""))
+        app = _app_name(target.get("repo") or "", target.get("app_name"))
+        ephemeral = None
+        try:
+            from ..db import get_engine
+            from .secret_backends import resolve_target_secret
+
+            # The target's OWN key when it has one; the platform key otherwise. observe() is
+            # not handed a connection, so this opens its own — a diagnosis that cannot read the
+            # credential would silently report "no container", which is a wrong answer, not a
+            # missing one.
+            material = None
+            try:
+                with begin_conn(get_engine(settings)) as c:
+                    material = resolve_target_secret(c, target, "ssh_key", settings)
+            except Exception:  # noqa: BLE001 — fall back to the platform key
+                material = None
+            key = ephemeral = _materialise_key(material) if material else _ssh_key_file(settings)
+            res = _ssh(key, host, user, port,
+                       f"curl -s -o /dev/null -m 5 -w '%{{http_code}}' "
+                       f"http://127.0.0.1:{app_port}/ 2>/dev/null || echo 000; "
+                       f"docker inspect -f '{{{{.State.Status}}}}' {shlex.quote(app)} "
+                       f"2>/dev/null || echo no-container",
+                       timeout=25)
+        except Exception as exc:  # noqa: BLE001
+            return f"(could not reach the host to diagnose: {type(exc).__name__})"
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
+
+        lines = [ln.strip() for ln in (res.stdout or "").splitlines() if ln.strip()]
+        local_code = lines[0] if lines else "000"
+        state = lines[1] if len(lines) > 1 else "unknown"
+        if local_code not in ("000", ""):
+            pool = _publishable_ports(target)
+            return (f"the app IS serving on the host (localhost:{app_port} returns "
+                    f"{local_code}), so port {app_port} is being blocked before it reaches "
+                    f"BOSS — a firewall or cloud security group, not the deployment."
+                    + (f" This host publishes {_render_pool(pool)}." if pool else
+                       " Declare publishable_ports on the target so BOSS picks a port that"
+                       " is actually open."))
+        if state == "no-container":
+            return "no container is running for this app on the host."
+        return (f"the container is {state} and localhost:{app_port} does not answer — the app "
+                f"itself failed to start. Check the transfer step's log.")
+
     def observe(self, target: dict, settings: Settings) -> dict:
         """Ask the DESTINATION whether it is serving.
 
@@ -702,7 +816,14 @@ class SSHContainerConnector:
                 code, ok = exc.code, exc.code == expect
             except Exception as exc:  # noqa: BLE001 — unreachable IS the answer, not an error
                 code, ok = None, False
-                results.append({"url": url, "error": f"{type(exc).__name__}: {exc}"[:120]})
+                results.append({
+                    "url": url, "error": f"{type(exc).__name__}: {exc}"[:120],
+                    # Unreachable has two very different causes and one identical symptom.
+                    # Asking the HOST whether the app answers on localhost separates them: a
+                    # broken app is the deployment's fault, a blocked port is the firewall's,
+                    # and an operator handed only "urlopen error timed out" cannot tell which.
+                    "diagnosis": self._why_unreachable(target, settings),
+                })
                 healthy = False
                 continue
             healthy = healthy and ok

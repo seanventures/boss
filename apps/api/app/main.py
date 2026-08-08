@@ -5572,6 +5572,31 @@ def list_deployment_targets_alias(project_id: str, limit: int = 50,
     return list_deployment_targets(project_id=project_id, limit=limit, offset=offset)
 
 
+def merge_target_resources(current: Any, updates: dict[str, Any]) -> list[dict]:
+    """Set some resource kinds on a target, leaving the rest alone.
+
+    `required_resources` is one JSONB array holding unrelated facts: the container runtime, the
+    port, which app in the repo to deploy, who owns the repo, which ports the host publishes.
+    THREE separate places wrote it by replacing the whole array with
+    `[container_runtime, app_port]` — so choosing a port silently deleted `app_entry`, and the
+    next deployment failed with "cannot tell which app to deploy", naming a field nobody had
+    touched. I fixed two of those three and missed the third, which is the reason this is a
+    function and not a careful line repeated at each call site.
+
+    An empty-string value CLEARS its kind — the only way to hand a port back to BOSS.
+    """
+    merged = [r for r in (current or []) if isinstance(r, dict)]
+    for kind, value in updates.items():
+        if value is None:
+            continue
+        merged = [r for r in merged if r.get("kind") != kind]
+        if str(value).strip():
+            merged.append({"kind": kind, "name": str(value).strip()})
+    if not any(r.get("kind") == "container_runtime" for r in merged):
+        merged.insert(0, {"kind": "container_runtime", "name": "docker"})
+    return merged
+
+
 def _same_name(typed: Any, stored: Any) -> bool:
     """Is the confirmation the operator typed the app name, ignoring surrounding space?
 
@@ -5619,6 +5644,12 @@ def create_deployment_target_endpoint(payload: dict):
     # Recorded per target so a project can deploy from more than one owner's repo.
     if payload.get("repo_owner"):
         resources.append({"kind": "repo_owner", "name": str(payload["repo_owner"])})
+    # Which ports this host actually publishes. Without it BOSS picks a port that is merely
+    # FREE, which on a cloud host means the app runs and the health check times out with
+    # nothing naming the security group.
+    if payload.get("publishable_ports"):
+        resources.append({"kind": "publishable_ports",
+                          "name": str(payload["publishable_ports"])})
 
     # Accept either "boss-sandbox" or "paramg/boss-sandbox". An operator copying a repo from
     # GitHub pastes the second form; rejecting it (or silently mis-cloning) is a trap.
@@ -5690,13 +5721,36 @@ def update_deployment_target_endpoint(target_id: str, payload: dict):
         if payload.get(field) is not None:
             sets.append(f"{column} = CAST(:{field} AS JSONB)")
             params[field] = json.dumps(payload[field])
-    if payload.get("app_port") is not None:
+    # Resources are MERGED, one kind at a time.
+    #
+    # Setting `app_port` used to rewrite the whole array as [container_runtime, app_port],
+    # silently deleting `app_entry`, `repo_owner` and anything else the target had declared.
+    # Changing a port therefore erased which app to deploy — and the next deployment failed
+    # with "cannot tell which app to deploy", naming a field nobody had touched.
+    resource_updates = {
+        "app_port": payload.get("app_port"),
+        "app_entry": payload.get("app_entry"),
+        "repo_owner": payload.get("repo_owner"),
+        "publishable_ports": payload.get("publishable_ports"),
+    }
+    explicit = payload.get("required_resources")
+    if explicit is not None or any(v is not None for v in resource_updates.values()):
+        with begin(engine) as c:
+            current = c.execute(
+                text("SELECT required_resources FROM deployment_targets WHERE id=:i"),
+                {"i": target_id}).scalar()
+        base = explicit if explicit is not None else current
         sets.append("required_resources = CAST(:rr AS JSONB)")
-        params["rr"] = json.dumps([{"kind": "container_runtime", "name": "docker"},
-                                   {"kind": "app_port",
-                                    "name": str(int(payload["app_port"]))}])
+        params["rr"] = json.dumps(merge_target_resources(base, resource_updates))
+
     if not sets:
-        raise HTTPException(status_code=422, detail="nothing to update")
+        # Naming what WAS sent, because the previous version accepted a body full of fields it
+        # did not understand and returned 200 — a PATCH that quietly changes nothing is worse
+        # than one that refuses.
+        raise HTTPException(status_code=422, detail=(
+            "nothing to update. Understood fields: target_ref, status, environment, app_name, "
+            "domains, health_checks, secret_refs, required_resources, app_port, app_entry, "
+            f"repo_owner, publishable_ports. Received: {sorted(payload)}"))
 
     with begin(engine) as connection:
         result = connection.execute(
@@ -5877,9 +5931,9 @@ def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict]
             connection.execute(
                 text("UPDATE deployment_targets SET required_resources = CAST(:rr AS JSONB), "
                      "updated_at = now() WHERE id = :i"),
-                {"rr": json.dumps([{"kind": "container_runtime", "name": "docker"},
-                                   {"kind": "app_port",
-                                    "name": str(report["suggested_port"])}]),
+                {"rr": json.dumps(merge_target_resources(
+                    target.get("required_resources"),
+                    {"app_port": str(report["suggested_port"])})),
                  "i": target_id})
             report["applied_port"] = report["suggested_port"]
     return report
