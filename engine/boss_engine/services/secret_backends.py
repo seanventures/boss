@@ -135,7 +135,7 @@ class FileBackend:
 class PlatformSecretStoreBackend:
     """The operator's platform secret store, reached over HTTP.
 
-    Modelled on the goldeneye ops API, which already exposes exactly the right shape:
+    Modelled on a platform ops API, which exposes exactly the right shape:
     `GET /secrets` returns KEYS with values withheld, `GET /secret?key=`, `POST /secret`,
     `DELETE /secret?key=` — and it is backed up and mirrored off-site. BOSS uses it rather than
     growing its own vault, because a second store would be a second place for a credential to
