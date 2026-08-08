@@ -41,7 +41,7 @@ export PYTHONPATH=engine
 
 python -m boss_engine bootstrap                   # FIRST RUN: schema + seed defaults
 python -m boss_engine tools                       # list the tool layer
-python -m boss_engine status --project boss-dogfood
+python -m boss_engine --project boss-dogfood status
 python -m boss_engine call list_code_tasks --args '{"limit":5}'
 python -m boss_engine ask "how many tasks are running right now?"
 python -m boss_engine chat --allow-writes          # interactive agent
