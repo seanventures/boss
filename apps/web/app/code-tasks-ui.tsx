@@ -3,6 +3,7 @@
 import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec } from "@boss/api-client";
+import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
   confirmCodeTaskFeedbackAction,
@@ -399,7 +400,7 @@ function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
 
 function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
-  const tests = st.tests ?? [];
+  const tests = structuredCodeTaskTests(st);
   // One link per task: the most-recent running preview for this run (dedupe).
   const livePreviews = previews
     .filter((p) => p.run_id === run.id && p.status === "running")
