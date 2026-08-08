@@ -2,8 +2,8 @@ apiVersion: v2
 name: boss
 description: Enterprise self-hosted BOSS control plane.
 type: application
-version: 0.9.1
-appVersion: "0.9.1"
+version: 0.10.0
+appVersion: "0.10.0"
 keywords:
   - boss
   - ai

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boss-engine"
-version = "0.9.1"
+version = "0.10.0"
 description = "The OSS-shippable core of the BOSS autonomous software factory: the workflow engine, its tool layer, the engine-native agent, and an MCP server — with no dependency on the HTTP API or web console."
 readme = "README.md"
 requires-python = ">=3.11"

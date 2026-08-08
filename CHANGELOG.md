@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.10.0 - 2026-08-08
+
+This feature release completes the governed QA benchmark and continuous
+improvement delivery loop, together with the final mainline reconciliation.
+
+### Added
+
+- Pinned cross-layer QA benchmark applications (BugBox, HookWatch, and
+  ApproveIt), launched through the normal budgeted, leased code-task pipeline
+  and reported with durable plan and verification evidence.
+- Evidence-aware scorecards for functionality, capability, interface, app
+  quality, speed, efficiency, cost, tokens, effort, innovation, and
+  reliability; missing evidence is explicitly unscored.
+- A developer runner and `make qa-benchmark-e2e` canary path for queue → worker
+  → terminal report → durable evaluation evidence in a configured deployment.
+- A deduplicated benchmark-evaluation ledger and bounded worker sweep that
+  continuously materialize changed terminal evidence without mutating product
+  configuration.
+- Proposal-only tuning handoff into the existing isolated evaluation, decision,
+  canary, staged-rollout, and rollback controls. A developer-authored PR or
+  config diff remains mandatory; BOSS never self-applies a tuning candidate.
+- Deterministic all-agent catalog smoke coverage for the seeded Agent Studio
+  personas.
+
+### Release notes
+
+- `main` was reconciled without reset or force push; the reconciliation commit
+  retains both historical mainline ancestry and the canonical current tree.
+- GitHub Actions remain intentionally disabled. Local focused test, lint,
+  workflow, and production-build evidence is recorded in Plane; a real E2E
+  benchmark still requires configured model, budget, Postgres, API, worker,
+  sandbox, and repository dependencies.
+
 ## v0.9.1 - 2026-07-27
 
 This patch release completes the BOSS-280 budget-settlement integrity work from
