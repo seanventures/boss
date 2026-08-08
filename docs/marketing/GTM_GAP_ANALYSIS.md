@@ -47,8 +47,8 @@ The OSS-split acceptance test ("standalone script + LLM key + sample repo → di
 
 ## Deck-side fixes (product is ahead of the deck)
 
-- **AI SRE / Autonomous Oncall wedge is missing from the deck.** Since 2026-07-21 it is the repo's flagship enterprise wedge (spec 12, RB-1..RB-20, Cleric-benchmarked, remediation-as-code differentiator) — yet slide 5's wedges and slide 9's scorecard don't include it. #304.
-- **"Pick one surface" is still unpicked** (slide 3's own warning). Recommendation: lead with **path B (OSS engine + commercial plane)** for launch motion, **AI SRE** as the enterprise wedge, "Company OS" as the vision umbrella. #304.
+- **AI SRE / Autonomous Oncall wedge is missing from the deck.** Since 2026-07-21 it is the repo's flagship enterprise wedge (spec 12, RB-1..RB-20, Cleric-benchmarked, remediation-as-code differentiator) — yet slide 5's wedges and slide 9's scorecard don't include it. The exact revision copy is in [`GTM_DECK_REVISION_BRIEF.md`](./GTM_DECK_REVISION_BRIEF.md). #304.
+- **"Pick one surface" is still unpicked** (slide 3's own warning). The launch recommendation is **path B (OSS engine + commercial plane)**, **AI SRE** as the enterprise wedge, "Company OS" as the vision umbrella; the application copy is in the [deck revision brief](./GTM_DECK_REVISION_BRIEF.md). #304.
 - **No launch assets exist** — no landing page, no one-pager anywhere in the repo. Reusable evidence: value-flow diagrams (`docs/product/diagrams/`), VAG experiment HTML reports, demo-runbook pitch copy. #305.
 
 ## Sequencing recommendation (maps to deck slide 10)
