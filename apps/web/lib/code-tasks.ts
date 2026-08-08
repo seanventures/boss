@@ -1,4 +1,9 @@
-import { BossApiError, type CodeTaskRun, type PreviewRec } from "@boss/api-client";
+import {
+  BossApiError,
+  type CodeTaskRun,
+  type CodeTaskTestResult,
+  type PreviewRec,
+} from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
 
@@ -16,6 +21,15 @@ export type CodeTaskFeed = {
   blockedReason?: string;
   items: CodeTaskRun[];
 };
+
+/**
+ * Code-task state is persisted JSON and may include legacy/demo payloads. Treat a
+ * non-array `tests` value as absent structured evidence instead of trusting it as
+ * a test-result list (or crashing the operator console).
+ */
+export function structuredCodeTaskTests(state?: CodeTaskRun["state"]): CodeTaskTestResult[] {
+  return Array.isArray(state?.tests) ? state.tests : [];
+}
 
 export function emptyCodeTaskFeed(reason?: string, projectId = PROJECT_ID): CodeTaskFeed {
   return {

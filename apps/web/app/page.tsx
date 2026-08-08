@@ -124,7 +124,7 @@ import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
-import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
+import { fetchCodeTasksFeed, fetchPreviews, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
@@ -6046,7 +6046,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               );
             if (codeTask) {
               const st = codeTask.state ?? {};
-              const tests = st.tests ?? [];
+              const tests = structuredCodeTaskTests(st);
               const testTotal = tests.length;
               const testPass = tests.filter((t) => t.exit_code === 0).length;
               const testDurationMs = tests.reduce((acc, t) => acc + (t.duration_ms ?? 0), 0);
