@@ -171,7 +171,7 @@ export type DeploymentTargetFeedItem = {
   targetKind: string;
   targetRef: string;
   domains: string[];
-  secretRefs: string[];
+  secretRefs: Array<string | Record<string, unknown>>;
   status: string;
   createdAt: string;
 };

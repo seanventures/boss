@@ -5472,12 +5472,11 @@ class DeploymentTargetSummary(BaseModel):
     target_ref: str
     domains: list[str]
     required_resources: list[dict[str, Any]]
-    # A BINDING, not a bare name: {"name": "ssh_key", "secret_ref_id": "sref_..."} — or the
-    # legacy {"name", "ref"} form. Typed `list[str]`, this field made the list endpoint 500 on
-    # every real target, because a target has always recorded WHICH requirement each secret
-    # satisfies, not merely that one exists. The schema described a shape the writer never wrote,
-    # and nothing read the endpoint until now, so it failed silently for weeks.
-    secret_refs: list[dict[str, Any]]
+    # Existing deployment targets record a binding (for example,
+    # {"name": "ssh_key", "secret_ref_id": "sref_..."}), while the public
+    # create endpoint and web console also support a bare secret ref such as
+    # "env:OPENAI_API_KEY". Preserve both durable representations.
+    secret_refs: list[str | dict[str, Any]]
     health_checks: list[dict[str, Any]]
     rollback_points: list[dict[str, Any]]
     status: str
@@ -5503,7 +5502,7 @@ class DeploymentTargetCreateRequest(BaseModel):
     target_ref: str
     domains: list[str] = Field(default_factory=list)
     required_resources: list[dict[str, Any]] = Field(default_factory=list)
-    secret_refs: list[dict[str, Any]] = Field(default_factory=list)
+    secret_refs: list[str | dict[str, Any]] = Field(default_factory=list)
     health_checks: list[dict[str, Any]] = Field(default_factory=list)
     rollback_points: list[dict[str, Any]] = Field(default_factory=list)
     actor: str = "ceo"
