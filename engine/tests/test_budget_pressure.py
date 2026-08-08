@@ -18,7 +18,9 @@ def test_green_and_yellow_change_nothing():
 
 
 def test_orange_degrades_strong_build_steps():
-    r = _route("balanced", "implement")            # balanced routes implement -> strong
+    # Balanced intentionally uses the economical builder and strong verification.
+    # Strict is the profile that exercises a class-routed strong build step.
+    r = _route("strict", "implement")
     assert r["model_class"] == "strong"
     out, lite = apply_budget_pressure(r, "implement", "orange")
     assert lite is True and out["model_class"] == "low_cost"
