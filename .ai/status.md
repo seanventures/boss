@@ -1,11 +1,11 @@
 # BOSS Autonomous Delivery Status
 
-**Last updated**: 2026-07-27 (v0.9.1 budget settlement patch)
+**Last updated**: 2026-08-08 (GA readiness evidence refresh)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss
-**Current branch**: ai/codex/release-v0.9.0
-**Base branch**: origin/main
-**Product**: BOSS v0.9.1 target (Business Operating System Sentinel)
+**Current integration baseline**: `origin/main` at `8e8dd4e` (security-hardened)
+**Base branch**: origin/main; use focused `ai/codex/*` branches for new work
+**Product**: BOSS v0.9.1 released; GA closure remains in progress (no new GA release published)
 **Mission**: Complete product to production-grade, tested, documented, pushed, Codex-coordinated, ready for real users. Grind until all discovered PRD/spec features satisfy world-class DoD or truly blocked.
 
 ## Discovered Spec Sources (see .ai/spec-index.md)
@@ -14,6 +14,20 @@
 - GitHub: draft PR #16 carries BOSS-22/BOSS-23 and is stacked on draft PR #15; other open PRs were inspected for overlap before implementation.
 
 ## Overall Product Status
+- **2026-08-08 GA truth.** PR #136 (`8e8dd4e`) is the canonical integration
+  of the critical authorization, secret-binding, delivery-verdict, and MCP
+  HTTP hardening that superseded contributor PRs #105–#114. Full local
+  evidence on that exact integration passes: 144 web tests and 1,088 Python
+  tests (four intentional skips), plus repository lint and smoke. GitHub has
+  no open BOSS PRs or issues as of this refresh.
+- **GA is deliberately unreleased.** The Plane GA umbrella remains In
+  Progress. The required private-sandbox `main` protection is not enabled:
+  GitHub returned HTTP 403 when asked to require an approving review, stale
+  review dismissal, conversation resolution, admin enforcement, and no force
+  pushes/deletions. The owner must upgrade/move the private sandbox to a
+  qualifying GitHub plan or explicitly authorize making it public. Do not run
+  a live PR demo or publish a GA release until that gate is resolved. GitHub
+  Actions remains globally disabled, so no status-check rule is requested.
 - BOSS-282 integrates the contributor budget-settlement patch: completed-no-PR
   and repair outcomes settle before release, while resumed runs charge only
   their previously unbilled delta.

@@ -3,6 +3,22 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — GA security integration and release-gate reconciliation
+
+- Reconciled the critical security contributor stack without rewriting its
+  branches. PR #136 merged as `8e8dd4e`; legacy PRs #105–#114 were closed as
+  superseded after their relevant hardening was integrated and validated.
+- Exact mainline evidence passes: 144 web tests, 1,088 Python tests with four
+  intentional skips, repository lint, and smoke. GitHub has no open BOSS PRs
+  or issues at the end of reconciliation.
+- Tried to protect private `seanheiney/boss-sandbox` `main` with one required
+  review, stale-review dismissal, conversation resolution, admin enforcement,
+  and force-push/deletion disabled. GitHub returned HTTP 403: the repository
+  needs GitHub Pro/Team or must be public. Recorded the evidence on the Plane
+  safety gate and kept the GA umbrella In Progress and unreleased. GitHub
+  Actions remains disabled, so no CI status-check requirement was introduced.
+
+---
 ## 2026-08-08 — Codex — BOSS-310–311 GA baseline repair
 
 - Opened a narrow GA-baseline branch from current `origin/main` after checking
