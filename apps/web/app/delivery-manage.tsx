@@ -22,6 +22,7 @@ import { useRouter } from "next/navigation";
 import {
   bindSecretAction, bootstrapTargetAction, createTargetAction, deployObservabilityAction,
   getDeliveryDefaultsAction, listRefsAction, listRepoAppsAction, listReposAction,
+  updateTargetAction,
   purgeTargetAction,
   deployTargetAction,
   generateKeypairAction, preflightTargetAction, putSecretAction, reactivateTargetAction,
@@ -509,6 +510,15 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
 
   const bootstrap = () => { void perform("Preparing host", async () => {
     if (!targetId) return;
+    // Save the pool FIRST: bootstrap is what reads it, so a value typed on this step has to
+    // reach the target before the host is asked to choose a port.
+    if (form.publishable_ports) {
+      const patched: any = await updateTargetAction(targetId,
+        { publishable_ports: form.publishable_ports });
+      say(patched?.error
+        ? `could not record the published ports: ${patched.error}`
+        : `published ports recorded: ${form.publishable_ports}`);
+    }
     say("preparing the host…");
     const out = await bootstrapTargetAction(targetId, true);
     if (out?.error) { say(`failed: ${out.error}`); return; }
@@ -682,9 +692,22 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
       {step === 2 && (
         <div style={{ display: "grid", gap: 10 }}>
           <div className="detail">
-            BOSS will create the deploy directory, confirm docker, and choose a port nothing
-            else on that host is using.
+            BOSS will create the deploy directory, confirm docker, and choose the port.
+            {form.publishable_ports
+              ? <> It will pick only from <code>{form.publishable_ports}</code>.</>
+              : <> With no published ports declared it takes the first one FREE on the host —
+                  free is not the same as reachable, and a port your firewall blocks gives a
+                  running app whose health check times out.</>}
           </div>
+          {/* The field is repeated here, and repeated on purpose. It belongs on step 1 with the
+              rest of the destination, but it is CONSUMED here — and someone who left it blank
+              only finds out two steps later, when the health check times out on a port the
+              security group never allowed. Fixable at the moment it matters. */}
+          <Field label="ports this host publishes (optional)"
+                 value={form.publishable_ports}
+                 placeholder="3003,3005,4000,10000-10001"
+                 title="Comma-separated, ranges allowed. BOSS will only choose from these."
+                 onChange={(e) => set("publishable_ports", e.target.value)} />
           <div>
             <ActionButton label="Prepare host →" busyLabel="Preparing host"
                           busy={busy === "Preparing host"} onClick={bootstrap} />

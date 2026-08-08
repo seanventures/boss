@@ -2474,6 +2474,24 @@ export async function purgeTargetAction(targetId: string, confirm: string): Prom
 
 /** Bring a retired target back. Its credential, port, domain and health check were kept, so
  *  this is a status change rather than a second trip through onboarding. */
+/** Change a target in place. Fields not named are left alone — see merge_target_resources. */
+export async function updateTargetAction(targetId: string,
+                                         patch: Record<string, unknown>): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+      cache: "no-store",
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    return out;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function reactivateTargetAction(targetId: string): Promise<any> {
   try {
     const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
