@@ -140,7 +140,12 @@ class ClaudeCliAdapter:
 
     def _usage(self, data: dict) -> dict:
         u = data.get("usage") or {}
-        prompt_tokens = int(u.get("input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+        # Cache tokens tracked SEPARATELY (BOSS-280 P1): folding them into prompt_tokens
+        # priced cache reads as full-price input on the estimate path, making cache savings
+        # invisible-to-negative. prompt_tokens = genuinely new input only.
+        prompt_tokens = int(u.get("input_tokens") or 0)
+        cache_read = int(u.get("cache_read_input_tokens") or 0)
+        cache_write = int(u.get("cache_creation_input_tokens") or 0)
         completion = int(u.get("output_tokens") or 0)
         model_usage = data.get("modelUsage") or {}
         # primary (non-haiku helper) model name, else configured/default
@@ -155,7 +160,9 @@ class ClaudeCliAdapter:
             "model": primary,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion,
-            "total_tokens": prompt_tokens + completion,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
         }
         if cost is not None:
             usage["cost_usd_micros"] = int(round(float(cost) * 1_000_000))

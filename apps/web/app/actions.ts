@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { DataBoundary } from "@boss/api-client";
+import type { DataBoundary, LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 
@@ -143,7 +143,7 @@ export async function agentChatAction(
   if (!message && !confirmPlanId) {
     return { ok: false, error: "Enter a message or confirm the pending plan." };
   }
-  const result = await postJsonReturn("/v1/agent/chat", {
+  const result = await postJsonReturn("/v1/engine/agent/chat", {
     project_id: getProjectId(formData),
     actor: getActor(formData),
     thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
@@ -541,6 +541,25 @@ function parseProviderOpsCheckbox(
 function getOptionalString(formData: FormData, name: string): string | undefined {
   const value = formData.get(name);
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseProviderCredentialRefs(formData: FormData): Record<string, string> {
+  const refs: Record<string, string> = {};
+  for (const [name, value] of formData.entries()) {
+    if (
+      !name.startsWith("credential_ref__") ||
+      typeof value !== "string" ||
+      !value.trim()
+    ) {
+      continue;
+    }
+    const slot = name.slice("credential_ref__".length).trim();
+    if (!slot) {
+      continue;
+    }
+    refs[slot] = value.trim();
+  }
+  return refs;
 }
 
 export async function resolveDecisionAction(formData: FormData): Promise<void> {
@@ -1470,6 +1489,261 @@ export async function createDecisionDigestAction(
   revalidatePath("/");
 }
 
+// ---- Project GitHub control plane ------------------------------------------
+
+export async function createGitHubConnectionAction(
+  formData: FormData,
+): Promise<void> {
+  const label = String(formData.get("connection_label") ?? "").trim();
+  const credentialRef = String(formData.get("credential_ref") ?? "").trim();
+  const authMethod = String(
+    formData.get("auth_method") ?? "github_app",
+  ).trim();
+  if (!label || !credentialRef) {
+    throw new Error("connection_label and credential_ref are required");
+  }
+  if (authMethod !== "github_app" && authMethod !== "personal_access_token") {
+    throw new Error("auth_method must be github_app or personal_access_token");
+  }
+  await client.createGitHubConnection({
+    project_id: getProjectId(formData),
+    connection_label: label,
+    auth_method: authMethod,
+    credential_ref: credentialRef,
+    app_id: getOptionalString(formData, "app_id"),
+    installation_id: getOptionalString(formData, "installation_id"),
+    api_base_url: getOptionalString(formData, "api_base_url"),
+    required_permissions: parseLines(formData.get("required_permissions")),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function setGitHubConnectionStateAction(
+  formData: FormData,
+): Promise<void> {
+  const connectionId = String(formData.get("connection_id") ?? "").trim();
+  const operation = String(formData.get("operation") ?? "").trim();
+  if (!connectionId) {
+    throw new Error("connection_id is required");
+  }
+  const payload = {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  };
+  if (operation === "enable") {
+    await client.enableGitHubConnection(connectionId, payload);
+  } else if (operation === "disable") {
+    await client.disableGitHubConnection(connectionId, payload);
+  } else {
+    throw new Error("operation must be enable or disable");
+  }
+  revalidatePath("/");
+}
+
+export async function createGitHubRepositoryBindingAction(
+  formData: FormData,
+): Promise<void> {
+  const connectionId = String(formData.get("connection_id") ?? "").trim();
+  const repository = String(formData.get("repository") ?? "").trim();
+  const role = String(formData.get("role") ?? "primary").trim();
+  if (!connectionId || !repository) {
+    throw new Error("connection_id and repository are required");
+  }
+  if (!["primary", "source", "upstream", "mirror"].includes(role)) {
+    throw new Error("role is invalid");
+  }
+  await client.createGitHubRepositoryBinding({
+    project_id: getProjectId(formData),
+    connection_id: connectionId,
+    repository,
+    role: role as "primary" | "source" | "upstream" | "mirror",
+    default_branch: getOptionalString(formData, "default_branch"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function testGitHubConnectionAction(
+  formData: FormData,
+): Promise<void> {
+  const connectionId = String(formData.get("connection_id") ?? "").trim();
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  if (!connectionId || !bindingId) {
+    throw new Error("connection_id and repository_binding_id are required");
+  }
+  await client.testGitHubConnection(connectionId, {
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    dedupe_key: `mission-control-test-${connectionId}-${bindingId}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function createGitHubBranchPolicyAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  if (!bindingId) {
+    throw new Error("repository_binding_id is required");
+  }
+  await client.createGitHubBranchPolicy({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    protected_ref_patterns: parseLines(formData.get("protected_ref_patterns")),
+    allowed_branch_prefixes: parseLines(
+      formData.get("allowed_branch_prefixes"),
+    ),
+    required_checks: parseLines(formData.get("required_checks")),
+    required_approvals: parseInteger(
+      formData.get("required_approvals"),
+      1,
+    ),
+    require_pull_request: true,
+    automation_updates_enabled: true,
+    force_push_allowed: false,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function captureGitHubBranchSnapshotAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  const sourceRef = String(formData.get("source_ref") ?? "").trim();
+  const targetRef = String(formData.get("target_ref") ?? "").trim();
+  if (!bindingId || !sourceRef || !targetRef) {
+    throw new Error(
+      "repository_binding_id, source_ref, and target_ref are required",
+    );
+  }
+  await client.captureGitHubBranchSnapshot({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    source_ref: sourceRef,
+    target_ref: targetRef,
+    dedupe_key: `mission-control-snapshot-${bindingId}-${sourceRef}-${targetRef}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function planGitHubCodeSyncAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = String(
+    formData.get("repository_binding_id") ?? "",
+  ).trim();
+  const snapshotId = String(formData.get("snapshot_id") ?? "").trim();
+  if (!bindingId || !snapshotId) {
+    throw new Error("repository_binding_id and snapshot_id are required");
+  }
+  await client.planGitHubCodeSync({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    snapshot_id: snapshotId,
+    resolution_branch: getOptionalString(formData, "resolution_branch"),
+    dedupe_key: `mission-control-sync-${bindingId}-${snapshotId}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function scheduleGitHubReconciliationAction(
+  formData: FormData,
+): Promise<void> {
+  const bindingId = getOptionalString(formData, "repository_binding_id");
+  await client.scheduleGitHubReconciliationPoll({
+    project_id: getProjectId(formData),
+    repository_binding_id: bindingId,
+    refs: parseLines(formData.get("refs")),
+    dedupe_key: `mission-control-reconcile-${bindingId ?? "all"}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function repairGitHubReconciliationAction(
+  formData: FormData,
+): Promise<void> {
+  const runId = String(formData.get("reconciliation_run_id") ?? "").trim();
+  if (!runId) {
+    throw new Error("reconciliation_run_id is required");
+  }
+  await client.repairGitHubReconciliationRun(runId, {
+    project_id: getProjectId(formData),
+    dedupe_key: `mission-control-repair-${runId}-${Date.now()}`,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function approveGitHubResolutionPlanAction(
+  formData: FormData,
+): Promise<void> {
+  const planId = String(formData.get("resolution_plan_id") ?? "").trim();
+  const summary = String(formData.get("review_summary") ?? "").trim();
+  if (!planId || !summary) {
+    throw new Error("resolution_plan_id and review_summary are required");
+  }
+  await client.approveGitHubResolutionPlan(planId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    review_evidence: {
+      verdict: "approved",
+      summary,
+      source: "github_mission_control",
+    },
+  });
+  revalidatePath("/");
+}
+
+export async function authorizeGitHubMergeAction(
+  formData: FormData,
+): Promise<void> {
+  const authorizationId = String(
+    formData.get("merge_authorization_id") ?? "",
+  ).trim();
+  const summary = String(formData.get("review_summary") ?? "").trim();
+  if (!authorizationId || !summary) {
+    throw new Error("merge_authorization_id and review_summary are required");
+  }
+  await client.authorizeGitHubMerge(authorizationId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    review_evidence: {
+      verdict: "approved",
+      summary,
+      source: "github_mission_control",
+    },
+  });
+  revalidatePath("/");
+}
+
+export async function enqueueGitHubMergeAction(
+  formData: FormData,
+): Promise<void> {
+  const authorizationId = String(
+    formData.get("merge_authorization_id") ?? "",
+  ).trim();
+  if (!authorizationId) {
+    throw new Error("merge_authorization_id is required");
+  }
+  await client.enqueueGitHubMerge(authorizationId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function createProviderAccountAction(
   formData: FormData,
 ): Promise<void> {
@@ -1481,11 +1755,18 @@ export async function createProviderAccountAction(
   if (typeof accountLabel !== "string" || !accountLabel.trim()) {
     throw new Error("account_label is required");
   }
+  const credentialRefs = parseProviderCredentialRefs(formData);
   await client.createProviderAccount({
     project_id: getProjectId(formData),
     provider: provider.trim(),
     account_label: accountLabel.trim(),
-    credential_ref: getOptionalString(formData, "credential_ref"),
+    auth_method: getOptionalString(formData, "auth_method"),
+    credential_ref:
+      Object.keys(credentialRefs).length === 0
+        ? getOptionalString(formData, "credential_ref")
+        : undefined,
+    credential_refs:
+      Object.keys(credentialRefs).length > 0 ? credentialRefs : undefined,
     scopes: parseLines(formData.get("scopes")),
     read_only: parseProviderOpsCheckbox(formData, "read_only", true),
     deploy_capable: parseProviderOpsCheckbox(formData, "deploy_capable", false),
@@ -1504,16 +1785,103 @@ export async function createProviderAccountAction(
   revalidatePath("/");
 }
 
-export async function testProviderAccountAction(formData: FormData): Promise<void> {
+function getProviderAccountId(formData: FormData): string {
   const providerAccountId = formData.get("provider_account_id");
   if (typeof providerAccountId !== "string" || !providerAccountId.trim()) {
     throw new Error("provider_account_id is required");
   }
+  return providerAccountId.trim();
+}
+
+export async function testProviderAccountAction(formData: FormData): Promise<void> {
+  const providerAccountId = getProviderAccountId(formData);
   await client.testProviderAccount(
-    providerAccountId.trim(),
+    providerAccountId,
     getProjectId(formData),
     getActor(formData),
   );
+  revalidatePath("/");
+}
+
+export async function updateProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  const providerAccountId = getProviderAccountId(formData);
+  await client.updateProviderAccount(providerAccountId, {
+    project_id: getProjectId(formData),
+    account_label: getOptionalString(formData, "account_label"),
+    owner_actor: getOptionalString(formData, "owner_actor"),
+    scopes: parseLines(formData.get("scopes")),
+    read_only: parseProviderOpsCheckbox(formData, "read_only", true),
+    deploy_capable: parseProviderOpsCheckbox(
+      formData,
+      "deploy_capable",
+      false,
+    ),
+    billing_readable: parseProviderOpsCheckbox(
+      formData,
+      "billing_readable",
+      false,
+    ),
+    destructive_actions_disabled: parseProviderOpsCheckbox(
+      formData,
+      "destructive_actions_disabled",
+      true,
+    ),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function enableProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  await client.enableProviderAccount(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function disableProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  await client.disableProviderAccount(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function rotateProviderCredentialsAction(
+  formData: FormData,
+): Promise<void> {
+  const credentialRefs = parseProviderCredentialRefs(formData);
+  if (Object.keys(credentialRefs).length === 0) {
+    throw new Error("At least one replacement SecretRef is required.");
+  }
+  const overlapMinutes = Number(formData.get("overlap_minutes") ?? 30);
+  await client.rotateProviderCredentials(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    credential_refs: credentialRefs,
+    overlap_minutes: Number.isFinite(overlapMinutes) ? overlapMinutes : 30,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function revokeProviderAccountAction(
+  formData: FormData,
+): Promise<void> {
+  const accountLabel = getOptionalString(formData, "account_label");
+  const confirmation = getOptionalString(formData, "confirmation");
+  if (!accountLabel || confirmation !== accountLabel) {
+    throw new Error("Type the account label exactly to confirm permanent revocation.");
+  }
+  await client.revokeProviderAccount(getProviderAccountId(formData), {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
   revalidatePath("/");
 }
 
@@ -1993,6 +2361,372 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+export async function getQaBenchmarkReportAction(runId: string) {
+  try {
+    return await client.getQaBenchmarkReport(runId);
+  } catch {
+    return null;
+  }
+}
+
+export async function startQaBenchmarkAppAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const benchmarkId = String(formData.get("benchmark_id") ?? "").trim();
+  if (!benchmarkId) return;
+  await client.startQaBenchmarkApp(benchmarkId, {
+    project_id: projectId,
+    actor: getActor(formData),
+    owner: String(formData.get("owner") ?? "").trim() || undefined,
+    repo: String(formData.get("repo") ?? "").trim() || undefined,
+    base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+  });
+  revalidatePath("/");
+}
+
+// Per-stage model-call activity for a code task (the internal detail behind each phase).
+// Returns [] on any failure so the activity panel degrades gracefully in the UI.
+
+/**
+ * Task Shepherd console data, fetched SERVER-side.
+ *
+ * The first cut fetched from the browser and rendered nothing: the API sends no
+ * CORS headers, so a cross-origin call from localhost:3001 to the api on :8000 is
+ * blocked before it is made. Every other panel in this console goes through a
+ * server action for exactly this reason — worth matching rather than adding CORS
+ * to the API just for one panel.
+ */
+export async function getDeliveryPipelineAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/pipeline?project_id=${encodeURIComponent(pid)}&limit=25`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return { error: `pipeline ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// --- Delivery management: onboarding, secrets, triggers ---------------------
+// Server actions rather than browser fetches: the API has no CORS headers, and routing these
+// through the server also keeps the API key out of the browser.
+
+/** The reason a delivery call failed, as a sentence.
+ *
+ * FastAPI's `detail` is sometimes a string and sometimes a structure — teardown refuses with
+ * `{ok, removed, refused:[...]}`. The client only handled the string case, so a refusal that
+ * said "ssh key unusable: No SSH key configured" reached the operator as the text "409". The
+ * reason existed at every layer and was discarded at the last one.
+ */
+function failureText(detail: unknown, status: number): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as Record<string, unknown>;
+    for (const key of ["refused", "problems", "errors"]) {
+      const list = d[key];
+      if (Array.isArray(list) && list.length) return list.map(String).join("; ");
+    }
+    if (typeof d.reason === "string") return d.reason;
+    // Pydantic validation errors: [{loc, msg}, ...]
+    if (Array.isArray(detail)) {
+      return (detail as { loc?: unknown[]; msg?: string }[])
+        .map((e) => `${(e.loc || []).slice(-1)}: ${e.msg}`).join("; ");
+    }
+    const text = JSON.stringify(detail);
+    if (text && text !== "{}") return text.slice(0, 300);
+  }
+  return `${status}`;
+}
+
+async function post(path: string, body: unknown): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    return out;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function get(path: string): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}${path}`, { headers: authHeaders(), cache: "no-store" });
+    if (!res.ok) return { error: `${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function listSecretsAction(projectId?: string): Promise<any> {
+  return get(`/v1/secrets?project_id=${encodeURIComponent(projectId || PROJECT_ID)}`);
+}
+
+/** Upload a secret. The value is written through to a backend; nothing returns it afterwards. */
+export async function putSecretAction(input: {
+  name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string;
+}): Promise<any> {
+  return post("/v1/secrets", { project_id: PROJECT_ID, actor: "operator", ...input });
+}
+
+/** Generate a keypair. Only the PUBLIC half comes back — the private half never leaves the backend. */
+export async function generateKeypairAction(input: {
+  name: string; algorithm?: string; backend?: string; scope_id?: string; comment?: string;
+}): Promise<any> {
+  return post("/v1/secrets/keypair", { project_id: PROJECT_ID, actor: "operator", ...input });
+}
+
+export async function verifySecretAction(secretRefId: string): Promise<any> {
+  return post(`/v1/secrets/${encodeURIComponent(secretRefId)}/verify`, { actor: "operator" });
+}
+
+/** Delete a retired target and its history outright, so the name can be reused. */
+export async function purgeTargetAction(targetId: string, confirm: string): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/purge`,
+              { confirm, actor: "operator" });
+}
+
+/** Bring a retired target back. Its credential, port, domain and health check were kept, so
+ *  this is a status change rather than a second trip through onboarding. */
+/** Change a target in place. Fields not named are left alone — see merge_target_resources. */
+export async function updateTargetAction(targetId: string,
+                                         patch: Record<string, unknown>): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+      cache: "no-store",
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    return out;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function reactivateTargetAction(targetId: string): Promise<any> {
+  try {
+    const res = await fetch(`${API_URL}/v1/deployment-targets/${encodeURIComponent(targetId)}`, {
+      method: "PATCH",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "active" }),
+      cache: "no-store",
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: failureText(out?.detail, res.status) };
+    return out;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Live progress of one deployment: steps, timings, logs. Polled by the console. */
+export async function getDeploymentAction(runId: string): Promise<any> {
+  return get(`/v1/delivery/deployments/${encodeURIComponent(runId)}`);
+}
+
+/** Recent deployments — actual deployments, not every code task that opened a PR. */
+export async function listDeploymentsAction(limit = 10): Promise<any> {
+  return get(`/v1/delivery/deployments?project_id=${encodeURIComponent(PROJECT_ID)}&limit=${limit}`);
+}
+
+/** Runnable apps in a repo — so `app entry` is picked, not guessed. */
+export async function listRepoAppsAction(owner: string, repo: string, ref = ""): Promise<any> {
+  return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/apps`
+             + (ref ? `?ref=${encodeURIComponent(ref)}` : ""));
+}
+
+/** Repositories BOSS has built in or deployed from. */
+export async function listReposAction(): Promise<any> {
+  return get(`/v1/delivery/repos?project_id=${encodeURIComponent(PROJECT_ID)}`);
+}
+
+/** Branches available for a repo, default first, with what BOSS already shipped from it. */
+export async function listRefsAction(owner: string, repo: string): Promise<any> {
+  return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/refs`);
+}
+
+/** What BOSS will clone unless the target says otherwise — owner, repo, and the full URL. */
+export async function getDeliveryDefaultsAction(): Promise<any> {
+  return get("/v1/delivery/defaults");
+}
+
+export async function createTargetAction(input: Record<string, unknown>): Promise<any> {
+  return post("/v1/deployment-targets", { project_id: PROJECT_ID, actor: "operator", ...input });
+}
+
+export async function bindSecretAction(targetId: string, name: string,
+                                       secretRefId: string): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/secrets`,
+              { project_id: PROJECT_ID, name, secret_ref_id: secretRefId, actor: "operator" });
+}
+
+/** Have BOSS prepare the host: deploy directory, docker check, and a free port. */
+export async function bootstrapTargetAction(targetId: string, applyPort = true): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/bootstrap`,
+              { apply_port: applyPort });
+}
+
+export async function preflightTargetAction(targetId: string): Promise<any> {
+  return get(`/v1/delivery/targets/${encodeURIComponent(targetId)}/preflight`
+             + `?project_id=${encodeURIComponent(PROJECT_ID)}`);
+}
+
+export async function setAutoDeployAction(targetId: string,
+                                          input: { auto_deploy?: boolean; paused?: boolean }): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/auto-deploy`, input);
+}
+
+/** Deploy a target at a chosen ref without waiting for a merge. */
+export async function deployTargetAction(targetId: string, ref?: string,
+                                         planOnly = false): Promise<any> {
+  return post("/v1/delivery/deploy",
+              { target_id: targetId, ref: ref || undefined, plan_only: planOnly,
+                actor: "operator" });
+}
+
+/** Remove a deployed app. `stop_only` is reversible; destroy needs the app name typed. */
+export async function teardownTargetAction(targetId: string, input: {
+  stop_only?: boolean; include_data?: boolean; confirm?: string;
+}): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/teardown`,
+              { actor: "operator", ...input });
+}
+
+/** What the observability stack monitors, and whether it is up. */
+export async function getObservabilityAction(hostTargetId?: string): Promise<any> {
+  const q = `project_id=${encodeURIComponent(PROJECT_ID)}`
+    + (hostTargetId ? `&host_target_id=${encodeURIComponent(hostTargetId)}` : "");
+  return get(`/v1/observability/stack?${q}`);
+}
+
+/** Render and deploy the collector/Prometheus/Grafana stack from the live target registry. */
+export async function deployObservabilityAction(hostTargetId: string): Promise<any> {
+  return post("/v1/observability/stack/deploy",
+              { project_id: PROJECT_ID, host_target_id: hostTargetId, actor: "operator" });
+}
+
+/** Health of everything BOSS has deployed — distinct from whether the deploy succeeded. */
+export async function getDeploymentHealthAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/health?project_id=${encodeURIComponent(pid)}`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return { error: `health ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Retry THIS deployment run (same row) — for one that failed or was blocked. */
+export async function executeDeploymentAction(deploymentRunId: string): Promise<any> {
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/execute`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        // Same console principal as other mutating actions — required by the API.
+        body: JSON.stringify({ actor: "executive_console" }),
+        cache: "no-store",
+      },
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.detail || `execute ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Ship the same target again as a NEW run, preserving the previous run's history. */
+export async function redeployAction(deploymentRunId: string): Promise<any> {
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/delivery/deployments/${encodeURIComponent(deploymentRunId)}/redeploy`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: "executive_console" }),
+        cache: "no-store",
+      },
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: body?.detail || `redeploy ${res.status}` };
+    return body;
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function getShepherdOverviewAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/shepherd/overview?project_id=${encodeURIComponent(pid)}&limit=40`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!res.ok) return { error: `overview ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function shepherdSweepAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(`${API_URL}/v1/shepherd/sweep`, {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ project_id: pid, limit: 20 }),
+    });
+    revalidatePath("/");
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function shepherdAnswerAction(escalationId: string, answer: string): Promise<any> {
+  try {
+    const res = await fetch(
+      `${API_URL}/v1/shepherd/escalations/${encodeURIComponent(escalationId)}/answer`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ answer, actor: "operator" }),
+      },
+    );
+    revalidatePath("/");
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function getCodeTaskActivityAction(runId: string): Promise<LlmCallRow[]> {
+  try {
+    const res = await client.getCodeTaskActivity(runId);
+    return Array.isArray(res?.calls) ? res.calls : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function startDiscoveryAction(
   _prev: { runId?: string; error?: string } | null,
   formData: FormData,
@@ -2099,8 +2833,40 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<void>
 export async function retryCodeTaskAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return;
-  await client.retryCodeTask(runId, String(formData.get("fix_note") ?? "").trim() || undefined);
+  await client.retryCodeTask(
+    runId,
+    String(formData.get("fix_note") ?? "").trim() || undefined,
+    getActor(formData),
+  );
   revalidatePath("/");
+}
+
+/**
+ * Operator-triggered retry. Distinct from the feedback flow, which asks an agent to diagnose
+ * and PROPOSE a retry: this is the plain "run it again" the operator reaches for when the
+ * findings are already on screen and no clarification is needed.
+ *
+ * The new attempt resumes rather than restarting — it inherits the parent's approved design,
+ * works on the same branch (so the code is already in the tree), and skips re-authoring tests
+ * when no test-related gate failed. Returns state so the button can name the new run.
+ */
+export async function retryCodeTaskWithStateAction(
+  _prev: { runId?: string; attempt?: number; error?: string } | null,
+  formData: FormData,
+): Promise<{ runId?: string; attempt?: number; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  if (!runId) return { error: "missing run_id" };
+  try {
+    const res = await client.retryCodeTask(
+      runId,
+      String(formData.get("fix_note") ?? "").trim() || undefined,
+      getActor(formData),
+    );
+    revalidatePath("/");
+    return { runId: res?.run_id, attempt: res?.attempt };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export type FeedbackActionResult = {
@@ -2161,7 +2927,7 @@ export async function startPreviewAction(
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.startPreview(runId);
+    const res = await client.startPreview(runId, 60, getActor(formData));
     revalidatePath("/");
     // Return the api-routed proxy URL — the preview's own 127.0.0.1 port isn't reachable from the
     // browser on a remote box, so the api reverse-proxies to it. Works locally too.
@@ -2190,7 +2956,7 @@ export async function overrideCodeTaskAction(
   const reason = String(formData.get("reason") ?? "").trim();
   if (!runId) return { error: "missing run_id" };
   try {
-    const res = await client.overrideCodeTask(runId, ["*"], reason);
+    const res = await client.overrideCodeTask(runId, ["*"], reason, getActor(formData));
     revalidatePath("/");
     if (res.pull_request_url) return { url: res.pull_request_url };
     return { error: "override did not open a PR" };

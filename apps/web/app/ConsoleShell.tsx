@@ -19,13 +19,18 @@ import {
   Code,
   Database,
   Gauge,
+  GitBranch,
+  Graph,
   House,
   List,
   MagnifyingGlass,
   Heartbeat,
+  PaintBrush,
+  SquaresFour,
   Pulse,
   Robot,
   Rows,
+  SlidersHorizontal,
   TerminalWindow,
   UserCircle,
   Users,
@@ -41,17 +46,25 @@ type AreaId =
   | "overview"
   | "decisions"
   | "work"
+  | "portfolio"
   | "discovery"
   | "meetings"
   | "code_tasks"
+  | "shepherd"
+  | "delivery"
+  | "monitoring"
   | "reliability"
   | "reports"
   | "budget"
   | "pipeline"
   | "comms"
+  | "github"
   | "infra"
   | "capabilities"
+  | "studio"
   | "sandboxes"
+  | "foundations"
+  | "components"
   | "ops"
   | "org"
   | "enterprise";
@@ -70,9 +83,11 @@ const ICONS = {
   overview: House,
   decisions: CheckCircle,
   work: Rows,
+  portfolio: SlidersHorizontal,
   budget: Wallet,
   pipeline: ArrowsClockwise,
   comms: ChatsCircle,
+  github: GitBranch,
   infra: Database,
   ops: Pulse,
   org: Users,
@@ -81,20 +96,32 @@ const ICONS = {
   capabilities: Wrench,
   meetings: UsersThree,
   code_tasks: Code,
+  shepherd: Code,
+  delivery: Code,
+  monitoring: Heartbeat,
   reliability: Heartbeat,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
+  studio: Graph,
+  foundations: PaintBrush,
+  components: SquaresFour,
 } as const;
 
 const AREAS: AreaDef[] = [
+  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
+  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
+  { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
-  { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Run", icon: ICONS.overview },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
+  { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and delivery status", group: "Run", icon: ICONS.portfolio },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
+  { id: "delivery", label: "CI/CD", sub: "Code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
+  { id: "monitoring", label: "Monitoring", sub: "Health of deployed apps, metrics, and Grafana dashboards", group: "Run", icon: ICONS.monitoring },
+  { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "AI SRE — incidents, root cause, governed fixes, learning", group: "Run", icon: ICONS.reliability },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
   { id: "budget", label: "Budget", sub: "Live spend, reservations, and cap pressure", group: "Govern", icon: ICONS.budget },
@@ -102,13 +129,15 @@ const AREAS: AreaDef[] = [
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Govern", icon: ICONS.ops },
   { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },
-  { id: "infra", label: "Infrastructure", sub: "Providers, resources, and AI capacity", group: "Platform", icon: ICONS.infra },
+  { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
+  { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, health, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
+  { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },
 ];
 
-const GROUP_ORDER: AreaDef["group"][] = ["Run", "Govern", "Platform"];
+const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Govern"];
 
 function budgetTone(state?: string): "green" | "amber" | "red" {
   const s = (state ?? "").toLowerCase();

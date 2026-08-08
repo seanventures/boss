@@ -21,6 +21,7 @@ from .core import (
     now_utc,
     normalize_data_boundary,
 )
+from .work_orchestration import WorkOrchestrationService
 
 
 class LeaseNotFoundError(RuntimeError):
@@ -61,6 +62,12 @@ def enqueue_job(
     run_after_seconds: int = 0,
     data_boundary: Optional[str] = None,
     dedupe_key: Optional[str] = None,
+    work_item_id: Optional[str] = None,
+    tracker_binding_id: Optional[str] = None,
+    allocation_id: Optional[str] = None,
+    priority_score: Optional[float] = None,
+    workload_class: str = "general",
+    resource_units: int = 1,
 ) -> dict[str, Any]:
     """Insert a queued job without importing budget, entitlement, or agent services.
 
@@ -77,27 +84,39 @@ def enqueue_job(
         text(
             """
             INSERT INTO jobs (
-                id, project_id, task_id, kind, priority, status, payload,
-                data_boundary, max_attempts, attempt, run_after, dedupe_key
+                id, project_id, task_id, work_item_id, tracker_binding_id,
+                allocation_id, kind, priority, priority_score, workload_class,
+                resource_units, status, payload, data_boundary, max_attempts,
+                attempt, run_after, dedupe_key
             )
             VALUES (
-                :id, :project_id, :task_id, :kind, :priority, 'queued',
-                CAST(:payload AS JSONB), :data_boundary, :max_attempts, 0,
-                :run_after, :dedupe_key
+                :id, :project_id, :task_id, :work_item_id, :tracker_binding_id,
+                :allocation_id, :kind, :priority, :priority_score,
+                :workload_class, :resource_units, 'queued',
+                CAST(:payload AS JSONB), :data_boundary, :max_attempts,
+                0, :run_after, :dedupe_key
             )
             ON CONFLICT (project_id, dedupe_key)
               WHERE dedupe_key IS NOT NULL
             DO NOTHING
-            RETURNING id, project_id, task_id, kind, status, data_boundary,
-                      priority, max_attempts, attempt, run_after, dedupe_key
+            RETURNING id, project_id, task_id, work_item_id,
+                      tracker_binding_id, allocation_id, kind, status,
+                      data_boundary, priority, priority_score, workload_class,
+                      resource_units, max_attempts, attempt, run_after, dedupe_key
             """
         ),
         {
             "id": job_id,
             "project_id": project_id,
             "task_id": task_id,
+            "work_item_id": work_item_id,
+            "tracker_binding_id": tracker_binding_id,
+            "allocation_id": allocation_id,
             "kind": kind,
             "priority": priority,
+            "priority_score": priority_score,
+            "workload_class": workload_class,
+            "resource_units": max(1, int(resource_units)),
             "payload": json.dumps(job_payload),
             "data_boundary": boundary,
             "max_attempts": max_attempts,
@@ -110,8 +129,10 @@ def enqueue_job(
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, task_id, kind, status, data_boundary,
-                       priority, max_attempts, attempt, run_after, dedupe_key
+                SELECT id, project_id, task_id, work_item_id,
+                       tracker_binding_id, allocation_id, kind, status,
+                       data_boundary, priority, priority_score, workload_class,
+                       resource_units, max_attempts, attempt, run_after, dedupe_key
                 FROM jobs
                 WHERE project_id = :project_id AND dedupe_key = :dedupe_key
                 """
@@ -140,10 +161,20 @@ def enqueue_job(
         "id": row["id"],
         "project_id": row["project_id"],
         "task_id": row["task_id"],
+        "work_item_id": row["work_item_id"],
+        "tracker_binding_id": row["tracker_binding_id"],
+        "allocation_id": row["allocation_id"],
         "kind": row["kind"],
         "status": row["status"],
         "data_boundary": row["data_boundary"],
         "priority": int(row["priority"]),
+        "priority_score": (
+            float(row["priority_score"])
+            if row["priority_score"] is not None
+            else None
+        ),
+        "workload_class": row["workload_class"],
+        "resource_units": int(row["resource_units"]),
         "max_attempts": int(row["max_attempts"]),
         "attempt": int(row["attempt"]),
         "run_after": row["run_after"].isoformat(),
@@ -158,6 +189,7 @@ class JobLeaseService:
         self.budget = BudgetGovernor(settings)
         self.comms = CommsService(settings)
         self.agent_runtime = AgentRuntimeService(settings)
+        self.work_orchestration = WorkOrchestrationService(settings)
 
     def list_jobs(
         self,
@@ -199,12 +231,20 @@ class JobLeaseService:
             text(
                 f"""
                 SELECT j.id, j.project_id, j.task_id, t.title AS task_title,
-                       j.kind, j.status, j.priority, j.attempt, j.max_attempts,
+                       j.work_item_id, j.tracker_binding_id, j.allocation_id,
+                       w.title AS work_title, b.external_key, b.external_url,
+                       p.provider_key AS tracker_provider,
+                       j.kind, j.status, j.priority, j.priority_score,
+                       j.workload_class, j.resource_units,
+                       j.attempt, j.max_attempts,
                        j.data_boundary, j.run_after, j.lease_owner,
                        j.lease_expires_at, j.heartbeat_at, j.last_error,
                        j.created_at, j.updated_at
                 FROM jobs j
                 LEFT JOIN tasks t ON t.id = j.task_id
+                LEFT JOIN work_items w ON w.id = j.work_item_id
+                LEFT JOIN work_tracker_bindings b ON b.id = j.tracker_binding_id
+                LEFT JOIN work_tracker_providers p ON p.id = b.provider_id
                 WHERE {where_clause}
                 ORDER BY
                   CASE j.status
@@ -216,6 +256,7 @@ class JobLeaseService:
                     WHEN 'queued' THEN 5
                     ELSE 6
                   END,
+                  j.priority_score DESC NULLS LAST,
                   j.priority ASC,
                   j.run_after ASC,
                   j.created_at DESC
@@ -237,6 +278,12 @@ class JobLeaseService:
         max_attempts: int = 3,
         run_after_seconds: int = 0,
         data_boundary: Optional[str] = None,
+        work_item_id: Optional[str] = None,
+        tracker_binding_id: Optional[str] = None,
+        allocation_id: Optional[str] = None,
+        priority_score: Optional[float] = None,
+        workload_class: str = "general",
+        resource_units: int = 1,
     ) -> dict[str, Any]:
         job = enqueue_job(
             connection,
@@ -248,6 +295,12 @@ class JobLeaseService:
             max_attempts=max_attempts,
             run_after_seconds=run_after_seconds,
             data_boundary=data_boundary,
+            work_item_id=work_item_id,
+            tracker_binding_id=tracker_binding_id,
+            allocation_id=allocation_id,
+            priority_score=priority_score,
+            workload_class=workload_class,
+            resource_units=resource_units,
         )
         # Preserve the public return shape used before enqueue_job was
         # extracted.  Dispatcher-only metadata belongs on the free function.
@@ -272,8 +325,9 @@ class JobLeaseService:
 
         candidate_statement = text(
             """
-            SELECT id, project_id, task_id, kind, payload, data_boundary, attempt,
-                   max_attempts, status
+            SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
+                   allocation_id, kind, payload, data_boundary, priority_score,
+                   workload_class, resource_units, attempt, max_attempts, status
             FROM jobs
             WHERE kind IN :capabilities
               AND run_after <= :now_utc
@@ -290,6 +344,7 @@ class JobLeaseService:
                 WHEN 'failed_retryable' THEN 1
                 ELSE 2
               END,
+              priority_score DESC NULLS LAST,
               priority ASC,
               created_at ASC
             LIMIT 10
@@ -308,6 +363,28 @@ class JobLeaseService:
 
         for candidate in candidates:
             payload = candidate["payload"] or {}
+            allocated, allocation_reason = (
+                self.work_orchestration.reserve_job_slot(
+                    connection,
+                    project_id=candidate["project_id"],
+                    job_id=candidate["id"],
+                    job_kind=candidate["kind"],
+                    work_item_id=candidate["work_item_id"],
+                    tracker_binding_id=candidate["tracker_binding_id"],
+                    allocation_id=candidate["allocation_id"],
+                    resource_units=int(candidate["resource_units"] or 1),
+                    already_held=candidate["status"] in {"leased", "running"},
+                )
+            )
+            if not allocated:
+                self._defer_for_resource_allocation(
+                    connection,
+                    candidate["project_id"],
+                    candidate["id"],
+                    candidate["work_item_id"],
+                    allocation_reason,
+                )
+                continue
             budget_policy = self._budget_state_policy_for_job(
                 connection,
                 candidate["project_id"],
@@ -316,6 +393,14 @@ class JobLeaseService:
                 candidate["kind"],
             )
             if budget_policy is not None:
+                self.work_orchestration.release_job_slot(
+                    connection,
+                    project_id=candidate["project_id"],
+                    job_id=candidate["id"],
+                    allocation_id=candidate["allocation_id"],
+                    resource_units=int(candidate["resource_units"] or 1),
+                    reason="budget_state_deferred",
+                )
                 self._defer_for_budget_state(
                     connection,
                     candidate["project_id"],
@@ -335,6 +420,14 @@ class JobLeaseService:
                     else None
                 )
                 if not reservation:
+                    self.work_orchestration.release_job_slot(
+                        connection,
+                        project_id=candidate["project_id"],
+                        job_id=candidate["id"],
+                        allocation_id=candidate["allocation_id"],
+                        resource_units=int(candidate["resource_units"] or 1),
+                        reason="budget_reservation_missing",
+                    )
                     self._cancel_budget_blocked_job(
                         connection,
                         candidate["project_id"],
@@ -361,9 +454,15 @@ class JobLeaseService:
                         id,
                         project_id,
                         task_id,
+                        work_item_id,
+                        tracker_binding_id,
+                        allocation_id,
                         kind,
                         payload,
                         data_boundary,
+                        priority_score,
+                        workload_class,
+                        resource_units,
                         attempt,
                         max_attempts,
                         lease_expires_at
@@ -392,6 +491,17 @@ class JobLeaseService:
                 row["id"],
                 {"attempt": row["attempt"], "kind": row["kind"]},
             )
+            if row["kind"] == "agent.studio.execute":
+                connection.execute(
+                    text(
+                        "UPDATE agent_studio_runs SET status='leased', "
+                        "updated_at=:updated_at WHERE job_id=:job_id"
+                    ),
+                    {
+                        "job_id": row["id"],
+                        "updated_at": current_time,
+                    },
+                )
             leased_payload = self.agent_runtime.attach_to_payload(
                 connection,
                 row["project_id"],
@@ -402,9 +512,19 @@ class JobLeaseService:
                 "id": row["id"],
                 "project_id": row["project_id"],
                 "task_id": row["task_id"],
+                "work_item_id": row["work_item_id"],
+                "tracker_binding_id": row["tracker_binding_id"],
+                "allocation_id": row["allocation_id"],
                 "kind": row["kind"],
                 "payload": leased_payload,
                 "data_boundary": row["data_boundary"],
+                "priority_score": (
+                    float(row["priority_score"])
+                    if row["priority_score"] is not None
+                    else None
+                ),
+                "workload_class": row["workload_class"],
+                "resource_units": int(row["resource_units"]),
                 "attempt": row["attempt"],
                 "max_attempts": row["max_attempts"],
                 "lease_token": lease_token,
@@ -447,6 +567,18 @@ class JobLeaseService:
                 "job_id": job_id,
             },
         )
+        if row["kind"] == "agent.studio.execute":
+            connection.execute(
+                text(
+                    "UPDATE agent_studio_runs SET status=:status, "
+                    "updated_at=:updated_at WHERE job_id=:job_id"
+                ),
+                {
+                    "status": next_status,
+                    "updated_at": current_time,
+                    "job_id": job_id,
+                },
+            )
         emit_event(
             connection,
             row["project_id"],
@@ -486,6 +618,14 @@ class JobLeaseService:
                 """
             ),
             {"job_id": job_id, "updated_at": now_utc()},
+        )
+        self.work_orchestration.release_job_slot(
+            connection,
+            project_id=project_id,
+            job_id=job_id,
+            allocation_id=row.get("allocation_id"),
+            resource_units=int(row.get("resource_units") or 1),
+            reason="job_succeeded",
         )
 
         extras = self._finalize_success(
@@ -542,6 +682,14 @@ class JobLeaseService:
                     "updated_at": current_time,
                 },
             )
+            self.work_orchestration.release_job_slot(
+                connection,
+                project_id=project_id,
+                job_id=job_id,
+                allocation_id=row.get("allocation_id"),
+                resource_units=int(row.get("resource_units") or 1),
+                reason="job_retry_scheduled",
+            )
             emit_event(
                 connection,
                 project_id,
@@ -557,6 +705,9 @@ class JobLeaseService:
             )
             self._mark_related_message_retrying(
                 connection, row, retry_delay_seconds
+            )
+            self._mark_agent_system_failure(
+                connection, row, error, terminal=False, actor=worker_id
             )
             return {
                 "job_id": job_id,
@@ -584,6 +735,14 @@ class JobLeaseService:
                 "last_error": json.dumps(error),
                 "updated_at": current_time,
             },
+        )
+        self.work_orchestration.release_job_slot(
+            connection,
+            project_id=project_id,
+            job_id=job_id,
+            allocation_id=row.get("allocation_id"),
+            resource_units=int(row.get("resource_units") or 1),
+            reason="job_failed_final",
         )
         emit_event(
             connection,
@@ -633,12 +792,66 @@ class JobLeaseService:
             {"deadletter_id": deadletter_id},
         )
         self._mark_related_message_deadlettered(connection, row, deadletter_id)
+        self._mark_agent_system_failure(
+            connection, row, error, terminal=True, actor=worker_id
+        )
+        self._mark_related_code_task_failed(connection, row, error, actor=worker_id)
         return {
             "job_id": job_id,
             "status": "deadlettered",
             "run_after": None,
             "deadletter_id": deadletter_id,
         }
+
+    def _mark_related_code_task_failed(
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        error: dict[str, Any],
+        *,
+        actor: str,
+    ) -> None:
+        """Keep the code-task run truthful when its driving job deadletters.
+
+        Without this, a `code.task` job that dies terminally (e.g. the step
+        endpoint 500s on a config error) leaves the run stuck at
+        status='running' phase='queued' forever — invisible failure in the
+        console. Mirror the terminal job state onto the run."""
+        if row.get("kind") != "code.task":
+            return
+        payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return
+        run_id = payload.get("run_id")
+        if not run_id:
+            return
+        message = str(error.get("message") or "job deadlettered")[:500]
+        updated = connection.execute(
+            text(
+                """
+                UPDATE code_task_runs
+                SET status = 'failed',
+                    error = :error,
+                    updated_at = :updated_at
+                WHERE id = :run_id
+                  AND status NOT IN ('completed', 'failed', 'cancelled')
+                """
+            ),
+            {"run_id": run_id, "error": message, "updated_at": now_utc()},
+        )
+        if updated.rowcount:
+            emit_event(
+                connection,
+                row["project_id"],
+                "code_task.failed",
+                actor,
+                "code_task_run",
+                run_id,
+                {"reason": "job_deadlettered", "job_id": row.get("id"), "error": message},
+            )
 
     def _load_leased_job_for_update(
         self,
@@ -650,8 +863,10 @@ class JobLeaseService:
         row = connection.execute(
             text(
                 """
-                SELECT id, project_id, task_id, kind, payload, status, attempt, max_attempts,
-                       data_boundary, lease_owner, lease_token_hash, lease_expires_at
+                SELECT id, project_id, task_id, work_item_id, tracker_binding_id,
+                       allocation_id, kind, payload, status, attempt, max_attempts,
+                       data_boundary, workload_class, resource_units, lease_owner,
+                       lease_token_hash, lease_expires_at
                 FROM jobs
                 WHERE id = :job_id
                 FOR UPDATE
@@ -698,7 +913,44 @@ class JobLeaseService:
                 "receipt_id": result.get("receipt_id"),
             }
 
+        if job_row["kind"] == "work_tracker.issue.sync":
+            binding = result.get("binding") or {}
+            self._record_delivery_presence(
+                connection,
+                job_row,
+                result,
+                provider="plane",
+                event_kind="issue.status",
+                status="synced",
+                summary=(
+                    f"Work item synced to "
+                    f"{binding.get('external_key') or 'Plane'}."
+                ),
+                external_url=binding.get("external_url"),
+            )
+            return {
+                "receipt_id": result.get("receipt_id"),
+                "binding_id": binding.get("id"),
+                "external_issue_id": binding.get("external_issue_id"),
+                "external_key": binding.get("external_key"),
+                "external_url": binding.get("external_url"),
+            }
+
         if job_row["kind"] in {"software_factory.propose_pr", "github.pull_request"}:
+            self._record_delivery_presence(
+                connection,
+                job_row,
+                result,
+                provider="github",
+                event_kind="pull_request.status",
+                status="open" if result.get("pull_request_url") else "completed",
+                summary=(
+                    f"Pull request opened: {result.get('pull_request_url')}"
+                    if result.get("pull_request_url")
+                    else "GitHub change proposal completed without a pull request URL."
+                ),
+                external_url=result.get("pull_request_url"),
+            )
             return {
                 "artifact_id": result.get("artifact_id"),
                 "diff_artifact_id": result.get("diff_artifact_id"),
@@ -731,6 +983,18 @@ class JobLeaseService:
             }
 
         if job_row["kind"] == "github.pull_request.merge":
+            self._record_delivery_presence(
+                connection,
+                job_row,
+                result,
+                provider="github",
+                event_kind="pull_request.status",
+                status="merged",
+                summary=(
+                    f"Pull request merged at {result.get('merged_sha') or 'unknown SHA'}."
+                ),
+                external_url=result.get("pull_request_url"),
+            )
             return {
                 "artifact_id": result.get("artifact_id"),
                 "decision_id": result.get("decision_id"),
@@ -742,6 +1006,19 @@ class JobLeaseService:
             }
 
         if job_row["kind"] == "github.deployment.create":
+            self._record_delivery_presence(
+                connection,
+                job_row,
+                result,
+                provider="github",
+                event_kind="deployment.status",
+                status=str(result.get("deployment_status") or "created"),
+                summary=(
+                    f"Deployment {result.get('deployment_status') or 'created'} "
+                    f"for {result.get('environment') or 'target environment'}."
+                ),
+                external_url=result.get("deployment_url"),
+            )
             return {
                 "artifact_id": result.get("artifact_id"),
                 "decision_id": result.get("decision_id"),
@@ -758,8 +1035,31 @@ class JobLeaseService:
             }
 
         if job_row["kind"] == "comms.outbox.deliver":
+            payload = job_row["payload"] or {}
+            channel = str(payload.get("channel") or "")
+            if channel.startswith("mattermost:"):
+                self._record_delivery_presence(
+                    connection,
+                    job_row,
+                    result,
+                    provider="mattermost",
+                    event_kind="message.status",
+                    status=str(result.get("status") or "delivered"),
+                    summary=(
+                        f"Mattermost delivery {result.get('status') or 'completed'} "
+                        f"to {channel.removeprefix('mattermost:')}."
+                    ),
+                    external_url=None,
+                )
             return {
                 "receipt_id": result.get("receipt_id"),
+            }
+
+        if job_row["kind"] == "a2a.dispatch":
+            return {
+                "receipt_id": result.get("receipt_id"),
+                "message_id": result.get("id") or result.get("message_id"),
+                "redis_stream_id": result.get("redis_stream_id"),
             }
 
         if job_row["kind"] == "infra.droplet.create":
@@ -790,15 +1090,38 @@ class JobLeaseService:
                 ((agent_module or {}).get("role_key"))
                 or str(job_row["kind"]).split(".")[1]
             )
+            artifact_type = "agent_brief"
+            if job_row["kind"] == "agent.studio.execute":
+                runtime_contract = (
+                    ((payload.get("agent_runtime") or {}).get("compiled_prompt") or {})
+                    .get("runtime_contract")
+                )
+                declared_type = (
+                    runtime_contract.get("artifact_type")
+                    if isinstance(runtime_contract, dict)
+                    else None
+                )
+                if (
+                    isinstance(declared_type, str)
+                    and declared_type
+                    and declared_type.replace("_", "").isalnum()
+                    and declared_type[0].isalpha()
+                    and len(declared_type) <= 64
+                ):
+                    artifact_type = declared_type
             artifact_id = create_artifact(
                 connection,
                 self.settings,
                 job_row["project_id"],
                 job_row["task_id"],
-                "agent_brief",
-                f"{role_key} brief for {job_row['kind']}",
+                artifact_type,
+                f"{role_key} {artifact_type.replace('_', ' ')}",
                 {
                     "job_kind": job_row["kind"],
+                    "output_contract": (
+                        ((payload.get("agent_runtime") or {}).get("compiled_prompt") or {})
+                        .get("runtime_contract")
+                    ),
                     "summary": result.get("summary"),
                     "findings": result.get("findings") or [],
                     "recommendations": result.get("recommendations") or [],
@@ -828,6 +1151,17 @@ class JobLeaseService:
                     "role_key": role_key,
                 },
             )
+            if job_row["kind"] == "agent.studio.execute":
+                from .agent_studio import AgentStudioService
+
+                AgentStudioService(self.settings).record_job_success(
+                    connection,
+                    project_id=job_row["project_id"],
+                    job_id=job_row["id"],
+                    result=result,
+                    artifact_id=artifact_id,
+                    actor="worker",
+                )
             return {"artifact_id": artifact_id}
 
         if job_row["kind"] == "enterprise.marketplace.validate":
@@ -923,6 +1257,96 @@ class JobLeaseService:
         )
         return {"artifact_id": artifact_id, "decision_id": decision_id}
 
+    def _mark_agent_system_failure(
+        self,
+        connection: Connection,
+        job_row,
+        error: dict[str, Any],
+        *,
+        terminal: bool,
+        actor: str,
+    ) -> None:
+        if job_row["kind"] == "agent.studio.execute":
+            from .agent_studio import AgentStudioService
+
+            AgentStudioService(self.settings).record_job_failure(
+                connection,
+                project_id=job_row["project_id"],
+                job_id=job_row["id"],
+                error=error,
+                terminal=terminal,
+                actor=actor,
+            )
+        elif job_row["kind"] == "a2a.dispatch":
+            from .a2a import A2AService
+
+            A2AService(self.settings).mark_dispatch_failure(
+                connection,
+                project_id=job_row["project_id"],
+                job_id=job_row["id"],
+                error=error,
+                terminal=terminal,
+            )
+
+    def _record_delivery_presence(
+        self,
+        connection: Connection,
+        job_row,
+        result: dict[str, Any],
+        *,
+        provider: str,
+        event_kind: str,
+        status: str,
+        summary: str,
+        external_url: Optional[str],
+    ) -> None:
+        reported_receipt_id = result.get("receipt_id")
+        receipt_id = None
+        if reported_receipt_id:
+            receipt_id = connection.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM receipts
+                    WHERE id = :receipt_id
+                      AND project_id = :project_id
+                    """
+                ),
+                {
+                    "receipt_id": reported_receipt_id,
+                    "project_id": job_row["project_id"],
+                },
+            ).scalar_one_or_none()
+        self.work_orchestration.record_delivery_event(
+            connection,
+            project_id=job_row["project_id"],
+            provider=provider,
+            event_kind=event_kind,
+            subject_type=(
+                "work_item" if job_row.get("work_item_id") else "job"
+            ),
+            subject_id=job_row.get("work_item_id") or job_row["id"],
+            status=status,
+            summary=summary,
+            dedupe_key=f"presence:{job_row['id']}:{event_kind}",
+            external_url=external_url,
+            receipt_id=receipt_id,
+            metadata={
+                "job_id": job_row["id"],
+                "task_id": job_row.get("task_id"),
+                "tracker_binding_id": job_row.get("tracker_binding_id"),
+                "allocation_id": job_row.get("allocation_id"),
+                "reported_receipt_id": reported_receipt_id,
+                "receipt_reference_status": (
+                    "resolved"
+                    if receipt_id
+                    else "not_reported"
+                    if not reported_receipt_id
+                    else "unresolved"
+                ),
+            },
+        )
+
     def _task_title(self, connection: Connection, task_id: Optional[str]) -> Optional[str]:
         if not task_id:
             return None
@@ -940,10 +1364,24 @@ class JobLeaseService:
             "project_id": row["project_id"],
             "task_id": row["task_id"],
             "task_title": row.get("task_title"),
+            "work_item_id": row.get("work_item_id"),
+            "work_title": row.get("work_title"),
+            "tracker_binding_id": row.get("tracker_binding_id"),
+            "tracker_provider": row.get("tracker_provider"),
+            "external_key": row.get("external_key"),
+            "external_url": row.get("external_url"),
+            "allocation_id": row.get("allocation_id"),
             "kind": row["kind"],
             "status": row["status"],
             "data_boundary": row.get("data_boundary") or "internal",
             "priority": row["priority"],
+            "priority_score": (
+                float(row["priority_score"])
+                if row.get("priority_score") is not None
+                else None
+            ),
+            "workload_class": row.get("workload_class") or "general",
+            "resource_units": int(row.get("resource_units") or 1),
             "max_attempts": row["max_attempts"],
             "attempt": row["attempt"],
             "run_after": row["run_after"].isoformat(),
@@ -960,6 +1398,49 @@ class JobLeaseService:
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
         }
+
+    def _defer_for_resource_allocation(
+        self,
+        connection: Connection,
+        project_id: str,
+        job_id: str,
+        work_item_id: Optional[str],
+        reason: str,
+    ) -> None:
+        run_after = now_utc() + timedelta(seconds=30)
+        connection.execute(
+            text(
+                """
+                UPDATE jobs
+                SET status='queued', run_after=:run_after,
+                    last_error=CAST(:last_error AS JSONB), updated_at=now()
+                WHERE id=:job_id
+                """
+            ),
+            {
+                "job_id": job_id,
+                "run_after": run_after,
+                "last_error": json.dumps(
+                    {
+                        "code": reason,
+                        "message": "Job is waiting for tracked quota allocation.",
+                    }
+                ),
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "job.allocation_deferred",
+            "job_allocator",
+            "job",
+            job_id,
+            {
+                "work_item_id": work_item_id,
+                "reason": reason,
+                "run_after": run_after.isoformat(),
+            },
+        )
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()

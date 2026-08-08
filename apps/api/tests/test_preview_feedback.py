@@ -34,10 +34,11 @@ def _insert_run(engine, run_id: str = "crun_feedback", *, substrate: str = "loca
     with engine.begin() as connection:
         connection.execute(text(
             "INSERT INTO code_task_runs "
-            "(id,project_id,status,phase,title,spec,state,finalize_ctx) "
-            "VALUES (:id,:p,'completed','done','Checkout task',CAST(:spec AS JSONB),"
+            "(id,project_id,status,phase,title,pull_request_url,spec,state,finalize_ctx) "
+            "VALUES (:id,:p,'completed','done','Checkout task',:pr_url,CAST(:spec AS JSONB),"
             "'{}'::jsonb,CAST(:fctx AS JSONB))"
         ), {"id": run_id, "p": settings.default_project_id,
+            "pr_url": f"https://example.test/pull/{run_id}",
             "spec": json.dumps(spec), "fctx": json.dumps(fctx)})
     return settings
 

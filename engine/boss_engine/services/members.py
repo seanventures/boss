@@ -69,6 +69,7 @@ class MemberDirectoryService:
                     "enterprise_manage",
                     "infra_provision",
                     "providerops_manage",
+                    "github_manage",
                     "workflow_manage",
                     "workflow_execute",
                 ],
@@ -85,6 +86,7 @@ class MemberDirectoryService:
                     "health_refresh",
                     "infra_provision",
                     "providerops_manage",
+                    "github_manage",
                     "workflow_execute",
                 ],
             },
@@ -118,6 +120,7 @@ class MemberDirectoryService:
                     "comms_manage",
                     "health_refresh",
                     "infra_provision",
+                    "github_manage",
                 ],
             },
             {
@@ -161,6 +164,7 @@ class MemberDirectoryService:
                     "enterprise_manage",
                     "infra_provision",
                     "providerops_manage",
+                    "github_manage",
                     "workflow_manage",
                     "workflow_execute",
                 ],
@@ -188,6 +192,7 @@ class MemberDirectoryService:
                     "enterprise_manage",
                     "infra_provision",
                     "providerops_manage",
+                    "github_manage",
                     "workflow_manage",
                     "workflow_execute",
                 ],
@@ -318,6 +323,53 @@ class MemberDirectoryService:
             payload["project_id"] = project_id
         return payload
 
+    def _mirror_to_org(self, connection: Connection, *, project_id: str, member_id: str,
+                       display_name: str, member_type: str, role_keys: list[str],
+                       permissions: list[str], actor: str) -> None:
+        """Ensure seeded system identities also exist at ORG scope.
+
+        `require_member` falls back to org_members for sibling projects, so mirroring an
+        arbitrary project collaborator (or OVERWRITING an existing org row from a project
+        upsert) is a privilege-escalation path: member_manage on Project A could mint
+        org-wide ceo/decision_resolve on Project B. Only DEFAULT_MEMBER_IDS are org-scoped
+        by convention; custom collaborators stay project-scoped. Org-wide grants for other
+        identities go through upsert_org_member / POST /v1/org-members.
+
+        Insert-only: never let a project upsert clobber an org-managed grant.
+        Best-effort: a project whose org cannot be resolved still gets its project row.
+        """
+        if member_id not in DEFAULT_MEMBER_IDS:
+            return
+        try:
+            # Use the EXISTING resolver, not a hand-rolled query. There is no projects.org_id
+            # column — the link is projects -> workspaces -> orgs — and the first version of
+            # this mirror invented one, which would have silently written nothing and left the
+            # very hole it was added to close. Same lesson as the rest of today: reuse the
+            # decision that already exists rather than writing a second one.
+            org_id = self.org_id_for_project(connection, project_id)
+            if not org_id:
+                return
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO org_members (
+                        id, org_id, member_id, display_name, member_type, role_keys,
+                        permissions, status, created_by
+                    ) VALUES (
+                        :id, :org_id, :member_id, :display_name, :member_type,
+                        CAST(:role_keys AS JSONB), CAST(:permissions AS JSONB), 'active', :by
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                ),
+                {"id": f"om_{org_id}_{member_id}", "org_id": org_id, "member_id": member_id,
+                 "display_name": display_name, "member_type": member_type,
+                 "role_keys": json.dumps(role_keys),
+                 "permissions": json.dumps(permissions), "by": actor},
+            )
+        except Exception:  # noqa: BLE001 — never fail member creation over the mirror
+            pass
+
     def upsert_member(
         self,
         connection: Connection,
@@ -390,6 +442,14 @@ class MemberDirectoryService:
                     "created_by": actor,
                 },
             )
+            # Seeded system identities also need an org_members row so require_member's
+            # org fallback works on sibling projects. Custom collaborators must NOT be
+            # mirrored — that would let project member_manage mint org-wide privileges.
+            self._mirror_to_org(
+                connection, project_id=project_id, member_id=normalized_member_id,
+                display_name=normalized_display_name, member_type=normalized_type,
+                role_keys=normalized_roles, permissions=normalized_permissions, actor=actor)
+
             install_status = "updated" if existing else "created"
             if emit_install_event:
                 emit_event(

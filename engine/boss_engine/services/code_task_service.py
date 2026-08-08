@@ -109,6 +109,42 @@ _DEPLOYABILITY_NOTE = (
 )
 
 
+def _allowed_sandbox_commands(settings) -> set[str]:
+    return {
+        item.strip()
+        for item in (settings.sandbox_validation_allowed_commands or "").split(",")
+        if item.strip()
+    }
+
+
+def preflight_test_commands(settings, test_commands) -> list[str]:
+    """Return the test commands the sandbox WILL reject, before a run is created.
+
+    The sandbox enforces an executable allowlist but nothing ever told the caller (or the
+    coding agent) what is on it, so a command like `[ -f x ] && npm test` was accepted at
+    creation, ran the whole expensive pipeline, and only died at validation time. Catching
+    it here turns a multi-dollar failure into an instant, free, actionable error.
+    """
+    import shlex
+
+    allowed = _allowed_sandbox_commands(settings)
+    if not allowed:
+        return []
+    rejected: list[str] = []
+    for cmd in test_commands or []:
+        try:
+            parts = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+        except ValueError:  # unbalanced quotes — let the sandbox be the judge
+            continue
+        if not parts:
+            continue
+        executable = parts[0]
+        candidate = executable[2:] if executable.startswith("./") else executable
+        if "/" in candidate or "\\" in candidate or candidate not in allowed:
+            rejected.append(executable)
+    return rejected
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -116,9 +152,21 @@ def start_code_task(
     jobs, profile: Optional[str] = None, risk_tier: Optional[int] = None,
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
-    substrate: Optional[str] = None,
+    substrate: Optional[str] = None, repo_host: Optional[str] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job."""
+    settings = getattr(jobs, "settings", None)
+    if settings is not None:
+        bad = preflight_test_commands(settings, test_commands)
+        if bad:
+            allowed = ", ".join(sorted(_allowed_sandbox_commands(settings)))
+            raise ValueError(
+                "test_commands use executables the sandbox will reject: "
+                + ", ".join(repr(b) for b in bad)
+                + ". Shell builtins and operators (`[`, `test`, `&&`, pipes) are NOT "
+                "available — give each test command as a single allowlisted executable "
+                "with arguments. Allowed: " + allowed
+            )
     run_id = make_id("crun")
     spec = {
         "instructions": instructions + _DEPLOYABILITY_NOTE,
@@ -126,8 +174,15 @@ def start_code_task(
         "test_commands": test_commands or [],
         "owner": owner, "repo": repo, "base_branch": base_branch,
     }
+    if settings is not None:
+        # Enforce-AND-inform: the sandbox allowlist used to be enforced silently, so the
+        # coding agent had to guess and kept authoring commands that were rejected at
+        # validation time. Carry it on the spec so the stage prompts can state it.
+        spec["allowed_test_executables"] = sorted(_allowed_sandbox_commands(settings))
     if substrate:  # per-run substrate override (retry fallback: microvm infra-failure -> local)
         spec["substrate"] = substrate
+    if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
+        spec["repo_host"] = repo_host
     if profile:  # per-task cost/rigor override (else the project setting applies)
         spec["profile"] = profile
     if isinstance(risk_tier, int):
@@ -189,9 +244,35 @@ def start_code_task(
     return run_id
 
 
+def _is_system_failure(error) -> bool:
+    """Thin re-export so the retry can classify without importing the whole pipeline."""
+    from .governed_code_task_service import is_system_failure
+    return is_system_failure(error)
+
+
+def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
+    """Which gates the previous attempt failed — from whichever path recorded them.
+
+    Three different code paths write this under three different keys, and a retry that reads
+    only one of them silently falls back to "re-run everything":
+      - `failing_gates`           — a run parked at awaiting_gate_override
+      - `advisory_failing_gates`  — an advisory run that shipped its PR with findings (the
+                                    normal case now that lean/balanced never block)
+      - `dissent.unresolved_gates`— repair rounds spent, shipped with dissent recorded
+    """
+    for src in (fctx_prev.get("failing_gates"),
+                fctx_prev.get("advisory_failing_gates"),
+                (fctx_prev.get("unresolved_dissent") or {}).get("unresolved_gates"),
+                (state.get("unresolved_dissent") or {}).get("unresolved_gates")):
+        if isinstance(src, list) and src:
+            return [str(g) for g in src]
+    return []
+
+
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
+    allow_test_retirement: bool = False,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -232,6 +313,39 @@ def retry_code_task(
 
     work_branch = f"boss/code/{root}"
     pr_url = prev.get("pull_request_url")
+
+    # REFRESH THE BRANCH FROM ITS BASE BEFORE THE AGENT SEES IT.
+    # A lineage branch is cut once and then reused for every attempt, so it keeps showing the
+    # agent the world as it was when the branch was created. Concretely: PR #66 merged
+    # `web-stocks` into main, then an extend asked the agent to consolidate the two stock
+    # apps — and it could not, because its working tree never contained web-stocks. It saw one
+    # app and correctly left one app.
+    #
+    # The merge path already knows how to do this (update_pull_request_branch, added for the
+    # 405-on-stale-base case). The gap was that nothing refreshed a branch before WORK, only
+    # before merging. Best-effort: a refusal here means a real conflict, which the agent is
+    # about to be asked to resolve anyway, and a failure must never block the retry.
+    if pr_url:
+        try:
+            from .software_factory import SoftwareFactoryService
+
+            sf = SoftwareFactoryService(settings)
+            pr_number = int(str(pr_url).rstrip("/").rsplit("/", 1)[-1])
+            if hasattr(sf.github, "update_pull_request_branch"):
+                refreshed = sf.github.update_pull_request_branch(pr_number)
+                with _transaction(engine) as c:
+                    emit_event(
+                        c, prev["project_id"],
+                        "code_task.branch_refreshed" if refreshed
+                        else "code_task.branch_refresh_declined",
+                        "boss", "code_task_run", run_id,
+                        {"branch": work_branch, "pull_request": pr_number,
+                         "why": ("merged the base in so the agent works against current main"
+                                 if refreshed else
+                                 "base could not be merged cleanly; the agent will see the "
+                                 "branch as-is and may need to resolve conflicts")})
+        except Exception:  # noqa: BLE001 — never block a retry on a refresh
+            pass
 
     # Prior adversarial findings — only meaningful when the previous attempt did NOT
     # complete (a completed attempt's reviews passed; carrying them as "findings" would
@@ -298,13 +412,48 @@ def retry_code_task(
                           # web_app_build, infer_risk_tier re-derives tier 2, and it runs the full
                           # design+write_tests+blocking-review pipeline (wrong for a scaffolded app,
                           # and loops on repair). Keep it a lean advisory web build on every attempt.
-                          **({"web_app_build": True} if fctx_prev.get("web_app_build") else {})},
+                          **({"web_app_build": True} if fctx_prev.get("web_app_build") else {}),
+                          # RESUME: hand the parent's approved design to the next attempt so it
+                          # skips standards+spec+plan+review_plan instead of re-deriving a plan
+                          # for a task that has not changed. Guarded on a real plan EXISTING,
+                          # not on `plan_ok` — that flag is a "REVISE" substring check and is
+                          # false even on runs that shipped clean, so it would disable resume.
+                          **({"inherited_design": state["design"]}
+                             if isinstance(state.get("design"), dict)
+                             and (state["design"].get("plan") or "").strip() else {}),
+                          # RESUME FROM WHERE IT FAILED. Which gates failed says which stages
+                          # are actually stale: a run rejected for `code_review_passed` has a
+                          # perfectly good test suite sitting on the branch, and re-authoring it
+                          # costs a full agent session (measured: 24 turns / 8.6 min) to arrive
+                          # at the same tests. Carried as data so the child can skip stages
+                          # instead of replaying the pipeline from the top.
+                          **({"prior_failing_gates": _prior_failing_gates(fctx_prev, state)}
+                             if _prior_failing_gates(fctx_prev, state) else {}),
+                          # Carry the parent's error so the child can tell a PLATFORM death
+                          # (spend cap, timeout) from a code verdict. The former must resume
+                          # onto the checkpointed branch, not re-author what already exists.
+                          **({"prior_error": str(prev.get("error"))[:400]}
+                             if prev.get("error") else {}),
+                          # RESUME POINT. Which stages the dead attempt actually finished.
+                          # Carried ONLY when the harness died (spend cap, timeout, lease) —
+                          # after a real code verdict the stages must re-run, because their
+                          # output is what was judged wanting.
+                          **({"resume_completed_stages":
+                              list((fctx_prev.get("completed_stages") or []))}
+                             if (fctx_prev.get("completed_stages")
+                                 and _is_system_failure(prev.get("error"))) else {})},
             jobs=jobs, profile=profile or spec.get("profile"), risk_tier=spec.get("risk_tier"),
             model_config=spec.get("model_config"), open_pr=spec.get("open_pr"),
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
             substrate=substrate_override,
         )
+        if allow_test_retirement:
+            # Declared on the RUN's spec so the gate can read it. Kept out of start_code_task's
+            # signature: this is an exception a caller asks for, not a property of every task.
+            c.execute(sql("UPDATE code_task_runs SET spec = COALESCE(spec,'{}'::jsonb) "
+                          "|| jsonb_build_object('allow_test_retirement', true) WHERE id=:i"),
+                      {"i": new_id})
     return {"status": "queued", "run_id": new_id, "attempt": attempt,
             "parent_run_id": run_id, "root_run_id": root}
 
@@ -407,14 +556,59 @@ def override_code_task(engine, settings: Settings, jobs, run_id: str, *,
 
 
 def _release(
-    budget, connection, project_id: str, reservation_id: Optional[str], reason: str
+    budget, connection, project_id: str, reservation_id: Optional[str], reason: str,
+    run_id: Optional[str] = None,
 ) -> None:
+    """Settle-then-release (BOSS-280): money already burned on model calls is REAL even when
+    the run failed — sum the run's llm_calls and settle it as an actual cost receipt, so the
+    budget ledger reconciles with true LLM spend instead of silently dropping every failed
+    run's cost. Only a run with zero recorded spend releases cleanly. Always fail-soft.
+
+    Settles the *unsettled* delta only: plan-approval pauses (and any earlier reservation for
+    the same run) already wrote cost_receipts under skill_or_model_id ``code_task:{run_id}``,
+    so a later settle on resume must not re-bill that spend or the ledger double-counts."""
     if not reservation_id:
         return
     try:
-        budget.release(connection, project_id, reservation_id, reason)
+        actual = 0
+        if run_id and hasattr(connection, "execute"):
+            gross = int(connection.execute(
+                sql("SELECT COALESCE(SUM(cost_usd_micros), 0) FROM llm_calls "
+                    "WHERE code_task_run_id = :r"),
+                {"r": run_id}).scalar() or 0)
+            already = int(connection.execute(
+                sql("SELECT COALESCE(SUM(actual_usd_micros), 0) FROM cost_receipts "
+                    "WHERE project_id = :p AND skill_or_model_id = :sid"),
+                {"p": project_id, "sid": f"code_task:{run_id}"}).scalar() or 0)
+            actual = max(0, gross - already)
+        if actual > 0:
+            # consume() requires a governance receipt (every settled effect gets one).
+            from .receipts import ReceiptService
+            scope = connection.execute(
+                sql("SELECT p.workspace_id, w.org_id FROM projects p "
+                    "JOIN workspaces w ON w.id = p.workspace_id WHERE p.id = :p"),
+                {"p": project_id}).mappings().first()
+            receipt, _created = ReceiptService().create_or_reuse(
+                connection, scope["org_id"], scope["workspace_id"], project_id,
+                dedupe_key=f"budget:settle:{run_id}:{reservation_id}",
+                effect_kind="budget.llm_spend.settle",
+                effect_scope={"run_id": run_id, "reservation_id": reservation_id},
+                payload={"actual_usd_micros": actual, "reason": reason},
+            )
+            budget.consume(
+                connection, project_id, reservation_id,
+                receipt_id=receipt["id"], category="code_task",
+                skill_or_model_id=f"code_task:{run_id}",
+                estimated_usd_micros=actual, actual_usd_micros=actual,
+                actor="budget_reconciler",
+            )
+        else:
+            budget.release(connection, project_id, reservation_id, reason)
     except Exception:
-        pass
+        try:
+            budget.release(connection, project_id, reservation_id, reason)
+        except Exception:
+            pass
 
 
 def _set_phase(connection, run_id: str, phase: str) -> None:
@@ -543,7 +737,8 @@ def _fail(
 # --------------------------------------------------------------------------- #
 #  The job handler                                                            #
 # --------------------------------------------------------------------------- #
-def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
+def run_code_task(engine, settings: Settings, jobs, run_id: str,
+                  *, fencing_token: Optional[str] = None) -> dict:
     """Execute one full code-task attempt. Safe to re-run after a crash."""
     with _transaction(engine) as c:
         run = load_code_task_run(c, run_id)
@@ -592,7 +787,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                     {"lr": json.dumps(lane_routing), "id": run_id},
                 )
         from .governed_code_task_service import run_governed_code_task
-        result = run_governed_code_task(engine, settings, jobs, run_id)
+        result = run_governed_code_task(engine, settings, jobs, run_id,
+                                        fencing_token=fencing_token)
         # Autonomous decomposition chain: when a decomposed build task lands successfully, start
         # the NEXT task in the plan (as a continuation on the shared branch) so BOSS delivers the
         # whole product itself, scaffold -> features -> wire-up, without a human between steps.
@@ -637,8 +833,14 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
     base_branch = spec.get("base_branch") or "main"
-    app = GitHubAppAdapter(settings)
-    token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
+    # BOSS-267: per-task repo host (spec.repo_host) else the project setting; github default.
+    from .repo_host import resolve_repo_host_kind
+    repo_host_kind = resolve_repo_host_kind(settings, spec)
+    if repo_host_kind == "bitbucket":
+        token = settings.bitbucket_token or ""
+    else:
+        app = GitHubAppAdapter(settings)
+        token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed
@@ -685,6 +887,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
                 "azure_api_version": settings.azure_openai_api_version,
                 "azure_key": settings.azure_openai_key,
                 "token": token, "timeout": settings.code_agent_timeout_seconds,
+                "repo_host": repo_host_kind,
             }
             result = provider.run_code_task(guest_spec, tenant_id=project_id)
             # The guest reports ONE aggregate usage for its whole edit/test loop — record it
@@ -701,7 +904,8 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "provisioning")
             sandbox.provision(owner, repo, base_branch=base_branch,
-                              work_branch=work_branch, token=token)
+                              work_branch=work_branch, token=token,
+                              repo_host=repo_host_kind)
             with _transaction(engine) as c:
                 _set_phase(c, run_id, "coding")
             # VAG Phase 0: attribute the host agent's model calls to this run.
@@ -730,12 +934,12 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
 
         if not result.diff:
             with _transaction(engine) as c:
-                _release(budget, c, project_id, reservation_id, "no changes produced")
+                _release(budget, c, project_id, reservation_id, "no changes produced", run_id=run_id)
                 return _fail(c, run_id, project_id, "Agent produced no file changes.",
                              failure_class="terminal", reason_code="no_diff")
         if not result.tests_passed:
             with _transaction(engine) as c:
-                _release(budget, c, project_id, reservation_id, "tests did not pass")
+                _release(budget, c, project_id, reservation_id, "tests did not pass", run_id=run_id)
                 return _fail(c, run_id, project_id,
                              "Tests did not pass; not opening a PR. See run state for details.",
                              failure_class="terminal", reason_code="tests_failed")
@@ -791,7 +995,7 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str) -> dict:
         reason = str(exc).strip() or f"{type(exc).__name__} with no message"
         fclass, rcode = classify_pipeline_exception(reason)
         with _transaction(engine) as c:
-            _release(budget, c, project_id, reservation_id, f"code task error: {reason}")
+            _release(budget, c, project_id, reservation_id, f"code task error: {reason}", run_id=run_id)
             # Retain + record the micro-VM so the failure can be root-caused in the console.
             _persist_sandbox_id(c, run_id, getattr(provider, "last_sandbox_task_id", None))
             return _fail(c, run_id, project_id, reason,

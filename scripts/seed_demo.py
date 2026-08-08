@@ -202,11 +202,17 @@ def seed_demo() -> None:
             VALUES (:id,:p,:tid,'completed','opened_pr',:title, CAST(:spec AS jsonb), CAST(:state AS jsonb),
                     CAST(:usage AS jsonb), '{}'::jsonb, :url, :num,
                     now()-interval '90 minutes', now()-interval '78 minutes')
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT (id) DO UPDATE
+              SET state = EXCLUDED.state,
+                  usage = EXCLUDED.usage,
+                  pull_request_url = EXCLUDED.pull_request_url,
+                  pull_request_number = EXCLUDED.pull_request_number,
+                  updated_at = EXCLUDED.updated_at
         """), {"id": "ctr_demo_healthz", "p": project_id, "tid": "tsk_demo_status_page",
                "title": "Add /healthz + activation_events migration", "spec": json.dumps(spec),
                "state": json.dumps({"engine": "native", "summary": "Added /healthz and migration.",
-                                    "files_changed": 3, "additions": 84, "deletions": 2, "tests": "mvn -q test",
+                                    "files_changed": 3, "additions": 84, "deletions": 2,
+                                    "tests": [{"command": "mvn -q test", "exit_code": 0, "duration_ms": 1840}],
                                     "tests_passed": True, "turns": 4, "cost_usd_micros": 110_522,
                                     "paths": ["src/HealthController.java", "db/V12__activation_events.sql"]}),
                "usage": json.dumps({"model": "claude-opus-4-8[1m]", "cost_usd_micros": 110_522}),

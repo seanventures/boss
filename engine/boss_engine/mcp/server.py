@@ -17,8 +17,11 @@ the pure OSS engine keeps its "no HTTP framework" property. Two transports:
 Implements MCP JSON-RPC 2.0: initialize, notifications/initialized, tools/list,
 tools/call.
 """
-from __future__ import annotations
-
+# NOTE: deliberately NO `from __future__ import annotations` here. `asgi_app()`
+# lazily imports FastAPI's `Request` inside the function; with postponed
+# annotations FastAPI would see the string "Request", fail to resolve it in
+# module globals, silently treat the parameter as a query param, and 422 every
+# JSON-RPC POST. Evaluating annotations at def-time keeps the lazy import valid.
 import json
 import sys
 from typing import Any, Optional
@@ -28,6 +31,26 @@ from ..tools import ToolRegistry, build_default_registry
 
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "boss-engine", "version": __version__}
+
+# Shown to the client model at initialize (MCP `instructions`). This is what
+# keeps external agents (Copilot/Claude/Cursor) on BOSS's governed workflow
+# instead of improvising: kickoffs go through the PRD meeting, not straight to
+# code, and artifacts (agendas/minutes/PRDs) are produced BY BOSS, not by the
+# client writing files.
+SERVER_INSTRUCTIONS = (
+    "BOSS is a governed AI-labor control plane. Work flows: idea -> "
+    "request_meeting (agent panel debates, produces minutes + PRD inside BOSS) "
+    "-> human PRD approval -> code task auto-starts -> tested, gated PR. "
+    "Rules for you as the client agent: (1) To kick off ANY new product/feature "
+    "idea — including requests phrased as 'build X' — call request_meeting with "
+    "the directive; do not call create_code_task first, and do not author "
+    "agenda/minutes/PRD documents yourself: BOSS creates those and they appear "
+    "in the console's Meetings area. (2) Use create_code_task only for a "
+    "direct, already-specified engineering change that needs no PRD. (3) Use "
+    "create_discovery when the idea first needs web research/evidence. (4) "
+    "Everything you start is inspectable: list_meetings, list_code_tasks, "
+    "get_code_task, project_status."
+)
 
 
 class MCPServer:
@@ -51,7 +74,11 @@ class MCPServer:
         self.project_id = project_id
         self.actor = actor
         self.registry = registry or build_default_registry()
-        self.read_only = read_only
+        # Catalog-only contexts have no durable workspace in which to record a
+        # receipt, approval, lease, or task. Enforce read-only at the transport
+        # boundary as well as at invocation time so every MCP host advertises an
+        # honest capability set.
+        self.read_only = read_only or not getattr(ctx, "durable_workspace_configured", True)
 
     # ---- schema ----------------------------------------------------------
     def _tools(self) -> list[dict]:
@@ -78,6 +105,7 @@ class MCPServer:
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
                 "serverInfo": SERVER_INFO,
+                "instructions": SERVER_INSTRUCTIONS,
             })
         if method in ("notifications/initialized", "initialized"):
             return None  # notification: no response
@@ -91,7 +119,10 @@ class MCPServer:
 
     def _tools_call(self, rid: Any, params: dict) -> dict:
         name = params.get("name")
-        args = params.get("arguments") or {}
+        # Session project_id is authoritative — never let tool arguments override
+        # into another tenant (write tools historically honored args.project_id).
+        args = dict(params.get("arguments") or {})
+        args.pop("project_id", None)
         if not name:
             return _err(rid, -32602, "tools/call requires a tool name")
         if not self._tool_allowed(name):
@@ -129,9 +160,13 @@ class MCPServer:
                 _write(rout, response)
 
     def asgi_app(self):
-        """Optional HTTP/JSON-RPC transport (POST /mcp, GET /health). Lazily
-        imports FastAPI so the pure engine never depends on it."""
+        """Optional HTTP/JSON-RPC transport (POST /mcp, GET /health) plus the
+        community Mission Control page (GET /). Lazily imports FastAPI so the
+        pure engine never depends on it."""
         from fastapi import FastAPI, Request  # noqa: PLC0415 (intentionally lazy)
+        from fastapi.responses import HTMLResponse  # noqa: PLC0415
+
+        from .ui import mission_control_html  # noqa: PLC0415
 
         app = FastAPI(title="boss-engine-mcp")
         server = self
@@ -146,6 +181,12 @@ class MCPServer:
         async def health():  # type: ignore[no-redef]
             return {"status": "ok", "server": SERVER_INFO["name"],
                     "tools": [t["name"] for t in server._tools()]}
+
+        @app.get("/", response_class=HTMLResponse)
+        async def mission_control():  # type: ignore[no-redef]
+            # Read-only by construction: the page only ever calls read tools
+            # through the same /mcp endpoint (see mcp/ui.py).
+            return mission_control_html()
 
         return app
 

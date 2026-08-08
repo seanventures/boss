@@ -1,6 +1,6 @@
 # BOSS Implementation Status
 
-Last updated: July 15, 2026
+Last updated: July 26, 2026
 Release target: `v0.4.0`
 
 This document summarizes the currently implemented BOSS runtime surfaces in this repository so the codebase, README, and product intent stay aligned.
@@ -37,7 +37,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - enterprise cluster/trust records for attached/detached enterprise posture, identity/audit/governance/private-worker controls, support/SLA metadata, and blocking-gap visibility
   - Enterprise SCIM group/user provisioning APIs that map active users to project-scoped BOSS members with explicit merged roles and permissions
   - CEO command intake
-  - persisted conversational orchestration (`POST /v1/agent/chat`) with capability-aware intent routing across code tasks, meetings, PRDs, discovery, and multi-phase commands; broad plans remain pending until explicit confirmation creates sequenced child tasks
+  - persisted conversational orchestration (`POST /v1/engine/agent/chat`; the legacy `/v1/agent/chat` route remains a deprecated compatibility alias) with capability-aware intent routing across code tasks, meetings, PRDs, discovery, and multi-phase commands; broad plans remain pending until explicit confirmation creates sequenced child tasks
   - canonical department, policy, plan, and meeting CRUD/list surfaces
   - task and job inspection
   - change journal list/detail for diff, review, deployment, self-improvement, infrastructure, and role-governance artifacts
@@ -50,6 +50,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - artifact, receipt, event, and audit export access
   - event-subscription list/create/update/delete APIs with exact or prefix matching, enabled-state filtering, OpenAPI contract coverage, and data-boundary enforcement
   - GitHub community adapter primitives for issue/PR comments, inline reviews, and unified-diff reads through the existing repository-scoped App identity; App manifest/setup now includes issue and pull-request write permissions, four community subscriptions, and fail-closed unconfigured webhook behavior
+  - complete project-scoped GitHub operations through BOSS-247–255: SecretRef-only App/PAT connections and repository bindings; immutable versioned branch policies; receipted commit/tree topology; fenced branch/worktree ownership; non-force code synchronization; red-to-green independently reviewed conflict resolution; exact-snapshot merge authorization and target queues; webhook/poll/repair reconciliation; and a permission-aware Mission Control workspace for branch truth, divergence, leases, sync/conflict/merge/reconciliation state, Receipts, rollback, degraded states, and configuration controls
   - replay bundle creation
   - Metatron status query
   - comms inbox and outbox
@@ -259,8 +260,8 @@ The latest passing local state at the time of this update was:
 
 ## Where to look next
 
-- Product intent: [PRD-v2.0.md](/Volumes/DataSSD1/test/boss/docs/product/PRD-v2.0.md)
-- Technical spec: [TECHNICAL_SPEC-v2.0.md](/Volumes/DataSSD1/test/boss/docs/product/TECHNICAL_SPEC-v2.0.md)
-- Active contract: [api/openapi.yaml](/Volumes/DataSSD1/test/boss/api/openapi.yaml)
-- Runtime overview: [README.md](/Volumes/DataSSD1/test/boss/README.md)
-- Entitlement policy: [MODEL_ENTITLEMENT_BROKER.md](/Volumes/DataSSD1/test/boss/docs/product/MODEL_ENTITLEMENT_BROKER.md)
+- Product intent: [PRD-v2.0.md](PRD-v2.0.md)
+- Technical spec: [TECHNICAL_SPEC-v2.0.md](TECHNICAL_SPEC-v2.0.md)
+- Active contract: [api/openapi.yaml](https://github.com/seanheiney/boss/blob/main/api/openapi.yaml)
+- Runtime overview: [README.md](https://github.com/seanheiney/boss/blob/main/README.md)
+- Entitlement policy: [MODEL_ENTITLEMENT_BROKER.md](MODEL_ENTITLEMENT_BROKER.md)

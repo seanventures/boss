@@ -419,7 +419,7 @@ export function MeetingsHome({
                 <span className={`cap-badge tone-${m.status === "completed" ? "green" : isRunning(m) ? "blue" : "amber"}`}>
                   {isRunning(m) ? "running" : m.status}
                 </span>
-                <span className="mr-meeting-date">{fmtDate(m.completed_at ?? m.created_at)}</span>
+                <span className="mr-meeting-date" suppressHydrationWarning>{fmtDate(m.completed_at ?? m.created_at)}</span>
               </div>
               <span className="mr-meeting-title">{m.title.replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ")}</span>
               <div className="mr-meeting-avatars">

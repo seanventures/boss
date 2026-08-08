@@ -80,7 +80,9 @@ def test_manifest_catalogs_all_twenty_assurance_workflows():
         (SPEC_ROOT / "manifest.yaml").read_text(encoding="utf-8")
     )
 
-    assert manifest["workflows"] == WORKFLOW_GROUPS
+    assert {
+        group: manifest["workflows"][group] for group in WORKFLOW_GROUPS
+    } == WORKFLOW_GROUPS
     assert len(_all_names()) == 20
     assert len(set(_all_names())) == 20
 

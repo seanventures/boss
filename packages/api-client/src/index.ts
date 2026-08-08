@@ -804,6 +804,8 @@ export type TaskSummary = {
   title: string;
   description?: string;
   status: string;
+  /** BOSS-281: activity-derived lifecycle (latest job + pending decisions). */
+  derived_status?: string;
   owner_role_id?: string;
   parent_task_id?: string;
   dependency_task_ids: string[];
@@ -1028,6 +1030,18 @@ export type CodeTaskRun = {
     sandbox_task_ids?: string[];
     root_run_id?: string;
     attempt?: number;
+    /** Gates the run failed. Three paths record them under different keys: `failing_gates`
+     *  when parked for override, `advisory_failing_gates` when an advisory profile shipped
+     *  the PR with findings (the normal case), and dissent.unresolved_gates when repair
+     *  rounds were spent. The retry uses these to decide which stages are actually stale. */
+    failing_gates?: string[];
+    advisory_failing_gates?: string[];
+    qa_benchmark?: {
+      id: string;
+      name: string;
+      verification_commands: string[];
+      completion_contract: string[];
+    };
   };
   reservation_id?: string | null;
   pull_request_url?: string | null;
@@ -1037,6 +1051,104 @@ export type CodeTaskRun = {
 };
 
 export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
+
+export type QaBenchmarkApp = {
+  id: string;
+  name: string;
+  tagline: string;
+  summary: string;
+  focus: string[];
+  acceptance_scenarios: string[];
+  completion_contract: string[];
+  verification_commands: string[];
+  scoring_dimensions: Array<{
+    id: string;
+    label: string;
+    weight: number;
+    evidence: string;
+  }>;
+  score_baselines: Record<string, number>;
+};
+
+export type QaBenchmarkAppsResponse = { benchmark_apps: QaBenchmarkApp[] };
+
+export type QaBenchmarkReport = {
+  run_id: string;
+  benchmark_id?: string;
+  benchmark_name?: string;
+  run_status: string;
+  completion_contract: string[];
+  required_verification_commands: string[];
+  results: Array<{
+    label: string;
+    command: string;
+    status: "pass" | "fail" | "not_recorded";
+    exit_code?: number | null;
+    timed_out?: boolean | null;
+  }>;
+  passed: boolean;
+  scorecard: {
+    version: string;
+    baselines: Record<string, number>;
+    dimensions: Array<{
+      id: string;
+      label: string;
+      weight: number;
+      evidence: string;
+      status: "scored" | "not_scored";
+      score: number | null;
+      reason?: string;
+    }>;
+    observed_weight: number;
+    evidence_coverage_pct: number;
+    overall_score: number | null;
+    overall_status: "provisional" | "complete";
+    tuning_note: string;
+  };
+  message: string;
+};
+
+export type QaBenchmarkTuningProposalRequest = {
+  project_id: string;
+  /** A developer-authored PR or configuration-diff reference. */
+  change_ref: string;
+  diff_summary: string;
+  actor?: string;
+  risk_tier?: number;
+};
+
+export type QaBenchmarkEvaluation = {
+  id: string;
+  project_id: string;
+  code_task_run_id: string;
+  benchmark_id: string;
+  scorecard_version: string;
+  status: "ready_for_candidate" | "not_ready";
+  overall_score: number | null;
+  observed_weight: number;
+  recommendation?: Record<string, unknown>;
+  evaluated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+// One per-stage model call recorded for a code task (GET /v1/code-tasks/{id}/activity) —
+// the internal detail behind each phase: model, turns, latency, retries, cost, ok/error.
+export type LlmCallRow = {
+  stage: string;
+  engine: string;
+  model: string;
+  total_tokens: number;
+  cost_usd_micros: number;
+  latency_ms: number;
+  retries: number;
+  turns: number;
+  ok: boolean;
+  error: string | null;
+  created_at: string | null;
+};
+
+export type CodeTaskActivityResponse = { run_id: string; calls: LlmCallRow[] };
 
 export type PreviewRec = {
   id: string;
@@ -2852,6 +2964,524 @@ export type SecretRefUpdateRequest = {
   actor?: string;
 };
 
+export type GitHubConnectionSummary = {
+  id: string;
+  project_id: string;
+  connection_label: string;
+  auth_method: "github_app" | "personal_access_token";
+  credential_configured: boolean;
+  app_id?: string;
+  installation_id?: string;
+  api_base_url: string;
+  status: "configured" | "active" | "error" | "disabled" | "revoked";
+  required_permissions: string[];
+  granted_permissions: string[];
+  missing_permissions: string[];
+  account_login?: string;
+  metadata: Record<string, unknown>;
+  last_test_status?: string;
+  last_tested_at?: string;
+  last_error?: Record<string, unknown>;
+  disabled_at?: string;
+  disabled_by?: string;
+  revoked_at?: string;
+  revoked_by?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubConnectionListResponse = {
+  project_id: string;
+  items: GitHubConnectionSummary[];
+};
+
+export type GitHubConnectionCreateRequest = {
+  project_id: string;
+  connection_label: string;
+  auth_method: "github_app" | "personal_access_token";
+  credential_ref: string;
+  app_id?: string;
+  installation_id?: string;
+  api_base_url?: string;
+  required_permissions?: string[];
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubConnectionLifecycleRequest = {
+  project_id: string;
+  actor?: string;
+};
+
+export type GitHubRepositoryBindingSummary = {
+  id: string;
+  project_id: string;
+  connection_id: string;
+  repository_id?: number;
+  owner: string;
+  name: string;
+  full_name: string;
+  role: "primary" | "source" | "upstream" | "mirror";
+  default_branch?: string;
+  visibility?: string;
+  archived: boolean;
+  status: "active" | "disabled";
+  permissions: Record<string, boolean>;
+  capabilities: string[];
+  metadata: Record<string, unknown>;
+  last_synced_at?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubRepositoryBindingListResponse = {
+  project_id: string;
+  items: GitHubRepositoryBindingSummary[];
+};
+
+export type GitHubRepositoryBindingCreateRequest = {
+  project_id: string;
+  connection_id: string;
+  repository: string;
+  role?: "primary" | "source" | "upstream" | "mirror";
+  default_branch?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubRepositoryBindingUpdateRequest = {
+  project_id: string;
+  role?: "primary" | "source" | "upstream" | "mirror";
+  status?: "active" | "disabled";
+  default_branch?: string;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubConnectionTestRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type GitHubConnectionTestResponse = {
+  status: "passed" | "failed";
+  duplicate: boolean;
+  receipt_id: string;
+  connection: GitHubConnectionSummary;
+  repository_binding: GitHubRepositoryBindingSummary;
+  detail: Record<string, unknown>;
+};
+
+export type GitHubBranchPolicySummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  version: number;
+  supersedes_policy_id: string | null;
+  status: "active" | "superseded" | "disabled";
+  protected_ref_patterns: string[];
+  allowed_branch_prefixes: string[];
+  branch_name_pattern: string;
+  allowed_update_methods: string[];
+  allowed_merge_methods: string[];
+  required_checks: string[];
+  required_approvals: number;
+  require_pull_request: boolean;
+  require_linear_history: boolean;
+  require_signed_commits: boolean;
+  automation_updates_enabled: boolean;
+  force_push_allowed: boolean;
+  metadata: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubBranchPolicyListResponse = {
+  project_id: string;
+  items: GitHubBranchPolicySummary[];
+};
+
+export type GitHubBranchPolicyCreateRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  protected_ref_patterns?: string[];
+  allowed_branch_prefixes?: string[];
+  branch_name_pattern?: string;
+  allowed_update_methods?: string[];
+  allowed_merge_methods?: string[];
+  required_checks?: string[];
+  required_approvals?: number;
+  require_pull_request?: boolean;
+  require_linear_history?: boolean;
+  require_signed_commits?: boolean;
+  automation_updates_enabled?: boolean;
+  force_push_allowed?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubBranchPolicyUpdateRequest = {
+  project_id: string;
+  status?: "active" | "disabled";
+  protected_ref_patterns?: string[];
+  allowed_branch_prefixes?: string[];
+  branch_name_pattern?: string;
+  allowed_update_methods?: string[];
+  allowed_merge_methods?: string[];
+  required_checks?: string[];
+  required_approvals?: number;
+  require_pull_request?: boolean;
+  require_linear_history?: boolean;
+  require_signed_commits?: boolean;
+  automation_updates_enabled?: boolean;
+  force_push_allowed?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubBranchPolicyEvaluateRequest = {
+  project_id: string;
+  ref: string;
+  operation: "observe" | "create" | "update" | "merge" | "delete";
+  method?: string;
+};
+
+export type GitHubBranchPolicyEvaluationResponse = {
+  policy_id: string;
+  policy_version: number;
+  status: "allowed" | "approval_required" | "blocked";
+  ref: string;
+  operation: string;
+  method: string | null;
+  protected: boolean;
+  reasons: string[];
+  required_checks: string[];
+  required_approvals: number;
+  require_pull_request: boolean;
+  require_linear_history: boolean;
+  require_signed_commits: boolean;
+};
+
+export type GitHubBranchSnapshotSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  branch_policy_id: string | null;
+  branch_policy_version: number | null;
+  source_ref: string;
+  target_ref: string;
+  source_commit_sha: string | null;
+  source_tree_sha: string | null;
+  target_commit_sha: string | null;
+  target_tree_sha: string | null;
+  merge_base_commit_sha: string | null;
+  merge_base_tree_sha: string | null;
+  ahead_by: number;
+  behind_by: number;
+  topology_classification:
+    | "equal"
+    | "tree_equivalent_rewrite"
+    | "fast_forward"
+    | "behind"
+    | "diverged"
+    | "missing";
+  classification:
+    | "equal"
+    | "tree_equivalent_rewrite"
+    | "fast_forward"
+    | "behind"
+    | "diverged"
+    | "missing"
+    | "protected_blocked";
+  refs: Record<string, unknown>;
+  comparison: Record<string, unknown>;
+  protection: Record<string, unknown>;
+  checks: Array<Record<string, unknown>>;
+  policy_evaluation: Record<string, unknown>;
+  receipt_id: string;
+  dedupe_key: string;
+  observed_by: string;
+  observed_at: string;
+  created_at: string;
+};
+
+export type GitHubBranchSnapshotListResponse = {
+  project_id: string;
+  items: GitHubBranchSnapshotSummary[];
+};
+
+export type GitHubBranchSnapshotCaptureRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  source_ref: string;
+  target_ref: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type GitHubBranchSnapshotCaptureResponse = {
+  status: "succeeded" | "failed";
+  duplicate: boolean;
+  receipt_id: string;
+  snapshot: GitHubBranchSnapshotSummary | null;
+  error: Record<string, unknown> | null;
+};
+
+export type GitHubBranchLeaseSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  ref_name: string;
+  owner_kind: "task" | "workflow_run" | "code_task_run" | "agent" | "manual";
+  owner_id: string;
+  run_id: string | null;
+  worktree_path: string | null;
+  acquire_key: string;
+  fencing_token: number;
+  status: "active" | "released" | "expired" | "reclaimed";
+  acquired_by: string;
+  acquired_at: string;
+  heartbeat_at: string;
+  lease_expires_at: string;
+  released_by: string | null;
+  released_at: string | null;
+  release_reason: string | null;
+  reclaimed_from_lease_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubBranchLeaseListResponse = {
+  project_id: string;
+  items: GitHubBranchLeaseSummary[];
+};
+
+export type GitHubBranchLeaseAcquireRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  ref_name: string;
+  owner_kind: "task" | "workflow_run" | "code_task_run" | "agent" | "manual";
+  owner_id: string;
+  run_id?: string;
+  worktree_path?: string;
+  acquire_key: string;
+  ttl_seconds?: number;
+  actor?: string;
+};
+
+export type GitHubBranchLeaseAcquireResponse = {
+  lease: GitHubBranchLeaseSummary;
+  lease_token: string | null;
+  duplicate: boolean;
+};
+
+export type GitHubBranchLeaseHeartbeatRequest = {
+  project_id: string;
+  lease_token: string;
+  fencing_token: number;
+  ttl_seconds?: number;
+  actor?: string;
+};
+
+export type GitHubBranchLeaseReleaseRequest = {
+  project_id: string;
+  lease_token: string;
+  fencing_token: number;
+  reason: string;
+  actor?: string;
+};
+
+export type GitHubBranchLeaseReclaimRequest = {
+  project_id: string;
+  reason: string;
+  actor?: string;
+};
+
+export type GitHubCodeSyncRunSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  branch_policy_id: string;
+  branch_policy_version: number;
+  initial_snapshot_id: string;
+  result_snapshot_id: string | null;
+  branch_lease_id: string | null;
+  fencing_token: number | null;
+  source_ref: string;
+  target_ref: string;
+  topology_classification:
+    | "equal"
+    | "tree_equivalent_rewrite"
+    | "fast_forward"
+    | "behind"
+    | "diverged"
+    | "missing";
+  action:
+    | "noop"
+    | "preserve_remote_identity"
+    | "fast_forward_target"
+    | "fast_forward_source"
+    | "create_resolution_branch"
+    | "blocked";
+  status:
+    | "planned"
+    | "pending_approval"
+    | "approved"
+    | "applying"
+    | "succeeded"
+    | "noop"
+    | "conflicted"
+    | "blocked"
+    | "failed"
+    | "deadlettered";
+  dedupe_key: string;
+  changeset_id: string | null;
+  conflict_set_id: string | null;
+  decision_id: string | null;
+  resolution_branch: string | null;
+  rollback_ref: string | null;
+  rollback_sha: string | null;
+  apply_attempts: number;
+  receipt_ids: string[];
+  resource_receipt_ids: string[];
+  error: Record<string, unknown> | null;
+  created_by: string;
+  approved_by: string | null;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+export type GitHubCodeSyncRunListResponse = {
+  project_id: string;
+  items: GitHubCodeSyncRunSummary[];
+};
+
+export type GitHubCodeSyncPlanRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  snapshot_id: string;
+  dedupe_key: string;
+  resolution_branch?: string;
+  actor?: string;
+};
+
+export type GitHubCodeSyncApplyRequest = {
+  project_id: string;
+  lease_id: string;
+  lease_token: string;
+  fencing_token: number;
+  actor?: string;
+};
+
+export type GitHubConflictSetSummary = {
+  id: string;
+  project_id: string;
+  code_sync_run_id: string;
+  repository_binding_id: string;
+  resolution_branch: string;
+  resolution_branch_head_sha: string;
+  base_commit_sha: string | null;
+  base_tree_sha: string | null;
+  ours_commit_sha: string;
+  ours_tree_sha: string;
+  theirs_commit_sha: string;
+  theirs_tree_sha: string;
+  status: "open" | "resolution_proposed" | "approved" | "resolved" | "blocked";
+  files: Array<Record<string, unknown>>;
+  conflict_count: number;
+  decision_id: string | null;
+  resolved_by_plan_id: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+};
+
+export type GitHubConflictSetListResponse = {
+  project_id: string;
+  items: GitHubConflictSetSummary[];
+};
+
+export type GitHubResolutionPlanSummary = {
+  id: string;
+  project_id: string;
+  conflict_set_id: string;
+  version: number;
+  status: "proposed" | "approved" | "applied" | "rejected" | "failed";
+  resolved_files: Array<Record<string, unknown>>;
+  validation_evidence: Record<string, unknown>;
+  independent_review: Record<string, unknown>;
+  decision_id: string | null;
+  changeset_id: string | null;
+  result_commit_sha: string | null;
+  created_by: string;
+  approved_by: string | null;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  applied_at: string | null;
+};
+
+export type GitHubResolutionPlanListResponse = {
+  project_id: string;
+  items: GitHubResolutionPlanSummary[];
+};
+
+export type GitHubResolutionPlanCreateRequest = {
+  project_id: string;
+  resolved_files: Array<{
+    path: string;
+    content: string;
+    mode?: "100644" | "100755";
+  }>;
+  validation_evidence: {
+    red: {
+      command: string;
+      exit_code: number;
+      evidence_ref: string;
+      [key: string]: unknown;
+    };
+    green: {
+      command: string;
+      exit_code: number;
+      evidence_ref: string;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  actor?: string;
+};
+
+export type GitHubResolutionPlanApproveRequest = {
+  project_id: string;
+  review_evidence: {
+    verdict: "approved";
+    summary: string;
+    [key: string]: unknown;
+  };
+  actor: string;
+};
+
+export type GitHubResolutionPlanApplyRequest = {
+  project_id: string;
+  lease_id: string;
+  lease_token: string;
+  fencing_token: number;
+  actor?: string;
+};
+
+export type GitHubResolutionApplyResponse = {
+  plan: GitHubResolutionPlanSummary;
+  conflict_set: GitHubConflictSetSummary;
+  sync_run: GitHubCodeSyncRunSummary;
+};
+
 export type AgentModuleSummary = {
   module_id: string;
   version: string;
@@ -3353,6 +3983,228 @@ export type ModelRouteDecisionSimulateResponse = {
   decision: ModelRouteDecisionSummary;
 };
 
+export type GitHubMergeAuthorizationSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  branch_policy_id: string;
+  branch_policy_version: number;
+  code_sync_run_id: string | null;
+  resolution_plan_id: string | null;
+  pull_request_number: number;
+  pull_request_url: string;
+  source_ref: string;
+  target_ref: string;
+  head_commit_sha: string;
+  head_tree_sha: string;
+  base_commit_sha: string;
+  base_tree_sha: string;
+  merge_method: "merge" | "squash" | "rebase";
+  status:
+    | "pending_approval"
+    | "authorized"
+    | "queued"
+    | "applying"
+    | "merged"
+    | "blocked"
+    | "expired"
+    | "failed"
+    | "deadlettered"
+    | "cancelled";
+  dedupe_key: string;
+  required_checks: string[];
+  observed_checks: Array<Record<string, unknown>>;
+  required_approvals: number;
+  observed_reviews: Array<Record<string, unknown>>;
+  evidence_bundle: Record<string, unknown>;
+  policy_evaluation: Record<string, unknown>;
+  authorized_by: string | null;
+  authorized_at: string | null;
+  expires_at: string;
+  queue_position: number;
+  queued_at: string | null;
+  branch_lease_id: string | null;
+  fencing_token: number | null;
+  changeset_id: string;
+  apply_attempts: number;
+  receipt_ids: string[];
+  resource_receipt_ids: string[];
+  result_merge_sha: string | null;
+  result_target_tree_sha: string | null;
+  rollback_plan: Record<string, unknown>;
+  error: Record<string, unknown> | null;
+  created_by: string;
+  applied_by: string | null;
+  created_at: string;
+  updated_at: string;
+  merged_at: string | null;
+};
+
+export type GitHubMergeAuthorizationListResponse = {
+  project_id: string;
+  items: GitHubMergeAuthorizationSummary[];
+};
+
+export type GitHubMergeAuthorizationCreateRequest = {
+  project_id: string;
+  repository_binding_id: string;
+  pull_request_number: number;
+  source_ref: string;
+  target_ref: string;
+  merge_method?: "merge" | "squash" | "rebase";
+  dedupe_key: string;
+  evidence_bundle: Record<string, unknown>;
+  expires_in_seconds?: number;
+  code_sync_run_id?: string;
+  resolution_plan_id?: string;
+  actor?: string;
+};
+
+export type GitHubMergeAuthorizationApproveRequest = {
+  project_id: string;
+  review_evidence: Record<string, unknown>;
+  actor: string;
+};
+
+export type GitHubMergeAuthorizationEnqueueRequest = {
+  project_id: string;
+  actor?: string;
+};
+
+export type GitHubMergeAuthorizationApplyRequest = {
+  project_id: string;
+  lease_id: string;
+  lease_token: string;
+  fencing_token: number;
+  actor?: string;
+};
+
+export type GitHubReconciliationRunSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  trigger_signal_id: string | null;
+  repair_of_run_id: string | null;
+  source: "webhook" | "poll" | "repair";
+  status:
+    | "queued"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "deadlettered"
+    | "cancelled";
+  dedupe_key: string;
+  requested_refs: string[];
+  attempt_count: number;
+  max_attempts: number;
+  job_id: string | null;
+  observation_ids: string[];
+  receipt_ids: string[];
+  rate_limit_status: Record<string, unknown>;
+  next_attempt_at: string | null;
+  deadletter_id: string | null;
+  error: Record<string, unknown> | null;
+  created_by: string;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubReconciliationRunListResponse = {
+  project_id: string;
+  items: GitHubReconciliationRunSummary[];
+};
+
+export type GitHubReconciliationSignalSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  inbound_webhook_id: string | null;
+  source: "webhook" | "poll" | "repair";
+  delivery_id: string | null;
+  provider_event: string | null;
+  action: string | null;
+  ref_name: string;
+  expected_commit_sha: string | null;
+  expected_deleted: boolean;
+  payload_hash: string | null;
+  dedupe_key: string;
+  status:
+    | "pending"
+    | "processing"
+    | "applied"
+    | "stale"
+    | "failed"
+    | "deadlettered";
+  reconciliation_run_id: string | null;
+  observed_commit_sha: string | null;
+  error: Record<string, unknown> | null;
+  provider_occurred_at: string | null;
+  processed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubReconciliationSignalListResponse = {
+  project_id: string;
+  items: GitHubReconciliationSignalSummary[];
+};
+
+export type GitHubRepositoryRefStateSummary = {
+  id: string;
+  project_id: string;
+  repository_binding_id: string;
+  ref_name: string;
+  exists: boolean;
+  commit_sha: string | null;
+  tree_sha: string | null;
+  protected: boolean;
+  protection: Record<string, unknown>;
+  latest_observation_id: string;
+  latest_signal_id: string | null;
+  latest_receipt_id: string;
+  observed_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type GitHubRepositoryRefStateListResponse = {
+  project_id: string;
+  items: GitHubRepositoryRefStateSummary[];
+};
+
+export type GitHubReconciliationPollRequest = {
+  project_id: string;
+  repository_binding_id?: string;
+  refs?: string[];
+  dedupe_key: string;
+  actor?: string;
+};
+
+export type GitHubReconciliationPollResponse = {
+  project_id: string;
+  items: GitHubReconciliationRunSummary[];
+};
+
+export type GitHubReconciliationExecuteRequest = {
+  project_id: string;
+  job_id: string;
+  worker_id: string;
+  lease_token: string;
+};
+
+export type GitHubReconciliationExecuteResponse = {
+  run: GitHubReconciliationRunSummary;
+  job: Record<string, unknown>;
+};
+
+export type GitHubReconciliationRepairRequest = {
+  project_id: string;
+  dedupe_key: string;
+  actor?: string;
+};
+
 export type ProviderAccountSummary = {
   id: string;
   project_id: string;
@@ -3661,7 +4513,7 @@ export type DeploymentTargetSummary = {
   target_ref: string;
   domains: string[];
   required_resources: Array<Record<string, unknown>>;
-  secret_refs: string[];
+  secret_refs: Array<string | Record<string, unknown>>;
   health_checks: Array<Record<string, unknown>>;
   rollback_points: Array<Record<string, unknown>>;
   status: string;
@@ -3687,7 +4539,7 @@ export type DeploymentTargetCreateRequest = {
   target_ref: string;
   domains?: string[];
   required_resources?: Array<Record<string, unknown>>;
-  secret_refs?: string[];
+  secret_refs?: Array<string | Record<string, unknown>>;
   health_checks?: Array<Record<string, unknown>>;
   rollback_points?: Array<Record<string, unknown>>;
   actor?: string;
@@ -4274,6 +5126,28 @@ export type WorkflowRunListResponse = {
   items: WorkflowRunSummary[];
 };
 
+export type AgentStudioCatalogResponse = {
+  project_id: string;
+  agents: Array<Record<string, unknown>>;
+  panels: Array<Record<string, unknown>>;
+  workflows: WorkflowDefinitionDetail[];
+  agent_runs: Array<Record<string, unknown>>;
+  panel_runs: Array<Record<string, unknown>>;
+  workflow_runs: WorkflowRunSummary[];
+  tests: Array<Record<string, unknown>>;
+  a2a: {
+    channels: Array<Record<string, unknown>>;
+    subscriptions: Array<Record<string, unknown>>;
+    messages: Array<Record<string, unknown>>;
+    health: Record<string, unknown>;
+  };
+};
+
+export type A2AListResponse = {
+  project_id: string;
+  items: Array<Record<string, unknown>>;
+};
+
 export class BossApiError extends Error {
   status: number;
   body?: unknown;
@@ -4354,6 +5228,162 @@ export function createBossApiClient(config: BossApiClientConfig) {
   }
 
   return {
+    getAgentStudioCatalog(projectId: string) {
+      return request<AgentStudioCatalogResponse>(
+        "GET",
+        "/v1/agent-studio/catalog",
+        { query: { project_id: projectId } },
+      );
+    },
+    validateStudioWorkflow(payload: {
+      project_id: string;
+      spec: Record<string, unknown>;
+      actor?: string;
+    }) {
+      return request<{
+        valid: boolean;
+        normalized_spec: Record<string, unknown>;
+        checks: Array<{ kind: string; passed: boolean; detail: string }>;
+      }>("POST", "/v1/agent-studio/workflows/validate", { body: payload });
+    },
+    createAgentDefinition(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/agent-studio/agents",
+        { body: payload },
+      );
+    },
+    createAgentVersion(agentId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agents/${encodeURIComponent(agentId)}/versions`,
+        { body: payload },
+      );
+    },
+    validateAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/validate`,
+        { body: payload },
+      );
+    },
+    publishAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/publish`,
+        { body: payload },
+      );
+    },
+    testAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/tests`,
+        { body: payload },
+      );
+    },
+    runAgentVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/agent-versions/${encodeURIComponent(versionId)}/runs`,
+        { body: payload },
+      );
+    },
+    createPanelDefinition(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/agent-studio/panels",
+        { body: payload },
+      );
+    },
+    createPanelVersion(panelId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/panels/${encodeURIComponent(panelId)}/versions`,
+        { body: payload },
+      );
+    },
+    publishPanelVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/panel-versions/${encodeURIComponent(versionId)}/publish`,
+        { body: payload },
+      );
+    },
+    runPanelVersion(versionId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/agent-studio/panel-versions/${encodeURIComponent(versionId)}/runs`,
+        { body: payload },
+      );
+    },
+    listA2AChannels(projectId: string) {
+      return request<A2AListResponse>("GET", "/v1/a2a/channels", {
+        query: { project_id: projectId },
+      });
+    },
+    createA2AChannel(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>("POST", "/v1/a2a/channels", {
+        body: payload,
+      });
+    },
+    createA2ASubscription(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/a2a/subscriptions",
+        { body: payload },
+      );
+    },
+    publishA2AMessage(payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>("POST", "/v1/a2a/messages", {
+        body: payload,
+      });
+    },
+    cancelA2AMessage(messageId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/a2a/messages/${encodeURIComponent(messageId)}/cancel`,
+        { body: payload },
+      );
+    },
+    replayA2AMessage(messageId: string, payload: Record<string, unknown>) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/a2a/messages/${encodeURIComponent(messageId)}/replay`,
+        { body: payload },
+      );
+    },
+    listA2AMessages(projectId: string, limit = 100, traceId?: string) {
+      return request<A2AListResponse>("GET", "/v1/a2a/messages", {
+        query: { project_id: projectId, limit, trace_id: traceId },
+      });
+    },
+    pollA2A(payload: Record<string, unknown>) {
+      return request<{ items: Array<Record<string, unknown>> }>(
+        "POST",
+        "/v1/a2a/poll",
+        { body: payload },
+      );
+    },
+    acknowledgeA2ADelivery(
+      deliveryId: string,
+      payload: Record<string, unknown>,
+    ) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/a2a/deliveries/${encodeURIComponent(deliveryId)}/acknowledge`,
+        { body: payload },
+      );
+    },
+    getA2AHealth(projectId: string) {
+      return request<Record<string, unknown>>("GET", "/v1/a2a/health", {
+        query: { project_id: projectId },
+      });
+    },
+    getA2AAudit(projectId: string, limit = 100) {
+      return request<Record<string, unknown>>("GET", "/v1/a2a/audit", {
+        query: { project_id: projectId, limit },
+      });
+    },
     getWorkflowDefinitions(projectId: string, includeRetired = false) {
       return request<WorkflowDefinitionListResponse>("GET", "/v1/workflows", {
         query: { project_id: projectId, include_retired: includeRetired },
@@ -4607,6 +5637,58 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId, limit },
       });
     },
+    getQaBenchmarkApps() {
+      return request<QaBenchmarkAppsResponse>("GET", "/v1/qa/benchmark-apps");
+    },
+    startQaBenchmarkApp(benchmarkId: string, payload: {
+      project_id: string;
+      actor?: string;
+      task_id?: string;
+      owner?: string;
+      repo?: string;
+      base_branch?: string;
+      profile?: string;
+    }) {
+      return request<{ status: string; run_id: string; benchmark: { id: string; name: string } }>(
+        "POST", `/v1/qa/benchmark-apps/${encodeURIComponent(benchmarkId)}/runs`, { body: payload },
+      );
+    },
+    getQaBenchmarkReport(runId: string) {
+      return request<QaBenchmarkReport>(
+        "GET", `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/report`,
+      );
+    },
+    listQaBenchmarkEvaluations(projectId: string, limit = 50) {
+      return request<{ project_id: string; items: QaBenchmarkEvaluation[] }>(
+        "GET",
+        "/v1/qa/benchmark-apps/evaluations",
+        { query: { project_id: projectId, limit } },
+      );
+    },
+    sweepQaBenchmarkEvaluations(payload?: {
+      project_id?: string;
+      limit?: number;
+      actor?: string;
+    }) {
+      return request<{
+        status: string;
+        project_id?: string | null;
+        checked_count: number;
+        changed_count: number;
+        ready_for_candidate_count: number;
+        items: QaBenchmarkEvaluation[];
+      }>("POST", "/v1/qa/benchmark-apps/tuning-sweep", { body: payload ?? {} });
+    },
+    createQaBenchmarkTuningProposal(
+      runId: string,
+      payload: QaBenchmarkTuningProposalRequest,
+    ) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/tuning-proposal`,
+        { body: payload },
+      );
+    },
     getDiscoveries(projectId: string, limit = 50) {
       return request<DiscoveriesResponse>("GET", "/v1/discoveries", {
         query: { project_id: projectId, limit },
@@ -4630,12 +5712,17 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getCodeTask(runId: string) {
       return request<CodeTaskRun>("GET", `/v1/code-tasks/${encodeURIComponent(runId)}`);
     },
+    getCodeTaskActivity(runId: string) {
+      return request<CodeTaskActivityResponse>(
+        "GET", `/v1/code-tasks/${encodeURIComponent(runId)}/activity`);
+    },
     createCodeTask(payload: CodeTaskCreatePayload) {
       return request<{ status: string; run_id: string }>("POST", "/v1/code-tasks", { body: payload });
     },
-    retryCodeTask(runId: string, fixNote?: string) {
+    retryCodeTask(runId: string, fixNote?: string, actor = "executive_console") {
       return request<{ status: string; run_id: string; attempt: number }>(
-        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`, { body: { fix_note: fixNote ?? "" } });
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`,
+        { body: { fix_note: fixNote ?? "", actor } });
     },
     submitCodeTaskFeedback(runId: string, payload: {
       message: string;
@@ -4653,12 +5740,17 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", `/v1/feedback-threads/${encodeURIComponent(threadId)}/confirm`,
         { body: { actor } });
     },
-    overrideCodeTask(runId: string, waiveGates: string[], reason?: string) {
+    overrideCodeTask(
+      runId: string,
+      waiveGates: string[],
+      reason?: string,
+      actor = "executive_console",
+    ) {
       return request<{ status: string; pull_request_url?: string; pull_request_number?: number }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/override`,
-        { body: { waive_gates: waiveGates, reason: reason ?? "" } });
+        { body: { waive_gates: waiveGates, reason: reason ?? "", actor } });
     },
-    startPreview(runId: string, ttlMinutes?: number) {
+    startPreview(runId: string, ttlMinutes?: number, actor = "executive_console") {
       return request<{
         id: string; status: string; url?: string; error?: string;
         // library/CLI builds have no live URL — they are "run" by executing their tests:
@@ -4666,7 +5758,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
         passed?: boolean; output?: string; message?: string;
       }>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/preview`,
-        { body: { ttl_minutes: ttlMinutes ?? 60 } });
+        { body: { ttl_minutes: ttlMinutes ?? 60, actor } });
+    },
+    stopPreview(previewId: string, actor = "executive_console") {
+      return request<{ status: string }>(
+        "POST", `/v1/previews/${encodeURIComponent(previewId)}/stop`,
+        { body: { actor } });
     },
     getPreviews(projectId: string, limit = 50) {
       return request<{ previews: PreviewRec[] }>(
@@ -5062,7 +6159,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
       });
     },
     chatWithAgent(payload: AgentChatRequest) {
-      return request<AgentChatResponse>("POST", "/v1/agent/chat", {
+      return request<AgentChatResponse>("POST", "/v1/engine/agent/chat", {
         body: payload,
       });
     },
@@ -5611,6 +6708,542 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<ProviderAccountListResponse>("GET", "/v1/providers", {
         query: { project_id: projectId },
       });
+    },
+    listGitHubConnections(projectId: string) {
+      return request<GitHubConnectionListResponse>(
+        "GET",
+        "/v1/github/connections",
+        { query: { project_id: projectId } },
+      );
+    },
+    createGitHubConnection(payload: GitHubConnectionCreateRequest) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        "/v1/github/connections",
+        { body: payload },
+      );
+    },
+    getGitHubConnection(projectId: string, connectionId: string) {
+      return request<GitHubConnectionSummary>(
+        "GET",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    enableGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionLifecycleRequest,
+    ) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/enable`,
+        { body: payload },
+      );
+    },
+    disableGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionLifecycleRequest,
+    ) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/disable`,
+        { body: payload },
+      );
+    },
+    revokeGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionLifecycleRequest,
+    ) {
+      return request<GitHubConnectionSummary>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/revoke`,
+        { body: payload },
+      );
+    },
+    testGitHubConnection(
+      connectionId: string,
+      payload: GitHubConnectionTestRequest,
+    ) {
+      return request<GitHubConnectionTestResponse>(
+        "POST",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/test`,
+        { body: payload },
+      );
+    },
+    listGitHubRepositoryBindings(projectId: string, connectionId?: string) {
+      return request<GitHubRepositoryBindingListResponse>(
+        "GET",
+        "/v1/github/repository-bindings",
+        {
+          query: {
+            project_id: projectId,
+            connection_id: connectionId,
+          },
+        },
+      );
+    },
+    createGitHubRepositoryBinding(
+      payload: GitHubRepositoryBindingCreateRequest,
+    ) {
+      return request<GitHubRepositoryBindingSummary>(
+        "POST",
+        "/v1/github/repository-bindings",
+        { body: payload },
+      );
+    },
+    getGitHubRepositoryBinding(projectId: string, bindingId: string) {
+      return request<GitHubRepositoryBindingSummary>(
+        "GET",
+        `/v1/github/repository-bindings/${encodeURIComponent(bindingId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    updateGitHubRepositoryBinding(
+      bindingId: string,
+      payload: GitHubRepositoryBindingUpdateRequest,
+    ) {
+      return request<GitHubRepositoryBindingSummary>(
+        "PATCH",
+        `/v1/github/repository-bindings/${encodeURIComponent(bindingId)}`,
+        { body: payload },
+      );
+    },
+    listGitHubBranchPolicies(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        include_history?: boolean;
+      } = {},
+    ) {
+      return request<GitHubBranchPolicyListResponse>(
+        "GET",
+        "/v1/github/branch-policies",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            include_history: options.include_history,
+          },
+        },
+      );
+    },
+    createGitHubBranchPolicy(payload: GitHubBranchPolicyCreateRequest) {
+      return request<GitHubBranchPolicySummary>(
+        "POST",
+        "/v1/github/branch-policies",
+        { body: payload },
+      );
+    },
+    getGitHubBranchPolicy(projectId: string, policyId: string) {
+      return request<GitHubBranchPolicySummary>(
+        "GET",
+        `/v1/github/branch-policies/${encodeURIComponent(policyId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    reviseGitHubBranchPolicy(
+      policyId: string,
+      payload: GitHubBranchPolicyUpdateRequest,
+    ) {
+      return request<GitHubBranchPolicySummary>(
+        "PATCH",
+        `/v1/github/branch-policies/${encodeURIComponent(policyId)}`,
+        { body: payload },
+      );
+    },
+    evaluateGitHubBranchPolicy(
+      policyId: string,
+      payload: GitHubBranchPolicyEvaluateRequest,
+    ) {
+      return request<GitHubBranchPolicyEvaluationResponse>(
+        "POST",
+        `/v1/github/branch-policies/${encodeURIComponent(policyId)}/evaluate`,
+        { body: payload },
+      );
+    },
+    listGitHubBranchSnapshots(
+      projectId: string,
+      options: { repository_binding_id?: string; limit?: number } = {},
+    ) {
+      return request<GitHubBranchSnapshotListResponse>(
+        "GET",
+        "/v1/github/branch-snapshots",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            limit: options.limit ?? 50,
+          },
+        },
+      );
+    },
+    captureGitHubBranchSnapshot(payload: GitHubBranchSnapshotCaptureRequest) {
+      return request<GitHubBranchSnapshotCaptureResponse>(
+        "POST",
+        "/v1/github/branch-snapshots/capture",
+        { body: payload },
+      );
+    },
+    getGitHubBranchSnapshot(projectId: string, snapshotId: string) {
+      return request<GitHubBranchSnapshotSummary>(
+        "GET",
+        `/v1/github/branch-snapshots/${encodeURIComponent(snapshotId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    listGitHubBranchLeases(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        ref_name?: string;
+        include_history?: boolean;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubBranchLeaseListResponse>(
+        "GET",
+        "/v1/github/branch-leases",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            ref_name: options.ref_name,
+            include_history: options.include_history,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    acquireGitHubBranchLease(payload: GitHubBranchLeaseAcquireRequest) {
+      return request<GitHubBranchLeaseAcquireResponse>(
+        "POST",
+        "/v1/github/branch-leases",
+        { body: payload },
+      );
+    },
+    getGitHubBranchLease(projectId: string, leaseId: string) {
+      return request<GitHubBranchLeaseSummary>(
+        "GET",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    heartbeatGitHubBranchLease(
+      leaseId: string,
+      payload: GitHubBranchLeaseHeartbeatRequest,
+    ) {
+      return request<GitHubBranchLeaseSummary>(
+        "POST",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/heartbeat`,
+        { body: payload },
+      );
+    },
+    releaseGitHubBranchLease(
+      leaseId: string,
+      payload: GitHubBranchLeaseReleaseRequest,
+    ) {
+      return request<GitHubBranchLeaseSummary>(
+        "POST",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/release`,
+        { body: payload },
+      );
+    },
+    reclaimGitHubBranchLease(
+      leaseId: string,
+      payload: GitHubBranchLeaseReclaimRequest,
+    ) {
+      return request<GitHubBranchLeaseSummary>(
+        "POST",
+        `/v1/github/branch-leases/${encodeURIComponent(leaseId)}/reclaim`,
+        { body: payload },
+      );
+    },
+    listGitHubCodeSyncRuns(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubCodeSyncRunListResponse>(
+        "GET",
+        "/v1/github/code-sync-runs",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    planGitHubCodeSync(payload: GitHubCodeSyncPlanRequest) {
+      return request<GitHubCodeSyncRunSummary>(
+        "POST",
+        "/v1/github/code-sync-runs/plan",
+        { body: payload },
+      );
+    },
+    getGitHubCodeSyncRun(projectId: string, syncRunId: string) {
+      return request<GitHubCodeSyncRunSummary>(
+        "GET",
+        `/v1/github/code-sync-runs/${encodeURIComponent(syncRunId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    applyGitHubCodeSync(
+      syncRunId: string,
+      payload: GitHubCodeSyncApplyRequest,
+    ) {
+      return request<GitHubCodeSyncRunSummary>(
+        "POST",
+        `/v1/github/code-sync-runs/${encodeURIComponent(syncRunId)}/apply`,
+        { body: payload },
+      );
+    },
+    listGitHubConflictSets(
+      projectId: string,
+      options: { status?: string; limit?: number } = {},
+    ) {
+      return request<GitHubConflictSetListResponse>(
+        "GET",
+        "/v1/github/conflict-sets",
+        {
+          query: {
+            project_id: projectId,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    getGitHubConflictSet(projectId: string, conflictSetId: string) {
+      return request<GitHubConflictSetSummary>(
+        "GET",
+        `/v1/github/conflict-sets/${encodeURIComponent(conflictSetId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    listGitHubResolutionPlans(
+      projectId: string,
+      options: { conflict_set_id?: string; limit?: number } = {},
+    ) {
+      return request<GitHubResolutionPlanListResponse>(
+        "GET",
+        "/v1/github/resolution-plans",
+        {
+          query: {
+            project_id: projectId,
+            conflict_set_id: options.conflict_set_id,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    createGitHubResolutionPlan(
+      conflictSetId: string,
+      payload: GitHubResolutionPlanCreateRequest,
+    ) {
+      return request<GitHubResolutionPlanSummary>(
+        "POST",
+        `/v1/github/conflict-sets/${encodeURIComponent(conflictSetId)}/resolution-plans`,
+        { body: payload },
+      );
+    },
+    getGitHubResolutionPlan(projectId: string, planId: string) {
+      return request<GitHubResolutionPlanSummary>(
+        "GET",
+        `/v1/github/resolution-plans/${encodeURIComponent(planId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    approveGitHubResolutionPlan(
+      planId: string,
+      payload: GitHubResolutionPlanApproveRequest,
+    ) {
+      return request<GitHubResolutionPlanSummary>(
+        "POST",
+        `/v1/github/resolution-plans/${encodeURIComponent(planId)}/approve`,
+        { body: payload },
+      );
+    },
+    applyGitHubResolutionPlan(
+      planId: string,
+      payload: GitHubResolutionPlanApplyRequest,
+    ) {
+      return request<GitHubResolutionApplyResponse>(
+        "POST",
+        `/v1/github/resolution-plans/${encodeURIComponent(planId)}/apply`,
+        { body: payload },
+      );
+    },
+    listGitHubMergeAuthorizations(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        target_ref?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubMergeAuthorizationListResponse>(
+        "GET",
+        "/v1/github/merge-authorizations",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            target_ref: options.target_ref,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    createGitHubMergeAuthorization(
+      payload: GitHubMergeAuthorizationCreateRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        "/v1/github/merge-authorizations",
+        { body: payload },
+      );
+    },
+    getGitHubMergeAuthorization(
+      projectId: string,
+      authorizationId: string,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "GET",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    authorizeGitHubMerge(
+      authorizationId: string,
+      payload: GitHubMergeAuthorizationApproveRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/authorize`,
+        { body: payload },
+      );
+    },
+    enqueueGitHubMerge(
+      authorizationId: string,
+      payload: GitHubMergeAuthorizationEnqueueRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/enqueue`,
+        { body: payload },
+      );
+    },
+    applyGitHubMerge(
+      authorizationId: string,
+      payload: GitHubMergeAuthorizationApplyRequest,
+    ) {
+      return request<GitHubMergeAuthorizationSummary>(
+        "POST",
+        `/v1/github/merge-authorizations/${encodeURIComponent(authorizationId)}/apply`,
+        { body: payload },
+      );
+    },
+    listGitHubReconciliationRuns(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubReconciliationRunListResponse>(
+        "GET",
+        "/v1/github/reconciliation-runs",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    scheduleGitHubReconciliationPoll(
+      payload: GitHubReconciliationPollRequest,
+    ) {
+      return request<GitHubReconciliationPollResponse>(
+        "POST",
+        "/v1/github/reconciliation-runs/poll",
+        { body: payload },
+      );
+    },
+    getGitHubReconciliationRun(projectId: string, runId: string) {
+      return request<GitHubReconciliationRunSummary>(
+        "GET",
+        `/v1/github/reconciliation-runs/${encodeURIComponent(runId)}`,
+        { query: { project_id: projectId } },
+      );
+    },
+    executeGitHubReconciliationRun(
+      runId: string,
+      payload: GitHubReconciliationExecuteRequest,
+    ) {
+      return request<GitHubReconciliationExecuteResponse>(
+        "POST",
+        `/v1/github/reconciliation-runs/${encodeURIComponent(runId)}/execute`,
+        { body: payload },
+      );
+    },
+    repairGitHubReconciliationRun(
+      runId: string,
+      payload: GitHubReconciliationRepairRequest,
+    ) {
+      return request<GitHubReconciliationRunSummary>(
+        "POST",
+        `/v1/github/reconciliation-runs/${encodeURIComponent(runId)}/repair`,
+        { body: payload },
+      );
+    },
+    listGitHubReconciliationSignals(
+      projectId: string,
+      options: {
+        repository_binding_id?: string;
+        status?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<GitHubReconciliationSignalListResponse>(
+        "GET",
+        "/v1/github/reconciliation-signals",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            status: options.status,
+            limit: options.limit ?? 100,
+          },
+        },
+      );
+    },
+    listGitHubRepositoryRefStates(
+      projectId: string,
+      options: { repository_binding_id?: string; limit?: number } = {},
+    ) {
+      return request<GitHubRepositoryRefStateListResponse>(
+        "GET",
+        "/v1/github/repository-ref-states",
+        {
+          query: {
+            project_id: projectId,
+            repository_binding_id: options.repository_binding_id,
+            limit: options.limit ?? 200,
+          },
+        },
+      );
     },
     listProviderDefinitions() {
       return request<ProviderDefinitionListResponse>("GET", "/v1/provider-definitions");

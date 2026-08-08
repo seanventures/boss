@@ -4,7 +4,6 @@ import {
   completeEntitlementConnectionSessionAction,
   createChangeSetAction,
   createDeploymentTargetAction,
-  createProviderAccountAction,
   createReplayBundleAction,
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
@@ -42,7 +41,6 @@ import {
   syncAccountConnectAction,
   syncHostedMarketplaceAction,
   syncProviderResourcesAction,
-  testProviderAccountAction,
   unlinkAccountConnectAction,
   uninstallAgentModuleAction,
   revokeAccountConnectTeamInviteAction,
@@ -66,6 +64,10 @@ import type { DataBoundary } from "@boss/api-client";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
+import { fetchAgentStudioFeed } from "../lib/agent-studio";
+import { AgentStudio } from "./agent-studio-ui";
+import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
+import { WorkOrchestration } from "./work-orchestration-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -122,9 +124,19 @@ import { fetchCapabilities } from "../lib/capabilities";
 import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
-import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
+import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { ShepherdConsole } from "./shepherd-ui";
+import { DeliveryPipeline } from "./delivery-ui";
+import { MonitoringArea } from "./monitoring-ui";
+import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction,
+         listDeploymentsAction } from "./actions";
 import { fetchReliabilityFeed } from "../lib/reliability";
+import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
+import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
+import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
+import { AgentOrb } from "./agent-orb";
+import { buildAgentRoster } from "../lib/roster";
 import { ReliabilityHome } from "./reliability-ui";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
@@ -141,6 +153,11 @@ import { ApprovalRulesView } from "./approval-rules-ui";
 import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
+import { ProviderConfigurationSuite } from "./provider-configuration-ui";
+import { fetchGitHubOperationsFeed } from "../lib/github-operations";
+import { GitHubOperations } from "./github-operations-ui";
+import { fetchRepoActivity } from "../lib/repo-activity";
+import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
@@ -234,6 +251,91 @@ function decisionRuleLabel(decision: DecisionFeedItem): string {
   if (map[action]) return map[action];
   if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
   return "governance gate";
+}
+
+// Plain-English description of what approving a decision actually triggers,
+// keyed off recommendation.action (mirrors decisions._handle_approved_follow_on).
+// Makes the otherwise-silent follow-on legible so "approve did nothing" is clear.
+function approvalEffectLabel(recommendation: Record<string, unknown>): string {
+  const action = typeof recommendation.action === "string" ? recommendation.action : "";
+  // Meeting PRD publish also auto-starts a governed code task.
+  if (
+    action === "execute_agent_tool" &&
+    (recommendation.start_code_task === true || recommendation.tool === "publish_document")
+  ) {
+    return "Approving publishes the PRD and starts a governed code task for this task.";
+  }
+  switch (action) {
+    case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
+    case "resume_code_task": return "Approving resumes the paused code task.";
+    case "review_pull_request": return "Approving authorizes the pull-request merge.";
+    case "review_deployment": return "Approving authorizes the deployment.";
+    case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
+    case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
+    case "resume_agent_run": return "Approving resumes the paused agent run.";
+    case "role.autonomy_change": return "Approving applies the role autonomy change.";
+    case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
+    case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
+    case "self_improvement.begin_canary":
+    case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
+    default: return "Approving records your decision — this type has no automated follow-on (no code task is started).";
+  }
+}
+
+// Decision Queue (handoff format): category chip for what kind of effect the
+// proposal is, colored by the signal palette.
+function decisionImpact(decision: DecisionFeedItem): { label: string; tone: string } {
+  const action =
+    typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
+  if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
+  if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
+  if (action === "review_deployment") return { label: "deploy", tone: "teal" };
+  if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
+  if (action === "role.autonomy_change") return { label: "access", tone: "red" };
+  if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
+  if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
+  if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
+  if (action === "resume_code_task") return { label: "plan", tone: "amber" };
+  const rule = decisionRuleLabel(decision);
+  return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
+}
+
+function roleInitials(name: string): string {
+  const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "CP";
+  const initials =
+    words.length === 1 ? words[0].slice(0, 3) : words.map((word) => word[0]).join("").slice(0, 3);
+  return initials.toUpperCase();
+}
+
+function waitedLabel(createdAt: string): string {
+  const created = Date.parse(createdAt);
+  if (Number.isNaN(created)) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() - created) / 60_000));
+  if (minutes < 60) return `waited ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `waited ${hours}h`;
+  return `waited ${Math.floor(hours / 24)}d`;
+}
+
+// Command Center coordination graph: the handoff's node positions (percent of
+// the stage) with their SVG line endpoints (520x340 viewBox) and staggered
+// animation periods.
+const CC_NODE_SPOTS = [
+  { left: 23, top: 24, lineX: 120, lineY: 80, spinSeconds: 3, flowSeconds: 1.1 },
+  { left: 77, top: 23, lineX: 400, lineY: 78, spinSeconds: 3.4, flowSeconds: 1.3 },
+  { left: 17, top: 68, lineX: 90, lineY: 230, spinSeconds: 2.8, flowSeconds: 1.5 },
+  { left: 83, top: 71, lineX: 430, lineY: 240, spinSeconds: 3.2, flowSeconds: 1.2 },
+  { left: 38, top: 85, lineX: 200, lineY: 290, spinSeconds: 3.6, flowSeconds: 1.6 },
+] as const;
+
+function formatMsDuration(ms?: number): string {
+  if (!ms || ms <= 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s % 60)}s`;
 }
 
 function formatDeadline(deadlineAt?: string): string {
@@ -399,6 +501,17 @@ function getParam(value: string | string[] | undefined): string | undefined {
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {
+  // Fetched here so the Task Shepherd panel arrives WITH the page. Never fatal: a failure
+  // yields null and the panel says so, rather than the whole console failing to render.
+  const shepherdOverview = await getShepherdOverviewAction().catch(() => null);
+  const deliveryPipeline = await getDeliveryPipelineAction().catch(() => null);
+  const deploymentHealth = await getDeploymentHealthAction().catch(() => null);
+  const deliverySecrets = await listSecretsAction().catch(() => null);
+  const recentDeployments = await listDeploymentsAction(10).catch(() => null);
+  // The host target is whichever active target we can borrow a host+credential from; the stack
+  // is one per host, not one per app.
+  const obsHost = (deliveryPipeline?.targets || []).find((t: any) => t.status === "active")?.id;
+  const observability = await getObservabilityAction(obsHost).catch(() => null);
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
@@ -475,6 +588,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     routingLogs,
     skills,
     providerOps,
+    githubOperations,
+    repoActivity,
     receipts,
     infrastructureResources,
     budgetStatus,
@@ -502,6 +617,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     codeTasksFeed,
     discoveryFeed,
     previewFeed,
+    qaBenchmarkApps,
     sandboxFeed,
     pipelineData,
     dashboardSnapshot,
@@ -514,6 +630,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     chaosRuns,
     commitmentRecons,
     workflowFeed,
+    agentStudioFeed,
+    workOrchestrationFeed,
   ] =
     await Promise.all([
       fetchStatus(activeProjectId),
@@ -540,6 +658,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       }),
       fetchSkillFeed(),
       fetchProviderOpsFeed(activeProjectId),
+      fetchGitHubOperationsFeed(activeProjectId),
+      fetchRepoActivity(activeProjectId, 30),
       fetchReceiptFeed(activeProjectId, 100),
       fetchInfrastructureResourceFeed(activeProjectId),
       fetchBudgetStatus(activeProjectId),
@@ -576,6 +696,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCodeTasksFeed(activeProjectId),
       fetchDiscoveriesFeed(activeProjectId),
       fetchPreviews(activeProjectId),
+      fetchQaBenchmarkApps(),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
       fetchDashboard(activeProjectId),
@@ -588,8 +709,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchChaosRuns(activeProjectId),
       fetchCommitmentReconciliations(activeProjectId),
       fetchWorkflowFeed(activeProjectId),
+      fetchAgentStudioFeed(activeProjectId),
+      fetchWorkOrchestrationFeed(activeProjectId),
     ]);
   const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
+  const [costInsights, llmSpend] = await Promise.all([
+    fetchCostInsights(activeProjectId),
+    fetchLlmSpend(activeProjectId),
+  ]);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -613,25 +740,25 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const activeActor = actorOptions.find(
     (member) => member.memberId === activeActorId,
   );
+  const canManageGitHub =
+    activeActor?.status === "active" &&
+    activeActor.permissions.includes("github_manage");
   const softwareFactoryDecisionEvidence = extractSoftwareFactoryDecisionEvidence(
     decisions.items,
   );
   const softwareFactoryArtifactEvidence = extractSoftwareFactoryArtifactEvidence(
     artifacts.items,
   );
-  const commandCenterAgents = roles.items.length > 0
-    ? roles.items.slice(0, 5).map((role) => ({
-        id: role.id,
-        name: role.displayName,
-        role: role.roleKey.replaceAll("_", " "),
-        trust: role.trustScore,
-      }))
-    : [
-        { id: "metatron", name: "Metatron", role: "orchestrator", trust: 100 },
-        { id: "planner", name: "Planner", role: "planning", trust: 100 },
-        { id: "operator", name: "Operator", role: "execution", trust: 100 },
-        { id: "auditor", name: "Auditor", role: "evidence", trust: 100 },
-      ];
+  // Command Center (handoff format): live agent states for the coordination
+  // graph — the busiest agents first so live work is what orbits the core.
+  const ccRoster = buildAgentRoster(roles.items, tasks.items);
+  const ccStateRank = { running: 0, blocked: 1, verified: 2, idle: 3 } as const;
+  const ccGraphAgents = [...ccRoster]
+    .sort((left, right) => ccStateRank[left.state] - ccStateRank[right.state])
+    .slice(0, CC_NODE_SPOTS.length);
+  const ccVerifiedToday = receipts.items.filter(
+    (receipt) => Date.now() - Date.parse(receipt.createdAt) < 86_400_000,
+  ).length;
 
   return (
     <ConsoleShell
@@ -662,113 +789,171 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <DashboardPanel snapshot={dashboardSnapshot} />
         </section>
 
+        <RepoActivityPanel repos={repoActivity} />
+
+        <GitHubOperations
+          feed={githubOperations}
+          actor={activeActorId}
+          canManage={canManageGitHub}
+        />
+
         <section className="panel-stack mission-roster-section" data-area="org" aria-label="Agent roster">
           <div className="section-head">
             <div>
               <span className="eyebrow">Agent Roster</span>
               <h2>Operators and autonomous roles active in this project.</h2>
             </div>
-            <span className="status-text running"><span className="dot teal bx-pulse" />{commandCenterAgents.length} available</span>
+            <span className="ar-meta">
+              {ccRoster.length} specialized workers ·{" "}
+              <span className="ar-meta-active">
+                {ccRoster.filter((agent) => agent.state !== "idle").length} active
+              </span>
+            </span>
           </div>
           <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
         </section>
 
+        <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
+          <AgentStudio
+            feed={agentStudioFeed}
+            roles={roles.items}
+            skills={skills.items}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="portfolio" aria-label="Work allocation">
+          <WorkOrchestration
+            feed={workOrchestrationFeed}
+            actor={activeActorId}
+          />
+        </section>
+
         <section className="ov-cc" data-area="overview" aria-label="Command center">
-          <form action={submitCommandAction} className="outcome-bar">
+          <form action={submitCommandAction} className="cc-composer">
             <input type="hidden" name="project_id" value={activeProjectId} />
             <input type="hidden" name="actor" value={activeActorId} />
-            <label className="outcome-field">
-              <span className="sr-only">Outcome command</span>
-              <input
-                name="command"
-                placeholder="Describe the outcome you want BOSS to achieve…"
-                disabled={disableCommandEntry}
-                required
-              />
-            </label>
-            <button className="button" disabled={disableCommandEntry} type="submit">
-              Issue command
+            <span className="cc-spinner" aria-hidden />
+            <input
+              aria-label="Outcome command"
+              className="cc-input"
+              name="command"
+              placeholder="Assign an outcome to your team…"
+              disabled={disableCommandEntry}
+              required
+            />
+            <span className="cc-kbd" aria-hidden>⌘K</span>
+            <button className="cc-assign" disabled={disableCommandEntry} type="submit">
+              Assign →
             </button>
           </form>
 
-          <div className="ov-kpis">
-            <AreaLink className={`ov-kpi${status.pendingDecisions > 0 ? " alert" : ""}`} area="decisions" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{status.pendingDecisions}</span>
-              <span className="ov-kpi-l">Pending decisions</span>
-              <span className="ov-kpi-cta">{status.pendingDecisions > 0 ? "Awaiting review" : "All clear"}</span>
+          <div className="cc-kpis">
+            <AreaLink className="cc-kpi" area="work" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Outcomes in flight</span>
+              <span className="cc-kpi-n">{status.openTasks}</span>
             </AreaLink>
-            <AreaLink className="ov-kpi" area="work" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{status.openTasks}</span>
-              <span className="ov-kpi-l">Open tasks</span>
-              <span className="ov-kpi-cta">Across all agents</span>
+            <AreaLink className="cc-kpi teal" area="org" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Agents active</span>
+              <span className="cc-kpi-n">
+                {ccRoster.filter((agent) => agent.state !== "idle").length}
+                <small>/{ccRoster.length}</small>
+              </span>
             </AreaLink>
-            <AreaLink className="ov-kpi" area="code_tasks" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{codeTasksFeed.items.length}</span>
-              <span className="ov-kpi-l">Code tasks</span>
-              <span className="ov-kpi-cta">Governed runs</span>
+            <AreaLink className="cc-kpi amber" area="decisions" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Awaiting you</span>
+              <span className="cc-kpi-n">{status.pendingDecisions}</span>
             </AreaLink>
-            <AreaLink className="ov-kpi" area="meetings" orgId={activeOrgId}>
-              <span className="ov-kpi-n">{meetingRooms.items.length}</span>
-              <span className="ov-kpi-l">Meetings</span>
-              <span className="ov-kpi-cta">Active rooms</span>
-            </AreaLink>
-            <AreaLink className="ov-kpi" area="budget" orgId={activeOrgId}>
-              <span className={`ov-kpi-n ov-state-${status.budgetState}`}>{status.budgetState}</span>
-              <span className="ov-kpi-l">Budget state</span>
-              <span className="ov-kpi-cta">Within policy</span>
+            <AreaLink className="cc-kpi green" area="reports" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Verified today</span>
+              <span className="cc-kpi-n">{ccVerifiedToday}</span>
             </AreaLink>
           </div>
 
-          <div className="mission-grid">
-            <article className="coordination-panel" aria-label="Active coordination">
-              <div className="mission-panel-head">
-                <span>
-                  <span className="eyebrow">Coordination graph</span>
-                  <strong>Active coordination</strong>
+          <div className="cc-grid">
+            <article className="cc-coord" aria-label="Live coordination">
+              <div className="cc-panel-head">
+                <strong>Live coordination</strong>
+                <span className="cc-panel-meta">
+                  {ccRoster.filter((agent) => agent.state === "running").length} running
                 </span>
-                <span className="status-text running"><span className="dot teal bx-pulse" />Live</span>
               </div>
-              <div className="coordination-stage">
-                <div className="agent-orb agent-orb-primary" aria-label="BOSS orchestration active">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img className="agent-orb-core" src="/boss-mark.png" alt="" />
+              <div className="cc-stage">
+                <svg className="cc-stage-lines" viewBox="0 0 520 340" aria-hidden>
+                  <g strokeWidth="1.6" fill="none" strokeDasharray="4 6">
+                    {CC_NODE_SPOTS.slice(0, ccGraphAgents.length).map((spot, index) => (
+                      <line
+                        key={index}
+                        x1="260"
+                        y1="170"
+                        x2={spot.lineX}
+                        y2={spot.lineY}
+                        stroke={index % 2 === 0 ? "#2f6fe0" : "#2ec5c5"}
+                        style={{ animation: `bpFlow ${spot.flowSeconds}s linear infinite` }}
+                      />
+                    ))}
+                    {ccGraphAgents.length >= 2 ? (
+                      <line
+                        x1={CC_NODE_SPOTS[0].lineX}
+                        y1={CC_NODE_SPOTS[0].lineY}
+                        x2={CC_NODE_SPOTS[1].lineX}
+                        y2={CC_NODE_SPOTS[1].lineY}
+                        stroke="#26365c"
+                        style={{ animation: "bpFlow 2s linear infinite" }}
+                      />
+                    ) : null}
+                  </g>
+                </svg>
+                <div className="cc-core">
+                  <div className="cc-core-tile">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/boss-mark.png" alt="" />
+                  </div>
+                  <span className="cc-core-label">BOSS core</span>
                 </div>
-                <div className="coordination-agents">
-                  {commandCenterAgents.map((agent, index) => (
-                    <div className={`coordination-agent agent-${index + 1}`} key={agent.id}>
-                      <span className="agent-initial">{agent.name.slice(0, 1)}</span>
-                      <span>
-                        <strong>{agent.name}</strong>
-                        <small>{agent.role}</small>
-                      </span>
-                      <span className="agent-trust">{Math.round(agent.trust)}%</span>
+                {ccGraphAgents.map((agent, index) => {
+                  const spot = CC_NODE_SPOTS[index];
+                  return (
+                    <div
+                      className="cc-node"
+                      key={agent.id}
+                      style={{ left: `${spot.left}%`, top: `${spot.top}%` }}
+                    >
+                      <AgentOrb
+                        label={roleInitials(agent.name)}
+                        state={agent.state}
+                        spinSeconds={spot.spinSeconds}
+                        title={`${agent.name} — ${agent.state}`}
+                      />
+                      <span className="cc-node-label">{agent.name}</span>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
             </article>
 
-            <article className="activity-panel" aria-label="Live activity">
-              <div className="mission-panel-head">
-                <span>
-                  <span className="eyebrow">Event stream</span>
-                  <strong>Live activity</strong>
-                </span>
-                <AreaLink className="text-link" area="work" orgId={activeOrgId}>All events</AreaLink>
+            <article className="cc-feed" aria-label="What changed">
+              <div className="cc-panel-head">
+                <span className="cc-live-dot" aria-hidden />
+                <strong>What changed</strong>
+                <span className="cc-feed-meta">live</span>
               </div>
-              <div className="activity-list">
-                {events.items.slice(0, 7).map((event) => (
-                  <div className="activity-row" key={event.id}>
-                    <span className="activity-marker" aria-hidden />
-                    <span className="activity-copy">
-                      <strong>{event.eventType.replaceAll("_", " ").replaceAll(".", " · ")}</strong>
-                      <small>{event.actor} · {event.entityType}</small>
-                    </span>
-                    <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+              <div className="cc-feed-list">
+                {events.items.slice(0, 8).map((event) => (
+                  <div className="cc-feed-row" key={event.id}>
+                    <span className="cc-feed-orb" aria-hidden>{roleInitials(event.actor)}</span>
+                    <div className="cc-feed-main">
+                      <div className="cc-feed-text">
+                        <b>{event.actor}</b> {event.eventType.replaceAll("_", " ").replaceAll(".", " · ")}{" "}
+                        <span>{event.entityType}</span>
+                      </div>
+                      <div className="cc-feed-sub">
+                        <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
+                      </div>
+                    </div>
                   </div>
                 ))}
                 {events.items.length === 0 ? (
-                  <p className="empty-state">No activity yet. Issue a command to start the event stream.</p>
+                  <p className="empty-state">No activity yet. Assign an outcome to start the event stream.</p>
                 ) : null}
               </div>
             </article>
@@ -1431,6 +1616,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </article>
         </section>
 
+        <section className="panel-stack" data-area="budget" aria-label="Cost governance">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Cost Governance</span>
+              <h2>Real model spend, enforced thresholds, and the top cost saves.</h2>
+            </div>
+            <p className="status-meta">
+              llm_calls is the ledger of record — per agent, per model, cache leverage.
+            </p>
+          </div>
+          <div className="stack-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
+            <CostInsightsCard feed={costInsights} />
+            <LlmSpendCard feed={llmSpend} />
+            <BudgetThresholdsCard status={budgetStatus} />
+          </div>
+        </section>
+
         <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
           <div className="section-head">
             <div>
@@ -1549,237 +1751,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
 
-          {!providerOps.apiReachable ? (
-            <article className="stack-card">
-              <h3>ProviderOps unavailable</h3>
-              <p className="detail">
-                {providerOps.blockedReason ??
-                  "ProviderOps APIs are unavailable for this project."}
-              </p>
-            </article>
-          ) : (
+          <ProviderConfigurationSuite
+            feed={providerOps}
+            projectId={activeProjectId}
+            actor={activeActorId}
+            canManage={
+              activeActor?.status === "active" &&
+              activeActor.permissions.includes("providerops_manage")
+            }
+            events={events.items}
+          />
+
+          {providerOps.apiReachable ? (
             <>
-              <div className="grid compact-grid">
-                <article>
-                  <h2>Connected Providers</h2>
-                  <div className="metric">
-                    {providerOps.summary.connectedProviders}
-                  </div>
-                  <p className="detail">
-                    {providerOps.providerAccounts.length} configured account
-                    {providerOps.providerAccounts.length === 1 ? "" : "s"}.
-                  </p>
-                </article>
-                <article>
-                  <h2>Provider Health</h2>
-                  <div className="metric">
-                    {providerOps.summary.healthyProviders}
-                  </div>
-                  <p className="detail">
-                    Healthy observations from official adapter tests and syncs.
-                  </p>
-                </article>
-                <article>
-                  <h2>Resources</h2>
-                  <div className="metric">
-                    {providerOps.summary.resourceCount}
-                  </div>
-                  <p className="detail">
-                    {providerOps.summary.unmanagedResourceCount} unmanaged /{" "}
-                    {providerOps.summary.orphanedSignalCount} orphan signals.
-                  </p>
-                </article>
-                <article>
-                  <h2>Open ChangeSets</h2>
-                  <div className="metric">
-                    {providerOps.summary.openChangeSets}
-                  </div>
-                  <p className="detail">
-                    Provider writes require explicit approval and receipts.{" "}
-                    {providerOps.summary.activeDeploymentRuns} active deployment
-                    run{providerOps.summary.activeDeploymentRuns === 1 ? "" : "s"}.
-                  </p>
-                </article>
-                <article>
-                  <h2>Observed Costs</h2>
-                  <div className="metric">
-                    {formatMicros(providerOps.summary.spendUsdMicros)}
-                  </div>
-                  <p className="detail">
-                    Cost ledger entries keep confidence labels visible.{" "}
-                    {providerOps.summary.openCostAnomalies} open anomaly
-                    {providerOps.summary.openCostAnomalies === 1 ? "" : "ies"}.
-                  </p>
-                </article>
-                <article>
-                  <h2>Worker Capacity</h2>
-                  <div className="metric">
-                    {providerOps.summary.desiredWorkerCount}
-                  </div>
-                  <p className="detail">
-                    Desired workers across {providerOps.workerPools.length} pool
-                    {providerOps.workerPools.length === 1 ? "" : "s"} /{" "}
-                    {providerOps.summary.openScalePlans} open scale plan
-                    {providerOps.summary.openScalePlans === 1 ? "" : "s"}.
-                  </p>
-                </article>
-              </div>
-
               <div className="stack-grid">
-                <article className="stack-card">
-                  <h3>Provider Connection Center</h3>
-                  <form action={createProviderAccountAction} className="composer compact">
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <div className="input-grid">
-                      <label className="field">
-                        <span>Provider</span>
-                        <select className="input" name="provider" required>
-                          <option value="digitalocean">DigitalOcean</option>
-                          <option value="cloudflare">Cloudflare</option>
-                          <option value="supabase">Supabase</option>
-                          <option value="openai">OpenAI</option>
-                          <option value="anthropic">Anthropic</option>
-                        </select>
-                      </label>
-                      <label className="field">
-                        <span>Account label</span>
-                        <input
-                          className="input"
-                          name="account_label"
-                          placeholder="Sandbox account"
-                          required
-                        />
-                      </label>
-                    </div>
-                    <label className="field">
-                      <span>Credential ref</span>
-                      <input
-                        className="input"
-                        name="credential_ref"
-                        placeholder="env:BOSS_CLOUDFLARE_API_TOKEN"
-                      />
-                    </label>
-                    <label className="field">
-                      <span>Scopes</span>
-                      <textarea
-                        className="textarea"
-                        name="scopes"
-                        rows={3}
-                        placeholder={"One scope per line\nread\nbilling.read"}
-                      />
-                    </label>
-                    <div className="input-grid">
-                      <label className="field checkbox-field">
-                        <span>Read-only</span>
-                        <input
-                          name="read_only"
-                          type="checkbox"
-                          value="true"
-                          defaultChecked
-                        />
-                      </label>
-                      <label className="field checkbox-field">
-                        <span>Deploy-capable</span>
-                        <input name="deploy_capable" type="checkbox" value="true" />
-                      </label>
-                      <label className="field checkbox-field">
-                        <span>Billing-readable</span>
-                        <input name="billing_readable" type="checkbox" value="true" />
-                      </label>
-                      <label className="field checkbox-field">
-                        <span>Destructive actions disabled</span>
-                        <input
-                          name="destructive_actions_disabled"
-                          type="checkbox"
-                          value="true"
-                          defaultChecked
-                        />
-                      </label>
-                    </div>
-                    <button className="button secondary" type="submit">
-                      Register provider account
-                    </button>
-                  </form>
-
-                  <div className="feed-list">
-                    {providerOps.providerAccounts.length === 0 ? (
-                      <p className="detail">
-                        No provider accounts are registered yet.
-                      </p>
-                    ) : (
-                      providerOps.providerAccounts.map((account) => (
-                        <div className="feed-row" key={account.id}>
-                          <div>
-                            <h4>{account.accountLabel}</h4>
-                            <p className="detail">
-                              {account.provider} / {account.status} /{" "}
-                              {account.readOnly ? "read-only" : "write-capable"}
-                            </p>
-                            <p className="detail">
-                              {account.credentialRef ?? "No credential ref"} /{" "}
-                              {account.destructiveActionsDisabled
-                                ? "destructive disabled"
-                                : "destructive enabled"}
-                            </p>
-                            {account.lastTestStatus ? (
-                              <p className="detail">
-                                Last test {account.lastTestStatus}
-                                {account.lastTestedAt
-                                  ? ` at ${formatDateTime(account.lastTestedAt)}`
-                                  : ""}
-                              </p>
-                            ) : null}
-                          </div>
-                          <div className="button-stack">
-                            <form action={testProviderAccountAction}>
-                              <input
-                                type="hidden"
-                                name="provider_account_id"
-                                value={account.id}
-                              />
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input
-                                type="hidden"
-                                name="actor"
-                                value={activeActorId}
-                              />
-                              <button className="button secondary" type="submit">
-                                Test
-                              </button>
-                            </form>
-                            <form action={syncProviderResourcesAction}>
-                              <input
-                                type="hidden"
-                                name="provider_account_id"
-                                value={account.id}
-                              />
-                              <input
-                                type="hidden"
-                                name="project_id"
-                                value={activeProjectId}
-                              />
-                              <input
-                                type="hidden"
-                                name="actor"
-                                value={activeActorId}
-                              />
-                              <button className="button secondary" type="submit">
-                                Sync
-                              </button>
-                            </form>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </article>
-
-                <article className="stack-card">
+                <article className="stack-card" id="provider-resources">
                   <h3>Resource Explorer</h3>
                   <div className="button-stack">
                     <form action={syncProviderResourcesAction}>
@@ -1854,7 +1840,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   )}
                 </article>
 
-                <article className="stack-card">
+                <article className="stack-card" id="provider-scaling">
                   <h3>Budget-Aware Autoscaler</h3>
                   <form action={upsertWorkerPoolAction} className="composer compact">
                     <input type="hidden" name="project_id" value={activeProjectId} />
@@ -2600,7 +2586,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   />
                 </article>
 
-                <article className="stack-card">
+                <article className="stack-card" id="provider-health">
                   <h3>Health, Drift, and Receipts</h3>
                   <div className="feed-list">
                     {providerOps.providerHealth.slice(0, 4).map((health) => (
@@ -2662,7 +2648,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   </div>
                 </article>
 
-                <article className="stack-card">
+                <article className="stack-card" id="provider-finops">
                   <h3>Cost and Reconciliation Ledger</h3>
                   <div className="feed-list">
                     {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
@@ -2735,7 +2721,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </article>
               </div>
             </>
-          )}
+          ) : null}
         </section>
 
         <section className="panel-stack">
@@ -6039,31 +6025,155 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Holistic view — throughput, cost, and agent performance.</h2>
             </div>
           </div>
-          {receipts.items[0] ? (
-            <article className="mission-evidence-receipt">
-              <header>
-                <span className="mission-receipt-avatar">RC</span>
-                <span>
-                  <strong>{titleCaseToken(receipts.items[0].effectKind)}</strong>
-                  <small>{receipts.items[0].id} · {formatDateTime(receipts.items[0].createdAt)}</small>
-                </span>
-                <span className="status-text verified"><span className="dot green" />{receipts.items[0].status}</span>
-              </header>
-              <div className="mission-receipt-metrics">
-                <span><small>Provider ref</small><strong>{receipts.items[0].providerRef ?? "Local control plane"}</strong></span>
-                <span><small>Job lineage</small><strong>{receipts.items[0].createdByJobId ?? "Canonical event"}</strong></span>
-                <span><small>Dedupe key</small><strong>{receipts.items[0].dedupeKey}</strong></span>
-              </div>
-              <div className="mission-receipt-verification">
-                <span className="eyebrow">Verification</span>
-                <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
-                <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
-                <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
-              </div>
-            </article>
-          ) : (
-            <p className="empty-state">No effect receipts have been recorded for this project yet.</p>
-          )}
+          {(() => {
+            const receipt = receipts.items[0];
+            // Prefer a governed code-task receipt: it carries the real changes /
+            // tests / cost / files behind the effect. Match the latest receipt to
+            // its run when possible, else fall back to any run with evidence.
+            const codeTask =
+              (receipt
+                ? codeTasksFeed.items.find(
+                    (ct) =>
+                      (receipt.createdByJobId?.includes(ct.id) ?? false) ||
+                      receipt.dedupeKey.includes(ct.id) ||
+                      (ct.pull_request_url != null && receipt.providerRef === ct.pull_request_url),
+                  )
+                : undefined) ??
+              codeTasksFeed.items.find(
+                (ct) =>
+                  ct.state &&
+                  (ct.state.additions != null ||
+                    ct.state.files_changed != null ||
+                    (ct.state.tests?.length ?? 0) > 0),
+              );
+            if (codeTask) {
+              const st = codeTask.state ?? {};
+              const tests = structuredCodeTaskTests(st);
+              const testTotal = tests.length;
+              const testPass = tests.filter((t) => t.exit_code === 0).length;
+              const testDurationMs = tests.reduce((acc, t) => acc + (t.duration_ms ?? 0), 0);
+              const costMicros = st.cost_usd_micros ?? codeTask.usage?.cost_usd_micros;
+              const testsGreen = testTotal > 0 ? testPass === testTotal : st.tests_passed === true;
+              const verified = codeTask.status === "completed" && testsGreen;
+              const failed = codeTask.status === "failed" || codeTask.status === "blocked";
+              const modelName = st.model ?? codeTask.usage?.model;
+              const paths = st.paths ?? [];
+              const checks: { ok: boolean; label: string }[] = [];
+              if (st.tests_passed != null || testTotal > 0)
+                checks.push({
+                  ok: testsGreen,
+                  label: `Tests ${testTotal > 0 ? `pass (${testPass}/${testTotal})` : st.tests_passed ? "pass" : "did not pass"}`,
+                });
+              if (st.security_verdict)
+                checks.push({ ok: /pass|clean|ok|none/i.test(st.security_verdict), label: `Security scan — ${st.security_verdict}` });
+              if (st.reviewer_independent != null)
+                checks.push({ ok: st.reviewer_independent, label: "Independent reviewer signed off" });
+              if (st.regressions_ok != null)
+                checks.push({ ok: st.regressions_ok, label: "No regressions detected" });
+              if (st.consistency_verdict)
+                checks.push({ ok: /pass|ok|consistent/i.test(st.consistency_verdict), label: `Consistency — ${st.consistency_verdict}` });
+              if (checks.length === 0)
+                checks.push({ ok: verified, label: verified ? "Governed pipeline completed" : `Status — ${codeTask.status}` });
+              return (
+                <article className="mission-evidence-receipt">
+                  <header>
+                    <span className="mission-receipt-avatar">CT</span>
+                    <span>
+                      <strong>{codeTask.title}</strong>
+                      <small>
+                        {codeTask.id}
+                        {modelName ? ` · ${modelName}` : ""} · {codeTask.phase}
+                      </small>
+                    </span>
+                    <span className={`status-text ${verified ? "verified" : failed ? "blocked" : "running"}`}>
+                      <span className={`dot ${verified ? "green" : failed ? "red" : "teal"}`} />
+                      {verified ? "verified" : codeTask.status}
+                    </span>
+                  </header>
+                  <div className="mission-receipt-metrics mission-receipt-metrics--four">
+                    <span>
+                      <small>Changes</small>
+                      <strong className="mission-receipt-changes">
+                        {st.additions != null || st.deletions != null ? (
+                          <>
+                            <span className="add">+{st.additions ?? 0}</span>{" "}
+                            <span className="del">−{st.deletions ?? 0}</span>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </strong>
+                    </span>
+                    <span>
+                      <small>Tests</small>
+                      <strong>
+                        {testTotal > 0
+                          ? `${testPass}/${testTotal} passed`
+                          : st.tests_passed != null
+                            ? st.tests_passed
+                              ? "pass"
+                              : "fail"
+                            : "—"}
+                      </strong>
+                    </span>
+                    <span><small>Cost</small><strong>{costMicros != null ? formatMicros(costMicros) : "—"}</strong></span>
+                    <span><small>Test duration</small><strong>{formatMsDuration(testDurationMs)}</strong></span>
+                  </div>
+                  <div className="mission-receipt-verification">
+                    <span className="eyebrow">Verification</span>
+                    {checks.map((c, i) => (
+                      <p key={i}>
+                        <span className={`dot ${c.ok ? "green" : "red"}`} aria-hidden /> {c.label}
+                      </p>
+                    ))}
+                  </div>
+                  <div className="mission-receipt-files">
+                    <span className="eyebrow">
+                      Files changed{st.files_changed != null ? ` · ${st.files_changed}` : ""}
+                    </span>
+                    {paths.length > 0 ? (
+                      paths.slice(0, 14).map((p, i) => <code key={i}>{p}</code>)
+                    ) : (
+                      <code>{st.summary ?? "No file manifest recorded"}</code>
+                    )}
+                    {codeTask.pull_request_url ? (
+                      <a href={codeTask.pull_request_url} target="_blank" rel="noreferrer">
+                        → {codeTask.pull_request_url}
+                      </a>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            }
+            if (receipt) {
+              return (
+                <article className="mission-evidence-receipt">
+                  <header>
+                    <span className="mission-receipt-avatar">RC</span>
+                    <span>
+                      <strong>{titleCaseToken(receipt.effectKind)}</strong>
+                      <small>{receipt.id} · {formatDateTime(receipt.createdAt)}</small>
+                    </span>
+                    <span className="status-text verified"><span className="dot green" />{receipt.status}</span>
+                  </header>
+                  <div className="mission-receipt-metrics">
+                    <span><small>Provider ref</small><strong>{receipt.providerRef ?? "Local control plane"}</strong></span>
+                    <span><small>Job lineage</small><strong>{receipt.createdByJobId ?? "Canonical event"}</strong></span>
+                    <span><small>Dedupe key</small><strong>{receipt.dedupeKey}</strong></span>
+                  </div>
+                  <div className="mission-receipt-verification">
+                    <span className="eyebrow">Verification</span>
+                    <p><span className="dot green" aria-hidden /> Durable receipt recorded in the control plane</p>
+                    <p><span className="dot green" aria-hidden /> Unique dedupe key prevents duplicate effects</p>
+                    <p><span className="dot green" aria-hidden /> Provider and job lineage remain auditable</p>
+                  </div>
+                </article>
+              );
+            }
+            return (
+              <p className="empty-state">No effect receipts have been recorded for this project yet.</p>
+            );
+          })()}
           <ReportsView report={report} />
         </section>
 
@@ -6105,6 +6215,41 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">CI/CD</span>
+              <h2>From a merged PR to a running deployment — and where it stopped.</h2>
+            </div>
+          </div>
+          <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
+                            deployments={recentDeployments} />
+        </section>
+
+        {/* Monitoring is its own area: "did it ship" and "is it working" are different
+            questions asked at different times, and one page answering both buries whichever
+            you did not come for. */}
+        <section className="panel-stack" data-area="monitoring" aria-label="Monitoring">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Monitoring</span>
+              <h2>Health of what BOSS has deployed, and the dashboards behind it.</h2>
+            </div>
+          </div>
+          <MonitoringArea health={deploymentHealth} observability={observability}
+                          hostTargetId={obsHost} />
+        </section>
+
+        <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Task Shepherd</span>
+              <h2>An internal AI developer that owns a task until it ships — or asks you one clear question.</h2>
+            </div>
+          </div>
+          <ShepherdConsole initial={shepherdOverview} />
+        </section>
+
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
           <div className="section-head">
             <div>
@@ -6118,7 +6263,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
             previews={previewFeed}
+            benchmarks={qaBenchmarkApps}
+            actor={activeActorId}
           />
+        </section>
+
+        <section data-area="foundations" aria-label="Design foundations">
+          <FoundationsScreen />
+        </section>
+
+        <section data-area="components" aria-label="Component library">
+          <ComponentsScreen />
         </section>
 
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
@@ -6527,27 +6682,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack approval-rules-section" data-area="decisions" aria-label="Approval rules">
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Approval Rules</span>
-              <h2>What requires your approval — and why.</h2>
-            </div>
-          </div>
-          <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
-        </section>
-
         <section
           aria-labelledby="decision-inbox-title"
           className="panel-stack decision-inbox-section"
+          data-area="decisions"
           id="decision-inbox"
           tabIndex={-1}
         >
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="decisions">Decision Inbox</span>
+              <span className="eyebrow">Decision Queue</span>
               <h2 id="decision-inbox-title">
-                Explicit approvals before real effects.
+                Agents proposed — <span className="dq-you-decide">you decide</span>.
               </h2>
             </div>
             <p className="status-meta">
@@ -6555,47 +6701,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               default when their deadline passes.
             </p>
           </div>
-
-          {decisions.apiReachable ? (
-            <article className="decision-card">
-              <div className="decision-head">
-                <div>
-                  <span className="pill">Digest</span>
-                  <h3>Create decision digest</h3>
-                </div>
-                <p className="detail">
-                  Creates a durable digest artifact. Optional channel creates an
-                  outbox draft only; sending still requires a budgeted queue action.
-                </p>
-              </div>
-              <form action={createDecisionDigestAction} className="decision-actions">
-                <input type="hidden" name="project_id" value={activeProjectId} />
-                <input type="hidden" name="actor" value={activeActorId} />
-                <label className="field">
-                  <span>Max items</span>
-                  <input
-                    className="input"
-                    defaultValue={20}
-                    max={100}
-                    min={1}
-                    name="max_items"
-                    type="number"
-                  />
-                </label>
-                <label className="field">
-                  <span>Optional outbox channel</span>
-                  <input
-                    className="input"
-                    name="channel"
-                    placeholder="email:founder@example.com or slack:#ops"
-                  />
-                </label>
-                <button className="button secondary" type="submit">
-                  Create digest
-                </button>
-              </form>
-            </article>
-          ) : null}
 
           {!decisions.apiReachable ? (
             <article className="decision-card empty">
@@ -6614,7 +6719,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             </article>
           ) : (
-            <div className="decision-list">
+            <div className="dq">
               {decisions.items.map((decision) => {
                 const estimatedCost =
                   typeof decision.costSummary.estimated_usd_micros === "number"
@@ -6623,135 +6728,204 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 const isPending =
                   decision.status === "pending" || decision.status === "delegated";
                 const isApproved = decision.status === "approved";
+                const linkedTask = decision.taskId
+                  ? tasks.items.find((task) => task.id === decision.taskId)
+                  : undefined;
+                const ownerRole = linkedTask?.ownerRoleId
+                  ? roles.items.find((role) => role.id === linkedTask.ownerRoleId)
+                  : undefined;
+                const who = ownerRole?.displayName ?? "Control plane";
+                const impact = decisionImpact(decision);
+                const rec = decision.recommendation;
+                const why = typeof rec.why === "string" ? rec.why : "";
+                const plan = typeof rec.plan === "string" ? rec.plan : "";
+                const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
 
                 return (
-                  <article className="decision-card" key={decision.id}>
-                    <div className="decision-head">
-                      <div>
-                        <span className={`pill${isPending ? " warn" : ""}`}>
-                          {decision.status}
-                        </span>
-                        <h3>{decision.question}</h3>
-                      </div>
-                      <div className="decision-meta">
-                        <span className="decision-rule">Rule · {decisionRuleLabel(decision)}</span>
-                        <span>Risk tier {decision.riskTier}</span>
-                        <span>Default: {decision.defaultAction ?? "hold"}</span>
-                        <span>Deadline: {formatDeadline(decision.deadlineAt)}</span>
-                      </div>
-                    </div>
-
-                    <div className="decision-grid">
-                      <div>
-                        <h4>Recommendation</h4>
-                        <p className="detail">{formatRecommendation(decision)}</p>
-                      </div>
-                      <div>
-                        <h4>Estimated Cost</h4>
-                        <p className="detail">{formatMicros(estimatedCost)}</p>
-                      </div>
-                      <div>
-                        <h4>Options</h4>
-                        <p className="detail">
-                          {decision.options
-                            .map((option) =>
-                              typeof option.label === "string"
-                                ? option.label
-                                : typeof option.action === "string"
-                                  ? option.action
-                                  : "review",
-                            )
-                            .join(" / ")}
+                  <article className="dq-row" key={decision.id}>
+                    <div className="dq-body">
+                      <div className="dq-orb" aria-hidden>{roleInitials(who)}</div>
+                      <div className="dq-main">
+                        <div className="dq-propose">
+                          <span className="dq-who"><b>{who}</b> proposes</span>
+                          <span className={`dq-impact ${impact.tone}`}>{impact.label}</span>
+                        </div>
+                        <h3 className="dq-title">{decision.question}</h3>
+                        <p className="dq-rationale">
+                          {why || formatRecommendation(decision)}
                         </p>
+                        {plan || review ? (
+                          <details className="decision-plan-details">
+                            <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
+                            {plan ? (
+                              <div className="decision-plan-sec">
+                                <h4>Technical plan</h4>
+                                <pre>{plan}</pre>
+                              </div>
+                            ) : null}
+                            {review ? (
+                              <div className="decision-plan-sec">
+                                <h4>Automated plan review</h4>
+                                <pre>{review}</pre>
+                              </div>
+                            ) : null}
+                          </details>
+                        ) : null}
+                        <div className="dq-evidence">
+                          <span className="dq-ev-label">evidence</span>
+                          {linkedTask ? (
+                            <span className="dq-ev">
+                              T-{decision.taskId?.slice(-4)} · {linkedTask.title.slice(0, 44)}
+                              {linkedTask.title.length > 44 ? "…" : ""}
+                            </span>
+                          ) : null}
+                          <span className="dq-ev">risk tier {decision.riskTier}</span>
+                          <span className="dq-ev">default {decision.defaultAction ?? "hold"}</span>
+                          {estimatedCost != null ? (
+                            <span className="dq-ev">{formatMicros(estimatedCost)}</span>
+                          ) : null}
+                          <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
+                        </div>
+                        {isPending ? (
+                          <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
+                        ) : null}
                       </div>
                     </div>
-
-                    <div className="decision-footer">
-                      <p className="detail">{decisionStatusDetail(decision)}</p>
+                    <div className="dq-foot">
                       {isPending ? (
-                        <form action={resolveDecisionAction} className="decision-actions">
-                          <input
-                            type="hidden"
-                            name="decision_id"
-                            value={decision.id}
-                          />
+                        <form action={resolveDecisionAction} className="dq-actions">
+                          <input type="hidden" name="decision_id" value={decision.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
-                          <textarea
-                            aria-label={`Decision note for ${decision.id}`}
-                            className="textarea decision-note"
-                            name="note"
-                            rows={3}
-                            placeholder="Optional note or required revision request rationale."
-                          />
-                          <input
-                            aria-label={`Delegate target for ${decision.id}`}
-                            className="input"
-                            name="delegate_to"
-                            placeholder="Delegate to role or approver"
-                          />
-                          <button className="button" name="action" value="approve">
+                          <button className="dq-btn approve" name="action" value="approve">
                             Approve
                           </button>
-                          <button className="button secondary" name="action" value="revise">
+                          <button className="dq-btn neutral" name="action" value="revise">
                             Request changes
                           </button>
-                          <button
-                            className="button secondary"
-                            name="action"
-                            value="reject"
-                          >
+                          <button className="dq-btn reject" name="action" value="reject">
                             Reject
                           </button>
-                          <button
-                            className="button secondary"
-                            name="action"
-                            value="revise"
-                          >
-                            Request revision
-                          </button>
-                          <button
-                            className="button secondary"
-                            name="action"
-                            value="delegate"
-                          >
-                            Delegate
-                          </button>
+                          <details className="dq-more">
+                            <summary>Note · delegate</summary>
+                            <div className="dq-more-body">
+                              <textarea
+                                aria-label={`Decision note for ${decision.id}`}
+                                className="textarea decision-note"
+                                name="note"
+                                rows={3}
+                                placeholder="Optional note or required revision request rationale."
+                              />
+                              <input
+                                aria-label={`Delegate target for ${decision.id}`}
+                                className="input"
+                                name="delegate_to"
+                                placeholder="Delegate to role or approver"
+                              />
+                              <button className="dq-btn neutral" name="action" value="delegate">
+                                Delegate
+                              </button>
+                            </div>
+                          </details>
+                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
                         </form>
-                      ) : null}
-                      {isApproved ? (
-                        <form action={resolveDecisionAction} className="decision-actions">
-                          <input
-                            type="hidden"
-                            name="decision_id"
-                            value={decision.id}
-                          />
-                          <input type="hidden" name="project_id" value={activeProjectId} />
-                          <input type="hidden" name="actor" value={activeActorId} />
-                          <textarea
-                            aria-label={`Execution note for ${decision.id}`}
-                            className="textarea decision-note"
-                            name="note"
-                            rows={2}
-                            placeholder="Record what was executed."
-                          />
-                          <input
-                            aria-label={`Execution external reference for ${decision.id}`}
-                            className="input"
-                            name="external_ref"
-                            placeholder="External reference (PR URL, commit SHA, ticket)"
-                          />
-                          <button className="button" name="action" value="execute">
-                            Mark executed
-                          </button>
-                        </form>
-                      ) : null}
+                      ) : (
+                        <>
+                          <span
+                            className={`dq-verdict ${
+                              isApproved || decision.status === "executed"
+                                ? "green"
+                                : decision.status === "rejected"
+                                  ? "red"
+                                  : "muted"
+                            }`}
+                          >
+                            {decision.status.toUpperCase()}
+                          </span>
+                          <span className="dq-note">{decisionStatusDetail(decision)}</span>
+                          {isApproved ? (
+                            <details className="dq-more">
+                              <summary>Mark executed</summary>
+                              <form action={resolveDecisionAction} className="dq-more-body">
+                                <input type="hidden" name="decision_id" value={decision.id} />
+                                <input type="hidden" name="project_id" value={activeProjectId} />
+                                <input type="hidden" name="actor" value={activeActorId} />
+                                <textarea
+                                  aria-label={`Execution note for ${decision.id}`}
+                                  className="textarea decision-note"
+                                  name="note"
+                                  rows={2}
+                                  placeholder="Record what was executed."
+                                />
+                                <input
+                                  aria-label={`Execution external reference for ${decision.id}`}
+                                  className="input"
+                                  name="external_ref"
+                                  placeholder="External reference (PR URL, commit SHA, ticket)"
+                                />
+                                <button className="dq-btn approve" name="action" value="execute">
+                                  Mark executed
+                                </button>
+                              </form>
+                            </details>
+                          ) : null}
+                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
+                        </>
+                      )}
                     </div>
                   </article>
                 );
               })}
             </div>
           )}
+
+          {decisions.apiReachable ? (
+            <details className="dq-digest">
+              <summary>Create decision digest</summary>
+              <div className="dq-digest-body">
+                <p className="detail">
+                  Creates a durable digest artifact. Optional channel creates an
+                  outbox draft only; sending still requires a budgeted queue action.
+                </p>
+                <form action={createDecisionDigestAction} className="decision-actions">
+                  <input type="hidden" name="project_id" value={activeProjectId} />
+                  <input type="hidden" name="actor" value={activeActorId} />
+                  <label className="field">
+                    <span>Max items</span>
+                    <input
+                      className="input"
+                      defaultValue={20}
+                      max={100}
+                      min={1}
+                      name="max_items"
+                      type="number"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Optional outbox channel</span>
+                    <input
+                      className="input"
+                      name="channel"
+                      placeholder="email:founder@example.com or slack:#ops"
+                    />
+                  </label>
+                  <button className="button secondary" type="submit">
+                    Create digest
+                  </button>
+                </form>
+              </div>
+            </details>
+          ) : null}
+        </section>
+
+        <section className="panel-stack approval-rules-section" aria-label="Approval rules">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow" data-area="decisions">Approval Rules</span>
+              <h2>What requires your approval — and why.</h2>
+            </div>
+          </div>
+          <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
         </section>
       </div>
     </ConsoleShell>

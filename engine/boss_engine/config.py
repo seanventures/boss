@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     app_base_url: Optional[str] = Field(default=None, alias="APP_BASE_URL")
     admin_url: Optional[str] = Field(default=None, alias="ADMIN_URL")
     redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
+    a2a_redis_prefix: str = Field(default="boss:a2a", alias="BOSS_A2A_REDIS_PREFIX")
+    a2a_default_ttl_seconds: int = Field(
+        default=3600, alias="BOSS_A2A_DEFAULT_TTL_SECONDS", ge=1, le=604800
+    )
+    a2a_max_payload_bytes: int = Field(
+        default=65536, alias="BOSS_A2A_MAX_PAYLOAD_BYTES", ge=1024
+    )
+    a2a_dispatch_max_attempts: int = Field(
+        default=5, alias="BOSS_A2A_DISPATCH_MAX_ATTEMPTS", ge=1, le=20
+    )
     sentry_dsn: Optional[str] = Field(default=None, alias="SENTRY_DSN")
     supabase_url: Optional[str] = Field(default=None, alias="SUPABASE_URL")
     supabase_anon_key: Optional[str] = Field(default=None, alias="SUPABASE_ANON_KEY")
@@ -115,6 +125,12 @@ class Settings(BaseSettings):
     slack_webhook_url: Optional[str] = Field(
         default=None, alias="BOSS_SLACK_WEBHOOK_URL"
     )
+    mattermost_base_url: Optional[str] = Field(
+        default=None, alias="BOSS_MATTERMOST_BASE_URL"
+    )
+    mattermost_bot_token: Optional[str] = Field(
+        default=None, alias="BOSS_MATTERMOST_BOT_TOKEN"
+    )
     infra_real_provision_allowed: bool = Field(
         default=False, alias="BOSS_INFRA_REAL_PROVISION_ALLOWED"
     )
@@ -139,6 +155,10 @@ class Settings(BaseSettings):
     ssh_host_deploy_allowed: bool = Field(
         default=False, alias="BOSS_SSH_HOST_DEPLOY_ALLOWED"
     )
+    # Path to the key, preferred over pasting material into config. Keeps the secret on
+    # disk at 0600 instead of in a process environment.
+    ssh_host_private_key_file: Optional[str] = Field(
+        default=None, alias="BOSS_SSH_HOST_PRIVATE_KEY_FILE")
     ssh_host_private_key: Optional[str] = Field(
         default=None, alias="BOSS_SSH_HOST_PRIVATE_KEY"
     )
@@ -248,6 +268,18 @@ class Settings(BaseSettings):
     deepseek_base_url: str = Field(
         default="https://api.deepseek.com/v1", alias="DEEPSEEK_BASE_URL"
     )
+    # Local / self-hosted OpenAI-compatible lanes (the OSS community wedge — no
+    # cloud key required). ollama: the OpenAI client insists on a non-empty api
+    # key, and Ollama ignores it, so a placeholder default keeps `ollama` a
+    # zero-config lane on a dev box. vllm: no conventional port/host exists, so
+    # the base URL must be configured explicitly (e.g. http://gpubox:8000/v1).
+    # Local inference is $0 — zero-price the models via BOSS_MODEL_PRICES_JSON.
+    ollama_api_key: str = Field(default="ollama", alias="OLLAMA_API_KEY")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434/v1", alias="OLLAMA_BASE_URL"
+    )
+    vllm_api_key: str = Field(default="vllm", alias="VLLM_API_KEY")
+    vllm_base_url: str = Field(default="", alias="VLLM_BASE_URL")
     # Output-token cap for native chat-API calls. Metered gateways (OpenRouter) RESERVE
     # credits for the requested maximum — an uncapped request can 402 on reservation
     # alone even when the actual completion would be affordable. 0 disables the cap.
@@ -285,6 +317,40 @@ class Settings(BaseSettings):
     target_github_repo: str = Field(
         default="boss-sandbox", alias="BOSS_TARGET_GITHUB_REPO"
     )
+    # --- Repo-host extension seam (BOSS-267): SCM providers as add-ins ---------------------
+    # Which host customer target repos live on: github (default, zero behavior change) or
+    # bitbucket. Per-task spec.repo_host overrides this project-level setting.
+    target_repo_host: str = Field(default="github", alias="BOSS_TARGET_REPO_HOST")
+    # Bitbucket Cloud target (workspace/repo_slug — the owner/repo analog). Fall back to the
+    # target_github_* pair so a single-target deployment only sets what differs.
+    target_bitbucket_workspace: Optional[str] = Field(
+        default=None, alias="BOSS_TARGET_BITBUCKET_WORKSPACE"
+    )
+    target_bitbucket_repo: Optional[str] = Field(
+        default=None, alias="BOSS_TARGET_BITBUCKET_REPO"
+    )
+    # Bitbucket auth: a workspace/repository access token (Bearer) — preferred — or a
+    # username + app password (Basic). Env-indirect like every BOSS connector credential.
+    bitbucket_token: Optional[str] = Field(default=None, alias="BOSS_BITBUCKET_TOKEN")
+    bitbucket_username: Optional[str] = Field(default=None, alias="BOSS_BITBUCKET_USERNAME")
+    bitbucket_app_password: Optional[str] = Field(
+        default=None, alias="BOSS_BITBUCKET_APP_PASSWORD"
+    )
+    # HMAC secret Bitbucket signs webhook deliveries with (X-Hub-Signature). Absent =>
+    # POST /v1/webhooks/bitbucket stays fail-closed, mirroring the GitHub webhook.
+    bitbucket_webhook_secret: Optional[str] = Field(
+        default=None, alias="BOSS_BITBUCKET_WEBHOOK_SECRET"
+    )
+    # --- MCP-backed repo host (BOSS-269): enterprise SSO/OAuth identity path ---------------
+    # URL of the MCP server that fronts the SCM with the USER's identity (SSO/OAuth at the
+    # gateway) — repo operations become MCP tool calls; no raw API keys in BOSS.
+    repo_mcp_url: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_URL")
+    # Env-var NAME holding the bearer for the MCP endpoint itself (gateway session/token).
+    repo_mcp_auth_env: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_AUTH_ENV")
+    # Which SCM the MCP server fronts (drives clone-URL form): bitbucket | github.
+    repo_mcp_provider: str = Field(default="bitbucket", alias="BOSS_REPO_MCP_PROVIDER")
+    # Optional JSON overrides for tool names ({"create_pull_request": "bb_pr_create", ...}).
+    repo_mcp_toolmap: Optional[str] = Field(default=None, alias="BOSS_REPO_MCP_TOOLMAP")
     github_webhook_secret: Optional[str] = Field(
         default=None, alias="BOSS_GITHUB_WEBHOOK_SECRET"
     )
@@ -320,6 +386,9 @@ class Settings(BaseSettings):
     )
     artifact_dir: Path = Field(default=Path("artifacts"), alias="BOSS_ARTIFACTS_DIR")
     core_pack_id: str = Field(default="core_v1", alias="BOSS_CORE_PACK_ID")
+    # Standalone/pip installs don't have the monorepo layout, so let them point
+    # at a spec pack directly instead of relying on repo_root discovery.
+    specpack_root_override: str = Field(default="", alias="BOSS_SPECPACK_ROOT")
     skill_trust_keys: str = Field(default="", alias="BOSS_SKILL_TRUST_KEYS")
     skill_signing_private_key: str = Field(
         default="", alias="BOSS_SKILL_SIGNING_PRIVATE_KEY"
@@ -410,9 +479,17 @@ class Settings(BaseSettings):
     slack_real_send_allowed: bool = Field(
         default=False, alias="BOSS_SLACK_REAL_SEND_ALLOWED"
     )
+    mattermost_real_send_allowed: bool = Field(
+        default=False, alias="BOSS_MATTERMOST_REAL_SEND_ALLOWED"
+    )
     enable_sandbox_merge: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_MERGE"
     )
+    # PRs were opened as drafts, and GitHub REFUSES to merge a draft -- so even an approved
+    # merge gate could never land, and every governed PR piled up open forever. The merge gate
+    # Decision is the actual safety control, so default to ready-for-review; set this true to
+    # go back to drafts.
+    open_pr_as_draft: bool = Field(default=False, alias="BOSS_OPEN_PR_AS_DRAFT")
     enable_sandbox_deploy: bool = Field(
         default=False, alias="BOSS_ENABLE_SANDBOX_DEPLOY"
     )
@@ -553,6 +630,39 @@ class Settings(BaseSettings):
     code_review_repair_max_rounds: int = Field(
         default=2, alias="BOSS_CODE_REVIEW_REPAIR_MAX_ROUNDS"
     )
+    # SEVERITY-CALIBRATED REVIEW GATE. The adversarial reviewer emits one
+    # `FINDING: <BLOCKER|MAJOR|MINOR|NIT> — …` line per defect; only findings at or above this
+    # severity fail `code_review_passed`. Without this the verdict is a single bit, so a NIT-level
+    # style note sinks a whole phase exactly like a data-loss bug. Lower-severity findings are
+    # still recorded on the run (and optionally spawned as follow-up tasks) — never silently
+    # dropped. A review that emits NO structured findings falls back to the binary verdict, so
+    # older prompts/models keep their previous fail-closed behaviour.
+    code_review_block_severity: str = Field(
+        default="major", alias="BOSS_CODE_REVIEW_BLOCK_SEVERITY"
+    )
+    # Non-blocking findings (below the threshold) become their own queued code task on the same
+    # repo/branch, so "ship the phase, fix the nit separately" needs no human bookkeeping.
+    code_review_followup_tasks: bool = Field(
+        default=True, alias="BOSS_CODE_REVIEW_FOLLOWUP_TASKS"
+    )
+    # TEST ARBITER. Tests are frozen ground truth: if the test author encoded the criteria WRONG,
+    # the implementer can never satisfy it and the run burns every repair round against a bad
+    # oracle. When tests fail, an INDEPENDENT third agent (never the implementer, never the test
+    # author) rules CODE_WRONG vs TEST_WRONG against the acceptance criteria. Only a TEST_WRONG
+    # ruling may amend a test, and the amendment is recorded in evidence — the implementer still
+    # never gets write access to the oracle, so `coder_did_not_edit_tests` keeps its meaning.
+    code_test_arbiter_enabled: bool = Field(
+        default=True, alias="BOSS_CODE_TEST_ARBITER_ENABLED"
+    )
+    # NEVER BLOCK (autonomy default). When convergence AND repair rounds are exhausted and gates
+    # are still red, ship anyway with the unresolved gates recorded on the run and re-queued as
+    # their own follow-up task, instead of parking in awaiting_gate_override for a human waiver.
+    # Halting there is what turns "10 autonomous tasks" into "10 tickets for the operator" — the
+    # human keeps every fact needed to reverse the call, but the program does not stall on it.
+    # Set false to restore fail-closed blocking.
+    code_gate_never_block: bool = Field(
+        default=True, alias="BOSS_CODE_GATE_NEVER_BLOCK"
+    )
     # Max agent turns inside the sandbox before we stop and take the diff. 40 is fine for a module
     # but too few for APP-SCALE work (scaffolding a whole Vite/React app is more file-writes than
     # that) — a too-low cap surfaces as error_max_turns and fails the task. 90 fits real app tasks.
@@ -565,6 +675,21 @@ class Settings(BaseSettings):
     # need 40 turns of exploration — a tighter cap cuts review latency a lot without losing
     # rigor (they read the diff + relevant files + judge).
     code_agent_review_max_turns: int = Field(default=16, alias="BOSS_CODE_AGENT_REVIEW_MAX_TURNS")
+    # How many times a check that DID NOT FINISH (turn cap/timeout/crash) is re-run with
+    # a doubled budget before the run ships with "not reviewed" recorded. Escalating the
+    # CHECK is the only coherent remedy for a check that never judged the code.
+    code_review_max_escalations: int = Field(
+        default=2, alias="BOSS_CODE_REVIEW_MAX_ESCALATIONS")
+    # How many times an implementer that hit its TURN CAP is resumed (warm session) to
+    # finish, before its partial change is judged. Judging a partial change as defective
+    # is what turned one small feature into 28 sessions / 96 model-minutes / $39.
+    code_impl_max_continuations: int = Field(
+        default=3, alias="BOSS_CODE_IMPL_MAX_CONTINUATIONS")
+    # How many relevance-ranked files are pre-packed into the coding prompt. The agent
+    # otherwise rediscovers the repo every stage (~27 exploration tool-calls vs 16 edits,
+    # measured). 0 disables the pack and restores pure self-exploration.
+    code_agent_context_files: int = Field(
+        default=14, alias="BOSS_CODE_AGENT_CONTEXT_FILES")
     # Hard wall-clock deadline for the whole review panel AND for a single read-only review
     # invocation — so a slow/rate-limited review (e.g. an OpenAI-gateway retry storm) can't
     # blow the review phase out to 20min. On deadline a check degrades to 'not_run' (security
@@ -776,7 +901,10 @@ class Settings(BaseSettings):
         default=True, alias="BOSS_RATE_LIMIT_ENABLED"
     )
     rate_limit_requests_per_minute: int = Field(
-        default=10, alias="BOSS_RATE_LIMIT_RPM"
+        # Bumped 10 -> 120 so interactive console/validation sessions aren't
+        # throttled on the high-cost paths (propose/query/chat/sync). Still
+        # env-overridable; prod should front with Redis/LB rate limiting.
+        default=120, alias="BOSS_RATE_LIMIT_RPM"
     )
 
     @property
@@ -800,6 +928,8 @@ class Settings(BaseSettings):
 
     @property
     def specpack_root(self) -> Path:
+        if self.specpack_root_override:
+            return Path(self.specpack_root_override).resolve()
         return (self.repo_root / "packages" / "specpack").resolve()
 
     @property

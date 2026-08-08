@@ -2,16 +2,50 @@
 
 import { useState, useEffect, useActionState } from "react";
 import { useRouter } from "next/navigation";
-import type { CodeTaskRun, PreviewRec } from "@boss/api-client";
+import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
+import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
   confirmCodeTaskFeedbackAction,
   createCodeTaskAction,
+  getQaBenchmarkReportAction,
+  startQaBenchmarkAppAction,
+  getCodeTaskActivityAction,
   startPreviewAction,
+  retryCodeTaskWithStateAction,
   submitCodeTaskFeedbackAction,
   overrideCodeTaskAction,
 } from "./actions";
 import { Markdown } from "./markdown";
+
+function RetryControls({ runId, failingGates = [] }: { runId: string; failingGates?: string[] }) {
+  const [state, action, pending] = useActionState(retryCodeTaskWithStateAction, null);
+  // Which stages the retry will SKIP, mirroring _repair_needs_write_tests on the server, so the
+  // operator knows this resumes rather than restarting. Kept in sync with _TEST_GATES.
+  const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
+                      "written_tests_pass", "existing_tests_intact"];
+  const reusesTests = failingGates.length > 0 && !failingGates.some((g) => TEST_GATES.includes(g));
+  return (
+    <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+        <input type="hidden" name="run_id" value={runId} />
+        <button className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
+          {pending ? "Starting retry…" : "↻ Retry"}
+        </button>
+      </form>
+      <span className="detail">
+        Resumes on the same branch and reuses the approved plan
+        {reusesTests ? " and the existing test suite" : ""} — it does not rebuild from scratch.
+      </span>
+      {state?.runId ? (
+        <span className="cap-badge tone-blue">attempt {state.attempt ?? "?"} started · {state.runId}</span>
+      ) : null}
+      {state?.error ? (
+        <span className="detail" style={{ color: "#f85149" }}>{state.error}</span>
+      ) : null}
+    </span>
+  );
+}
 
 function OverrideControls({ runId }: { runId: string }) {
   const [state, action, pending] = useActionState(overrideCodeTaskAction, null);
@@ -289,6 +323,52 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
   );
 }
 
+function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaultRepo }: {
+  benchmarks: QaBenchmarkApp[];
+  projectId: string;
+  actor: string;
+  defaultOwner?: string;
+  defaultRepo?: string;
+}) {
+  if (!benchmarks.length) return null;
+  return (
+    <div className="ct-block" style={{ marginTop: 12 }}>
+      <div className="ct-block-title">End-to-end QA benchmarks</div>
+      <p className="detail" style={{ marginTop: 4 }}>
+        These are pinned product contracts, not canned demos. Launching one creates a strict governed code task with a durable plan, evidence bundle, and final verification report.
+      </p>
+      <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+        {benchmarks.map((benchmark) => (
+          <article key={benchmark.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, display: "grid", gap: 7 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+              <strong>{benchmark.name}</strong>
+              <span className="cap-badge tone-blue">{benchmark.tagline}</span>
+            </div>
+            <p className="detail" style={{ margin: 0 }}>{benchmark.summary}</p>
+            <p className="detail" style={{ margin: 0 }}>Exercises: {benchmark.focus.join(" · ")}</p>
+            <details>
+              <summary className="detail" style={{ cursor: "pointer" }}>Acceptance scenarios &amp; required evidence</summary>
+              <ul className="detail" style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+                {benchmark.acceptance_scenarios.map((scenario) => <li key={scenario}>{scenario}</li>)}
+              </ul>
+              <p className="detail" style={{ marginBottom: 0 }}>Verification: {benchmark.verification_commands.join(" · ")}</p>
+            </details>
+            <form action={startQaBenchmarkAppAction} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input type="hidden" name="project_id" value={projectId} />
+              <input type="hidden" name="actor" value={actor} />
+              <input type="hidden" name="benchmark_id" value={benchmark.id} />
+              <input type="hidden" name="owner" value={defaultOwner ?? ""} />
+              <input type="hidden" name="repo" value={defaultRepo ?? ""} />
+              <button className="cap-btn primary">Launch {benchmark.name}</button>
+              <span className="detail">Strict profile · starts a budgeted, review-gated task</span>
+            </form>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Three states, not two: passed (green ✓), failed (red ✗), or NOT RUN (muted –). A skipped
 // check must never read as a failure — that's what made a lean build look like it "failed".
 function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; note?: string; skipped?: boolean }) {
@@ -303,6 +383,65 @@ function GateRow({ label, ok, note, skipped }: { label: string; ok?: boolean; no
   );
 }
 
+function QaBenchmarkEvidence({ runId, benchmarkName }: { runId: string; benchmarkName: string }) {
+  const [report, setReport] = useState<QaBenchmarkReport | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void getQaBenchmarkReportAction(runId).then((value) => {
+      if (!cancelled) {
+        setReport(value);
+        setLoaded(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [runId]);
+  const tone = report?.passed ? "green" : "amber";
+  return (
+    <div className="ct-block">
+      <div className="ct-block-title">
+        QA benchmark evidence <span className={`cap-badge tone-${tone}`}>{report?.passed ? "certified" : "not certified"}</span>
+      </div>
+      <p className="detail" style={{ marginTop: 4 }}>
+        {benchmarkName} is certified only from recorded evidence; a completed run alone is insufficient.
+      </p>
+      {!loaded ? <p className="detail">Loading benchmark report…</p> : null}
+      {loaded && !report ? <p className="detail">Benchmark report is unavailable; no completion claim is shown.</p> : null}
+      {report ? (
+        <>
+          <div style={{ display: "grid", gap: 5, marginTop: 8 }}>
+            {report.results.map((result) => (
+              <GateRow key={result.command} label={result.label} ok={result.status === "pass"}
+                skipped={result.status === "not_recorded"}
+                note={`${result.command}${result.exit_code != null ? ` · exit ${result.exit_code}` : ""}`} />
+            ))}
+          </div>
+          <div style={{ marginTop: 12, display: "grid", gap: 5 }}>
+            <div className="ct-block-title" style={{ fontSize: 12.5 }}>
+              Benchmark scorecard <span className={`cap-badge tone-${report.scorecard.overall_score == null ? "muted" : report.scorecard.overall_status === "complete" ? "green" : "amber"}`}>
+                {report.scorecard.overall_score == null ? "unscored" : `${report.scorecard.overall_score}/100 · ${report.scorecard.overall_status}`}
+              </span>
+            </div>
+            <p className="detail" style={{ margin: 0 }}>
+              Evidence coverage: {report.scorecard.evidence_coverage_pct}% weighted. Missing dimensions stay unscored and do not improve the overall result.
+            </p>
+            {report.scorecard.dimensions.map((dimension) => (
+              <div key={dimension.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
+                <span>{dimension.label} <span className="detail">({dimension.weight}%)</span></span>
+                <span className={dimension.status === "scored" ? "detail" : "detail"}>
+                  {dimension.status === "scored" ? `${dimension.score}/100` : "not scored"}
+                </span>
+              </div>
+            ))}
+            <p className="detail" style={{ margin: 0 }}>{report.scorecard.tuning_note}</p>
+          </div>
+          <p className="detail" style={{ marginTop: 8 }}>{report.message}</p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function fmtDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
@@ -311,9 +450,64 @@ function fmtDuration(ms: number): string {
   return rs ? `${m}m ${rs}s` : `${m}m`;
 }
 
+// Per-stage model-call detail (the internal "why is this slow"): model, turns, latency,
+// retries, cost, errors per governed stage. Auto-refreshes while the task is live.
+function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
+  const [open, setOpen] = useState(live);
+  const [calls, setCalls] = useState<LlmCallRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const load = async () => {
+      const data = await getCodeTaskActivityAction(runId);
+      if (!cancelled) {
+        setCalls(data);
+        setLoaded(true);
+      }
+    };
+    void load();
+    const id = live ? setInterval(load, 4000) : undefined;
+    return () => {
+      cancelled = true;
+      if (id) clearInterval(id);
+    };
+  }, [runId, open, live]);
+  return (
+    <div className="ct-activity-wrap">
+      <button type="button" className="cap-btn" onClick={() => setOpen((o) => !o)}>
+        {open ? "Hide agent activity" : "Show agent activity"}
+      </button>
+      {open ? (
+        <div className="ct-activity">
+          {!loaded ? (
+            <p className="detail">Loading…</p>
+          ) : calls.length === 0 ? (
+            <p className="detail">No model calls recorded yet — the current stage hasn’t returned a call.</p>
+          ) : (
+            calls.map((c, i) => (
+              <div className={`ct-call${c.ok ? "" : " err"}`} key={i}>
+                <span className="ct-call-stage">{PHASE_LABEL[c.stage] ?? c.stage}</span>
+                <span className="ct-call-model">{c.model || c.engine}</span>
+                <span>{c.turns} turn{c.turns === 1 ? "" : "s"}</span>
+                <span className="ct-call-lat">{fmtDuration(c.latency_ms)}</span>
+                {c.retries > 0 ? (
+                  <span className="ct-call-retry">{c.retries} retr{c.retries === 1 ? "y" : "ies"}</span>
+                ) : null}
+                <span className="ct-call-cost">${(c.cost_usd_micros / 1e6).toFixed(3)}</span>
+                {!c.ok ? <span className="ct-call-err">✗ {(c.error ?? "error").slice(0, 60)}</span> : null}
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
-  const tests = st.tests ?? [];
+  const tests = structuredCodeTaskTests(st);
   // One link per task: the most-recent running preview for this run (dedupe).
   const livePreviews = previews
     .filter((p) => p.run_id === run.id && p.status === "running")
@@ -361,7 +555,7 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {live ? (
         <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
           <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
-          {PHASE_LABEL[run.phase] ?? run.phase} — running {currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase} — running <span suppressHydrationWarning>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
           <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
         </div>
       ) : null}
@@ -379,16 +573,18 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             {live && currentPhaseMs != null ? (
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
+                <span style={{ color: "#58a6ff", fontWeight: 600 }} suppressHydrationWarning>{fmtDuration(currentPhaseMs)}</span>
               </div>
             ) : null}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
               <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
-              <span className="detail">{fmtDuration(totalMs)}</span>
+              <span className="detail" suppressHydrationWarning>{fmtDuration(totalMs)}</span>
             </div>
           </div>
         </div>
       ) : null}
+
+      <CodeTaskActivity runId={run.id} live={live} />
 
       {run.error ? (
         <div className="ct-error">
@@ -396,6 +592,10 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             ? "Quality gate failed — the pipeline blocked the PR (fail-closed). See Review & quality gate below."
             : run.error}
         </div>
+      ) : null}
+
+      {run.finalize_ctx?.qa_benchmark ? (
+        <QaBenchmarkEvidence runId={run.id} benchmarkName={run.finalize_ctx.qa_benchmark.name} />
       ) : null}
 
       {hasGateEvidence ? (
@@ -535,9 +735,22 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
           {run.pull_request_url ? (
             <PreviewControls runId={run.id} livePreviews={livePreviews} />
           ) : (
-            <span className="detail">▶ Preview available once a PR is open (a run must reach a green gate, or be overridden).</span>
+            <span className="detail">▶ Preview available once a PR is open. Checks do not have to pass — a run ships its PR with any findings attached — so this appears as soon as the run produces a change.</span>
           )}
         </div>
+        {/* Row: plain operator-triggered retry. Separate from the feedback flow below, which
+            asks an agent to diagnose and propose one — when the findings are already on screen
+            the operator just wants to run it again. */}
+        {run.status !== "running" && run.status !== "queued" ? (
+          <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+            <RetryControls
+              runId={run.id}
+              failingGates={(run.finalize_ctx?.advisory_failing_gates
+                ?? run.finalize_ctx?.failing_gates
+                ?? []) as string[]}
+            />
+          </div>
+        ) : null}
         {/* Separate row: iterate on the same task with feedback */}
         {(run.status === "completed" || run.status === "failed" || run.status === "blocked") ? (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.09)" }}>
@@ -567,12 +780,14 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   );
 }
 
-export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [] }: {
+export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], benchmarks = [], actor = "executive_console" }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
   apiReachable: boolean;
   previews?: PreviewRec[];
+  benchmarks?: QaBenchmarkApp[];
+  actor?: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -606,6 +821,14 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
       {showNew ? (
         <NewCodeTaskForm projectId={projectId} defaultOwner={lastRepo?.owner} defaultRepo={lastRepo?.repo} />
       ) : null}
+
+      <QaBenchmarkCatalog
+        benchmarks={benchmarks}
+        projectId={projectId}
+        actor={actor}
+        defaultOwner={lastRepo?.owner}
+        defaultRepo={lastRepo?.repo}
+      />
 
       {codeTasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>

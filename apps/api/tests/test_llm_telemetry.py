@@ -93,9 +93,12 @@ _SQLITE_DDL = """
 CREATE TABLE llm_calls (
     id TEXT PRIMARY KEY,
     project_id TEXT, code_task_run_id TEXT, stage TEXT, engine TEXT, model TEXT,
+    role TEXT,
     prompt_tokens BIGINT NOT NULL DEFAULT 0,
     completion_tokens BIGINT NOT NULL DEFAULT 0,
     total_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT NOT NULL DEFAULT 0,
     cost_usd_micros BIGINT NOT NULL DEFAULT 0,
     price_estimated BOOLEAN NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,

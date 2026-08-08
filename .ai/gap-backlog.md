@@ -1,11 +1,61 @@
 # BOSS Gap Backlog (.ai Autonomous Version)
 
+## 2026-07-26 Work orchestration disposition
+
+- BOSS-270–278 close the local implementation gap for explainable work ranking,
+  hierarchical job quotas, Plane-first tracked intake, Product Manager
+  ownership, embedded ticket/job visibility, and GitHub/Mattermost delivery
+  presence.
+- Alternate WorkTracker plugins publish typed capabilities but remain
+  fail-closed until their provider executors and credentials are installed.
+- Live Mattermost sending remains intentionally disabled until a bot token,
+  server URL, channel policy, and `BOSS_MATTERMOST_REAL_SEND_ALLOWED=true` are
+  supplied. This is external rollout configuration, not a silent local success.
+- Legacy unscoped job producers remain measurable migration debt. New Agent
+  Studio work uses the mandatory tracked path; a later hardening release may
+  reject unscoped job creation after every producer has migrated.
+
+## 2026-07-26 GitHub project sync delivery map
+
+- BOSS-247 closes the project-scoped connection/repository-binding foundation
+  once PR #81 merges.
+- BOSS-248/BOSS-249 implement immutable versioned branch policy plus
+  Receipt-backed repository snapshots/topology and close once their stacked PR
+  merges.
+- BOSS-250 implements fenced TTL branch/worktree ownership and closes once its
+  stacked PR merges.
+- BOSS-251/BOSS-252 implement safe synchronization, typed conflict-resolution
+  branches, red-to-green proof, independent review, and receipted non-force
+  resolution commits; they close once their stacked PR merges.
+- BOSS-253 implements exact-snapshot merge authorization, independent approval,
+  deterministic target queues, protected-target lease/fence verification,
+  fresh checks/reviews, guarded PR-only merge, receipted rollback evidence, and
+  bounded retry/deadletter; it closes once its stacked PR merges.
+- BOSS-254 implements the webhook/poll/repair reconciler with binding-resolved
+  enqueue-only ingress, delivery/ref/SHA dedupe, leased Receipt-backed
+  rate/ref reads, canonical observations/ref state, stale/out-of-order
+  handling, drift invalidation, reset-aware bounded retry, deadletter and
+  repair; it closes once its stacked PR merges.
+- BOSS-255 implements Mission Control repository topology and branch
+  operations with canonical multi-stream reads, partial-failure visibility,
+  branch evidence/divergence/lease inspection, linear sync/conflict/merge/
+  reconciliation state, Receipts/rollback, responsive empty/error states, and
+  `github_manage`-aware controls. It closes once its stacked PR merges.
+- The governing GHX-001 contract requires immutable observed SHAs, no silent
+  reset/force-push, visible rewrite/divergence classification, provider writes
+  through ChangeSets/ResourceReceipts, unique dedupe keys, and approval gates
+  for protected/destructive operations.
+
 ## 2026-07-26 Provider suite foundation
 
 - BOSS-236 closes the connection/credential lifecycle foundation for BOSS-235.
+- BOSS-237 closes the System Configuration UX slice locally: persisted
+  connections/resources/health/FinOps views, truthful planned states,
+  permission-aware account lifecycle controls, saved scope, partial-feed
+  handling, evidence drawers, and responsive containment. Merge is pending.
 - BOSS-18 remains the model-provider BYOK stream.
 - BOSS-64/65/70 remain the AWS/Azure/GCP adapter and IaC stream.
-- BOSS-237–245 remain open for suite UX, DigitalOcean/OVH expansion,
+- BOSS-238–245 remain open for DigitalOcean/OVH expansion,
   inventory/topology, monitoring, autoscaling, accounting/FinOps, and adapter
   conformance. Planned adapters are represented honestly and fail closed.
 
@@ -77,3 +127,22 @@
   verification, and provider writes with credentials/reservation/approval.
 - The documented legacy monolithic API matrix remains tracked by BOSS-119; its
   old principal-delegation expectations are not a v0.8 release regression.
+
+## 2026-07-26 Agent Studio/A2A disposition
+
+- BOSS-256–266 are implementation-complete on
+  `ai/codex/boss-256-agent-studio-a2a` and stay In Progress until merge.
+- BOSS-268 adds the guided Agent Studio commissioning path over the same
+  canonical definition/version/validation/publication APIs. No alternate
+  agent runtime or credential store was introduced; it stays In Progress
+  until the shared PR merges.
+- No local P0/P1 gap remains in the delivered deterministic Studio, Panel, or
+  A2A transport scope. Redis loss is visible and recoverable from Postgres;
+  consumer loss is reclaimed and bounded; all external transport writes have
+  Receipts.
+- Agent Studio now includes operator-authored Workflow creation, live graph
+  preview, side-effect-free validation, immutable version publication, and
+  pinned execution on top of the existing reusable Workflow registry/runtime.
+- Deliberate next-lane work, not silently implied by this delivery: enable
+  live-model AgentVersions only through the existing model adapter,
+  BudgetReservation, cost Receipt, and provider entitlement path.

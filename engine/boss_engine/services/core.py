@@ -86,8 +86,14 @@ def _emit_event_postgres(
     connection.execute(
         sql(
             """
-            INSERT INTO events (id, project_id, event_type, actor, entity_type, entity_id, data)
-            VALUES (:id, :project_id, :event_type, :actor, :entity_type, :entity_id, CAST(:data AS JSONB))
+            INSERT INTO events (
+                id, project_id, event_type, actor, entity_type, entity_id,
+                data, created_at
+            )
+            VALUES (
+                :id, :project_id, :event_type, :actor, :entity_type, :entity_id,
+                CAST(:data AS JSONB), clock_timestamp()
+            )
             """
         ),
         {

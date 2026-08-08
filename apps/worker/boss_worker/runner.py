@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 from .config import WorkerSettings
@@ -142,6 +143,31 @@ AGENT_WORK_PRODUCT_STRATEGIES: dict[str, dict[str, Any]] = {
         "safety_gates": ["no_silent_autonomy_upgrade", "evidence_required"],
         "required_decision_when": ["autonomy_upgrade", "high_risk_skill_install"],
     },
+    "agent.studio.execute": {
+        "contract": "AgentStudioWorkProduct",
+        "role_logic": (
+            "Execute the immutable Agent Studio version inside its compiled "
+            "RoleSpec, scope, skill, integration, model, and budget envelope."
+        ),
+        "sections": [
+            "objective",
+            "findings",
+            "recommendations",
+            "dissent",
+            "required_decisions",
+        ],
+        "evidence": ["agent_version", "artifact", "event", "receipt"],
+        "safety_gates": [
+            "effective_capability_is_intersection",
+            "preserve_role_authority",
+            "evidence_before_claim",
+        ],
+        "required_decision_when": [
+            "scope_expansion",
+            "policy_override",
+            "budget_change",
+        ],
+    },
     "agent.providerops_manager.providerops_brief": {
         "contract": "ProviderOpsBrief",
         "role_logic": "Review provider connections, resource inventory, ChangeSets, and provider risk.",
@@ -267,8 +293,11 @@ def capabilities() -> list[str]:
         "agent.resource_janitor.cleanup_brief",
         "agent.secrets_steward.secret_boundary_review",
         "agent.vp_agents.role_review",
+        "agent.studio.execute",
+        "a2a.dispatch",
         "enterprise.marketplace.validate",
         "providerops.sync.readonly",
+        "work_tracker.issue.sync",
         "plan.command",
         "plan.generate",
         "openai.plan",
@@ -285,6 +314,7 @@ def capabilities() -> list[str]:
         "webhook.outbound.deliver",
         "github.triage",
         "github.pr_review",
+        "github.repository.reconcile",
         "skill.execute",
     ]
 
@@ -309,6 +339,22 @@ def build_agent_brief_result(job: LeasedJob) -> dict[str, Any]:
         "safety_gates": ["respect_role_boundaries", "escalate_missing_data"],
         "required_decision_when": ["scope_expansion", "policy_override"],
     }
+    runtime_contract = compiled_prompt.get("runtime_contract")
+    if job.kind == "agent.studio.execute" and isinstance(runtime_contract, dict):
+        declared_sections = runtime_contract.get("sections")
+        if isinstance(declared_sections, list) and declared_sections:
+            strategy = {
+                **strategy,
+                "contract": str(
+                    runtime_contract.get("artifact_type")
+                    or strategy["contract"]
+                ),
+                "sections": [
+                    str(section)
+                    for section in declared_sections
+                    if str(section).strip()
+                ],
+            }
     grounding_context = _agent_grounding_context(job)
     grounding_status = "grounded_in_payload_context" if grounding_context else "needs_control_plane_context"
     findings = [
@@ -578,6 +624,52 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                 "lease_token": job.lease_token,
             },
         )
+    if job.kind == "github.repository.reconcile":
+        run_id = str(job.payload.get("run_id") or "").strip()
+        if not run_id:
+            raise ValueError(
+                "github.repository.reconcile requires payload.run_id"
+            )
+        return client.run_github_reconciliation(
+            run_id,
+            {
+                "project_id": job.project_id,
+                "job_id": job.id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            },
+        )
+    if job.kind == "a2a.dispatch":
+        try:
+            return client.dispatch_a2a_message(
+                job.payload["message_id"],
+                {
+                    "project_id": job.project_id,
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                },
+            )
+        except Exception as error:  # transport/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
+    if job.kind == "work_tracker.issue.sync":
+        try:
+            result = client.sync_work_tracker(
+                {
+                    "project_id": job.project_id,
+                    "binding_id": job.payload["binding_id"],
+                    "worker_id": client.worker_id,
+                    "lease_token": job.lease_token,
+                    "created_by_job_id": job.id,
+                }
+            )
+        except Exception as error:  # provider/API outages use durable retry
+            raise RetryableJobError(str(error)) from error
+        if result.get("status") != "succeeded":
+            raise RetryableJobError(
+                result.get("reason") or "Work-tracker sync failed."
+            )
+        return result
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)
     if job.kind == "enterprise.marketplace.validate":
@@ -606,7 +698,12 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             raise RuntimeError(result.get("error") or "Meeting step failed.")
         return result
     if job.kind == "code.task":
-        result = client.run_code_task({"run_id": job.payload["run_id"]})
+        # Send the lease token so the pipeline can FENCE its writes: a worker whose lease
+        # was reclaimed must not be able to mutate the run any more. Without this the
+        # pipeline has no way to know which execution it is.
+        result = client.run_code_task({"run_id": job.payload["run_id"],
+                                       "fencing_token": job.lease_token,
+                                       "job_id": job.id})
         if result.get("status") == "failed":
             raise RuntimeError(result.get("error") or "Code task failed.")
         return result
@@ -783,6 +880,31 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 
+def _sweep_deployment_health() -> None:
+    """Sample the health of deployed apps while there is no job to run.
+
+    The idle branch is where this belongs: the worker is about to sleep anyway, and health is a
+    background concern that must never compete with real work. `sweep` itself is due-gated, so
+    running it every idle cycle costs one cheap query per target rather than a probe.
+
+    Swallows everything. A monitoring sweep that can raise would turn "the health graph is
+    stale" into "the worker crash-loops", which is a strictly worse failure than the one it
+    exists to detect.
+    """
+    try:
+        from boss_engine.config import get_settings
+        from boss_engine.db import get_engine
+        from boss_engine.services.deployment_health import sweep
+
+        engine_settings = get_settings()
+        result = sweep(get_engine(engine_settings), engine_settings)
+        if result.get("probed"):
+            LOGGER.info("health_sweep probed=%s failed=%s",
+                        result["probed"], result.get("failed"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("health_sweep_skipped", exc_info=True)
+
+
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
     job = client.poll(
         settings.worker_id,
@@ -791,6 +913,7 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     )
     if not job:
         LOGGER.info("worker_idle worker_id=%s", settings.worker_id)
+        _sweep_deployment_health()
         return False
 
     LOGGER.info(
@@ -824,19 +947,54 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
     )
 
     def _renew_lease() -> None:
+        # The heartbeat proves the WORKER is alive, never that the JOB is progressing. A
+        # hung stage therefore kept its lease renewed indefinitely: nothing reclaimed it,
+        # nothing failed it, and the stall only ended when the process happened to die.
+        # Observed: a review check hung and the run showed a "164 min adversarial review"
+        # that was pure lease latency, not work.
+        #
+        # So renewal is BOUNDED. Past the ceiling we stop renewing; the lease then expires
+        # within one TTL and the reclaimer picks the job up (or fails it on max_attempts)
+        # instead of the run hanging open forever.
         interval = max(15, settings.lease_ttl_seconds // 2)
+        max_runtime = max(0, int(getattr(settings, "job_max_runtime_seconds", 5400) or 0))
+        started_at = time.monotonic()
         while not hb_stop.wait(interval):
+            elapsed = time.monotonic() - started_at
+            if max_runtime and elapsed > max_runtime:
+                LOGGER.error(
+                    "lease_renewal_stopped_runtime_exceeded worker_id=%s job_id=%s "
+                    "kind=%s elapsed_s=%d max_s=%d — job exceeded its runtime ceiling; "
+                    "letting the lease expire so it is reclaimed instead of hanging",
+                    settings.worker_id, job.id, job.kind, int(elapsed), max_runtime,
+                )
+                return
             try:
                 hb_client.heartbeat(
                     settings.worker_id, job.id, job.lease_token,
                     settings.lease_ttl_seconds,
                 )
-            except Exception:  # noqa: BLE001 — a transient heartbeat failure must not kill the job
+            except Exception as exc:  # noqa: BLE001
+                # A 409 is NOT transient: the control plane is telling us this lease now belongs
+                # to somebody else, because ours expired and another worker reclaimed the job.
+                # Swallowing it left BOTH workers executing the same run — measured on
+                # job_2fbe88e6 (attempt 3/3): worker-local kept running and heartbeating into
+                # 409s while worker-local-3 owned the lease, both writing phases, so the run's
+                # phase moved backwards and stages re-ran. Stop renewing and signal the job.
+                if "409" in str(exc) or "Conflict" in str(exc):
+                    LOGGER.error(
+                        "lease_lost worker_id=%s job_id=%s — another worker owns this lease; "
+                        "abandoning our execution to avoid duplicate concurrent work",
+                        settings.worker_id, job.id,
+                    )
+                    lease_lost.set()
+                    return
                 LOGGER.warning(
                     "heartbeat_renew_failed worker_id=%s job_id=%s",
                     settings.worker_id, job.id,
                 )
 
+    lease_lost = threading.Event()
     hb_thread = threading.Thread(target=_renew_lease, name=f"lease-hb-{job.id}", daemon=True)
     hb_thread.start()
 
@@ -875,6 +1033,17 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                 hb_client.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    # Reconciliation owns its bounded retry/deadletter transition in the same
+    # transaction that records provider-read Receipts and observations.
+    if job.kind == "github.repository.reconcile":
+        LOGGER.info(
+            "job_finalized_by_reconciler worker_id=%s job_id=%s status=%s",
+            settings.worker_id,
+            job.id,
+            (result.get("job") or {}).get("status"),
+        )
+        return True
 
     completion = client.complete(
         settings.worker_id,

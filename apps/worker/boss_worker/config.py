@@ -25,6 +25,12 @@ class WorkerSettings(BaseSettings):
     # run a minute+ without heart-beating) keeps its lease, while still bounding
     # crash recovery. A crashed worker's 'running' job is reclaimed after this.
     lease_ttl_seconds: int = Field(default=300, alias="BOSS_LEASE_TTL_SECONDS")
+    # Ceiling on how long ONE job may hold its lease. The heartbeat proves the worker is
+    # alive, not that the job is progressing, so without this a hung stage renews forever
+    # and the run never gets reclaimed. Past this the worker stops renewing and the job is
+    # reclaimed within one lease TTL. Default 90 min > the longest legitimate pipeline.
+    job_max_runtime_seconds: int = Field(
+        default=5400, alias="BOSS_JOB_MAX_RUNTIME_SECONDS")
     github_token: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("BOSS_GITHUB_TOKEN", "GITHUB_TOKEN")
     )

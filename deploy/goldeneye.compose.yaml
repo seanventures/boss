@@ -26,6 +26,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 90s
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
@@ -112,6 +113,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 90s
 
 networks:
   boss:

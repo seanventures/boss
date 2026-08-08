@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 from apps.worker.boss_worker.control_plane import ControlPlaneClient, LeasedJob
+from apps.worker.boss_worker.main import _sweep_qa_benchmark_evaluations
 from apps.worker.boss_worker.runner import (
     AGENT_WORK_PRODUCT_STRATEGIES,
     agent_module_id_from_payload,
@@ -98,6 +99,18 @@ class FakeControlPlaneClient:
             "result": {"ok": True},
         }
 
+    def sync_work_tracker(self, payload):
+        self.calls.append(("sync_work_tracker", payload))
+        return {
+            "status": "succeeded",
+            "receipt_id": "rcpt_tracker",
+            "binding": {
+                "id": payload["binding_id"],
+                "external_issue_id": "plane-issue-31",
+                "external_key": "BOSS-31",
+            },
+        }
+
     def merge_pull_request(self, payload):
         self.calls.append(("merge_pull_request", payload))
         return {
@@ -175,6 +188,17 @@ class FakeControlPlaneClient:
             "verdict": "accept",
         }
 
+    def run_github_reconciliation(self, run_id, payload):
+        self.calls.append(("run_github_reconciliation", run_id, payload))
+        return {
+            "run": {
+                "id": run_id,
+                "status": "succeeded",
+                "observation_ids": ["ghobs_1"],
+            },
+            "job": {"job_id": payload["job_id"], "status": "succeeded"},
+        }
+
     def sync_provider_resources(self, payload):
         self.calls.append(("sync_provider_resources", payload))
         if payload.get("provider_account_id") == "prov_fail":
@@ -238,6 +262,19 @@ def test_control_plane_client_sends_bearer_api_key():
         client.close()
 
 
+def test_idle_worker_sweeps_terminal_benchmark_evidence_without_executing_a_change():
+    calls = []
+
+    class Client:
+        def sweep_qa_benchmark_evaluations(self):
+            calls.append("sweep")
+            return {"status": "succeeded", "changed_count": 0}
+
+    _sweep_qa_benchmark_evaluations(Client())
+
+    assert calls == ["sweep"]
+
+
 def test_worker_capabilities_include_infra_job_kinds():
     supported = capabilities()
     assert "infra.droplet.create" in supported
@@ -247,10 +284,12 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.model_spend_analyst.model_spend_brief" in supported
     assert "enterprise.marketplace.validate" in supported
     assert "providerops.sync.readonly" in supported
+    assert "work_tracker.issue.sync" in supported
     assert "webhook.outbound.deliver" in supported
     assert "docs.update" in supported
     assert "github.triage" in supported
     assert "github.pr_review" in supported
+    assert "github.repository.reconcile" in supported
     assert "skill.execute" in supported
 
 
@@ -293,6 +332,40 @@ def test_run_worker_cycle_executes_real_skill_with_lease_scope():
             "lease_token": "lease_skill",
         },
     )
+
+
+def test_run_worker_cycle_syncs_tracker_through_fenced_control_plane():
+    leased_job = LeasedJob(
+        id="job_tracker",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="work_tracker.issue.sync",
+        payload={"binding_id": "trackbind_31"},
+        attempt=1,
+        max_attempts=5,
+        lease_token="lease_tracker",
+        lease_expires_at="future",
+        work_item_id="work_31",
+        tracker_binding_id="trackbind_31",
+        allocation_id="alloc_31",
+        priority_score=88.5,
+        workload_class="product",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(worker_id="worker-tracker", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert client.calls[2] == (
+        "sync_work_tracker",
+        {
+            "project_id": "boss-dogfood",
+            "binding_id": "trackbind_31",
+            "worker_id": "worker-tracker",
+            "lease_token": "lease_tracker",
+            "created_by_job_id": "job_tracker",
+        },
+    )
+    assert client.calls[-1][0] == "complete"
 
 
 def test_run_worker_cycle_executes_budgeted_docs_update_job():
@@ -400,6 +473,38 @@ def test_worker_executes_github_community_job_through_lease_boundary():
         },
     ) in client.calls
     assert any(call[0] == "complete" for call in client.calls)
+
+
+def test_worker_executes_reconciliation_and_does_not_double_finalize_lease():
+    leased_job = LeasedJob(
+        id="job_reconcile",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="github.repository.reconcile",
+        payload={"run_id": "ghrecon_1"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_reconcile",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(
+        worker_id="worker-reconcile",
+        lease_ttl_seconds=60,
+    )
+
+    assert run_worker_cycle(client, settings) is True
+    assert (
+        "run_github_reconciliation",
+        "ghrecon_1",
+        {
+            "project_id": "boss-dogfood",
+            "job_id": "job_reconcile",
+            "worker_id": "worker-reconcile",
+            "lease_token": "lease_reconcile",
+        },
+    ) in client.calls
+    assert all(call[0] not in {"complete", "fail"} for call in client.calls)
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():

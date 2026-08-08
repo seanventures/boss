@@ -19,7 +19,7 @@ decision_rights:
   must_escalate:
     - Tradeoffs requiring product or risk acceptance.
 permissions:
-  allowed_skills: [code.review, coding_pipeline.design_critique, artifact.create]
+  allowed_skills: [code.review, coding_pipeline.design_critique, artifact.create, coding_pipeline.review_plan, model.generate_text]
   forbidden_skills: [code.edit, github.merge_pr_real, infra.*]
 output_contracts: [DesignCritique, FailureModeCatalog]
 autonomy:

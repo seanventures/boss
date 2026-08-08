@@ -39,14 +39,94 @@ boss_engine/
 export DATABASE_URL='postgresql+psycopg://boss:boss@localhost:5432/boss'
 export PYTHONPATH=engine
 
+python -m boss_engine bootstrap                   # FIRST RUN: schema + seed defaults
 python -m boss_engine tools                       # list the tool layer
-python -m boss_engine status --project boss-dogfood
+python -m boss_engine --project boss-dogfood status
 python -m boss_engine call list_code_tasks --args '{"limit":5}'
 python -m boss_engine ask "how many tasks are running right now?"
 python -m boss_engine chat --allow-writes          # interactive agent
-python -m boss_engine serve-mcp                     # MCP over stdio (default)
-python -m boss_engine serve-mcp --http --port 8791  # MCP over HTTP (needs [mcp-http])
+python -m boss_engine serve-mcp                     # MCP over stdio (default; writes OK)
+python -m boss_engine serve-mcp --http --port 8791  # HTTP + Mission Control (read-only)
+# HTTP has no auth — write tools require an explicit opt-in:
+# python -m boss_engine serve-mcp --http --allow-writes --host 127.0.0.1
 ```
+
+A fresh database MUST be bootstrapped first — `bootstrap` creates the schema
+(`db/schema.sql`) and seeds the default org/project, budget policy, the
+`core_v1` role pack and the default agent modules. Without it every DB-backed
+tool fails with `relation "code_task_runs" does not exist`.
+
+### Durable-workspace requirement
+
+The community engine has no hosted dependency: a self-hosted PostgreSQL
+database is its durable workspace. It is required before BOSS can create a
+task, Receipt, approval, lease, meeting, or other governed workflow record.
+Without `DATABASE_URL`, `boss-engine tools` remains useful for inspecting the
+catalog, and the MCP endpoint is read-only, but write tools fail closed with
+setup instructions. In-memory ports are an internal composition seam for
+isolated pipeline tests; they are not a substitute for the durable audit trail
+required by a running BOSS installation.
+
+### Docker
+
+```bash
+# Build from the REPO ROOT (the image vendors db/schema.sql + the spec pack):
+docker build -f engine/Dockerfile -t boss-engine .
+
+docker network create boss && docker run -d --name boss-db --network boss \
+  -e POSTGRES_DB=boss -e POSTGRES_USER=boss -e POSTGRES_PASSWORD=boss postgres:16
+export DB='postgresql+psycopg://boss:boss@boss-db:5432/boss'
+
+docker run --rm --network boss -e DATABASE_URL=$DB boss-engine bootstrap
+docker run --rm --network boss -e DATABASE_URL=$DB boss-engine status
+docker run -i  --rm --network boss -e DATABASE_URL=$DB boss-engine serve-mcp   # stdio
+docker run -d  --name boss-mcp --network boss -p 8791:8791 -e DATABASE_URL=$DB \
+  boss-engine serve-mcp --http --host 0.0.0.0                                  # HTTP (read-only)
+```
+
+### Mission Control (community, read-only)
+
+`serve-mcp --http` also serves a zero-dependency, read-only **Mission Control**
+page at `http://host:8791/` — project status, running work, code tasks,
+previews, discovery and meetings, rendered straight from the engine's read
+tools over the same `/mcp` JSON-RPC endpoint. HTTP mode defaults to
+**read-only** (no transport auth); write tools stay on stdio MCP or require
+`--allow-writes` on loopback. It is a snapshot viewer by design; approvals and
+multi-user operation live in the commercial console.
+
+### Local / open models (Ollama, vLLM, any OpenAI-compatible endpoint)
+
+The chat lane honors an OpenAI-compatible base URL, and the code-agent lane has
+first-class local providers:
+
+```bash
+# Ollama on the same box (zero config beyond the model name):
+export BOSS_LLM_ENGINE=openai OPENAI_API_KEY=ollama \
+       OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_MODEL=qwen2.5-coder:14b
+python -m boss_engine ask "what's running?"
+
+# Code tasks on local lanes: BOSS_CODE_AGENT_ENGINE=ollama (daemon default
+# http://localhost:11434/v1, override OLLAMA_BASE_URL) or =vllm (set
+# VLLM_BASE_URL, e.g. http://gpubox:8000/v1).
+# Local inference is $0 — zero-price your models for honest cost accounting:
+export BOSS_MODEL_PRICES_JSON='{"qwen2.5-coder:14b":[0,0]}'
+```
+
+### Standalone installs
+
+`pip install boss-engine` outside the monorepo: point the engine at a spec pack
+with `BOSS_SPECPACK_ROOT=/path/to/specpack` (roles, skills, packs, policies) —
+otherwise it is resolved from the monorepo layout relative to the package.
+
+### Private design partners and public release
+
+Before the public release, use the
+[design-partner onboarding pack](./DESIGN_PARTNER_ONBOARDING.md) to establish a
+safe local/MCP proof, the canonical sample-repository boundary, and
+evidence-backed feedback. It deliberately does not imply that the engine is
+publicly released or that hosted services are configured. The
+[community readiness record](./COMMUNITY_READINESS.md) tracks the legal,
+security, extraction, and approval gates required before a public flip.
 
 ## Status: Phase 3 release-ready
 

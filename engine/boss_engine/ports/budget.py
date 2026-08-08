@@ -21,6 +21,7 @@ class BudgetPort(Protocol):
         expires_in_minutes: int,
         job_id: Optional[str] = None,
         allocation_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
     ) -> dict[str, Any]: ...
 
     def assert_active_reservation(

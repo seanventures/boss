@@ -2,7 +2,7 @@
 
 Status: Technical companion to `docs/product/PRD-v2.0.md`
 Date: June 3, 2026
-Last updated: July 18, 2026
+Last updated: July 26, 2026
 Supersedes: `docs/product/TECHNICAL_SPEC-v1.1.md`
 
 ## Architecture Overview
@@ -11,18 +11,143 @@ BOSS is a durable, API-first control plane for accountable AI labor. The technic
 
 - Control Plane: canonical tenant state, tasks, plans, decisions, approvals, policies, budgets, receipts, events, audit, roles, packs, Mission Control, and Metatron.
 - Execution Plane: leases, stateless workers, local runners, cloud workers, browser workers, code/test/review workers, deployment workers, comms workers, worker pools, local model serving, and enterprise private workers.
-- Communications Plane: outbox/inbox, ACK, persona rendering, quiet hours, escalation, channel rollout policies, delivery receipts, and deadletters.
+- Communications Plane: external outbox/inbox plus the internal typed A2A envelope/outbox/delivery/ACK ledger, Redis Streams transport, consumer groups, correlation/causation, lag, replay, quiet hours, escalation, delivery receipts, and deadletters.
 - Elastic Resource Plane / ProviderOps: provider accounts, adapters, inventory, billing, deployments, ChangeSets, ResourceReceipts, drift, health, reconciliation, janitor, and autoscaler policy.
 - Model Entitlement Broker / AI Capacity Router: adapter discovery, entitlement pools, capacity state, route decisions, cooldowns, fallback selection, local/subscription/API/enterprise gateway routing.
 - Skills Registry: typed skills, risk tier, data boundary, permissions, retry policy, cost estimates, artifact requirements, receipt requirements.
 - Integration Registry: connector/adapter definitions, installed connections, SecretRefs, granted capabilities, scope, health/freshness, provenance, rate-limit state, and revocation.
 - Agent Group Runtime: versioned collaboration definitions, member-role resolution, topology/protocol, context boundaries, independence, dissent, bounded rounds, budgets, and durable runs.
+- Agent Studio: stable agent/panel identities, immutable executable versions, model/prompt/rule/capability/scope contracts, seeded catalog, validation/test/publish gates, and live operator topology.
 - Workflow Registry and Runtime: immutable definitions/versions, deterministic work mappings, durable runs/step runs, branching, fan-out/join, approvals, subworkflows, retries/deadletters, compensation, and migration.
 - Ground-truth and Assurance Runtime: metric observations, settled conclusions, typed claims/evidence, surface ownership, Assurance Cases, and scheduled adversarial verification.
 - BOSS Account Connect: hosted account identity, licensing, marketplace identity, cloud org/workspace membership, team invites, billing portal, managed connector authorization, and optional telemetry/health sync.
 - Enterprise Identity Runtime: OIDC/SAML/SCIM provider metadata, SecretRefs, certificate/JWKS configuration, and explicit per-project rollout policies. Provider metadata alone is not sufficient for live SSO or SCIM; runtime paths require matching rollout policy.
 
 OpenClaw is not the BOSS foundation or durable runtime. External runtimes, legacy systems, and coding agents are adapters behind BOSS-owned state, policy, budget, routing, receipt, and observability layers.
+
+## Work Orchestration Kernel
+
+The Work Orchestration Kernel separates human-visible work management from durable execution:
+
+- A `WorkTrackerProvider` is the plugin registration and capability contract. Plane is seeded as the default open-source provider. GitHub Issues, Linear, and Jira are adapter registrations, not hard-coded domain models.
+- A `WorkTrackerBinding` maps one canonical BOSS `WorkItem` to one external issue. Required providers must reach `synced` before ordinary agent work can lease.
+- A `WorkItem` stores normalized score inputs, confidence, manual adjustment, rationale, priority band, workload class, estimated units, current allocation, ownership, and evidence.
+- A `ResourceQuota` is a bounded capacity envelope for a global, org, workspace, project, agent, or workload scope. Hard limits are inviolate; burst and borrowing exist only when explicit policy enables them.
+- A `ResourceAllocation` is a current reservation of quota capacity for ranked work. Allocation planning is deterministic and emits visible hold reasons.
+- A `Job` remains the only executable unit. Tracked jobs carry work-item, tracker-binding, and allocation references while retaining lease TTL, heartbeat, retry, budget, decision, Receipt, and deadletter semantics.
+
+Priority is explainable rather than an opaque integer. BOSS computes a score from customer impact, business value, urgency, risk reduction, and dependency unlock, discounts it by confidence, applies a bounded manual adjustment, and persists the factors and rationale. Score bands map to `P0` through `P4`. Dependency blocks remain explicit and cannot be overridden by score.
+
+Lease order is effective score descending, legacy numeric priority ascending, then creation time. Before a tracked job leases, the allocator atomically verifies its tracker binding and consumes allocation units. Completion, retry, terminal failure, budget deferral, and lease recovery release units. Capacity denial keeps the job queued with a visible reason; it never silently drops work.
+
+Tracker synchronization is also a leased job (`work_tracker.issue.sync`). The worker calls the control plane with its lease token; the control plane creates or reuses an external-effect `Receipt`, invokes the configured tracker adapter, updates the binding, and returns the provider reference. Plane creation uses `X-API-Key` behind `PlaneClient`; credentials remain configuration/SecretRefs and are never placed in prompts, payloads, events, or UI responses.
+
+`DeliveryBotIdentity`, `DeliveryStatusChannel`, and `DeliveryPresenceEvent` project Plane, GitHub, and Mattermost activity into Mission Control. GitHub PR/merge/deployment completion and Mattermost delivery create deduplicated presence records. Active status channels automatically receive matching event-kind/data-boundary projections attributed to their configured bot identity. Channel policies constrain event kinds and data boundaries. External Mattermost posting remains a separate leased, budgeted, policy-gated, Receipt-backed effect using the official `/api/v4/posts` bot-token API behind an explicit real-send rollout flag.
+
+The seeded Product Manager AgentDefinition owns PRD currency, acceptance criteria, ticket hygiene, priority rationale, dependencies, and completion evidence. Its installed skills are limited to tracker ensure/update and priority update; the Agent Studio completion path persists the immutable AgentVersion's declared `product_delivery_brief` artifact contract with PRD and ticket change sections. It cannot bypass policy or self-certify evidence.
+
+## Project GitHub Integration and Branch Orchestration
+
+GitHub execution resolves from project state, never directly from global
+`BOSS_TARGET_GITHUB_*` values once a project binding exists. Global settings
+remain a bootstrap compatibility lane until all callers migrate.
+
+Canonical records:
+
+- `ProjectGitHubConnection`: project, label, auth method, SecretRef pointer,
+  non-secret App/installation identity, API origin, required/effective/missing
+  permissions, health, lifecycle, and audit evidence.
+- `GitHubRepositoryBinding`: project, connection, provider repository ID,
+  owner/name/full name, primary/source/upstream/mirror role, default branch,
+  visibility, capabilities, lifecycle, and last reconciliation time.
+- `BranchPolicy`: protected refs, allowed name templates, update/merge methods,
+  force-push prohibition, required checks/review/evidence, stale-snapshot
+  threshold, and conflict escalation rules.
+- `BranchLease`: repository/ref owner, worktree/run, fencing token, TTL,
+  heartbeat, release/reclaim state, and attempt lineage.
+- `BranchSnapshot`: immutable remote refs, commit graph references, tree IDs,
+  merge bases, ahead/behind counts, protection/check state, fetched time, and
+  provenance.
+- `CodeSyncRun`: pinned policy/snapshot, source/target, classification,
+  selected action, ChangeSet/receipt links, result snapshot, retry/deadletter,
+  and rollback evidence.
+- `ConflictSet` and `ResolutionPlan`: base/ours/theirs identities, typed
+  file-level conflicts, proposed resolutions, validation evidence, dissent,
+  review, and Decision.
+- `MergeAuthorization`: exact head/base snapshots, required checks, approvals,
+  ownership, evidence bundle, expiry, actor, policy snapshot, and merge result.
+- `GitHubReconciliationSignal`: delivery/ref/expected-SHA identity, source
+  event, dedupe key, processing/stale/deadletter state, observed SHA, and run
+  lineage.
+- `GitHubReconciliationRun`: webhook/poll/repair trigger, requested refs,
+  leased job, bounded attempts, rate-limit state, Receipt/observation IDs,
+  next attempt, deadletter, and repair lineage.
+- `GitHubRepositoryObservation` and `GitHubRepositoryRefState`: immutable
+  per-run branch existence/commit/tree/protection evidence and its latest
+  project-scoped canonical read model.
+
+Connection state machine:
+
+`configured -> active|error -> disabled -> configured`, with `revoked`
+terminal. Enabling requires a usable project-scoped SecretRef and returns to
+`configured` until retested. Revocation disables every bound repository and
+cannot be reversed.
+
+Connection tests resolve secret material only inside the execution node, call
+the deterministic GitHub adapter, and persist a `github.repository.read`
+Receipt. Read models expose only `credential_configured`; they never return the
+SecretRef pointer. Repository identity and effective permissions update only
+from a successful provider response.
+
+Branch mutation pipeline:
+
+`Resolve binding -> acquire BranchLease -> fetch BranchSnapshot -> evaluate BranchPolicy -> classify topology -> plan ChangeSet -> authorize -> mutate through adapter -> ResourceReceipt -> fetch result snapshot -> verify -> release lease`.
+
+Topology classification distinguishes `equal`, `tree_equivalent_rewrite`,
+`fast_forward`, `behind`, `diverged`, `missing`, and `protected_blocked`.
+`tree_equivalent_rewrite` compares tree identities and patch equivalence before
+classifying a history rewrite as a content conflict. Only owned, explicitly
+authorized branches can be replaced; other contributor branches remain
+untouched.
+
+Diverged branches create a dedicated resolution branch. The resolver records a
+typed `ConflictSet`, applies a `ResolutionPlan`, runs the repository's
+red-to-green verification contract, and requires independent review. Ambiguous
+ownership, destructive updates, protected refs, validation failures, and
+unresolved conflicts create safe-HOLD Decisions. No branch mutation is
+performed inline in a webhook request.
+
+Webhook deliveries are the low-latency signal; a polling reconciler is the
+completeness backstop. Both converge through the same dedupe keys, leased jobs,
+snapshots, retry/deadletter behavior, and audit events.
+
+BOSS-254 implements that convergence without provider calls in the webhook
+request. Verified deliveries create deduplicated per-ref signals and
+`github.repository.reconcile` jobs. Polls and explicit repairs enqueue the
+same run type. A leased worker first records a core rate-limit Receipt, then
+records a Receipt and immutable observation for each branch read, and advances
+the canonical ref state only from the provider response. Expected webhook SHAs
+classify applied versus stale/out-of-order signals; current provider truth
+wins.
+
+Provider failures and exhausted rate limits use the durable job retry state
+with bounded backoff, synchronized run/signal status, terminal deadletter
+linkage, and a repair endpoint. Reconciled commit/tree drift blocks pending
+CodeSyncRuns and MergeAuthorizations that were pinned to stale identities.
+
+BOSS-248/BOSS-249 implement the policy and observation portion of this
+pipeline. `github_branch_policies` preserves immutable supersession lineage,
+and `github_branch_snapshots` preserves immutable Receipt-linked remote
+identity, topology, protection, check, and pinned-policy evidence. No branch
+write is part of these slices; leases and synchronization begin with BOSS-250.
+
+BOSS-250 implements `github_branch_leases`. A partial unique index permits one
+active lease per repository binding/ref. Acquisition locks the binding row to
+serialize concurrent claimants, stores only a hash of the one-time lease token,
+uses a database sequence for monotonic fencing, and records expiry/reclaim
+lineage. Every future ref mutation must verify project, binding, ref, active
+status, TTL, raw-token hash, and exact fencing token immediately before its
+provider write.
 
 ## Resource Plane Kernel
 
@@ -229,6 +354,63 @@ Group-run state machine:
 
 Completion rules decide whether the collaboration protocol is finished, not whether a claim is true. Evidence/approval/safety gates execute after group completion. Every spendy member call uses BudgetReservation and Receipt; every member job uses lease, heartbeat, bounded retry, and deadletter.
 
+## Agent Studio and Panel Runtime
+
+Canonical records:
+
+- `AgentDefinition`: stable project-scoped key, purpose, owner, lifecycle and active version.
+- `AgentVersion`: immutable RoleSpec/AgentModule lineage, model policy, prompt layers, rules, requested skills/integrations, scope, data boundary, A2A permissions, limits, output contract, validation result and content hash.
+- `AgentTestRun`: pinned version, scenario, compiled effective-capability preview, assertions, evidence, status and artifacts.
+- `AgentRun`: pinned version, input, task/job/workflow/panel references, lease-owned job, budget/receipt lineage, output and status.
+- `PanelDefinition`: stable reusable panel key, purpose and active version.
+- `PanelVersion`: pinned member AgentVersions plus topology, context, independence, quorum, rounds, evidence, consolidation, dissent and escalation policy.
+- `PanelRun`: pinned panel version and optional AgentGroupRun/WorkflowRun lineage.
+
+Published versions are immutable. Draft changes create new versions. Content hashes deduplicate identical versions. Publish validates schema, RoleSpec lineage, scope, message permissions, output contract, bounded calls/runtime, capability references and model posture, but runtime resolution rechecks current project policy, connections, health, budget and actor authority.
+
+The Studio agent wizard is a client-side compiler over this lifecycle, not a second persistence or orchestration path. It derives a normalized project-scoped key, compiles selected RoleSpec, model policy, prompt layers, deterministic rules, requested installed skill/integration references, data boundary, bounded limits, output contract, A2A policy, and wizard provenance into the existing definition/version request schemas. The server action performs `POST /agents`, `POST /agents/{id}/versions`, and, when requested, validate then publish in order. Partial completion is returned explicitly with created identifiers so a version-creation, validation, or publication failure cannot be reported as success or erase the draft.
+
+Client preflight checks required identity, RoleSpec, prompts, rules, artifact type, live-model capabilities, pinned-model identity, and numeric bounds. These checks improve authoring feedback but never replace server validation. Installed RoleSpecs and Skills are supplied from their canonical project feeds; the wizard stores only integration references and cannot accept tokens or provider secrets. Successful mutation revalidates the Studio feed.
+
+The Studio workflow lane is an authoring and observability client over the canonical Workflow Registry and Runtime. Its catalog joins full WorkflowDefinition/version graphs and recent WorkflowRuns into the live Studio feed. Draft validation calls the runtime compiler without inserting a definition/version or executing work; create, publish, and run operations reuse `/v1/workflows`, immutable version publication, and `/v1/workflow-runs`. The graph preview renders the draft while execution always pins a published version.
+
+Seeded agents default to `deterministic_brief`, a zero-cost and side-effect-free leased execution mode. A live model mode must select through the Model Entitlement Broker and requires a BudgetReservation and Receipt. Agent tool effects still execute only through the Skill Runtime.
+
+Panel runs fan out one leased `AgentRun` per member. Each result remains attributable. Consolidation creates a separate artifact over member findings; it never mutates or discards them. Evidence-ranked, attributed-synthesis, weighted-recommendation, majority-with-minority-report, producer-reviewer and hold-for-evidence policies are deterministic. Any missing proof, budget, approval, ownership or capability gate yields `waiting_decision`, `blocked` or `deadlettered`, never synthetic consensus.
+
+## Global A2A Coordination Fabric
+
+Canonical records:
+
+- `A2AChannel`: project-scoped channel key, schema allowlist, retention and status.
+- `A2ASubscription`: channel, consumer group, subscriber AgentVersion/system identity, recipient filters, ACK mode, visibility timeout and retry policy.
+- `A2AEnvelope`: immutable typed payload, sender/recipient, scope, data boundary, priority, TTL, dedupe, correlation/causation/conversation/trace IDs and canonical lineage references.
+- `A2ADelivery`: per-subscription state, attempt count, visibility/lease owner, Redis stream ID, last error and terminal time.
+- `A2AAcknowledgement`: accepted, processed, rejected or deferred result with evidence.
+- `A2ATransportAttempt`: dispatch/poll/claim/replay action, status, latency, stream/cursor and redacted error.
+
+Envelope state:
+
+`draft -> queued -> dispatching -> published -> delivering -> acknowledged|partially_acknowledged|expired|cancelled|deadlettered`.
+
+Delivery state:
+
+`pending -> published -> claimed -> processing -> acknowledged|rejected|retry_wait -> deadlettered|expired|cancelled`.
+
+Publishing is transactional:
+
+1. validate message schema, tenant/data scope, recipient and TTL;
+2. insert the immutable envelope, target deliveries and Postgres outbox record;
+3. enqueue a deduplicated leased `a2a.dispatch` job;
+4. create/reuse a Receipt for the Redis publish attempt;
+5. `XADD` to the project/channel stream and persist the returned stream ID;
+6. a consumer uses `XREADGROUP`; BOSS persists the claim before handing payload to the subscriber;
+7. ACK/NACK writes durable acknowledgement and audit state before `XACK`.
+
+Redis is an adapter behind `A2ATransport`. No production in-memory fallback is allowed. Missing or unhealthy Redis leaves Postgres work queued, reports `degraded`, retries with bounded backoff, and deadletters visibly. Pending entries can be reclaimed after their visibility timeout. Replay creates a new envelope whose `causation_id` points to the original.
+
+A2A payloads never contain secrets; they may contain SecretRefs. Unknown schema versions, oversize payloads, expired TTL, cross-tenant recipients and boundary-incompatible subscribers fail closed. A message cannot grant capability, create spend or authorize a provider write. Those effects continue through Jobs/Workflows, BudgetReservations, approvals, ChangeSets and Receipts.
+
 ## Skill and Integration Runtime
 
 `SkillSpec` remains the requested capability boundary. `IntegrationDefinition` lists connector metadata and supported SkillSpecs. `IntegrationConnection` is a scoped installation with `SecretRef`, permission grants, health/freshness, rate-limit state, owner, provenance, and enabled/revoked status. `ExecutorBinding` maps a SkillSpec and compatible IntegrationDefinition to a deterministic local/server/plugin executor.
@@ -372,6 +554,36 @@ BOSS Account Connect provides marketplace identity for Cloud and attached Enterp
 
 ## API Surface Inventory
 
+Agent Studio:
+
+- `GET /v1/agent-studio/catalog`
+- `POST /v1/agent-studio/workflows/validate`
+- `GET/POST /v1/agent-studio/agents`
+- `GET /v1/agent-studio/agents/{id}`
+- `POST /v1/agent-studio/agents/{id}/versions`
+- `POST /v1/agent-studio/agent-versions/{id}/validate`
+- `POST /v1/agent-studio/agent-versions/{id}/publish`
+- `POST /v1/agent-studio/agent-versions/{id}/runs`
+- `GET/POST /v1/agent-studio/panels`
+- `POST /v1/agent-studio/panels/{id}/versions`
+- `POST /v1/agent-studio/panel-versions/{id}/publish`
+- `GET/POST /v1/agent-studio/panel-runs`
+- `GET /v1/agent-studio/panel-runs/{id}`
+
+A2A coordination:
+
+- `GET/POST /v1/a2a/channels`
+- `GET/POST /v1/a2a/subscriptions`
+- `GET/POST /v1/a2a/messages`
+- `GET /v1/a2a/messages/{id}`
+- `POST /v1/a2a/messages/{id}/dispatch`
+- `POST /v1/a2a/subscriptions/{id}/poll`
+- `POST /v1/a2a/deliveries/{id}/ack`
+- `POST /v1/a2a/messages/{id}/cancel`
+- `POST /v1/a2a/messages/{id}/replay`
+- `GET /v1/a2a/audit`
+- `GET /v1/a2a/health`
+
 Agent Groups (planned):
 
 - `GET/POST /v1/agent-groups`
@@ -387,6 +599,27 @@ Skills and Integrations:
 - `POST /v1/integration-connections/{id}/test`
 - `POST /v1/integration-connections/{id}/revoke`
 - `GET /v1/skill-invocations`
+
+GitHub project integration:
+
+- `GET/POST /v1/github/connections`
+- `GET /v1/github/connections/{id}`
+- `POST /v1/github/connections/{id}/enable|disable|revoke|test`
+- `GET/POST /v1/github/repository-bindings`
+- `GET/PATCH /v1/github/repository-bindings/{id}`
+- Implemented through BOSS-254:
+  `/v1/github/branch-policies`, `/v1/github/branch-leases`,
+  `/v1/github/branch-snapshots`, `/v1/github/code-sync-runs`,
+  `/v1/github/conflict-sets`, `/v1/github/resolution-plans`, and
+  `/v1/github/merge-authorizations`; plus
+  `/v1/github/reconciliation-runs`,
+  `/v1/github/reconciliation-signals`, and
+  `/v1/github/repository-ref-states`.
+- Implemented under BOSS-255: Mission Control composes those canonical read
+  models into project/repository topology, branch evidence, lease/sync/
+  conflict/merge/reconciliation workflows, Receipt/rollback inspection, and
+  permission-aware controls. Browser clients never receive one-time lease
+  secrets; lease-token-bearing apply remains a worker boundary.
 
 Reusable Workflows:
 
@@ -419,8 +652,15 @@ Ground-truth and Assurance (planned):
 
 ProviderOps:
 
+- `GET /v1/provider-definitions`
 - `GET /v1/providers`
 - `POST /v1/providers`
+- `GET /v1/providers/{id}`
+- `PATCH /v1/providers/{id}`
+- `POST /v1/providers/{id}/enable`
+- `POST /v1/providers/{id}/disable`
+- `POST /v1/providers/{id}/rotate`
+- `POST /v1/providers/{id}/revoke`
 - `POST /v1/providers/{id}/test`
 - `GET /v1/resources`
 - `POST /v1/resources/sync`
@@ -437,6 +677,32 @@ ProviderOps:
 - `POST /v1/deployment-runs`
 - `GET /v1/provider-health`
 - `GET /v1/drift-reports`
+
+ProviderOps operator contract:
+
+- The System Configuration route composes provider definitions and accounts as
+  its core feed. Secondary inventory, cost, health, deployment, ChangeSet, and
+  receipt feeds are loaded independently so one failure produces a visible
+  partial state instead of hiding usable connection controls.
+- The client persists the active Connections, Resources, Scaling & Health, or
+  Cloud FinOps view in `infra_view` and mirrors saved resource scope locally
+  across provider, account, environment, region, and service.
+- Connection forms derive their authentication methods and named credential
+  slots from provider definitions. Planned adapters and planned auth methods
+  are disabled before submission.
+- Credential inputs are password/write-only controls. Read models expose only
+  slot names and lifecycle posture; the UI renders a configured marker, never
+  the stored SecretRef pointer.
+- Mutating server actions carry project and actor scope and rely on API
+  enforcement of `providerops_manage`. The client also removes mutation
+  controls for unauthorized actors.
+- Provider-account and resource drawers are viewport-bound dialogs containing
+  durable relationship and audit evidence. Revocation additionally requires
+  exact account-label confirmation and explains that rollback means creating a
+  new account and SecretRefs.
+- Tabular inventory may use an internal horizontal scroll container, but the
+  document viewport itself must not overflow at the 390-pixel mobile
+  breakpoint.
 
 Model Entitlement:
 

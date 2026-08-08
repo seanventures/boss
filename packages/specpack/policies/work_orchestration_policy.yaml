@@ -1,0 +1,59 @@
+kind: Policy
+id: work_orchestration_policy
+version: 0.1.0
+purpose: >
+  Make ranked, externally tracked work the only normal path into agent
+  execution while keeping resource allocation, provider writes, and delivery
+  status auditable.
+scope:
+  type: org
+rules:
+  system_of_record:
+    work_tracker_binding_required: true
+    default_provider: plane
+    alternate_providers_require_installed_plugin: true
+    tracker_provider_is_intake_authority: true
+    boss_jobs_are_execution_authority: true
+    provider_outages_are_visible: true
+    silent_sync_failure_allowed: false
+  priority:
+    explainable_score_required: true
+    required_inputs:
+      - strategic_value
+      - customer_impact
+      - urgency
+      - cost_of_delay
+      - risk_reduction
+      - dependency_pressure
+      - confidence
+    manual_adjustment_requires_rationale: true
+    ranking_never_overrides_budget_governor: true
+  allocation:
+    quota_required_for_tracked_jobs: true
+    scopes: [global, org, workspace, project, agent, workload]
+    dynamic_reallocation_allowed: true
+    borrowing_requires_explicit_policy: true
+    hard_limit_never_exceeded: true
+    budget_governor_wins: true
+  execution:
+    agents_take_work_from_leased_jobs: true
+    lease_ttl_and_heartbeat_required: true
+    tracker_sync_uses_leased_job: true
+    external_write_requires_receipt: true
+    dedupe_key_required: true
+    retry_or_deadletter_required: true
+    required_tracker_must_sync_before_agent_execution: true
+    unscoped_legacy_jobs:
+      allowed_during_migration: true
+      visible_as_policy_debt: true
+  product_management:
+    product_manager_owns_prd_currency: true
+    product_manager_owns_ticket_hygiene: true
+    priority_changes_require_evidence: true
+    done_requires_shipment_evidence: true
+  delivery_presence:
+    supported_providers: [plane, github, mattermost]
+    bot_credentials_are_secret_refs: true
+    raw_secrets_visible_to_agents: false
+    deployment_and_pull_request_events_are_audited: true
+    channel_data_boundary_must_allow_event: true

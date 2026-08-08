@@ -71,7 +71,7 @@ class BudgetGovernor:
             text(
                 """
                 SELECT daily_cap_usd_micros, soft_cap_pct, auto_lite_mode_pct,
-                       freeze_provisioning_pct, operational_intensity
+                       freeze_provisioning_pct, freeze_tier2_pct, operational_intensity
                 FROM budget_policies
                 WHERE scope_type = 'project' AND scope_id = :project_id
                 ORDER BY created_at DESC
@@ -100,6 +100,8 @@ class BudgetGovernor:
                 "soft_cap_pct": 0.7,
                 "auto_lite_mode_pct": 0.85,
                 "freeze_provisioning_pct": 0.9,
+                "freeze_tier2_pct": 0.95,
+                "tier2_frozen": False,
             }
 
         reservation_snapshot = connection.execute(
@@ -176,6 +178,9 @@ class BudgetGovernor:
         soft = float(policy_row["soft_cap_pct"])
         orange = float(policy_row["auto_lite_mode_pct"])
         red = float(policy_row["freeze_provisioning_pct"])
+        tier2 = float(policy_row["freeze_tier2_pct"] or 0.95)
+        # Enforced (BOSS-280): past this utilization, tier-2+ risk work is refused at reserve().
+        tier2_frozen = bool(cap and utilization >= tier2)
 
         budget_state = self._state_for_totals(
             cap,
@@ -211,6 +216,8 @@ class BudgetGovernor:
             "soft_cap_pct": soft,
             "auto_lite_mode_pct": orange,
             "freeze_provisioning_pct": red,
+            "freeze_tier2_pct": tier2,
+            "tier2_frozen": tier2_frozen,
             "operational_intensity": policy_row["operational_intensity"],
         }
 
@@ -458,9 +465,35 @@ class BudgetGovernor:
         expires_in_minutes: int,
         job_id: Optional[str] = None,
         allocation_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
     ) -> dict:
         self.expire_stale_reservations(connection, project_id)
         snapshot = self.status_for_project(connection, project_id)
+
+        # BOSS-280: freeze_tier2_pct, actually enforced. Past the threshold, HIGH-RISK work
+        # (tier >= 2) is refused even while cheaper/lower-risk work still fits under the cap —
+        # the last budget headroom is preserved for finishing safe work, not starting risky work.
+        if snapshot.get("tier2_frozen") and (risk_tier or 0) >= 2:
+            decision_id = create_blocking_decision(
+                connection, project_id, None,
+                "Tier-2 work frozen by budget policy",
+                {"action": "raise_cap_or_wait_for_headroom"},
+                {"requested_usd_micros": amount_usd_micros, "risk_tier": risk_tier,
+                 "utilization_ratio": snapshot.get("utilization_ratio"),
+                 "freeze_tier2_pct": snapshot.get("freeze_tier2_pct")},
+                "budget_tier2_frozen",
+            )
+            record_policy_eval(
+                connection, project_id, "budget.reserve", "deny", action=category,
+                reason="tier2 frozen (utilization past freeze_tier2_pct)",
+                detail={"risk_tier": risk_tier, "decision_id": decision_id,
+                        "utilization_ratio": snapshot.get("utilization_ratio")})
+            return {
+                "status": "denied",
+                "decision_id": decision_id,
+                "budget_state": snapshot["budget_state"],
+                "message": "Tier-2+ work is frozen at this budget utilization. Decision created.",
+            }
         total_after = (
             snapshot["reserved_usd_micros"] + snapshot["actual_usd_micros"] + amount_usd_micros
         )

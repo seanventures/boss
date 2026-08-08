@@ -637,7 +637,7 @@ export function WorkBoard({
                     <span className={`wf-ic tone-${m.tone}`}><m.Icon /></span>
                     <span className="wf-tl-body">
                       <span className="wf-tl-label">{m.label}</span>
-                      <span className="wf-tl-meta">{e.actor} · {fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
+                      <span className="wf-tl-meta" suppressHydrationWarning>{e.actor} · {fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
                     </span>
                   </div>
                 );
@@ -755,7 +755,7 @@ export function WorkflowHealth({
                   <span className="wf-ic tone-red"><Ic.alert /></span>
                   <span className="wf-fail-body">
                     <span className="wf-fail-reason">{d.reason}</span>
-                    <span className="wf-tl-meta">{d.sourceKind} · {d.status} · {fmtTime(d.createdAt)}</span>
+                    <span className="wf-tl-meta" suppressHydrationWarning>{d.sourceKind} · {d.status} · {fmtTime(d.createdAt)}</span>
                   </span>
                 </div>
               ))}

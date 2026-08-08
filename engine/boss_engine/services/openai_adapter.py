@@ -76,28 +76,46 @@ def _price_overrides() -> dict[str, tuple[float, float]]:
 _price_overrides_cache: dict = {}
 
 
-def price_for_model(model: str) -> tuple[float, float, bool]:
-    """(input_$/Mtok, output_$/Mtok, known). Overrides win; provider-prefixed names
-    (OpenRouter's "deepseek/deepseek-chat") also match on their basename. known=False
-    means the DEFAULT_PRICE fallback was used — treat that cost as an estimate."""
+def price_for_model(model: str, provider: str = "") -> tuple[float, float, bool]:
+    """(input_$/Mtok, output_$/Mtok, known). Lookup order (BOSS-280 P2):
+    "provider:model" (Azure/OpenRouter/self-hosted price the SAME model differently — set
+    e.g. {"azure:gpt-4o": [3.0, 12.0]} in BOSS_MODEL_PRICES_JSON) → exact model → basename
+    of provider-prefixed names ("deepseek/deepseek-chat"). Overrides always win.
+    known=False means the DEFAULT_PRICE fallback was used — treat that cost as an estimate."""
     table = {**PRICE_PER_MTOK, **_price_overrides()}
-    for key in (model, model.rsplit("/", 1)[-1]):
+    keys = []
+    if provider:
+        keys.append(f"{provider.strip().lower()}:{model}")
+    keys += [model, model.rsplit("/", 1)[-1]]
+    for key in keys:
         if key in table:
             return (*table[key], True)
     return (*DEFAULT_PRICE, False)
 
 
+# Cache pricing multipliers vs the input rate (Anthropic: reads 0.1x, 5-min writes 1.25x;
+# OpenAI cached input is 0.25-0.5x — 0.1/1.25 is the conservative Anthropic default since
+# that's the engine most of our cache traffic rides). Override via env if a provider differs.
+CACHE_READ_MULT = 0.1
+CACHE_WRITE_MULT = 1.25
+
+
 def estimate_cost_usd_micros(usage: dict) -> int:
-    """micros = prompt_tokens * input_$/Mtok + completion_tokens * output_$/Mtok.
+    """micros = prompt*input + completion*output + cache_read*input*0.1 + cache_write*input*1.25.
 
     If the backend already reported an exact cost (e.g. the Claude CLI returns
     total_cost_usd per call), honor that instead of the token price table."""
     if usage.get("cost_usd_micros") is not None:
         return int(usage["cost_usd_micros"])
-    inp, out, _ = price_for_model(str(usage.get("model") or ""))
+    inp, out, _ = price_for_model(str(usage.get("model") or ""),
+                                  provider=str(usage.get("provider") or ""))
     prompt = int(usage.get("prompt_tokens") or 0)
     completion = int(usage.get("completion_tokens") or 0)
-    return int(round(prompt * inp + completion * out))
+    cache_read = int(usage.get("cache_read_tokens") or 0)
+    cache_write = int(usage.get("cache_write_tokens") or 0)
+    return int(round(prompt * inp + completion * out
+                     + cache_read * inp * CACHE_READ_MULT
+                     + cache_write * inp * CACHE_WRITE_MULT))
 
 
 def _usage_from_response(response, model: str) -> dict:

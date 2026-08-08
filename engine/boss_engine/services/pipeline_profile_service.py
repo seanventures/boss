@@ -14,7 +14,32 @@ from .core import emit_event, make_id
 from .pipeline_profiles import DEFAULT_PROFILE, PROFILES
 
 _COLS = ("name", "label", "tier_floor", "tier_cap", "model_routing",
-         "caching", "parallel_checks", "is_default")
+         "caching", "parallel_checks", "is_default", "advisory_gate", "panel_checks")
+
+
+def _preset_field(name: str, field: str, default):
+    """Fall back to the PRESET's value for a field the DB row leaves NULL.
+
+    Every column added here is a semantic a preset defines. A row that predates the column
+    must not silently redefine `lean` as blocking just because its cell is empty — that is
+    exactly how `implement` ended up on opus at $6.10 after being routed to the cheap lane:
+    the Python constant was right and the stale DB row won.
+    """
+    return PROFILES.get(name, {}).get(field, default)
+
+
+def _panel_checks(r):
+    """Which adversarial seats run. NULL row cell -> the preset's list; absent -> None,
+    which the runtime reads as 'the full panel'."""
+    v = r["panel_checks"]
+    if v is None:
+        return _preset_field(r["name"], "panel_checks", None)
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except Exception:
+            return None
+    return list(v) if isinstance(v, list) else None
 
 
 def _row_to_profile(r) -> dict:
@@ -29,6 +54,9 @@ def _row_to_profile(r) -> dict:
         "tier_floor": r["tier_floor"], "tier_cap": r["tier_cap"],
         "model": routing or {}, "caching": r["caching"],
         "parallel_checks": r["parallel_checks"], "is_default": bool(r["is_default"]),
+        "advisory_gate": bool(r["advisory_gate"]) if r["advisory_gate"] is not None
+        else bool(_preset_field(r["name"], "advisory_gate", False)),
+        "panel_checks": _panel_checks(r),
         "custom": r["name"] not in PROFILES,
     }
 
@@ -39,6 +67,8 @@ def _preset(name: str, *, is_default: bool = False) -> dict:
         "name": name, "label": p["label"], "tier_floor": p["tier_floor"],
         "tier_cap": p["tier_cap"], "model": p.get("model", {}),
         "caching": p.get("caching", True), "parallel_checks": p.get("parallel_checks", True),
+        "advisory_gate": bool(p.get("advisory_gate", False)),
+        "panel_checks": p.get("panel_checks"),
         "is_default": is_default, "custom": False,
     }
 

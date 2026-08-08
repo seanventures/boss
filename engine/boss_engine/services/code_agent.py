@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import re
 from pathlib import Path
 import subprocess
 import time
@@ -113,18 +114,149 @@ class CodeAgentResult:
         }
 
 
+# Appended to EVERY agent invocation. Measured across four runs, the agent issued exactly
+# 1.00 tool calls per turn — 65, 114, 59 and 51 turns, never once batching. Each turn is a
+# full model round trip (~8-12s), so reading 19 files cost 19 round trips and ~8 minutes of
+# pure latency. Interactive Claude Code reads the same repo in 2-3 minutes because it fires
+# several reads in ONE turn. Nothing in BOSS ever asked for that, and headless `claude -p`
+# defaults to one-at-a-time. This is the single largest latency item in the pipeline and it
+# costs nothing to fix: the calls are independent, so issuing them together is free.
+_PARALLEL_TOOLS_RULE = (
+    "\n\nTOOL EFFICIENCY (important):\n"
+    "- When you need several INDEPENDENT pieces of information, issue those tool calls "
+    "TOGETHER IN ONE TURN — e.g. read 5 files in a single turn, not 5 turns. Every turn is a "
+    "network round trip; batching independent reads is the difference between seconds and "
+    "minutes.\n"
+    "- Prefer Grep/Glob to locate code over opening files speculatively one by one.\n"
+    "- Only serialize when a call genuinely depends on the previous result.\n"
+    # 40 of 110 turns in a measured run called NO tool at all — pure narration between
+    # actions, ~9.2s each, the single largest time bucket after the round trips themselves.
+    # The work is judged by the diff and by BOSS re-running the tests, never by the prose.
+    "- Do NOT narrate your plan between actions. BOSS judges the DIFF and re-runs the tests "
+    "itself; commentary costs a full round trip and is never read. Act, then summarise ONCE "
+    "at the end.\n"
+)
+
+
+_SHARED_ROOT_HINTS = ("readme", "package.json", "pyproject", "requirements", "makefile",
+                      "docker", ".gitignore", "conftest", "setup.cfg", "tsconfig")
+
+
+def _scope_to_task_app(entries: list[dict], files: list[str], task: str) -> tuple[list[dict], list[str]]:
+    """Restrict context to the app the task is ABOUT, when the repo holds several.
+
+    boss-sandbox now carries two applications. For "Expand N-Queens app to support 1-10
+    queens" the packer offered 26 N-Queens files AND 18 Sudoku ones, so ~40% of the agent's
+    context was an application it had no business reading — and it spent 8 minutes and 30
+    exploration calls orienting. Generic term-overlap scores sudoku_core/profile.py about as
+    highly as nqueens_core/profile.py.
+
+    When task words match top-level directories, keep those directories (plus genuinely
+    shared root files) and drop the sibling apps. If nothing matches, change nothing.
+    """
+    words = {w for w in re.split(r"[^a-z0-9]+", (task or "").lower()) if len(w) > 3}
+    if not words:
+        return entries, files
+    tops = {f.split("/", 1)[0] for f in files if "/" in f}
+    matched = {
+        top for top in tops
+        for w in words
+        if w in re.sub(r"[^a-z0-9]+", "", top.lower()) or re.sub(r"[^a-z0-9]+", "", top.lower()) in w
+    }
+    if not matched or matched == tops:
+        return entries, files          # nothing to disambiguate
+
+    # Name fragments of the OTHER apps, so their files can be spotted inside shared dirs.
+    # The shared dirs THEMSELVES must be excluded: `tests` is in `tops` and unmatched, so
+    # including it made every path under tests/ look like a sibling app's file and dropped
+    # the named app's own tests (tests/test_nqueens_board.py) from an N-Queens task.
+    _shared = {"tests", "test", "spec", "docs", "doc", "scripts"}
+    other_tokens = {re.sub(r"[^a-z0-9]+", "", t.lower()).replace("core", "").replace("web", "")
+                    for t in (tops - matched - _shared)}
+    other_tokens = {t for t in other_tokens if len(t) > 3}
+
+    def keep(rel: str) -> bool:
+        low = rel.lower()
+        top = rel.split("/", 1)[0]
+        if "/" not in rel:             # root-level file
+            return True
+        if top in matched:
+            return True
+        if any(h in low for h in _SHARED_ROOT_HINTS):
+            return True
+        if top in ("tests", "test", "spec", "docs"):
+            # Shared test/doc dirs hold BOTH apps' files (tests/test_nqueens_*.py next to
+            # tests/test_streak.py), so keeping the whole directory re-imports the sibling app
+            # through the back door. Drop the ones clearly named for another app.
+            return not any(tok in low for tok in other_tokens)
+        return top not in tops
+
+    kept_entries = [e for e in entries if keep(e["rel"])]
+    kept_files = [f for f in files if keep(f)]
+    return (kept_entries or entries), (kept_files or files)
+
+
+def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
+    # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
+    # added so the design system is visible, and selection is retrieval-driven (pin the design
+    # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.
+    exts = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs", ".json", ".md",
+            ".txt", ".cfg", ".toml", ".yaml", ".yml", ".gradle", ".xml", ".css", ".scss",
+            ".html", ".vue", ".svelte", ".tf", ".tfvars", ".hcl"}
+    skip = {"node_modules", "dist", "build", ".next", ".git", ".venv", "venv",
+            "__pycache__", "vendor", "target", "coverage", ".turbo"}
+    files: list[str] = []
+    entries: list[dict] = []
+    for p in sorted(cwd.rglob("*")):
+        if not p.is_file() or skip & set(p.parts):
+            continue
+        rel = p.relative_to(cwd).as_posix()
+        files.append(rel)
+        if p.suffix not in exts:
+            continue
+        try:
+            entries.append({"rel": rel, "content": p.read_text(errors="ignore"),
+                            "size": p.stat().st_size})
+        except OSError:
+            continue
+    # Pin the design-system source of truth (when the repo has one) so a UI task always sees the
+    # tokens + component kit; Terraform core stays pinned too. The 40/20KB caps are gone as the
+    # selection mechanism — max_files/max_bytes are a large safety ceiling.
+    # Scope to the app the task names BEFORE ranking, so a sibling application cannot
+    # consume half the context budget.
+    entries, files = _scope_to_task_app(entries, files, task)
+    ui = any(repo_retriever.is_design_file(e["rel"]) for e in entries)
+    selection = repo_retriever.select_files(entries, task, ui=ui, pin=_is_core_tf_file,
+                                             max_files=limit)
+    return repo_retriever.render_context(files, selection)
+
+
+def build_repo_context(cwd: Path, *, task: str = "", limit: int = 120) -> str:
+    """Relevance-ranked repo context for a task.
+
+    BOSS has owned a module-aware context packer since spec 09, but only NativeCodeAgent
+    used it — ClaudeCodeAgent started every stage with a bare prompt and rediscovered the
+    repository with its own tools. Measured on the implement stage of crun_08c43028:
+    ~27 of its tool calls were exploration (Read/ls/cat) against 16 real edits. That
+    rediscovery is paid again by every stage of every run.
+    """
+    return _pack(cwd, task=task, limit=limit)
+
+
 class CodeAgent(Protocol):
     def run(
         self, spec: CodeTaskSpec, repo: RepoContext, sandbox: EphemeralSandbox
     ) -> CodeAgentResult: ...
 
     def run_role(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
     ) -> dict:
         """Run one isolated, role-scoped invocation against an existing workdir.
-        Returns {summary, usage, cost_usd_micros, turns, model}. The role prompt is the
-        guidance; the model impersonates the role. read_only stages must not edit files;
-        model overrides which model runs this step (low-cost vs strong routing)."""
+        Returns {summary, usage, cost_usd_micros, turns, model, session_id?}. The role
+        prompt is the guidance; the model impersonates the role. read_only stages must
+        not edit files; model overrides which model runs this step (low-cost vs strong
+        routing). resume_session_id continues a prior SAME-role session (cache reuse)."""
         ...
 
 
@@ -151,10 +283,26 @@ class ClaudeCodeAgent:
                 return str(local)
         return configured
 
-    def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext) -> str:
+    def _build_prompt(self, spec: CodeTaskSpec, repo: RepoContext,
+                      cwd: Optional[Path] = None) -> str:
         criteria = "\n".join(f"- {c}" for c in spec.acceptance_criteria) or "- (none specified)"
         tests = "\n".join(f"- {c}" for c in spec.test_commands) or "- (none specified)"
         guide = f"\n\nREPO GUIDE:\n{repo.repo_guide}\n" if repo.repo_guide else ""
+        # Hand the agent a relevance-ranked map of the repo instead of making it discover the
+        # codebase with Read/ls/cat on every run. Bounded (a focused pack, not the whole tree)
+        # so it orients the agent rather than flooding the context it re-sends each turn.
+        ctx = ""
+        limit = int(getattr(self.settings, "code_agent_context_files", 14) or 0)
+        if cwd is not None and limit > 0:
+            try:
+                packed = build_repo_context(
+                    cwd, task=f"{spec.title}\n{spec.instructions}", limit=limit)
+            except Exception:
+                packed = ""
+            if packed:
+                ctx = ("\n\nREPO CONTEXT (pre-selected as most relevant — start here rather "
+                       "than exploring from scratch; open anything else you need):\n" + packed + "\n")
+        guide = ctx + guide
         return (
             "You are a senior software engineer working in a checked-out git repo "
             "(your current working directory). Implement the task below by editing "
@@ -174,7 +322,8 @@ class ClaudeCodeAgent:
 
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
-        allowed_tools: Optional[str] = None,
+        allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
+        max_turns: Optional[int] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -198,52 +347,104 @@ class ClaudeCodeAgent:
         if read_only:
             # Reviews read + judge; they don't need the full edit-loop turn budget.
             _max_turns = min(_max_turns, int(getattr(self.settings, "code_agent_review_max_turns", 16) or 16))
+        if max_turns:
+            # Explicit per-invocation budget. A reviewer that exhausted its turns returns NO
+            # verdict, and a verdict-less review used to read as "the code failed review" — so
+            # the caller escalates the budget and re-runs the REVIEW rather than repairing code
+            # that was never actually judged.
+            _max_turns = int(max_turns)
+            timeout = max(timeout, min(3600, int(max_turns) * 30))
         cmd = [
             self._claude_bin(),
-            "-p", prompt,
+            "-p",
             "--output-format", "json",
             "--max-turns", str(_max_turns),
             "--allowedTools", allowed,
             "--permission-mode", permission,
         ]
+        if resume_session_id:
+            # Token optimization: continue the prior session instead of cold-starting —
+            # the follow-up rides the warm prompt cache (repo context + conversation are
+            # cache READS, not fresh ingestion). Used by the repair loop.
+            cmd += ["--resume", resume_session_id]
         model = model or getattr(self.settings, "claude_cli_model", None)
         if model:
             cmd += ["--model", model]
-        try:
-            proc = subprocess.run(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(cwd),
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
-            ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"claude code agent exited {proc.returncode}: "
-                f"{(proc.stderr or proc.stdout or '')[:300]}"
-            )
-        try:
-            return json.loads(proc.stdout)
-        except Exception as exc:
-            raise RuntimeError(
-                f"claude code agent returned non-JSON: {proc.stdout[:300]}"
-            ) from exc
+        # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
+        # "--- SECTION ---" header) must never be read as a CLI option.
+        # Single choke point: every stage (build AND review) goes through _invoke, so the
+        # batching rule is applied uniformly here rather than in each prompt builder.
+        cmd += ["--", prompt + _PARALLEL_TOOLS_RULE]
+        last_error = ""
+        for attempt in range(3):
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(cwd),
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
+                ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
+            if proc.returncode == 0:
+                try:
+                    return json.loads(proc.stdout)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"claude code agent returned non-JSON: {proc.stdout[:300]}"
+                    ) from exc
+            # Non-zero exit: the CLI still prints its result JSON on stdout; the
+            # human-readable reason lives in `result` (e.g. "You've hit your monthly
+            # spend limit …"). Surface THAT instead of an opaque JSON prefix.
+            detail = (proc.stderr or proc.stdout or "")[:300]
+            try:
+                data = json.loads(proc.stdout)
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                if data.get("subtype") == "error_max_turns":
+                    # Ran out of turns ≠ failed: it's a PARTIAL attempt. Return it like a
+                    # normal result so (a) the spend is recorded instead of vanishing from
+                    # the ledger, and (b) the governed repair loop can run the authoritative
+                    # tests, gather evidence, and RESUME this session to finish the work.
+                    data.setdefault(
+                        "result",
+                        "(ran out of turns before finishing — partial attempt; resume to continue)",
+                    )
+                    return data
+                reason = str(data.get("result") or data.get("error") or "").strip()
+                subtype = str(data.get("subtype") or data.get("stop_reason") or "").strip()
+                if reason or subtype:
+                    detail = " — ".join(p for p in (subtype, reason[:220]) if p)
+            last_error = f"claude code agent exited {proc.returncode}: {detail}"
+            # TRANSIENT infra errors (dropped connection, overloaded upstream, gateway
+            # blips) must not fail a whole governed run — retry the invocation with a
+            # short backoff. Anything non-transient (spend limit, bad flags, real agent
+            # errors) raises immediately.
+            transient = any(marker in detail.lower() for marker in (
+                "connection closed mid-response", "connection error", "overloaded",
+                "internal server error", "network error", "econnreset", "socket hang up",
+                "529", "503", "bad gateway",
+            ))
+            if transient and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise RuntimeError(last_error)
+        raise RuntimeError(last_error or "claude code agent failed")
 
     @staticmethod
     def _usage(data: dict, settings: Settings) -> tuple[dict, int]:
         u = data.get("usage") or {}
-        prompt_tokens = (
-            int(u.get("input_tokens") or 0)
-            + int(u.get("cache_read_input_tokens") or 0)
-            + int(u.get("cache_creation_input_tokens") or 0)
-        )
+        # Cache tokens tracked separately (BOSS-280 P1) — see claude_cli_adapter._usage.
+        prompt_tokens = int(u.get("input_tokens") or 0)
+        cache_read = int(u.get("cache_read_input_tokens") or 0)
+        cache_write = int(u.get("cache_creation_input_tokens") or 0)
         completion = int(u.get("output_tokens") or 0)
         model_usage = data.get("modelUsage") or {}
         primary = next((n for n in model_usage if "haiku" not in n), None)
@@ -256,23 +457,30 @@ class ClaudeCodeAgent:
             "model": primary,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion,
-            "total_tokens": prompt_tokens + completion,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "total_tokens": prompt_tokens + cache_read + cache_write + completion,
             "cost_usd_micros": cost_micros,
         }
         return usage, cost_micros
 
     def run_role(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        resume_session_id: Optional[str] = None, max_turns: Optional[int] = None,
     ) -> dict:
         """Run a single role-scoped agent invocation against an existing workdir and
-        return {summary, usage, cost_usd_micros, turns, model}. Used by the governed
-        pipeline to dispatch each step as an ISOLATED context — a fresh `claude -p` process
-        with no shared session state between roles. `model` routes low-cost vs strong."""
+        return {summary, usage, cost_usd_micros, turns, model, session_id}. Used by the
+        governed pipeline to dispatch each step as an ISOLATED context — a fresh
+        `claude -p` process with no shared session state between roles. `model` routes
+        low-cost vs strong. `resume_session_id` continues a prior session of the SAME
+        role (repair loop) so the follow-up hits the warm prompt cache — never used
+        across roles, which would break reviewer independence."""
         if getattr(self, "redact", False):  # data-boundary: mask PII for restricted tasks
             prompt = _redact_pii(prompt)[0]
         started = time.monotonic()
         try:
-            data = self._invoke(prompt, cwd, read_only=read_only, model=model)
+            data = self._invoke(prompt, cwd, read_only=read_only, model=model,
+                                resume_session_id=resume_session_id, max_turns=max_turns)
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},
@@ -289,6 +497,7 @@ class ClaudeCodeAgent:
             "cost_usd_micros": cost_micros,
             "turns": turns,
             "model": model or usage.get("model"),
+            "session_id": data.get("session_id"),
         }
 
     def run_research(self, prompt: str, *, model: Optional[str] = None) -> dict:
@@ -319,7 +528,7 @@ class ClaudeCodeAgent:
     ) -> CodeAgentResult:
         if sandbox.path is None:
             raise RuntimeError("Sandbox must be provisioned before running the agent.")
-        prompt = self._build_prompt(spec, repo)
+        prompt = self._build_prompt(spec, repo, cwd=sandbox.path)
         started = time.monotonic()
         data = self._invoke(prompt, sandbox.path)
         usage, cost_micros = self._usage(data, self.settings)
@@ -390,6 +599,9 @@ class NativeCodeAgent:
         self._llm = OpenAIAdapter(settings)
 
     def _repo_context(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
+        return build_repo_context(cwd, task=task, limit=limit)
+
+    def _repo_context_impl(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
         # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
         # added so the design system is visible, and selection is retrieval-driven (pin the design
         # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.
@@ -451,7 +663,8 @@ class NativeCodeAgent:
         return written
 
     def run_role(
-        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None
+        self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
+        resume_session_id: Optional[str] = None,  # accepted for interface parity; native has no session store
     ) -> dict:
         from .openai_adapter import estimate_cost_usd_micros
 
@@ -533,6 +746,10 @@ _PROVIDER_LANES: dict[str, tuple[str, str]] = {
     "openrouter": ("openrouter_api_key", "openrouter_base_url"),
     "groq": ("groq_api_key", "groq_base_url"),
     "deepseek": ("deepseek_api_key", "deepseek_base_url"),
+    # Local / self-hosted lanes (OSS): same mechanics, no cloud credential.
+    # ollama defaults to the local daemon; vllm requires VLLM_BASE_URL.
+    "ollama": ("ollama_api_key", "ollama_base_url"),
+    "vllm": ("vllm_api_key", "vllm_base_url"),
 }
 
 
@@ -606,6 +823,8 @@ def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeA
         api_key = getattr(settings, key_field)
         if not api_key:
             raise RuntimeError(f"{key_field.upper()} is not configured.")
+        if not getattr(settings, url_field):
+            raise RuntimeError(f"{url_field.upper()} is not configured.")
         bound = settings.model_copy(update={
             "openai_api_key": api_key,
             "openai_base_url": getattr(settings, url_field),

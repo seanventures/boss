@@ -290,6 +290,153 @@ def execute_deployment_run_plan(
     }
 
 
+@register_executor("model.generate_code")
+def execute_model_generate_code(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """The first model-lane executor (Plane #298): one governed model call that
+    turns (repo_context, task_spec, constraints) into a patch artifact + test
+    plan, per the SkillSpec output schema. It never touches a repo — the patch
+    is an artifact for the software-factory gates to validate. Receipt-backed
+    so the budget reservation settles with the real token cost."""
+    from .claude_cli_adapter import make_chat_adapter
+    from .core import create_artifact
+    from .openai_adapter import estimate_cost_usd_micros
+
+    task_spec = _required_text(inputs, "task_spec")
+    repo_context = str(inputs.get("repo_context") or "").strip()
+    constraints = [str(item) for item in _optional_list(inputs, "constraints")]
+
+    org_id, workspace_id = context.tenant_scope()
+    dedupe_key = _model_generate_code_dedupe_key(
+        context.project_id, task_spec, repo_context, constraints
+    )
+    receipt, created = context.receipts.create_or_reuse(
+        context.connection,
+        org_id,
+        workspace_id,
+        context.project_id,
+        dedupe_key,
+        "model.generate_code",
+        {"data_boundary": "internal"},
+        {"task_spec": task_spec[:2000], "constraints": constraints},
+        created_by_job_id=context.created_by_job_id,
+        data_boundary="internal",
+    )
+    if not created:
+        prior = receipt.get("result") or {}
+        if receipt.get("status") == "succeeded" and prior.get("patch_artifact_id"):
+            return {
+                "status": "reused",
+                "patch_artifact_id": prior["patch_artifact_id"],
+                "test_plan": prior.get("test_plan") or "",
+                "receipt_id": receipt["id"],
+                "actual_cost_usd_micros": 0,
+            }
+        # A prior failed/in-progress attempt: fall through and try again under
+        # the same receipt (mark_succeeded/mark_failed below updates it).
+
+    system_prompt = (
+        "You are a senior software engineer producing a reviewable change.\n"
+        "Respond with EXACTLY two sections:\n"
+        "1. A unified diff inside a ```diff fenced block (git apply-able, "
+        "relative paths).\n"
+        "2. A line 'TEST PLAN:' followed by how to verify the change.\n"
+        "No other prose. Never invent files you were not shown."
+    )
+    user_prompt = f"TASK:\n{task_spec}\n"
+    if constraints:
+        user_prompt += "\nCONSTRAINTS:\n" + "\n".join(f"- {c}" for c in constraints) + "\n"
+    if repo_context:
+        user_prompt += f"\nREPOSITORY CONTEXT:\n{repo_context}\n"
+
+    try:
+        message, usage = make_chat_adapter(context.settings).create_chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        content = str(message.get("content") or "")
+        patch, test_plan = _split_patch_and_test_plan(content)
+        if not patch:
+            raise ValueError("model returned no ```diff block")
+        artifact_id = create_artifact(
+            context.connection,
+            context.settings,
+            context.project_id,
+            None,
+            "code_patch",
+            f"model.generate_code: {task_spec[:80]}",
+            {
+                "patch": patch,
+                "test_plan": test_plan,
+                "constraints": constraints,
+                "model": usage.get("model"),
+                "usage": usage,
+                "data_boundary": "internal",
+            },
+            created_by_job_id=context.created_by_job_id,
+        )
+        result = {"patch_artifact_id": artifact_id, "test_plan": test_plan}
+        context.receipts.mark_succeeded(
+            context.connection, receipt["id"], artifact_id, result
+        )
+    except Exception as error:
+        context.receipts.mark_failed(
+            context.connection,
+            receipt["id"],
+            {"message": str(error), "skill_id": "model.generate_code"},
+        )
+        raise
+    return {
+        "status": "created",
+        "patch_artifact_id": artifact_id,
+        "test_plan": test_plan,
+        "receipt_id": receipt["id"],
+        "actual_cost_usd_micros": estimate_cost_usd_micros(usage),
+    }
+
+
+def _model_generate_code_dedupe_key(
+    project_id: str,
+    task_spec: str,
+    repo_context: str,
+    constraints: list[str],
+) -> str:
+    """Stable receipt dedupe key for model.generate_code.
+
+    Constraints are part of the identity: omitting them caused silent wrong-reuse
+    when the same task/repo was re-invoked under different constraints.
+    """
+    import hashlib
+    import json
+
+    material = (
+        f"{project_id}:{task_spec}:{repo_context}\0"
+        f"{json.dumps(constraints, ensure_ascii=False)}"
+    )
+    return "model.generate_code:" + hashlib.sha256(material.encode()).hexdigest()
+
+
+def _split_patch_and_test_plan(content: str) -> tuple[str, str]:
+    """Parse the executor's required output format leniently: the first ```diff
+    fence is the patch; everything after 'TEST PLAN:' is the plan."""
+    patch = ""
+    marker = "```diff"
+    if marker in content:
+        after = content.split(marker, 1)[1]
+        patch = after.split("```", 1)[0].strip("\n")
+    upper = content.upper()
+    test_plan = ""
+    if "TEST PLAN:" in upper:
+        index = upper.rindex("TEST PLAN:")
+        test_plan = content[index + len("TEST PLAN:"):].strip()
+        test_plan = test_plan.split("```", 1)[0].strip()
+    return patch, test_plan
+
+
 @register_executor("deployment.health.check")
 def execute_deployment_health_check(
     context: SkillExecutorContext,

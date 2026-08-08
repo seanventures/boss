@@ -52,10 +52,15 @@ def _prepare_repo(spec):
         owner, repo = spec["owner"], spec["repo"]
         branch = spec.get("base_branch", "main")
         token = spec.get("token")
-        url = (
-            f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-            if token else f"https://github.com/{owner}/{repo}.git"
-        )
+        # BOSS-267: host-aware clone (the guest is dependency-free, so the tiny URL map lives
+        # inline; the host passes spec.repo_host — absent -> github, unchanged behavior).
+        host = (spec.get("repo_host") or "github").lower()
+        if host == "bitbucket":
+            url = (f"https://x-token-auth:{token}@bitbucket.org/{owner}/{repo}.git"
+                   if token else f"https://bitbucket.org/{owner}/{repo}.git")
+        else:
+            url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+                   if token else f"https://github.com/{owner}/{repo}.git")
         rc, _o, e = _run(["git", "clone", "--depth", "1", "--branch", branch, url, str(WORK)])
         if rc != 0:
             raise RuntimeError("clone failed: " + (e or "").replace(token or "\0", "***")[:300])

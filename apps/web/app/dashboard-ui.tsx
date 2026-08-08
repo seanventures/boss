@@ -3,7 +3,7 @@
 import { type DashboardSnapshot } from "../lib/dashboard";
 
 function usd(micros: number): string {
-  return `$${(micros / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  return `$${(micros / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 
 // State → signal color (design tokens). Status renders as colored mono text, never a pill.

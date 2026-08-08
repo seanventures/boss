@@ -19,6 +19,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cached_property
+import os
 from typing import Any, Iterator
 
 from ._compat import app_module, ensure_monorepo_on_path, services_module
@@ -34,6 +35,11 @@ class EngineContext:
 
     settings: Any
     engine: Any
+    # The engine's Settings object has a development Postgres default.  Preserve
+    # the difference between that default and an operator explicitly supplying a
+    # durable workspace: without the latter, catalog/inspection mode must never
+    # pretend that it can create governed work.
+    durable_workspace_configured: bool = True
 
     # ---- construction -----------------------------------------------------
     @classmethod
@@ -45,7 +51,11 @@ class EngineContext:
         engine = db.get_engine(settings)
         if ensure_schema:
             db.ensure_schema(engine, settings)
-        return cls(settings=settings, engine=engine)
+        return cls(
+            settings=settings,
+            engine=engine,
+            durable_workspace_configured=bool(os.environ.get("DATABASE_URL")),
+        )
 
     # ---- connections ------------------------------------------------------
     @contextmanager

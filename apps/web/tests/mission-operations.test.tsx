@@ -134,9 +134,9 @@ describe("mission operations views", () => {
       <MissionTaskBoard tasks={tasks} jobs={jobs} receipts={receipts} />,
     );
 
-    expect(rosterHtml).toContain("mission-roster-header");
-    expect(rosterHtml).toContain("state-running");
-    expect(rosterHtml).toContain("state-blocked");
+    expect(rosterHtml).toContain("ar-head");
+    expect(rosterHtml).toContain("bp-orb running");
+    expect(rosterHtml).toContain("bp-orb blocked");
     expect(rosterHtml).toContain("Reconcile deployment receipts");
     expect(boardHtml).toContain("T-123456");
     expect(boardHtml).toContain("1 receipt");

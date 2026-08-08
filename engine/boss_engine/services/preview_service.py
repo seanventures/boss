@@ -59,7 +59,165 @@ def _low_priority(command: list[str]) -> list[str]:
     return prefix + command
 
 
-def _detect_command(workdir: Path) -> Optional[list[str]]:
+# Single source of truth for "which python file starts this app". Kept as one constant because
+# the host path (_detect_command) and the container path (_generate_dockerfile) MUST agree --
+# they previously carried separate copies of this tuple, and an app whose entrypoint was named
+# serve.py failed to launch in both while the test fallback reported a misleading 'verified'.
+_PY_ENTRYPOINTS = ("server.py", "serve.py", "app.py", "wsgi.py", "main.py")
+# Directories a static build drops its index.html into, in priority order ("." = repo root).
+_STATIC_DIRS = (".", "web", "public", "dist", "site", "static")
+
+
+
+class AmbiguousAppError(RuntimeError):
+    """The repo holds several runnable apps and this task gave no signal which one is its own.
+
+    Raised rather than guessed. The previous behaviour returned the first convention match,
+    which showed an operator an application their task never touched — and in a repo shared
+    across customers, another tenant's app entirely.
+    """
+
+    def __init__(self, candidates: list[str]) -> None:
+        self.candidates = candidates
+        super().__init__(
+            "cannot tell which app this task built: the repository contains "
+            f"{len(candidates)} runnable apps ({', '.join(candidates)}) and the run recorded "
+            "no implementation files identifying one. Refusing to preview an arbitrary app. "
+            "Retry the task so it records what it built, or add a boss.preview.command file."
+        )
+
+
+def lineage_impl_files(engine, run: dict) -> list[str]:
+    """Every implementation file THIS TASK'S LINEAGE has written, newest attempt first.
+
+    `state.impl_files` is per-ATTEMPT. On a repair it holds only the touched-up files — for
+    crun_9b8e732b that was ["README.md", "nqueens_core/levels.py"], with no trace of the
+    web-nqueens/ app the task exists to build. resolve_app_entry then finds no index.html
+    among them and falls back to the repo-wide serve.py, so the preview served SUDOKU for an
+    N-Queens task. Again.
+
+    The branch holds the whole lineage's work, so the file list must too. (Deriving it with
+    `git diff base...HEAD` is not an option: the preview clones --depth 1 --branch X, so the
+    base ref does not exist in that workdir.)
+    """
+    fctx = run.get("finalize_ctx") or {}
+    root = fctx.get("root_run_id")
+    if not root and fctx.get("deferred_from_run"):
+        # A deferred-findings FOLLOW-UP is spawned as its own root, so its file list is only the
+        # findings it fixed — for crun_022620a9 that was ["nqueens_core/levels.py"], with no app
+        # in it at all. It builds on the SAME branch as the run it came from, so its preview must
+        # inherit that run's lineage. Resolved here rather than by writing root_run_id on the
+        # follow-up, which would make the pipeline treat it as a retry and change its stages.
+        with begin(engine) as c:
+            parent = c.execute(
+                text("SELECT COALESCE(finalize_ctx->>'root_run_id', id) AS r "
+                     "FROM code_task_runs WHERE id=:i"),
+                {"i": fctx["deferred_from_run"]},
+            ).mappings().first()
+        if parent:
+            root = parent["r"]
+    root = root or run.get("id")
+    if not root:
+        return list((run.get("state") or {}).get("impl_files") or [])
+    with begin(engine) as c:
+        rows = c.execute(
+            text("""
+                SELECT state->'impl_files' AS f
+                FROM code_task_runs
+                WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root
+                   OR finalize_ctx->>'deferred_from_run' IN (
+                        SELECT id FROM code_task_runs
+                        WHERE COALESCE(finalize_ctx->>'root_run_id', id) = :root)
+                ORDER BY created_at DESC
+            """),
+            {"root": root},
+        ).mappings().all()
+    out: list[str] = []
+    for r in rows:
+        for path in (r["f"] or []):
+            if isinstance(path, str) and path not in out:
+                out.append(path)
+    return out
+
+
+def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
+    """Directories this task touched, in the order they appear in the diff."""
+    out: list[str] = []
+    for c in changed or []:
+        d = c.rsplit("/", 1)[0] if "/" in c else "."
+        if d not in out:
+            out.append(d)
+    return out
+
+
+def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tuple[str, str]:
+    """THE single decision about which app a preview launches: ("py"|"static"|"node"|"", value).
+
+    Both the host path (_detect_command) and the container path (_generate_dockerfile) call
+    THIS. They previously each carried their own copy of the preference logic, and the copies
+    drifted twice:
+
+      PR #62  — the host path learned to prefer the entrypoint the task built; the container
+                path did not, and previewed Sudoku for an N-Queens build.
+      crun_9b8e732b — both paths then preferred a CHANGED .py entrypoint, but neither applied
+                the same preference to STATIC dirs. _STATIC_DIRS tries "." first, and a task
+                that built `web-nqueens/index.html` in a repo whose root already held the
+                Sudoku app previewed Sudoku again — this time via the repo-wide serve.py.
+
+    Hence one function. "What this task built" outranks "what the repo happens to contain",
+    for every stack, and there is exactly one place to change that rule.
+    """
+    touched = _changed_dirs(changed)
+
+    # 1. An entrypoint THIS task wrote.
+    for cand in [c for c in (changed or []) if c.endswith(".py")]:
+        base = cand.rsplit("/", 1)[-1]
+        if base.startswith(("serve", "server", "app", "main", "wsgi")) and (workdir / cand).exists():
+            return ("py", cand)
+    # 2. A static app THIS task built. Ranked ABOVE the repo-wide python fallback: a task that
+    #    ships web-nqueens/index.html means that app, not whatever serve.py predates it.
+    for d in touched:
+        if (workdir / d / "index.html").is_file():
+            return ("static", d)
+    # 3. Repo conventions — but ONLY when the repo is unambiguous.
+    #
+    # FAIL CLOSED ON AMBIGUITY. This used to walk the conventions and return the first hit, so
+    # a task whose own output revealed no app previewed whatever the repo happened to contain.
+    # A deferred-findings follow-up touching only nqueens_core/levels.py showed the operator
+    # the SUDOKU app sitting at the repo root. In a repo holding one customer's work that is a
+    # confusing preview; in a repo holding several it is showing someone another tenant's
+    # application. Serving the wrong app is strictly worse than serving nothing, so when the
+    # repo offers more than one candidate and the task gives no signal, we refuse and say why.
+    candidates: list[tuple[str, str]] = []
+    for entry in _PY_ENTRYPOINTS:
+        if (workdir / entry).exists():
+            candidates.append(("py", entry))
+    for cand in sorted(workdir.glob("*.py")):
+        if cand.name.startswith(("serve", "server", "app", "main", "wsgi")):
+            if ("py", cand.name) not in candidates:
+                candidates.append(("py", cand.name))
+    for rel in _STATIC_DIRS:
+        if (workdir / rel / "index.html").is_file():
+            candidates.append(("static", rel))
+    # Any OTHER top-level directory holding an index.html is a candidate too. Counting only the
+    # convention names made a multi-app repo look unambiguous: boss-sandbox holds web/ (Sudoku),
+    # web-stock/ and web-nqueens/, but only "web" is a convention, so a task with no signal got
+    # a confident answer of SUDOKU rather than the refusal this function promises. Ambiguity has
+    # to be measured against what the repo actually contains.
+    for cand in sorted(workdir.glob("*/index.html")):
+        rel = cand.parent.name
+        if ("static", rel) not in candidates:
+            candidates.append(("static", rel))
+    if not candidates and (workdir / "package.json").exists():
+        candidates.append(("node", "."))
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        raise AmbiguousAppError([f"{k}:{v}" for k, v in candidates])
+    return ("", "")
+
+
+def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optional[list[str]]:
     """Detect the repo's declared preview command before falling back to stack hints."""
     hint = workdir / "boss.preview.command"
     if hint.is_file() and hint.read_text(errors="ignore").strip():
@@ -110,9 +268,19 @@ def _detect_command(workdir: Path) -> Optional[list[str]]:
         for target in ("dev", "run"):
             if re.search(rf"(?m)^{target}\s*:", content):
                 return ["make", target]
-    for entry in ("server.py", "app.py", "wsgi.py", "main.py"):
-        if (workdir / entry).exists():
-            return ["python3", entry]
+    # PREFER WHAT THIS TASK BUILT. Selection used to walk a fixed filename list over the whole
+    # repo, so a task that added `serve_nqueens.py` to a repo already containing the Sudoku
+    # `serve.py` previewed SUDOKU — serve.py sorts earlier and serve_nqueens.py was not on the
+    # list at all. The preview faithfully launched the wrong application (PR #62).
+    # ONE decision, shared with the container path (see resolve_app_entry).
+    kind, value = resolve_app_entry(workdir, changed)
+    if kind == "py":
+        return ["python3", value]
+    if kind == "static":
+        # A static site still needs a SERVER — ES modules refuse to load over file:// — so a
+        # bare index.html is a runnable app, not a library.
+        return ["sh", "-lc",
+                f'python3 -m http.server "$PORT" --bind 0.0.0.0 --directory {value}']
     return None
 
 
@@ -231,12 +399,56 @@ def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0)
     return None
 
 
+class PreviewNotReady(Exception):
+    """A preview was requested for a run that has not produced a reviewable change yet.
+
+    Deliberately NOT a RuntimeError: the API tries several preview substrates in turn and
+    treats RuntimeError as "this substrate failed, try the next one". Retrying three ways
+    cannot conjure a PR, so this must propagate on the first attempt instead of being
+    swallowed into a generic "preview could not start".
+    """
+
+    def __init__(self, run_id: str, status: str, phase: str) -> None:
+        self.run_id, self.status, self.phase = run_id, status, phase
+        super().__init__(
+            f"run {run_id} has not opened a pull request yet "
+            f"(status={status}, phase={phase}), so there is no completed change to preview"
+        )
+
+    def as_detail(self) -> dict:
+        return {
+            "error": "preview_unavailable_no_pr",
+            "message": ("This run has not opened a pull request yet, so there is no completed "
+                        "change to preview."),
+            "run_id": self.run_id, "run_status": self.status, "run_phase": self.phase,
+            "next_action": ("Wait for the run to finish. If it is blocked on a plan-approval "
+                            "decision, approve it; if it failed, retry the task."),
+        }
+
+
+def assert_previewable(run: dict, run_id: str) -> None:
+    """A preview is only meaningful once the work exists as a PR.
+
+    Enforced HERE, in the one place every caller already passes through, rather than in each
+    entrypoint. The console gated its button and the API gated its endpoint, but the MCP tool
+    called the service directly and bypassed both — the same "fix the host path, miss the
+    container path" mistake that once launched Sudoku as the preview for an N-Queens build.
+    Share the decision, not just the data.
+
+    Gated on the PR, deliberately not on gates passing: an advisory run legitimately opens a
+    PR with failing checks and IS previewable.
+    """
+    if not (run.get("pull_request_url") or ""):
+        raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
+
+
 def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
     """Clone the run's branch, launch the app, discover its port, register an expiring preview."""
     with begin(engine) as c:
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
+    assert_previewable(run, run_id)
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
@@ -269,8 +481,9 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     token = settings.github_token
-    clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                 if token else f"https://github.com/{owner}/{repo}.git")
+    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                              owner, repo, token or "")
     clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120)
     if clone.returncode != 0:
@@ -308,13 +521,19 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "command": cmd_str, "exit_code": exit_code, "passed": passed,
             "output": output[-6000:],
             "message": (
-                f"This build is a library/module — there is no web app to serve, so nothing runs "
-                f"as a live URL. Instead I ran its test suite (`{cmd_str}`): "
+                f"Verified by tests — NOT a live app preview. No runnable entrypoint was detected "
+                f"(looked for: boss.preview.command, package.json dev/start, Procfile web, Makefile "
+                f"dev/run, {'/'.join(_PY_ENTRYPOINTS)}, index.html in {'/'.join(_STATIC_DIRS[1:])}), "
+                f"so this is either a library/module or an app whose entrypoint is named something "
+                f"unrecognised. Ran its test suite (`{cmd_str}`): "
                 f"{'PASSED ✓' if passed else 'FAILED ✗'} (exit {exit_code}). See the output below "
                 f"and the PR to review the code."),
         }
 
-    command = _detect_command(workdir)
+    # `impl_files` is what THIS task built — prefer its entrypoint over any
+    # pre-existing app already in the repo.
+    _changed = lineage_impl_files(engine, run)
+    command = _detect_command(workdir, _changed)
     if not command:
         # No web server, but a library still has a way to 'run it' — its tests. Prefer the test
         # command the pipeline already recorded on the run, else detect one from the repo.
@@ -373,14 +592,30 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
             "build_substrate": build_substrate}
 
 
-def _generate_dockerfile(workdir: Path) -> int:
+def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> int:
     """Ensure the app has a Dockerfile; return the container port the app listens on.
     Generated images set HOST=0.0.0.0 + PORT so deploy-ready apps bind correctly for -p mapping."""
     existing = workdir / "Dockerfile"
     if existing.exists():
         m = re.search(r"EXPOSE\s+(\d{2,5})", existing.read_text(errors="ignore"))
         return int(m.group(1)) if m else 8000
-    py_entry = next((e for e in ("server.py", "app.py", "wsgi.py", "main.py") if (workdir / e).exists()), None)
+    # Prefer the entrypoint THIS task built. Sharing _PY_ENTRYPOINTS between the host and
+    # container paths was not enough: the preference logic lived only in _detect_command, so a
+    # docker-mode preview still picked the repo's pre-existing serve.py and launched Sudoku for
+    # an N-Queens build (PR #62). Both paths must make the SAME choice, not merely consult the
+    # same list.
+    kind, value = resolve_app_entry(workdir, changed)
+    if kind == "static":
+        # Serve the static app THIS task built. Without this branch the container path fell
+        # through to the repo-wide python entrypoint and launched the wrong application.
+        port = 8000
+        existing.write_text(
+            "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\n"
+            f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\n"
+            f'CMD ["python3", "-m", "http.server", "{port}", "--bind", "0.0.0.0", '
+            f'"--directory", "{value}"]\n')
+        return port
+    py_entry = value if kind == "py" else None
     if py_entry:
         port = 8000
         reqs = "COPY requirements.txt ./\nRUN pip install --no-cache-dir -r requirements.txt\n" \
@@ -410,6 +645,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
+    assert_previewable(run, run_id)
     spec = run.get("spec") or {}
     owner = spec.get("owner") or settings.target_github_owner
     repo = spec.get("repo") or settings.target_github_repo
@@ -440,15 +676,17 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
     token = settings.github_token
-    clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                 if token else f"https://github.com/{owner}/{repo}.git")
+    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                              owner, repo, token or "")
     clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
                            capture_output=True, text=True, timeout=120)
     if clone.returncode != 0:
         return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
     try:
-        container_port = _generate_dockerfile(workdir)
+        _changed_ep = lineage_impl_files(engine, run)
+        container_port = _generate_dockerfile(workdir, _changed_ep)
     except RuntimeError as exc:
         return _fail(str(exc))
 
@@ -506,6 +744,7 @@ def start_rootfs_preview(
         run = load_code_task_run(c, run_id)
     if run is None:
         raise ValueError(f"code task run not found: {run_id}")
+    assert_previewable(run, run_id)
     fctx = run.get("finalize_ctx") or {}
     state = run.get("state") or {}
     build_substrate = fctx.get("execution_substrate") or state.get("execution_substrate")
@@ -603,14 +842,16 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
         workdir = Path(tempfile.mkdtemp(prefix=f"{preview_id}-", dir=str(PREVIEW_ROOT)))
         log_path = str(workdir / "_preview.log")
         token = settings.github_token
-        clone_url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-                     if token else f"https://github.com/{owner}/{repo}.git")
+        from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+        clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                                  owner, repo, token or "")
         clone = subprocess.run(
             ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
             capture_output=True, text=True, timeout=120)
         if clone.returncode != 0:
             return
-        command = _detect_command(workdir)
+        _changed = lineage_impl_files(engine, {"id": row["run_id"]})
+        command = _detect_command(workdir, _changed)
         if not command:
             return
         port_hint = _free_port()
@@ -1014,3 +1255,27 @@ def list_previews(
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     return [dict(r) for r in rows]
+
+
+def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
+    """Start a preview the same way the console's button does: try the substrates in order.
+
+    Exists so the pipeline's auto-preview and the API endpoint share ONE launch policy. The
+    endpoint used to own the ordering inline, and anything else calling a single start_* would
+    have silently used a different strategy — the same drift that made the container path pick
+    a different app from the host path.
+    """
+    attempts = (start_rootfs_preview, start_container_preview, start_preview)
+    last: dict = {"status": "failed", "error": "preview could not start"}
+    for fn in attempts:
+        try:
+            res = fn(engine, settings, run_id, ttl_minutes=ttl_minutes)
+        except (PreviewNotReady, AmbiguousAppError):
+            raise
+        except (ValueError, RuntimeError) as exc:
+            last = {"status": "failed", "error": str(exc)}
+            continue
+        if res.get("status") == "running":
+            return res
+        last = res
+    return last

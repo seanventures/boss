@@ -22,6 +22,10 @@ COPY db ./db
 COPY packages ./packages
 COPY scripts ./scripts
 COPY tools ./tools
+# Post-split the API's config/db/services are shims importing boss_engine, so the
+# runtime image must carry engine/ on PYTHONPATH (same as infra/containers/api.Dockerfile).
+COPY engine ./engine
+ENV PYTHONPATH=/app:/app/engine
 
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss
@@ -44,6 +48,9 @@ COPY db ./db
 COPY packages ./packages
 COPY scripts ./scripts
 COPY tools ./tools
+# Worker drives the same engine code paths — bundle engine/ like the api target.
+COPY engine ./engine
+ENV PYTHONPATH=/app:/app/engine
 
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss

@@ -23,6 +23,7 @@ class NoopBudgetPort:
         expires_in_minutes: int,
         job_id: Optional[str] = None,
         allocation_id: Optional[str] = None,
+        risk_tier: Optional[int] = None,
     ) -> dict[str, Any]:
         del connection
         reservation_id = f"oss_res_{uuid4().hex[:20]}"
@@ -40,6 +41,7 @@ class NoopBudgetPort:
             ).isoformat(),
             "job_id": job_id,
             "allocation_id": allocation_id,
+            "risk_tier": risk_tier,
             "unmetered": True,
         }
         with self._lock:

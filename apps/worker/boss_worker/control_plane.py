@@ -18,6 +18,12 @@ class LeasedJob:
     lease_token: str
     lease_expires_at: str
     data_boundary: str = "internal"
+    work_item_id: Optional[str] = None
+    tracker_binding_id: Optional[str] = None
+    allocation_id: Optional[str] = None
+    priority_score: Optional[float] = None
+    workload_class: str = "general"
+    resource_units: int = 1
 
 
 class ControlPlaneClient:
@@ -146,6 +152,28 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def sweep_deployment_health(self) -> dict[str, Any]:
+        """Probe every deployed target that is due for a health sample.
+
+        Called on the worker's idle path. Goes through the API rather than calling `sweep()`
+        in-process on purpose: probing a target resolves ITS credential and may SSH to the
+        host to work out why it is unreachable, and the worker's settings object carries
+        neither the artifact root nor the platform key that needs. The API has both.
+        """
+        response = self._client.post("/v1/delivery/health/sweep")
+        response.raise_for_status()
+        return response.json()
+
+    def sweep_qa_benchmark_evaluations(self) -> dict[str, Any]:
+        """Persist changed terminal benchmark reports as tuning evidence snapshots.
+
+        Unlike an improvement rollout, this is analysis-only: the API does not create
+        a candidate diff, spend budget, or apply any configuration.
+        """
+        response = self._client.post("/v1/qa/benchmark-apps/tuning-sweep", json={})
+        response.raise_for_status()
+        return response.json()
+
     def create_infra_droplet(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/infra/droplets", json=payload)
         response.raise_for_status()
@@ -170,6 +198,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def dispatch_a2a_message(
+        self, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/a2a/messages/{message_id}/dispatch", json=payload
+        )
+        response.raise_for_status()
+        return response.json()
+
     def deliver_webhook(
         self, delivery_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -188,6 +225,16 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_github_reconciliation(
+        self, run_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        response = self._client.post(
+            f"/v1/github/reconciliation-runs/{run_id}/execute",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def invoke_skill(
         self, skill_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -199,6 +246,14 @@ class ControlPlaneClient:
 
     def sync_provider_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/resources/sync", json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def sync_work_tracker(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post(
+            "/v1/work-orchestration/tracker-sync/execute",
+            json=payload,
+        )
         response.raise_for_status()
         return response.json()
 

@@ -14,7 +14,7 @@ boundaries:
     - Present estimates as exact.
     - Approve spend increases without decision policy.
 permissions:
-  allowed_skills: [cost.inspect, billing.sync.readonly, anomaly.detect, budget.recommend, artifact.create, decision.create]
+  allowed_skills: [cost.inspect, billing.sync.readonly, anomaly.detect, budget.recommend, artifact.create, decision.create, openai.costs.sync, anthropic.usage_cost.sync, digitalocean.billing.sync, aws.costs.sync]
   forbidden_skills: [budget.increase.apply, provider.write, provider.secret.read_raw]
 output_contracts: [CostAnomalyReport, BillingReconciliationSummary, BudgetPressureBrief]
 autonomy:

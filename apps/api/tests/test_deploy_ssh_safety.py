@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from apps.api.app.services import deploy_service as ds
+from boss_engine.services import preview_service
 
 
 def test_validate_ssh_target_rejects_shell_metacharacters():
@@ -107,7 +108,11 @@ def test_docker_run_failure_rolls_back_previous_build(monkeypatch):
     monkeypatch.setattr(ds, "load_code_task_run", lambda *_a, **_k: run)
     monkeypatch.setattr(ds, "begin", MagicMock())
     monkeypatch.setattr(ds, "emit_event", MagicMock())
-    monkeypatch.setattr(ds, "_build_dist", lambda *_a, **_k: Path("/tmp/boss-deploy-fake"))
+    monkeypatch.setattr(
+        ds,
+        "_build_dist",
+        lambda *_a, **_k: (Path("/tmp/boss-deploy-fake"), "static", "", "abc123"),
+    )
     monkeypatch.setattr(ds.time, "sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(ds.shutil, "rmtree", lambda *_a, **_k: None)
     monkeypatch.setattr(ds.os, "unlink", lambda *_a, **_k: None)
@@ -138,6 +143,9 @@ def test_docker_run_failure_rolls_back_previous_build(monkeypatch):
 
     monkeypatch.setattr(ds, "_ssh", fake_ssh)
     monkeypatch.setattr(ds.subprocess, "run", fake_run)
+    # File-lineage resolution has its own database contract. This test isolates the
+    # post-transfer rollback guarantee and supplies a deterministic build input.
+    monkeypatch.setattr(preview_service, "lineage_impl_files", lambda *_args: [])
 
     with pytest.raises(RuntimeError, match="docker run failed"):
         ds.deploy_ssh(

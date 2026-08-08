@@ -1551,7 +1551,7 @@ class ResourcePlaneService:
         target_ref: str,
         domains: list[str],
         required_resources: list[dict[str, Any]],
-        secret_refs: list[str],
+        secret_refs: list[str | dict[str, Any]],
         health_checks: list[dict[str, Any]],
         rollback_points: list[dict[str, Any]],
         actor: str,
@@ -1560,6 +1560,9 @@ class ResourcePlaneService:
             self.get_provider_account(connection, project_id, provider_account_id)
         normalized_environment = self._normalize_deployment_environment(environment)
         target_id = make_id("deptgt")
+        # Preserve dict bindings ({name, secret_ref_id}). _normalize_string_list used to
+        # strip them, so POST /v1/deployments could never store a Phase 1 credential binding.
+        normalized_secret_refs = self._normalize_secret_ref_bindings(secret_refs)
         connection.execute(
             text(
                 """
@@ -1600,7 +1603,7 @@ class ResourcePlaneService:
                 "target_ref": self._require_text(target_ref, "target_ref"),
                 "domains": json.dumps(self._normalize_string_list(domains)),
                 "required_resources": json.dumps(required_resources),
-                "secret_refs": json.dumps(self._normalize_string_list(secret_refs)),
+                "secret_refs": json.dumps(normalized_secret_refs),
                 "health_checks": json.dumps(health_checks),
                 "rollback_points": json.dumps(rollback_points),
                 "actor": actor,
@@ -4304,11 +4307,22 @@ class ResourcePlaneService:
         commit_ref: Optional[str],
     ) -> Optional[dict[str, Any]]:
         target_kind = target["target_kind"].lower().replace("-", "_")
-        if target_kind in {"local", "local_process", "local_runner"}:
+        # `provider_account_id` identifies a CLOUD PROVIDER ACCOUNT — an AWS/GCP/Azure identity
+        # whose API this deployment will call. A host reached over SSH is not that: its
+        # credential is a key, declared in the target's secret_refs and checked by the
+        # connector's validate() before anything is attempted. Demanding a provider account
+        # for it blocked a target that was fully credentialed and ready, with an error naming
+        # a concept that does not apply.
+        #
+        # Kept narrow deliberately: cloud kinds still require an account, because there the
+        # account IS the credential and the quota boundary.
+        if target_kind in {"local", "local_process", "local_runner", "ssh", "container"}:
             return None
         provider_account_id = target["provider_account_id"]
         if not provider_account_id:
-            raise ValueError("Provider deployment targets require provider_account_id.")
+            raise ValueError(
+                f"Cloud deployment targets require provider_account_id "
+                f"(target_kind={target_kind!r}).")
         account = self.get_provider_account(
             connection,
             target["project_id"],
@@ -8304,6 +8318,31 @@ class ResourcePlaneService:
 
     def _normalize_string_list(self, values: list[str]) -> list[str]:
         return [item.strip() for item in values if isinstance(item, str) and item.strip()]
+
+    def _normalize_secret_ref_bindings(
+        self, values: list[str | dict[str, Any]]
+    ) -> list[str | dict[str, Any]]:
+        """Keep Phase 1 dict bindings and bare string refs; drop empties only."""
+        out: list[str | dict[str, Any]] = []
+        for item in values or []:
+            if isinstance(item, str):
+                token = item.strip()
+                if token:
+                    out.append(token)
+            elif isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                ref_id = str(item.get("secret_ref_id") or "").strip()
+                legacy = str(item.get("ref") or "").strip()
+                if not name:
+                    continue
+                binding: dict[str, str] = {"name": name}
+                if ref_id:
+                    binding["secret_ref_id"] = ref_id
+                if legacy:
+                    binding["ref"] = legacy
+                if "secret_ref_id" in binding or "ref" in binding:
+                    out.append(binding)
+        return out
 
     def _require_text(self, value: str, field_name: str) -> str:
         cleaned = value.strip()

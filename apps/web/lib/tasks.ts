@@ -6,6 +6,7 @@ export type TaskFeedItem = {
   id: string;
   title: string;
   status: string;
+  derivedStatus?: string;
   ownerRoleId?: string;
   parentTaskId?: string;
   dependencyTaskIds: string[];
@@ -27,6 +28,7 @@ function mapTask(payload: TaskSummary): TaskFeedItem {
     id: payload.id,
     title: payload.title,
     status: payload.status,
+    derivedStatus: payload.derived_status,
     ownerRoleId: payload.owner_role_id,
     parentTaskId: payload.parent_task_id,
     dependencyTaskIds: payload.dependency_task_ids ?? [],
@@ -48,7 +50,7 @@ export function emptyTaskFeed(reason?: string, projectId = PROJECT_ID): TaskFeed
 
 export async function fetchTaskFeed(
   projectId = PROJECT_ID,
-  limit = 8,
+  limit = 30,
 ): Promise<TaskFeed> {
   try {
     const payload = await client.listTasks(resolveProjectId(projectId));

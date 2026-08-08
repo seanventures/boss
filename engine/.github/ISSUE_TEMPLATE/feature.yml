@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a user outcome for BOSS Engine.
+title: "[feature] "
+labels: ["feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the user, context, and current limitation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome and acceptance criteria
+      description: State observable success and safety or governance requirements.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or prior art
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks and non-goals
+      description: Include compatibility, security, budget, or external-effect implications.

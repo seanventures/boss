@@ -100,6 +100,68 @@ Acceptance criteria:
 - Given a UI-affecting change, when browser validation evidence is missing, then BOSS marks the release gate conditional until browser validation evidence is attached.
 - Given failing or missing validation, when merge is considered, then BOSS blocks merge and creates visible evidence instead of silently proceeding.
 
+### Story ENG-002: Govern Project GitHub Repositories and Branches
+
+As an engineering lead, I want GitHub connections, repositories, branches,
+sync, conflicts, and merges governed per project, so parallel contributors and
+agents cannot overwrite one another or merge against stale remote truth.
+
+Acceptance criteria:
+
+- Given a project-scoped GitHub App or PAT SecretRef, when an actor with
+  `github_manage` registers a connection, then BOSS stores only the SecretRef
+  pointer and non-secret App/installation identity and never returns the
+  pointer or raw credential.
+- Given secret-shaped connection or repository metadata, when registration is
+  attempted, then BOSS rejects it before persistence.
+- Given a configured connection and primary/source/upstream/mirror repository,
+  when the connection is tested, then BOSS calls the deterministic adapter,
+  records a deduplicated `github.repository.read` Receipt, updates canonical
+  repository identity and effective/missing permissions, and emits an audit
+  event.
+- Given the same test dedupe key, when the request is replayed, then BOSS
+  returns the prior Receipt and does not repeat the provider call.
+- Given a disabled or revoked connection, when any GitHub operation is
+  attempted, then BOSS fails before adapter invocation; a revoked connection
+  cannot be re-enabled and its bindings remain disabled.
+- Given another project ID, when a connection or repository binding is read or
+  mutated, then BOSS does not expose or change the original project's record.
+- Given an active repository binding, when a branch policy is created or
+  revised, then BOSS stores protected refs, allowed prefixes/name rules,
+  update/merge methods, checks, approvals, and history/signing requirements as
+  immutable versions with supersession and actor evidence.
+- Given an unsafe branch name, forbidden prefix, protected delete, disallowed
+  update/merge method, or force-push against a protected ref, when policy is
+  evaluated, then BOSS returns a deterministic blocked result and reasons
+  before any provider write.
+- Given a mutable branch operation, when BOSS begins work, then it owns a
+  current fenced TTL lease and fresh remote `BranchSnapshot` before deciding.
+- Given two agents acquire the same repository ref concurrently, when
+  acquisition serializes, then exactly one gets the active lease and the other
+  receives a visible conflict without a second owner row.
+- Given an acquired lease, when the owner heartbeats or releases it, then the
+  raw one-time token and current monotonic fencing token must both match; token
+  hashes are never returned or emitted in events.
+- Given a lease expires, when a new owner acquires or an operator reclaims it,
+  then BOSS preserves prior lease lineage, assigns a higher fence to new
+  ownership, and never reclaims an unexpired owner.
+- Given a branch snapshot capture, when BOSS reads GitHub, then it records a
+  deduplicated Receipt and immutable source/target commit and tree IDs,
+  parents, merge base, ahead/behind, protection, checks, and pinned policy
+  evaluation; replay does not repeat the provider read.
+- Given different commit identities with equal tree content, when topology is
+  classified, then BOSS records a tree-equivalent rewrite rather than a
+  content conflict.
+- Given a true divergence, when synchronization is requested, then BOSS creates
+  a dedicated resolution branch and typed `ConflictSet` instead of rewriting
+  the contributor or protected branch in place.
+- Given a proposed resolution, when merge is considered, then red-to-green
+  tests, independent review, current checks, ownership, policy, approval,
+  `MergeAuthorization`, ChangeSet, receipt, and rollback evidence are required.
+- Given a webhook is missed or duplicated, when reconciliation runs, then
+  scheduled polling converges through the same dedupe/jobs/state machine and
+  every exhausted failure becomes a visible deadletter or Decision.
+
 ### Story ENG-002: Package Agent Logic
 
 As a VP Agents or marketplace operator, I want worker agents packaged as modules, so that roles, prompts, skills, and runtime defaults can be versioned and distributed.
@@ -270,6 +332,47 @@ Acceptance criteria:
   adapter call; revoked records cannot be silently reactivated.
 - Given a provider is marked read-only or destructive-actions-disabled, when a write or destructive action is requested, then policy blocks the action before any provider call.
 - Given an agent needs provider data, when it requests access, then it receives typed Resource Plane outputs rather than raw credentials.
+
+### Story RPL-001A: Operate System Configuration
+
+As a ProviderOps Manager, I want connections, inventory, service posture, and
+cloud finance in one truthful workspace, so that I can understand authority,
+impact, health, and spend before changing provider state.
+
+Acceptance criteria:
+
+- Given the System Configuration workspace loads, when the provider catalog is
+  available but a secondary feed fails, then BOSS keeps connection controls
+  available and identifies the failed feed as partial rather than reporting a
+  false total outage.
+- Given AWS or DigitalOcean has an available adapter, when an authorized
+  operator selects it, then BOSS renders its supported authentication methods
+  and named write-only SecretRef slots.
+- Given Azure, Google Cloud, OVHcloud, or any authentication method is planned,
+  when an operator selects it, then BOSS explains that it is planned and
+  disables credential entry and submission.
+- Given a configured account exists, when its table row or drawer renders, then
+  BOSS shows credential slot count and version but never renders stored
+  SecretRef pointers or secret values.
+- Given the active actor lacks `providerops_manage`, when System Configuration
+  renders, then the actor receives an explicit read-only notice and no provider
+  mutation controls.
+- Given an account is untested, fresh, stale, disabled, revoked, or has an
+  error, when it renders, then the state and supporting timestamp or evidence
+  are visible without inference.
+- Given an operator changes the System Configuration view, when the page is
+  reloaded or shared, then `infra_view` restores the same view; saved resource
+  scope covers provider, account, environment, region, and service.
+- Given an account or resource detail drawer opens, when the operator reviews
+  it, then BOSS links impact, ownership, spend, tasks, deployments, budgets,
+  ChangeSets, receipts, and audit events where present.
+- Given an authorized operator chooses permanent revocation, when the warning
+  renders, then it states impact, required approval, absence of direct
+  rollback, retained evidence, and requires the exact account label before
+  submission.
+- Given the workspace renders at 390 CSS pixels, when dense provider tables and
+  account drawers are used, then scrolling remains contained and the document
+  does not overflow horizontally.
 
 ### Story RPL-002: Inventory External Resources
 

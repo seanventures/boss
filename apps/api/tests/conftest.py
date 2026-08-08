@@ -12,6 +12,7 @@ from apps.api.app.config import get_settings
 from apps.api.app.main import app
 from apps.api.app import main as api_main
 from apps.api.app.services.entitlements import EntitlementBrokerService
+from apps.api.app.services.agent_studio import AgentStudioService
 from apps.api.app.services.event_dispatch import invalidate_subscription_cache
 from apps.api.app.services.members import MemberDirectoryService
 from apps.api.app.services.skill_registry import seed_system_skills
@@ -59,9 +60,13 @@ def clean_tables(engine):
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
+            "delivery_presence_events",
+            "delivery_status_channels",
+            "delivery_bot_identities",
             # AI SRE reliability pipeline + knowledge graph + learning loop (child → parent)
             "incident_evidence",
             "reliability_policies",
+            "llm_calls",
             "remediations",
             "anomaly_signals",
             "incidents",
@@ -76,6 +81,23 @@ def clean_tables(engine):
             "workflow_mappings",
             "workflow_versions",
             "workflow_definitions",
+            "a2a_acknowledgements",
+            "a2a_transport_attempts",
+            "a2a_deliveries",
+            "a2a_outbox",
+            "a2a_envelopes",
+            "a2a_subscriptions",
+            "a2a_channels",
+            "panel_dissent",
+            "panel_findings",
+            "agent_studio_runs",
+            "panel_runs",
+            "panel_version_members",
+            "panel_versions",
+            "panel_definitions",
+            "agent_test_runs",
+            "agent_versions",
+            "agent_definitions",
             "agent_messages",
             "agent_threads",
             "account_connect_billing_portal_sessions",
@@ -112,6 +134,19 @@ def clean_tables(engine):
             "billing_accounts",
             "capabilities",
             "provider_accounts",
+            "github_repository_ref_states",
+            "github_repository_observations",
+            "github_reconciliation_runs",
+            "github_reconciliation_signals",
+            "github_merge_authorizations",
+            "github_resolution_plans",
+            "github_conflict_sets",
+            "github_code_sync_runs",
+            "github_branch_leases",
+            "github_branch_snapshots",
+            "github_branch_policies",
+            "github_repository_bindings",
+            "github_connections",
             "secret_refs",
             "resource_policies",
             "capacity_receipts",
@@ -130,6 +165,7 @@ def clean_tables(engine):
             "feedback_messages",
             "feedback_threads",
             "app_previews",
+            "qa_benchmark_evaluations",
             "code_task_runs",
             "meeting_runs",
             "ack_state",
@@ -159,6 +195,11 @@ def clean_tables(engine):
             "artifacts",
             "decisions",
             "jobs",
+            "work_tracker_bindings",
+            "work_tracker_providers",
+            "resource_allocations",
+            "resource_quotas",
+            "work_items",
             "tasks",
         ]:
             try:
@@ -188,6 +229,18 @@ def clean_tables(engine):
             "test-reset",
         )
         members.seed_default_members(
+            connection,
+            settings.default_project_id,
+            "test-reset",
+        )
+        AgentStudioService(settings).seed_catalog(
+            connection,
+            settings.default_project_id,
+            "test-reset",
+        )
+        from apps.api.app.services.work_orchestration import WorkOrchestrationService
+
+        WorkOrchestrationService(settings).seed_defaults(
             connection,
             settings.default_project_id,
             "test-reset",

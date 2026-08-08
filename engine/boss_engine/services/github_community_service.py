@@ -6,6 +6,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .github_adapter import GitHubAdapter
+from .repo_host import RepoHost  # BOSS-269: agents work against any SCM plugin
 from .github_pr_review_agent import GitHubPullRequestReviewAgent
 from .github_triage_agent import GitHubTriageAgent
 from .jobs import JobLeaseService
@@ -17,7 +18,7 @@ class GitHubCommunityService:
     def __init__(
         self,
         settings: Settings,
-        adapter_factory: Optional[Callable[[Settings], GitHubAdapter]] = None,
+        adapter_factory: Optional[Callable[[Settings], RepoHost]] = None,
     ) -> None:
         self.settings = settings
         self.jobs = JobLeaseService(settings)
@@ -26,12 +27,12 @@ class GitHubCommunityService:
         self.pr_review = GitHubPullRequestReviewAgent(settings, adapter_factory)
 
     @property
-    def adapter_factory(self) -> Optional[Callable[[Settings], GitHubAdapter]]:
+    def adapter_factory(self) -> Optional[Callable[[Settings], RepoHost]]:
         return self._adapter_factory
 
     @adapter_factory.setter
     def adapter_factory(
-        self, value: Optional[Callable[[Settings], GitHubAdapter]]
+        self, value: Optional[Callable[[Settings], RepoHost]]
     ) -> None:
         self._adapter_factory = value
         factory = value or GitHubAdapter

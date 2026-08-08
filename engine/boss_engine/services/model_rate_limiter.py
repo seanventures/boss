@@ -59,6 +59,10 @@ def provider_of(engine: Optional[str]) -> str:
     return e or "default"
 
 
+class RateLimitAcquireTimeout(RuntimeError):
+    """Raised when a call slot cannot be acquired within the deadline."""
+
+
 @dataclass
 class _Lane:
     limit: int                      # current AIMD concurrency cap
@@ -75,6 +79,8 @@ class ModelRateLimiter:
         self, *, max_concurrency: int = 3, floor_concurrency: int = 1,
         min_interval_s: float = 0.0, recover_after: int = 5,
         default_backoff_s: float = 30.0,
+        max_backoff_s: float = 300.0,
+        acquire_timeout_s: float = 600.0,
         time_fn: Callable[[], float] = time.monotonic,
         sleep_fn: Callable[[float], None] = time.sleep,
     ):
@@ -83,6 +89,14 @@ class ModelRateLimiter:
         self.min_interval_s = max(0.0, float(min_interval_s))
         self.recover_after = max(1, int(recover_after))
         self.default_backoff_s = max(0.0, float(default_backoff_s))
+        # A provider Retry-After was previously honoured VERBATIM. When an account hits its
+        # quota the provider answers with the time until the quota RESETS — potentially hours —
+        # so the limiter slept for hours while holding the job's lease. That is the root cause
+        # of the "164 min adversarial review": not review work, a silent backoff.
+        self.max_backoff_s = max(1.0, float(max_backoff_s))
+        # And acquisition itself was an unbounded `while True`. Past this deadline we raise
+        # instead of sleeping forever, so the stage fails FAST with a legible reason.
+        self.acquire_timeout_s = max(1.0, float(acquire_timeout_s))
         self._time = time_fn
         self._sleep = sleep_fn
         self._cond = threading.Condition()
@@ -96,18 +110,31 @@ class ModelRateLimiter:
         return lane
 
     def _acquire(self, provider: str) -> None:
+        deadline = self._time() + self.acquire_timeout_s
         with self._cond:
             lane = self._lane(provider)
             while True:
                 now = self._time()
+                if now >= deadline:
+                    waited = int(self.acquire_timeout_s)
+                    raise RateLimitAcquireTimeout(
+                        f"could not acquire a {provider} call slot within {waited}s "
+                        f"(in_flight={lane.in_flight}/{lane.limit}, "
+                        f"backoff_remaining={max(0, int(lane.backoff_until - now))}s). "
+                        "The provider is throttling or its quota is exhausted — failing fast "
+                        "instead of holding the job open.")
+                # Each wait is SLICED so the acquire deadline is re-checked promptly. A single
+                # long wait (a 300s backoff) would otherwise block past the deadline before the
+                # loop got a chance to give up.
+                slice_s = max(0.001, min(1.0, deadline - now))
                 if now < lane.backoff_until:
-                    self._cond.wait(timeout=max(0.001, lane.backoff_until - now))
+                    self._cond.wait(timeout=min(slice_s, max(0.001, lane.backoff_until - now)))
                     continue
                 if now < lane.next_earliest:
-                    self._cond.wait(timeout=max(0.001, lane.next_earliest - now))
+                    self._cond.wait(timeout=min(slice_s, max(0.001, lane.next_earliest - now)))
                     continue
                 if lane.in_flight >= lane.limit:
-                    self._cond.wait(timeout=1.0)   # wait for a release; re-check on wake
+                    self._cond.wait(timeout=slice_s)   # wait for a release; re-check on wake
                     continue
                 lane.in_flight += 1
                 lane.next_earliest = now + self.min_interval_s
@@ -136,6 +163,7 @@ class ModelRateLimiter:
             lane.limit = max(self.floor, lane.limit // 2)
             lane.successes = 0
             wait = self.default_backoff_s if retry_after_s is None else max(0.0, float(retry_after_s))
+            wait = min(wait, self.max_backoff_s)   # never sleep out a quota-reset window
             lane.backoff_until = max(lane.backoff_until, self._time() + wait)
             self._cond.notify_all()
 

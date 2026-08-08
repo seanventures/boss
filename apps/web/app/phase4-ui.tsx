@@ -12,7 +12,7 @@ import {
 } from "./actions";
 
 function usd(micros: number): string {
-  return `$${(micros / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  return `$${(micros / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 }
 function verdictTone(v: string): string {
   if (v === "on_track" || v === "recovered") return "#3fb950";

@@ -847,6 +847,35 @@ def resume_agent_run(connection: Connection, settings: Settings, run_id: str) ->
         return {"status": run["status"], "run_id": run_id}
     project_id = run["project_id"]
     pending = run["pending"] or {}
+    # Governance invariant: deferred high-risk tools only execute after the linked
+    # Decision is approved. The HTTP resume endpoint is worker-facing and historically
+    # had no actor check — without this gate, anyone who knew a suspended run_id could
+    # POST /v1/agent-runs/{id}/resume and execute the pending tool as if approved.
+    decision_id = str(pending.get("decision_id") or "").strip()
+    if not decision_id:
+        return {
+            "status": "denied",
+            "run_id": run_id,
+            "reason": "missing approval decision for suspended run",
+        }
+    decision = connection.execute(
+        text(
+            "SELECT status FROM decisions WHERE id = :id AND project_id = :project_id"
+        ),
+        {"id": decision_id, "project_id": project_id},
+    ).mappings().first()
+    if decision is None or decision["status"] != "approved":
+        return {
+            "status": "denied",
+            "run_id": run_id,
+            "decision_id": decision_id,
+            "reason": (
+                "decision not approved"
+                if decision is not None
+                else "approval decision not found"
+            ),
+            "decision_status": None if decision is None else decision["status"],
+        }
     if pending.get("kind") == "mcp":
         server = next(
             (

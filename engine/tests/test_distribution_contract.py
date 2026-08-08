@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = ROOT / "engine"
-RELEASE_VERSION = "0.8.0"
+RELEASE_VERSION = "0.9.1"
 
 
 def _json(path: Path) -> dict[str, object]:
@@ -45,8 +45,13 @@ def test_distribution_has_apache_license_evidence() -> None:
 
 def test_container_boundaries_include_the_engine_without_api_source() -> None:
     standalone = (ENGINE / "Dockerfile").read_text(encoding="utf-8")
-    assert "COPY boss_engine ./boss_engine" in standalone
-    assert "COPY pyproject.toml README.md LICENSE ./" in standalone
+    assert "COPY engine/boss_engine engine/boss_engine" in standalone
+    assert "COPY engine/pyproject.toml engine/README.md engine/LICENSE engine/" in standalone
+    # Self-bootstrap data (Plane #306): the standalone image vendors the schema,
+    # the spec pack, and the traceability table so `bootstrap` works on a fresh DB.
+    assert "COPY db/schema.sql db/schema.sql" in standalone
+    assert "COPY packages/specpack packages/specpack" in standalone
+    assert "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md" in standalone
     assert "apps/" not in "\n".join(
         line for line in standalone.splitlines() if line.lstrip().startswith("COPY ")
     )

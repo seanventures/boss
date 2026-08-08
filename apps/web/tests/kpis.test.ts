@@ -15,6 +15,11 @@ vi.mock("../lib/client", () => ({
     createKpi: vi.fn(),
     proposeCommand: vi.fn(),
     createProviderAccount: vi.fn(),
+    updateProviderAccount: vi.fn(),
+    enableProviderAccount: vi.fn(),
+    disableProviderAccount: vi.fn(),
+    rotateProviderCredentials: vi.fn(),
+    revokeProviderAccount: vi.fn(),
     createSelfImprovementProposal: vi.fn(),
     listSelfImprovementProposals: vi.fn(),
     queueOutboxDelivery: vi.fn(),
@@ -146,7 +151,12 @@ describe("client action feedback (toasts + revalidate)", async () => {
     createKpiAction,
     submitCommandAction,
     createProviderAccountAction,
+    disableProviderAccountAction,
+    enableProviderAccountAction,
+    revokeProviderAccountAction,
+    rotateProviderCredentialsAction,
     submitSelfImprovementProposalAction,
+    updateProviderAccountAction,
     queueOutboxMessageAction,
   } = await import("../app/actions");
 
@@ -240,5 +250,112 @@ describe("client action feedback (toasts + revalidate)", async () => {
     impFd.set("diff_summary", "d");
     await submitSelfImprovementProposalAction(impFd);
     expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("parses named write-only provider slots and lifecycle controls", async () => {
+    vi.mocked(client.createProviderAccount).mockResolvedValue({} as any);
+    vi.mocked(client.updateProviderAccount).mockResolvedValue({} as any);
+    vi.mocked(client.enableProviderAccount).mockResolvedValue({} as any);
+    vi.mocked(client.disableProviderAccount).mockResolvedValue({} as any);
+    vi.mocked(client.rotateProviderCredentials).mockResolvedValue({} as any);
+    vi.mocked(client.revokeProviderAccount).mockResolvedValue({} as any);
+
+    const create = new FormData();
+    create.set("project_id", "boss-dogfood");
+    create.set("actor", "ceo");
+    create.set("provider", "aws");
+    create.set("account_label", "AWS production");
+    create.set("auth_method", "access_key");
+    create.set("credential_ref__access_key_id", "env:BOSS_AWS_ACCESS_KEY_ID");
+    create.set(
+      "credential_ref__secret_access_key",
+      "env:BOSS_AWS_SECRET_ACCESS_KEY",
+    );
+    create.set("read_only", "true");
+    create.set("billing_readable", "true");
+    await createProviderAccountAction(create);
+
+    expect(client.createProviderAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "aws",
+        auth_method: "access_key",
+        credential_ref: undefined,
+        credential_refs: {
+          access_key_id: "env:BOSS_AWS_ACCESS_KEY_ID",
+          secret_access_key: "env:BOSS_AWS_SECRET_ACCESS_KEY",
+        },
+      }),
+    );
+
+    const update = new FormData();
+    update.set("provider_account_id", "pa_aws");
+    update.set("project_id", "boss-dogfood");
+    update.set("actor", "ceo");
+    update.set("account_label", "AWS primary");
+    update.append("read_only", "false");
+    update.append("deploy_capable", "true");
+    update.append("billing_readable", "true");
+    update.append("destructive_actions_disabled", "true");
+    await updateProviderAccountAction(update);
+    expect(client.updateProviderAccount).toHaveBeenCalledWith(
+      "pa_aws",
+      expect.objectContaining({
+        account_label: "AWS primary",
+        read_only: false,
+        deploy_capable: true,
+      }),
+    );
+
+    const lifecycle = new FormData();
+    lifecycle.set("provider_account_id", "pa_aws");
+    lifecycle.set("project_id", "boss-dogfood");
+    lifecycle.set("actor", "ceo");
+    await disableProviderAccountAction(lifecycle);
+    await enableProviderAccountAction(lifecycle);
+    expect(client.disableProviderAccount).toHaveBeenCalledWith("pa_aws", {
+      project_id: "boss-dogfood",
+      actor: "ceo",
+    });
+    expect(client.enableProviderAccount).toHaveBeenCalledWith("pa_aws", {
+      project_id: "boss-dogfood",
+      actor: "ceo",
+    });
+
+    const rotate = new FormData();
+    rotate.set("provider_account_id", "pa_aws");
+    rotate.set("project_id", "boss-dogfood");
+    rotate.set("actor", "ceo");
+    rotate.set("credential_ref__access_key_id", "env:BOSS_AWS_ACCESS_KEY_ID_V2");
+    rotate.set(
+      "credential_ref__secret_access_key",
+      "env:BOSS_AWS_SECRET_ACCESS_KEY_V2",
+    );
+    rotate.set("overlap_minutes", "15");
+    await rotateProviderCredentialsAction(rotate);
+    expect(client.rotateProviderCredentials).toHaveBeenCalledWith("pa_aws", {
+      project_id: "boss-dogfood",
+      credential_refs: {
+        access_key_id: "env:BOSS_AWS_ACCESS_KEY_ID_V2",
+        secret_access_key: "env:BOSS_AWS_SECRET_ACCESS_KEY_V2",
+      },
+      overlap_minutes: 15,
+      actor: "ceo",
+    });
+
+    const revoke = new FormData();
+    revoke.set("provider_account_id", "pa_aws");
+    revoke.set("project_id", "boss-dogfood");
+    revoke.set("actor", "ceo");
+    revoke.set("account_label", "AWS production");
+    revoke.set("confirmation", "wrong");
+    await expect(revokeProviderAccountAction(revoke)).rejects.toThrow(
+      "Type the account label exactly",
+    );
+    revoke.set("confirmation", "AWS production");
+    await revokeProviderAccountAction(revoke);
+    expect(client.revokeProviderAccount).toHaveBeenCalledWith("pa_aws", {
+      project_id: "boss-dogfood",
+      actor: "ceo",
+    });
   });
 });

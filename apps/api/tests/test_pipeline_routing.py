@@ -71,7 +71,7 @@ def test_parse_route_garbage_falls_back_to_strong():
 #  Precedence                                                                 #
 # --------------------------------------------------------------------------- #
 def test_precedence_spec_step_over_spec_default_over_profile():
-    profile = resolve_profile("balanced")  # profile: implement=strong
+    profile = resolve_profile("balanced")  # profile: implement=low_cost, reviews=strong
     mc = {"default": "native:deepseek-chat", "steps": {"implement": "claude_code:opus"}}
     r = route_for_step(profile, "implement", mc)
     assert (r["engine"], r["model"]) == ("claude_code", "opus")  # spec step wins

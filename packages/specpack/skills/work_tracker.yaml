@@ -1,0 +1,67 @@
+skills:
+  - id: work_tracker.issue.ensure
+    kind: work_tracking
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Ensure a task, feature, bug, incident, or PRD has a binding in the configured WorkTracker plugin.
+    data_boundary: internal
+    input_schema: { work_item_id: string, provider_key: "string?", title: string, description: "string?" }
+    output_schema: { tracker_binding_id: string, external_issue_id: "string?", sync_status: string }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 3, backoff: exponential }
+    permissions:
+      allowed_callers: [pm, coo, worker]
+      required_permissions: [work_tracker_write]
+    policy:
+      requires_receipt: true
+      requires_lease: true
+      dedupe_key_template: "work_tracker.issue.ensure:{work_item_id}"
+  - id: work_tracker.issue.update
+    kind: work_tracking
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Update state, priority, links, and evidence through the configured WorkTracker plugin.
+    data_boundary: internal
+    input_schema: { tracker_binding_id: string, state: "string?", comment_html: "string?", links: "array?" }
+    output_schema: { tracker_binding_id: string, sync_status: string, receipt_id: string }
+    cost: { estimator: fixed, category: tool }
+    retry: { max_attempts: 3, backoff: exponential }
+    permissions:
+      allowed_callers: [pm, coo, worker]
+      required_permissions: [work_tracker_write]
+    policy:
+      requires_receipt: true
+      requires_lease: true
+      dedupe_key_template: "work_tracker.issue.update:{tracker_binding_id}:{state}"
+  - id: work.priority.update
+    kind: orchestration
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Recompute an explainable work score from product and operational drivers.
+    data_boundary: internal
+    input_schema: { work_item_id: string, drivers: object, rationale: string }
+    output_schema: { work_item_id: string, effective_score: number, priority_band: string }
+    cost: { estimator: fixed, category: internal }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [pm, coo]
+      required_permissions: [work_prioritize]
+    policy: { requires_receipt: false, requires_lease: true }
+  - id: resource.allocation.plan
+    kind: orchestration
+    risk_tier: 1
+    mock_mode: false
+    load: eager
+    description: Allocate bounded execution capacity to ranked work without bypassing budget policy.
+    data_boundary: internal
+    input_schema: { project_id: string, resource_kind: string }
+    output_schema: { allocations: array, throttled: array }
+    cost: { estimator: fixed, category: internal }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [coo, finops_sentinel, worker]
+      required_permissions: [resource_allocate]
+    policy: { requires_receipt: false, requires_lease: true, budget_governor_wins: true }

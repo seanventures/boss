@@ -1,0 +1,122 @@
+kind: WorkflowSpec
+id: qa_benchmark_baseline_tuning
+version: 0.1.0
+name: QA benchmark evidence to governed baseline improvement
+description: >
+  Collect a pinned benchmark's durable report, identify observed scorecard gaps,
+  and route a developer-authored candidate diff through isolated evaluation,
+  approval, canary, rollout, and rollback. It never writes a workflow/model
+  configuration or applies a candidate directly.
+entry_step: collect_terminal_report
+input_schema:
+  required: [project_id, benchmark_run_id, candidate_change_ref, candidate_diff_summary, dedupe_key]
+output_schema:
+  required: [status, benchmark_report_ref, recommendation, audit_event_ref]
+steps:
+  - id: collect_terminal_report
+    kind: task
+    input: { operation: qa_benchmark.load_report }
+    next: [report_is_terminal]
+  - id: report_is_terminal
+    kind: condition
+    expression: { path: context.report_terminal, op: eq, value: true }
+    on_true: evaluate_observed_scorecard
+    on_false: record_waiting_for_evidence
+  - id: evaluate_observed_scorecard
+    kind: task
+    input: { operation: qa_benchmark.derive_tuning_recommendation }
+    next: [candidate_has_measured_gap]
+  - id: candidate_has_measured_gap
+    kind: condition
+    expression: { path: context.recommendation_ready, op: eq, value: true }
+    on_true: validate_candidate_change_ref
+    on_false: record_insufficient_evidence
+  - id: validate_candidate_change_ref
+    kind: task
+    input: { operation: qa_benchmark.validate_traceable_candidate_diff }
+    next: [candidate_diff_is_present]
+  - id: candidate_diff_is_present
+    kind: condition
+    expression: { path: context.candidate_diff_is_traceable, op: eq, value: true }
+    on_true: create_governed_improvement_proposal
+    on_false: record_candidate_missing
+  - id: create_governed_improvement_proposal
+    kind: task
+    input: { operation: self_improvement.create_proposal_from_benchmark_evidence }
+    next: [run_isolated_control_and_candidate]
+  - id: run_isolated_control_and_candidate
+    kind: parallel
+    branches: [run_pinned_control, run_candidate_intervention]
+    join: compare_isolated_results
+  - id: run_pinned_control
+    kind: task
+    input: { operation: qa_benchmark.run_comparable_control }
+    next: [compare_isolated_results]
+  - id: run_candidate_intervention
+    kind: task
+    input: { operation: qa_benchmark.run_single_variable_candidate }
+    next: [compare_isolated_results]
+  - id: compare_isolated_results
+    kind: join
+    wait_for: [run_pinned_control, run_candidate_intervention]
+    success_policy: all
+    next: [isolated_improvement_reproduced]
+  - id: isolated_improvement_reproduced
+    kind: condition
+    expression: { path: context.improvement_reproduced, op: eq, value: true }
+    on_true: request_canary_decision
+    on_false: record_inconclusive
+  - id: request_canary_decision
+    kind: decision
+    question: Approve a QA-only canary for this evidence-backed tuning candidate?
+    input: { default_action: hold, required_refs: [candidate_change_ref, control_report, candidate_report, rollback_plan] }
+    next: [run_qa_only_canary]
+  - id: run_qa_only_canary
+    kind: task
+    input: { operation: self_improvement.run_canary }
+    next: [request_rollout_decision]
+  - id: request_rollout_decision
+    kind: decision
+    question: Approve staged rollout of the tuning candidate after canary evidence?
+    input: { default_action: hold, required_refs: [canary_report, rollback_plan, success_metrics] }
+    next: [start_staged_rollout]
+  - id: start_staged_rollout
+    kind: task
+    input: { operation: self_improvement.start_rollout }
+    next: [monitor_rollout]
+  - id: monitor_rollout
+    kind: task
+    input: { operation: self_improvement.monitor_and_advance }
+    next: [record_outcome]
+  - id: record_waiting_for_evidence
+    kind: task
+    input: { operation: qa_benchmark.record_waiting_for_evidence }
+    next: [record_outcome]
+  - id: record_insufficient_evidence
+    kind: task
+    input: { operation: qa_benchmark.record_insufficient_evidence }
+    next: [record_outcome]
+  - id: record_candidate_missing
+    kind: task
+    input: { operation: qa_benchmark.record_candidate_missing }
+    next: [record_outcome]
+  - id: record_inconclusive
+    kind: task
+    input: { operation: qa_benchmark.record_inconclusive_comparison }
+    next: [record_outcome]
+  - id: record_outcome
+    kind: task
+    input: { operation: audit.emit_qa_benchmark_tuning_result }
+rules:
+  never_apply_candidate_directly: true
+  developer_authored_pr_or_config_diff_required: true
+  compare_same_benchmark_and_scorecard_revision: true
+  exactly_one_candidate_variable_changes: true
+  correlation_only_is_inconclusive: true
+  decision_defaults_to_hold: true
+  canary_before_rollout: true
+  rollback_plan_required: true
+  every_attempt_is_audited: true
+completion:
+  artifacts_required: [EvaluationRun, ImprovementProposal, CanaryRun, Evidence]
+  non_terminal_result: waiting_for_evidence

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boss-engine"
-version = "0.8.0"
+version = "0.9.1"
 description = "The OSS-shippable core of the BOSS autonomous software factory: the workflow engine, its tool layer, the engine-native agent, and an MCP server — with no dependency on the HTTP API or web console."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,7 +15,7 @@ authors = [{ name = "BOSS" }]
 # while the HTTP API and web console remain outside this distribution.
 dependencies = [
     "boto3>=1.43,<2",
-    "cryptography>=48,<49",
+    "cryptography>=50,<51",
     "httpx>=0.28,<1",
     "markdown>=3.9,<4",
     "openai>=1.93,<2",
@@ -25,6 +25,7 @@ dependencies = [
     "PyJWT[crypto]>=2.10,<3",
     "PyYAML>=6,<7",
     "reportlab>=4.5,<5",
+    "redis>=5.2,<6",
     "SQLAlchemy>=2.0,<3",
     "websockets>=15,<16",
 ]

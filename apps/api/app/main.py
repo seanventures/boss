@@ -13,7 +13,7 @@ from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import text
 
 from boss_engine.ports import configure_engine_ports
@@ -225,6 +225,62 @@ from .schemas import (
     FileChange,
     InboundWebhookResponse,
     GitHubCommunityJobExecuteRequest,
+    GitHubBranchPolicyCreateRequest,
+    GitHubBranchPolicyEvaluateRequest,
+    GitHubBranchPolicyEvaluationResponse,
+    GitHubBranchPolicyListResponse,
+    GitHubBranchPolicySummary,
+    GitHubBranchPolicyUpdateRequest,
+    GitHubBranchLeaseAcquireRequest,
+    GitHubBranchLeaseAcquireResponse,
+    GitHubBranchLeaseHeartbeatRequest,
+    GitHubBranchLeaseListResponse,
+    GitHubBranchLeaseReclaimRequest,
+    GitHubBranchLeaseReleaseRequest,
+    GitHubBranchLeaseSummary,
+    GitHubBranchSnapshotCaptureRequest,
+    GitHubBranchSnapshotCaptureResponse,
+    GitHubBranchSnapshotListResponse,
+    GitHubBranchSnapshotSummary,
+    GitHubCodeSyncApplyRequest,
+    GitHubCodeSyncPlanRequest,
+    GitHubCodeSyncRunListResponse,
+    GitHubCodeSyncRunSummary,
+    GitHubConflictSetListResponse,
+    GitHubConflictSetSummary,
+    GitHubConnectionCreateRequest,
+    GitHubConnectionLifecycleRequest,
+    GitHubConnectionListResponse,
+    GitHubConnectionSummary,
+    GitHubConnectionTestRequest,
+    GitHubConnectionTestResponse,
+    GitHubMergeAuthorizationApplyRequest,
+    GitHubMergeAuthorizationApproveRequest,
+    GitHubMergeAuthorizationCreateRequest,
+    GitHubMergeAuthorizationEnqueueRequest,
+    GitHubMergeAuthorizationListResponse,
+    GitHubMergeAuthorizationSummary,
+    GitHubReconciliationExecuteRequest,
+    GitHubReconciliationExecuteResponse,
+    GitHubReconciliationPollRequest,
+    GitHubReconciliationPollResponse,
+    GitHubReconciliationRepairRequest,
+    GitHubReconciliationRunListResponse,
+    GitHubReconciliationRunSummary,
+    GitHubReconciliationSignalListResponse,
+    GitHubReconciliationSignalSummary,
+    GitHubRepositoryRefStateListResponse,
+    GitHubRepositoryRefStateSummary,
+    GitHubRepositoryBindingCreateRequest,
+    GitHubRepositoryBindingListResponse,
+    GitHubRepositoryBindingSummary,
+    GitHubRepositoryBindingUpdateRequest,
+    GitHubResolutionApplyResponse,
+    GitHubResolutionPlanApplyRequest,
+    GitHubResolutionPlanApproveRequest,
+    GitHubResolutionPlanCreateRequest,
+    GitHubResolutionPlanListResponse,
+    GitHubResolutionPlanSummary,
     WebhookDeliveryCreateRequest,
     WebhookDeliveryExecuteRequest,
     WebhookDeliveryListResponse,
@@ -379,6 +435,7 @@ from .schemas import (
     SecretRefListResponse,
     SecretRefSummary,
     SecretRefUpdateRequest,
+    QABenchmarkTuningProposalRequest,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -418,6 +475,7 @@ from .schemas import (
     WorkflowDefinitionDetail,
     WorkflowDefinitionListResponse,
     WorkflowDefinitionSummary,
+    WorkflowDraftValidateRequest,
     WorkflowMappingCreateRequest,
     WorkflowMappingListResponse,
     WorkflowMappingResolveRequest,
@@ -437,6 +495,47 @@ from .schemas import (
     WorkflowStepRunSummary,
     WorkflowVersionCreateRequest,
     WorkflowVersionSummary,
+)
+from .schemas import (
+    A2AAcknowledgeRequest,
+    A2AChannelCreateRequest,
+    A2ADispatchRequest,
+    A2AMessageCancelRequest,
+    A2AMessagePublishRequest,
+    A2AMessageReplayRequest,
+    A2APollRequest,
+    A2ASubscriptionCreateRequest,
+    AgentDefinitionCreateRequest,
+    AgentStudioActorRequest,
+    AgentStudioRunRequest,
+    AgentTestRunRequest,
+    AgentVersionCreateRequest,
+    PanelDefinitionCreateRequest,
+    PanelRunRequest,
+    PanelVersionCreateRequest,
+    DeliveryBotIdentityUpsertRequest,
+    DeliveryPresenceEventCreateRequest,
+    DeliveryStatusChannelUpsertRequest,
+    ResourceAllocationPlanRequest,
+    ResourceQuotaUpsertRequest,
+    WorkItemUpsertRequest,
+    WorkTrackerBindingUpsertRequest,
+    WorkTrackerSyncExecuteRequest,
+)
+from .services.a2a import (
+    A2ANotFoundError,
+    A2AService,
+    A2AStateError,
+    A2ATransportUnavailable,
+)
+from .services.agent_studio import (
+    AgentDefinitionNotFoundError,
+    AgentStudioService,
+    AgentVersionNotFoundError,
+    AgentVersionStateError,
+    PanelDefinitionNotFoundError,
+    PanelVersionNotFoundError,
+    PanelVersionStateError,
 )
 from .services.audit import AuditTrailService
 from .services.agent_loop import conversation_from_messages, describe_native_tools
@@ -489,7 +588,45 @@ from .services.webhooks import (
     WebhookService,
 )
 from .services.plane_webhooks import PlaneWebhookService
+from .services.plane_client import PlaneClient
 from .services.github_community_service import GitHubCommunityService
+from .services.github_branches import (
+    GitHubBranchPolicyNotFoundError,
+    GitHubBranchService,
+    GitHubBranchSnapshotNotFoundError,
+)
+from .services.github_branch_leases import (
+    GitHubBranchLeaseConflictError,
+    GitHubBranchLeaseNotFoundError,
+    GitHubBranchLeaseService,
+    GitHubBranchLeaseTokenError,
+)
+from .services.github_code_sync import (
+    GitHubCodeSyncNotFoundError,
+    GitHubCodeSyncService,
+    GitHubCodeSyncStaleError,
+    GitHubCodeSyncStateError,
+    GitHubConflictSetNotFoundError,
+    GitHubResolutionPlanNotFoundError,
+)
+from .services.github_connections import (
+    GitHubConnectionNotFoundError,
+    GitHubConnectionService,
+    GitHubConnectionStateError,
+    GitHubRepositoryBindingNotFoundError,
+)
+from .services.github_merges import (
+    GitHubMergeAuthorizationNotFoundError,
+    GitHubMergeAuthorizationService,
+    GitHubMergeAuthorizationStaleError,
+    GitHubMergeAuthorizationStateError,
+)
+from .services.github_reconciliation import (
+    GitHubReconciliationNotFoundError,
+    GitHubReconciliationProviderError,
+    GitHubReconciliationService,
+    GitHubReconciliationStateError,
+)
 from .services.infrastructure import (
     InfraResourceNotFoundError,
     InfrastructureService,
@@ -502,6 +639,7 @@ from .services.agent_service import (
     AgentThreadOwnershipError,
 )
 from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.work_orchestration import WorkOrchestrationService
 from .services.members import (
     DEFAULT_MEMBER_IDS,
     MemberDirectoryService,
@@ -603,6 +741,28 @@ webhooks = WebhookService(settings)
 inbound_webhooks = InboundWebhookService(settings)
 plane_webhooks = PlaneWebhookService(settings)
 github_community = GitHubCommunityService(settings)
+github_connections = GitHubConnectionService(settings)
+github_branches = GitHubBranchService(
+    settings,
+    github_connections=github_connections,
+)
+github_branch_leases = GitHubBranchLeaseService(
+    github_connections=github_connections,
+)
+github_code_sync = GitHubCodeSyncService(
+    github_connections=github_connections,
+    github_branches=github_branches,
+    github_branch_leases=github_branch_leases,
+)
+github_merge_authorizations = GitHubMergeAuthorizationService(
+    github_connections=github_connections,
+    github_branches=github_branches,
+    github_branch_leases=github_branch_leases,
+)
+github_reconciler = GitHubReconciliationService(
+    settings,
+    github_connections=github_connections,
+)
 software_factory = SoftwareFactoryService(settings, ports=engine_ports)
 decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
@@ -634,6 +794,9 @@ ops_queue = OpsQueueService(settings)
 reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
+agent_studio = AgentStudioService(settings)
+a2a = A2AService(settings)
+work_orchestration = WorkOrchestrationService(settings)
 deployment_rollout_engine = DeploymentRolloutEngine(settings)
 promotion_orchestrator = PromotionOrchestrator(
     settings,
@@ -800,6 +963,15 @@ async def lifespan(_: FastAPI):
         print(f"[lifespan] preview reconciliation: {result}")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] preview reconciliation skipped: {exc}")
+    # A deployment runs in a background THREAD of this process. If the process dies mid-flight
+    # its row stays `running` forever: the console polls it every two seconds for eternity and
+    # an operator reads "still deploying" about work that stopped when the API restarted.
+    # Nothing else can adopt that thread, so startup is the only honest place to close it out.
+    try:
+        from .services.delivery_pipeline import fail_orphaned_deployments
+        print(f"[lifespan] orphaned deployments: {fail_orphaned_deployments(engine)}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] orphaned-deployment sweep skipped: {exc}")
     try:
         from .services.execution_substrate import effective_substrates
         print(f"[lifespan] execution substrates: {effective_substrates(settings)}")
@@ -863,6 +1035,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
     # Plane's issue webhook is a machine callback that verifies its own X-Plane-Signature HMAC,
     # so it is exempt from transport auth exactly like the GitHub webhook.
     is_plane_webhook = request.url.path == "/v1/webhooks/plane"
+    is_bitbucket_webhook = request.url.path == "/v1/webhooks/bitbucket"
     # Alerting tools sign reliability alert deliveries (X-Reliability-Signature HMAC) — same model.
     is_reliability_alert = request.url.path == "/v1/reliability/alert"
     if (
@@ -872,6 +1045,7 @@ async def require_transport_auth_for_v1(request: Request, call_next):
         or is_inbound_webhook
         or is_github_webhook
         or is_plane_webhook
+        or is_bitbucket_webhook
         or is_reliability_alert
     ):
         principal_token = current_api_principal.set(None)
@@ -1295,9 +1469,26 @@ def project_id_for_deployment_run(connection, deployment_run_id: str) -> str:
     return row["project_id"]
 
 
+def derive_task_status(row) -> str:
+    """BOSS-281 — the board lifecycle a task is ACTUALLY in, derived from its activity:
+    the tasks table only ever holds open/archived, so board columns must come from the
+    latest job + pending decisions."""
+    job = str(row.get("latest_job_status") or "").lower()
+    if row.get("has_open_decision"):
+        return "review"
+    if job in ("failed", "deadlettered", "cancelled"):
+        return "blocked"
+    if job == "succeeded":
+        return "done"
+    if job in ("running", "leased", "executing"):
+        return "in_progress"
+    return str(row.get("status") or "open")
+
+
 def task_summary_from_row(row) -> TaskSummary:
     return TaskSummary(
         id=row["id"],
+        derived_status=derive_task_status(row) if "latest_job_status" in row else None,
         project_id=row["project_id"],
         title=row["title"],
         description=row["description"],
@@ -1328,10 +1519,20 @@ def job_summary_from_row(row) -> JobSummary:
         id=row["id"],
         project_id=row["project_id"],
         task_id=row["task_id"],
+        work_item_id=row.get("work_item_id"),
+        tracker_binding_id=row.get("tracker_binding_id"),
+        allocation_id=row.get("allocation_id"),
         kind=row["kind"],
         status=row["status"],
         data_boundary=row.get("data_boundary") or "internal",
         priority=row["priority"],
+        priority_score=(
+            float(row["priority_score"])
+            if row.get("priority_score") is not None
+            else None
+        ),
+        workload_class=row.get("workload_class") or "general",
+        resource_units=int(row.get("resource_units") or 1),
         max_attempts=row["max_attempts"],
         attempt=row["attempt"],
         run_after=row["run_after"].isoformat(),
@@ -2159,11 +2360,28 @@ def model_route_decision_summary_from_service(payload) -> ModelRouteDecisionSumm
     return ModelRouteDecisionSummary(**payload)
 
 
+# Liveness must never queue behind the sync-endpoint threadpool or the DB pool:
+# under console-SSR bursts the pools saturate for seconds, /health exceeded the
+# container healthcheck's 5s budget, and the watchdog restart-looped a healthy api
+# (Traefik 404s during every restart). Async handler + cached DB reachability keep
+# the probe O(ms); DB state refreshes off the hot path at most every 15s.
+_db_health_cache = {"ok": True, "checked_at": 0.0}
+
+
 @app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
+async def health() -> HealthResponse:
+    now = time.monotonic()
+    if now - _db_health_cache["checked_at"] > 15.0:
+        _db_health_cache["checked_at"] = now
+        try:
+            _db_health_cache["ok"] = await asyncio.wait_for(
+                asyncio.to_thread(database_is_reachable, engine), timeout=3.0
+            )
+        except (asyncio.TimeoutError, RuntimeError):
+            _db_health_cache["ok"] = False
     return HealthResponse(
         status="ok",
-        database_connected=database_is_reachable(engine),
+        database_connected=_db_health_cache["ok"],
         github_configured=bool(settings.github_token),
         openai_configured=bool(settings.openai_api_key),
     )
@@ -4569,6 +4787,15 @@ async def receive_inbound_webhook(
             raw_body,
             headers,
         )
+        if (
+            source.strip().lower() == "github"
+            and result["status"] == "accepted"
+            and result.get("inbound_webhook_id")
+        ):
+            github_reconciler.ingest_inbound_webhook(
+                connection,
+                inbound_webhook_id=result["inbound_webhook_id"],
+            )
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -4591,6 +4818,33 @@ async def receive_github_webhook(request: Request):
             headers,
             github_community_only=True,
         )
+        if result["status"] == "accepted" and result.get("inbound_webhook_id"):
+            github_reconciler.ingest_inbound_webhook(
+                connection,
+                inbound_webhook_id=result["inbound_webhook_id"],
+            )
+    if result["status"] == "rejected":
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    if result["status"] == "not_configured":
+        raise HTTPException(status_code=503, detail="Webhook source is not configured.")
+    if result["status"] == "invalid":
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if result["status"] in {"unrouted", "ignored"}:
+        return Response(status_code=204)
+    return JSONResponse(
+        status_code=202,
+        content=InboundWebhookResponse(**result).model_dump(mode="json"),
+    )
+
+
+@app.post("/v1/webhooks/bitbucket", status_code=202)
+async def receive_bitbucket_webhook(request: Request):
+    """Bitbucket ingress (BOSS-269): X-Hub-Signature verified, pullrequest:* normalized to the
+    canonical PR shape (fulfilled = merged) — the Bitbucket analog of the GitHub webhook."""
+    raw_body = await request.body()
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    with begin(engine) as connection:
+        result = inbound_webhooks.ingest(connection, "bitbucket", raw_body, headers)
     if result["status"] == "rejected":
         raise HTTPException(status_code=401, detail="Invalid webhook signature.")
     if result["status"] == "not_configured":
@@ -5047,25 +5301,30 @@ def start_code_task_endpoint(payload: dict):
     if not project_id:
         raise HTTPException(status_code=422, detail="project_id is required.")
     from .services.code_task_service import start_code_task
-    with begin(engine) as c:
-        run_id = start_code_task(
-            c, project_id=project_id, task_id=payload.get("task_id"),
-            title=payload.get("title") or "Code task",
-            instructions=payload.get("instructions") or "",
-            acceptance_criteria=payload.get("acceptance_criteria") or [],
-            test_commands=payload.get("test_commands") or [],
-            owner=payload.get("owner") or settings.target_github_owner,
-            repo=payload.get("repo") or settings.target_github_repo,
-            base_branch=payload.get("base_branch") or "main",
-            finalize_ctx=payload.get("finalize_ctx") or {},
-            jobs=jobs,
-            profile=payload.get("profile"),
-            risk_tier=payload.get("risk_tier"),
-            model_config=payload.get("model_config"),
-            open_pr=payload.get("open_pr"),
-            repair_retries=payload.get("repair_retries"),
-            review_panel_size=payload.get("review_panel_size"),
-        )
+    try:
+        with begin(engine) as c:
+            run_id = start_code_task(
+                c, project_id=project_id, task_id=payload.get("task_id"),
+                title=payload.get("title") or "Code task",
+                instructions=payload.get("instructions") or "",
+                acceptance_criteria=payload.get("acceptance_criteria") or [],
+                test_commands=payload.get("test_commands") or [],
+                owner=payload.get("owner") or settings.target_github_owner,
+                repo=payload.get("repo") or settings.target_github_repo,
+                base_branch=payload.get("base_branch") or "main",
+                finalize_ctx=payload.get("finalize_ctx") or {},
+                jobs=jobs,
+                profile=payload.get("profile"),
+                risk_tier=payload.get("risk_tier"),
+                model_config=payload.get("model_config"),
+                open_pr=payload.get("open_pr"),
+                repair_retries=payload.get("repair_retries"),
+                review_panel_size=payload.get("review_panel_size"),
+            )
+    except ValueError as error:
+        # Preflight rejections (e.g. non-allowlisted test executables) are the CALLER's
+        # problem to fix, not a server fault — return the actionable message, not a 500.
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return {"status": "queued", "run_id": run_id}
 
 
@@ -5122,6 +5381,202 @@ def build_web_app_endpoint(payload: dict):
         owner=payload.get("owner") or settings.target_github_owner,
         repo=payload.get("repo") or settings.target_github_repo,
         review=bool(payload.get("review", False)))
+
+
+@app.get("/v1/qa/benchmark-apps")
+def list_qa_benchmark_apps_endpoint():
+    """List pinned end-to-end application contracts used to evaluate BOSS itself.
+
+    Catalog reads are side-effect free. A benchmark is not a claimed result; it becomes
+    a governed code-task run only through the explicit launch endpoint below.
+    """
+    from boss_engine.services.benchmark_apps import list_benchmark_apps
+
+    return {"benchmark_apps": list_benchmark_apps()}
+
+
+@app.post("/v1/qa/benchmark-apps/{benchmark_id}/runs", status_code=201)
+def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
+    """Launch one pinned QA benchmark through the normal budgeted code-task workflow."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = str((payload or {}).get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required.")
+    from boss_engine.services.benchmark_apps import benchmark_task_input
+    from .services.code_task_service import start_code_task
+
+    try:
+        task = benchmark_task_input(benchmark_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    actor = str((payload or {}).get("actor") or "executive_console").strip()
+    try:
+        with begin(engine) as c:
+            require_project_actor(c, project_id, actor, "task_create")
+            run_id = start_code_task(
+                c,
+                project_id=project_id,
+                task_id=(payload or {}).get("task_id"),
+                title=task["title"],
+                instructions=task["instructions"],
+                acceptance_criteria=task["acceptance_criteria"],
+                test_commands=task["test_commands"],
+                owner=(payload or {}).get("owner") or settings.target_github_owner,
+                repo=(payload or {}).get("repo") or settings.target_github_repo,
+                base_branch=(payload or {}).get("base_branch") or "main",
+                finalize_ctx=task["finalize_ctx"],
+                jobs=jobs,
+                profile=(payload or {}).get("profile") or "strict",
+                risk_tier=2,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
+    }
+
+
+@app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
+def qa_benchmark_app_report_endpoint(run_id: str):
+    """Read the evidence-backed completion report for a benchmark run."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_apps import completion_report
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as c:
+        run = load_code_task_run(c, run_id)
+        calls = c.execute(
+            text(
+                "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "
+                "FROM llm_calls WHERE code_task_run_id=:run_id ORDER BY created_at"
+            ),
+            {"run_id": run_id},
+        ).mappings().all()
+    if run is None:
+        raise HTTPException(status_code=404, detail="code task not found")
+    if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+        raise HTTPException(status_code=404, detail="code task is not a QA benchmark run")
+    return completion_report(run, llm_calls=[dict(call) for call in calls])
+
+
+@app.get("/v1/qa/benchmark-apps/evaluations")
+def list_qa_benchmark_evaluations(project_id: str, limit: int = 50):
+    """List durable scorecard snapshots produced by the benchmark tuning sweep."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_tuning import list_evaluations
+
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": list_evaluations(connection, project_id=project_id, limit=limit),
+        }
+
+
+@app.post("/v1/qa/benchmark-apps/tuning-sweep")
+def sweep_qa_benchmark_evaluations(payload: dict | None = None):
+    """Materialize changed terminal QA reports; safe for the worker's idle loop.
+
+    This performs no model, provider, SCM, or configuration write. It only stores
+    evidence snapshots and recommendation state, so a regular worker can safely
+    invoke it without gaining authority to approve or apply a tuning candidate.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    payload = payload or {}
+    project_id = str(payload.get("project_id") or "").strip() or None
+    limit = int(payload.get("limit") or 100)
+    actor = str(payload.get("actor") or "qa_benchmark_scheduler").strip()
+    from boss_engine.services.benchmark_tuning import sweep_terminal_benchmarks
+
+    try:
+        with begin(engine) as connection:
+            return sweep_terminal_benchmarks(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                limit=limit,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal",
+    response_model=SelfImprovementProposalDetail,
+    status_code=201,
+)
+def create_qa_benchmark_tuning_proposal(
+    run_id: str,
+    payload: QABenchmarkTuningProposalRequest,
+) -> SelfImprovementProposalDetail:
+    """Create a decision-gated tuning proposal from durable benchmark evidence.
+
+    The endpoint cannot generate or apply a candidate change. ``change_ref`` must
+    identify a developer-authored PR or configuration diff, and the resulting
+    proposal follows the established test, canary, approval, rollout, and rollback
+    state machine.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_apps import (
+        completion_report,
+        tuning_proposal_inputs,
+    )
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "self_improvement_manage",
+            )
+            run = load_code_task_run(connection, run_id)
+            if run is None or run.get("project_id") != payload.project_id:
+                raise HTTPException(status_code=404, detail="QA benchmark run not found.")
+            if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+                raise HTTPException(status_code=404, detail="Code task is not a QA benchmark run.")
+            calls = connection.execute(
+                text(
+                    "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "
+                    "FROM llm_calls WHERE code_task_run_id=:run_id ORDER BY created_at"
+                ),
+                {"run_id": run_id},
+            ).mappings().all()
+            report = completion_report(run, llm_calls=[dict(call) for call in calls])
+            proposal_input = tuning_proposal_inputs(
+                report,
+                change_ref=payload.change_ref,
+                diff_summary=payload.diff_summary,
+            )
+            row = self_improvement.create_proposal(
+                connection,
+                project_id=payload.project_id,
+                title=proposal_input["title"],
+                summary=proposal_input["summary"],
+                change_ref=proposal_input["change_ref"],
+                diff_summary=proposal_input["diff_summary"],
+                expected_impact=proposal_input["expected_impact"],
+                test_plan=proposal_input["test_plan"],
+                canary_scope=proposal_input["canary_scope"],
+                rollback_plan=proposal_input["rollback_plan"],
+                success_metrics=proposal_input["success_metrics"],
+                actor=payload.actor,
+                risk_tier=payload.risk_tier,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return self_improvement_detail_from_row(row)
 
 
 @app.get("/v1/pipeline-profiles")
@@ -5187,7 +5642,63 @@ def run_code_task_step_endpoint(payload: dict):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.code_task_service import run_code_task
-    return run_code_task(engine, settings, jobs, payload["run_id"])
+    return run_code_task(engine, settings, jobs, payload["run_id"],
+                         fencing_token=payload.get("fencing_token"))
+
+
+@app.post("/v1/code-tasks/{run_id}/steer")
+def code_task_steer_endpoint(run_id: str, payload: dict):
+    """Redirect a RUNNING task. The guidance is applied at the next stage boundary.
+
+    Without this a run is fire-and-wait: you watch it head the wrong way and the only lever
+    is cancel-and-restart, discarding everything done so far. This turns a 25-minute wrong
+    answer into a one-stage correction."""
+    guidance = str((payload or {}).get("guidance") or "").strip()
+    if not guidance:
+        raise HTTPException(status_code=422, detail="guidance is required")
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from datetime import datetime as _dt, timezone as _tz
+    entry = {"text": guidance[:4000], "actor": actor,
+             "at": _dt.now(_tz.utc).isoformat()}
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT project_id, status FROM code_task_runs WHERE id=:id"),
+            {"id": run_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"no code task run {run_id}")
+        # Steering injects an OPERATOR OVERRIDE into the next stage prompt — same bar as
+        # starting/waiving work. Without this, knowing a run_id was enough to redirect any
+        # tenant's running task (including "delete the app" / "exfiltrate secrets").
+        require_project_actor(connection, row["project_id"], actor, "task_create")
+        if row["status"] in ("completed", "failed", "cancelled"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"run is {row['status']}; steering only applies to a running task")
+        connection.execute(
+            text("UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+                 "|| jsonb_build_object('pending_guidance', "
+                 "COALESCE(finalize_ctx->'pending_guidance','[]'::jsonb) || CAST(:e AS JSONB)), "
+                 "updated_at=now() WHERE id=:id AND project_id=:p"),
+            {"e": json.dumps([entry]), "id": run_id, "p": row["project_id"]})
+    return {"status": "queued", "run_id": run_id,
+            "applies": "at the next stage boundary", "guidance": guidance[:200]}
+
+
+@app.get("/v1/code-tasks/{run_id}/live")
+def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
+    """LIVE tool-level activity for a running task — what the agent is doing right now.
+
+    /activity is per-LLM-call and only lands when a stage finishes. This reads the agent's
+    transcript as it is written, so a console pane (or an MCP client) can show a terminal
+    feed while `implement` is still going: which files it is touching, how many lines it has
+    written, and whether it is exploring or editing. Read-only; never affects the run."""
+    from .services.live_activity import live_activity, live_activity_text
+    if fmt == "text":
+        return PlainTextResponse(live_activity_text(run_id, limit=limit))
+    return live_activity(run_id, limit=limit)
 
 
 @app.get("/v1/code-tasks/{run_id}/activity")
@@ -5227,15 +5738,1084 @@ def code_task_activity_endpoint(run_id: str):
     return {"run_id": run_id, "calls": calls}
 
 
+@app.post("/v1/delivery/deployments/{deployment_run_id}/execute")
+def delivery_execute_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
+    """Tell BOSS to carry out a planned deployment: plan -> apply -> observe.
+
+    The operator supplies the destination and a credential reference; BOSS does the work. This
+    endpoint is the trigger, not the doer — nothing here knows which connector will run.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404,
+                                detail=f"no deployment run {deployment_run_id}")
+        # Execute places artifacts on a real host. Knowing a deployment_run_id must not be
+        # enough to push arbitrary commits to another tenant's staging box.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "providerops_manage"
+        )
+    return _start_deployment_in_background(deployment_run_id, actor, trigger="retry")
+
+
+# --------------------------------------------------------------------------- #
+# Deployment targets — onboarding an app without hand-written SQL
+# --------------------------------------------------------------------------- #
+@app.get("/v1/deployment-targets", response_model=DeploymentTargetListResponse)
+def list_deployment_targets_alias(project_id: str, limit: int = 50,
+                                  offset: int = 0) -> DeploymentTargetListResponse:
+    """List targets at the same path as create/update/delete.
+
+    The original list has always been `/v1/deployments`, and the CRUD added here sits on
+    `/v1/deployment-targets` — so the same resource answered on one path for reads and another
+    for writes. Delegates rather than reimplements: two list queries would be two chances to
+    filter differently.
+    """
+    return list_deployment_targets(project_id=project_id, limit=limit, offset=offset)
+
+
+def merge_target_resources(current: Any, updates: dict[str, Any]) -> list[dict]:
+    """Set some resource kinds on a target, leaving the rest alone.
+
+    `required_resources` is one JSONB array holding unrelated facts: the container runtime, the
+    port, which app in the repo to deploy, who owns the repo, which ports the host publishes.
+    THREE separate places wrote it by replacing the whole array with
+    `[container_runtime, app_port]` — so choosing a port silently deleted `app_entry`, and the
+    next deployment failed with "cannot tell which app to deploy", naming a field nobody had
+    touched. I fixed two of those three and missed the third, which is the reason this is a
+    function and not a careful line repeated at each call site.
+
+    An empty-string value CLEARS its kind — the only way to hand a port back to BOSS.
+    """
+    merged = [r for r in (current or []) if isinstance(r, dict)]
+    for kind, value in updates.items():
+        if value is None:
+            continue
+        merged = [r for r in merged if r.get("kind") != kind]
+        if str(value).strip():
+            merged.append({"kind": kind, "name": str(value).strip()})
+    if not any(r.get("kind") == "container_runtime" for r in merged):
+        merged.insert(0, {"kind": "container_runtime", "name": "docker"})
+    return merged
+
+
+def _same_name(typed: Any, stored: Any) -> bool:
+    """Is the confirmation the operator typed the app name, ignoring surrounding space?
+
+    Destroy is guarded by typing the name back. That guard is meant to stop an accidental
+    removal, not to be unpassable: a target registered with a stray space in its name could
+    never be confirmed, because the space is invisible in every place the name is shown.
+    """
+    return str(typed or "").strip() == str(stored or "").strip()
+
+
+@app.post("/v1/deployment-targets", status_code=201)
+def create_deployment_target_endpoint(payload: dict):
+    """Register where an app is deployed. This is the whole of onboarding.
+
+    Both existing targets were inserted by a hand-run script; that is the step this replaces.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.core import make_id
+    from .services.deployment_connectors import connector_for, supported_kinds
+
+    # Trim EVERY string the operator typed, not just the one field that bit us. A leading space
+    # in `app_name` is invisible in a form and then reappears as a container called
+    # " nqueens-app", a target no lookup finds, and a destroy confirmation that can never match
+    # because nobody types the space. Normalising once here beats every later reader guessing.
+    payload = {k: (v.strip() if isinstance(v, str) else v) for k, v in payload.items()}
+
+    required = ("project_id", "app_name", "repo", "environment", "target_kind", "target_ref")
+    for field in required:
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    if connector_for({"target_kind": payload["target_kind"]}) is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown target_kind {payload['target_kind']!r}; have {supported_kinds()}")
+
+    app_port = payload.get("app_port")
+    resources = [{"kind": "container_runtime", "name": "docker"}]
+    if app_port:
+        resources.append({"kind": "app_port", "name": str(int(app_port))})
+    # Which file or directory IS this app. Only needed when the repo holds several — guessing
+    # in a shared repo is what once deployed Sudoku to a stock-app target.
+    if payload.get("app_entry"):
+        resources.append({"kind": "app_entry", "name": str(payload["app_entry"])})
+    # Recorded per target so a project can deploy from more than one owner's repo.
+    if payload.get("repo_owner"):
+        resources.append({"kind": "repo_owner", "name": str(payload["repo_owner"])})
+    # Which ports this host actually publishes. Without it BOSS picks a port that is merely
+    # FREE, which on a cloud host means the app runs and the health check times out with
+    # nothing naming the security group.
+    if payload.get("publishable_ports"):
+        resources.append({"kind": "publishable_ports",
+                          "name": str(payload["publishable_ports"])})
+
+    # Accept either "boss-sandbox" or "paramg/boss-sandbox". An operator copying a repo from
+    # GitHub pastes the second form; rejecting it (or silently mis-cloning) is a trap.
+    repo_field = str(payload["repo"]).strip()
+    if "/" in repo_field:
+        owner_part, repo_part = repo_field.rsplit("/", 1)
+        payload = {**payload, "repo": repo_part, "repo_owner": owner_part.split("/")[-1]}
+
+    target_id = payload.get("id") or make_id("deptgt")
+    with begin(engine) as connection:
+        # deployment_targets is UNIQUE (project_id, app_name, environment). Onboarding a name
+        # that already exists — including one that was RETIRED rather than deleted — otherwise
+        # surfaced as a 500, which tells an operator nothing about the one field they need to
+        # change. A retired duplicate is the likely case, so the message says how to bring it
+        # back instead of implying the name is unusable.
+        clash = connection.execute(
+            text("SELECT id, status FROM deployment_targets "
+                 "WHERE project_id=:p AND app_name=:a AND environment=:e"),
+            {"p": payload["project_id"], "a": payload["app_name"],
+             "e": payload["environment"]}).mappings().first()
+        if clash:
+            raise HTTPException(status_code=409, detail=(
+                f"{payload['app_name']} is already registered for {payload['environment']} "
+                f"(target {clash['id']}, status {clash['status']})."
+                + (" Restore it to reuse its configuration and history, or delete it "
+                   "permanently to start from scratch."
+                   if clash["status"] != "active" else "")))
+
+        connection.execute(text("""
+            INSERT INTO deployment_targets
+              (id, project_id, app_name, repo, environment, target_kind, target_ref,
+               domains, required_resources, secret_refs, health_checks, status, created_by,
+               created_at, updated_at)
+            VALUES (:id,:p,:app,:repo,:env,:kind,:ref,
+                    CAST(:dom AS JSONB), CAST(:req AS JSONB), CAST(:sec AS JSONB),
+                    CAST(:hc AS JSONB), :status, :by, now(), now())
+        """), {
+            "id": target_id, "p": payload["project_id"], "app": payload["app_name"],
+            "repo": payload["repo"], "env": payload["environment"],
+            "kind": payload["target_kind"], "ref": payload["target_ref"],
+            "dom": json.dumps(payload.get("domains") or []),
+            "req": json.dumps(resources),
+            "sec": json.dumps(payload.get("secret_refs") or []),
+            "hc": json.dumps(payload.get("health_checks")
+                             or [{"kind": "http", "path": "/", "expect": 200,
+                                  "scheme": payload.get("scheme") or "https"}]),
+            "status": payload.get("status") or "active",
+            "by": str(payload.get("actor") or "operator"),
+        })
+        row = connection.execute(
+            text("SELECT * FROM deployment_targets WHERE id=:i"), {"i": target_id}
+        ).mappings().first()
+    return dict(row)
+
+
+@app.patch("/v1/deployment-targets/{target_id}")
+def update_deployment_target_endpoint(target_id: str, payload: dict):
+    """Change a target in place — port, domain, health check, status, auto-deploy."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    sets, params = [], {"i": target_id}
+    for field, column in (("target_ref", "target_ref"), ("status", "status"),
+                          ("environment", "environment"), ("app_name", "app_name")):
+        if payload.get(field) is not None:
+            sets.append(f"{column} = :{field}")
+            params[field] = payload[field]
+    for field, column in (("domains", "domains"), ("health_checks", "health_checks"),
+                          ("secret_refs", "secret_refs")):
+        if payload.get(field) is not None:
+            sets.append(f"{column} = CAST(:{field} AS JSONB)")
+            params[field] = json.dumps(payload[field])
+    # Resources are MERGED, one kind at a time.
+    #
+    # Setting `app_port` used to rewrite the whole array as [container_runtime, app_port],
+    # silently deleting `app_entry`, `repo_owner` and anything else the target had declared.
+    # Changing a port therefore erased which app to deploy — and the next deployment failed
+    # with "cannot tell which app to deploy", naming a field nobody had touched.
+    resource_updates = {
+        "app_port": payload.get("app_port"),
+        "app_entry": payload.get("app_entry"),
+        "repo_owner": payload.get("repo_owner"),
+        "publishable_ports": payload.get("publishable_ports"),
+    }
+    explicit = payload.get("required_resources")
+    if explicit is not None or any(v is not None for v in resource_updates.values()):
+        with begin(engine) as c:
+            current = c.execute(
+                text("SELECT required_resources FROM deployment_targets WHERE id=:i"),
+                {"i": target_id}).scalar()
+        base = explicit if explicit is not None else current
+        sets.append("required_resources = CAST(:rr AS JSONB)")
+        params["rr"] = json.dumps(merge_target_resources(base, resource_updates))
+
+    if not sets:
+        # Naming what WAS sent, because the previous version accepted a body full of fields it
+        # did not understand and returned 200 — a PATCH that quietly changes nothing is worse
+        # than one that refuses.
+        raise HTTPException(status_code=422, detail=(
+            "nothing to update. Understood fields: target_ref, status, environment, app_name, "
+            "domains, health_checks, secret_refs, required_resources, app_port, app_entry, "
+            f"repo_owner, publishable_ports. Received: {sorted(payload)}"))
+
+    with begin(engine) as connection:
+        result = connection.execute(
+            text(f"UPDATE deployment_targets SET {', '.join(sets)}, updated_at = now() "
+                 f"WHERE id = :i"), params)
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+    return dict(row)
+
+
+@app.delete("/v1/deployment-targets/{target_id}", status_code=200)
+def retire_deployment_target_endpoint(target_id: str):
+    """Retire a target. Deliberately a status change, not a delete.
+
+    Deployment runs reference it, and health samples reference it. Removing the row would erase
+    the history of everything ever shipped there, which is the opposite of what an operator
+    retiring an app wants.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        result = connection.execute(
+            text("UPDATE deployment_targets SET status='retired', updated_at=now() "
+                 "WHERE id=:i"), {"i": target_id})
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+    return {"target_id": target_id, "status": "retired"}
+
+
+@app.post("/v1/deployment-targets/{target_id}/teardown")
+def teardown_deployment_target_endpoint(target_id: str, payload: dict):
+    """Remove a deployed app from its host and report the space reclaimed.
+
+    Three levels, because "remove the app" means different things at different moments:
+      stop_only=true      container goes, files stay — reversible by a redeploy
+      (default)           container + release directories; DATA SURVIVES
+      include_data=true   also the data directory — the only irreversible one
+
+    Requires `confirm` to equal the app name. A destructive action reached by a single click is
+    a destructive action taken by accident, and the operator naming the app is the cheapest
+    possible proof they meant this one.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.core import emit_event
+    from .services.deployment_connectors import connector_for
+
+    include_data = bool(payload.get("include_data"))
+    stop_only = bool(payload.get("stop_only"))
+    actor = str(payload.get("actor") or "operator")
+
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+
+        # Compare trimmed on BOTH sides: a name stored with a stray space (registered before
+        # the create endpoint normalised its input) is otherwise impossible to confirm, because
+        # nobody types a leading space and no UI shows one.
+        if not stop_only and not _same_name(payload.get("confirm"), target["app_name"]):
+            raise HTTPException(
+                status_code=428,
+                detail=(f"confirm must equal the app name {target['app_name']!r} to remove it"
+                        f"{' INCLUDING ITS DATA' if include_data else ''}"))
+
+        conn = connector_for(target)
+        if conn is None:
+            raise HTTPException(status_code=422, detail="no connector for this target_kind")
+
+        report = conn.destroy(target, settings, connection,
+                              include_data=include_data, stop_only=stop_only)
+
+        # Recorded whether or not it succeeded: a teardown that was refused is exactly the
+        # event someone will go looking for later.
+        emit_event(connection, target["project_id"],
+                   "delivery.torn_down" if report.get("ok") else "delivery.teardown_refused",
+                   actor, "deployment_target", target_id,
+                   {"removed": report.get("removed"), "refused": report.get("refused"),
+                    "include_data": include_data, "stop_only": stop_only,
+                    "reclaimed_kb": report.get("reclaimed_kb")})
+
+        # A destroyed app is not a deployable one. Retiring the target stops auto-deploy from
+        # quietly resurrecting it on the next merge.
+        if report.get("ok") and not stop_only:
+            connection.execute(
+                text("UPDATE deployment_targets SET status='retired', auto_deploy=false, "
+                     "updated_at=now() WHERE id=:i"), {"i": target_id})
+            report["target_status"] = "retired"
+
+    if report.get("refused"):
+        raise HTTPException(status_code=409, detail=report)
+    return report
+
+
+@app.post("/v1/deployment-targets/{target_id}/purge")
+def purge_deployment_target_endpoint(target_id: str, payload: dict):
+    """Delete a target and its records outright, so the name can be reused.
+
+    DELETE retires rather than deletes, because deployment runs and health samples reference a
+    target and erasing them destroys the history of everything ever shipped there. That is the
+    right default — but it left "I want to start over" with no route except restoring the thing
+    you were trying to be rid of.
+
+    So: purge is a separate, explicit act. It requires the app name typed, and it refuses while
+    the target is still ACTIVE — tear it down first, so nobody deletes the records of an app
+    that is still running and then wonders why the host has a container nothing knows about.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.core import emit_event
+
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+
+        if not _same_name(payload.get("confirm"), target["app_name"]):
+            raise HTTPException(status_code=428, detail=(
+                f"confirm must equal the app name {target['app_name']!r} to delete it and its "
+                f"deployment history permanently"))
+        if target["status"] == "active":
+            raise HTTPException(status_code=409, detail=(
+                f"{target['app_name']} is still active. Remove the deployment first (Stop or "
+                f"Destroy), then delete — otherwise the host keeps a container that no target "
+                f"describes."))
+
+        samples = connection.execute(
+            text("DELETE FROM deployment_health_samples WHERE deployment_target_id=:i"),
+            {"i": target_id}).rowcount
+        runs = connection.execute(
+            text("DELETE FROM deployment_runs WHERE deployment_target_id=:i"),
+            {"i": target_id}).rowcount
+        connection.execute(text("DELETE FROM deployment_targets WHERE id=:i"), {"i": target_id})
+
+        # Recorded BEFORE the row is gone is impossible, so it is recorded after — but the event
+        # keeps the name and counts, which is the whole point of an audit trail for a delete.
+        emit_event(connection, target["project_id"], "delivery.target_purged",
+                   str(payload.get("actor") or "operator"), "deployment_target", target_id,
+                   {"app_name": target["app_name"], "environment": target["environment"],
+                    "deployment_runs_deleted": runs, "health_samples_deleted": samples})
+
+    return {"target_id": target_id, "app_name": target["app_name"], "deleted": True,
+            "deployment_runs_deleted": runs, "health_samples_deleted": samples}
+
+
+@app.post("/v1/deployment-targets/{target_id}/bootstrap")
+def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict] = None):
+    """Have BOSS prepare the host: deploy directory, docker check, and a free port.
+
+    These were manual SSH steps for the first two apps. Idempotent and non-destructive — on a
+    shared host, anything it would remove belongs to someone else.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_connectors import connector_for
+
+    apply_port = bool((payload or {}).get("apply_port", True))
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+        conn = connector_for(target)
+        if conn is None:
+            raise HTTPException(status_code=422, detail="no connector for this target_kind")
+        report = conn.bootstrap(target, settings, connection)
+
+        # Write the chosen port back, so the operator does not have to copy it by hand — which
+        # is exactly the transcription step that produced the 8080 collision.
+        if apply_port and report.get("suggested_port"):
+            connection.execute(
+                text("UPDATE deployment_targets SET required_resources = CAST(:rr AS JSONB), "
+                     "updated_at = now() WHERE id = :i"),
+                {"rr": json.dumps(merge_target_resources(
+                    target.get("required_resources"),
+                    {"app_port": str(report["suggested_port"])})),
+                 "i": target_id})
+            report["applied_port"] = report["suggested_port"]
+            # And point the URL at that port. Writing the port without fixing the domain left
+            # the console showing `3.94.66.139` between onboarding and the first deploy — which
+            # is port 80, which on this host is an unrelated product answering 200. The rule
+            # already existed in the connector; only the connector ran it, and the connector
+            # does not run until you deploy.
+            from .services.deployment_connectors import _split_ref, domain_with_port
+            _u, host, _p = _split_ref(target.get("target_ref", ""))
+            fixed = domain_with_port((target.get("domains") or [None])[0], host,
+                                     report["suggested_port"])
+            if fixed:
+                connection.execute(
+                    text("UPDATE deployment_targets SET domains = CAST(:d AS JSONB) "
+                         "WHERE id = :i"), {"d": json.dumps([fixed]), "i": target_id})
+                report["domain"] = fixed
+    return report
+
+
+# --------------------------------------------------------------------------- #
+# Secrets — write-through. No endpoint in this section returns a secret value.
+# --------------------------------------------------------------------------- #
+@app.get("/v1/secrets")
+def list_secrets_endpoint(project_id: str):
+    """Secret METADATA: name, backend, kind, fingerprint, last4, status, what it is bound to.
+
+    There is deliberately no variant that includes values. An endpoint that can return a secret
+    eventually returns one to the wrong reader.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import list_secrets
+    with begin(engine) as connection:
+        return {"project_id": project_id, "secrets": list_secrets(connection, project_id)}
+
+
+@app.post("/v1/secrets", status_code=201)
+def put_secret_endpoint(payload: dict):
+    """Upload a value: it is written THROUGH to the backend and not retained by BOSS."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_backends import SecretUnavailable
+    from .services.secrets_service import put_secret
+
+    for field in ("project_id", "name", "value"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    try:
+        with begin(engine) as connection:
+            return put_secret(
+                connection, settings,
+                project_id=payload["project_id"], name=payload["name"],
+                value=payload["value"],
+                secret_kind=payload.get("secret_kind") or "api_token",
+                backend=payload.get("backend") or "platform_secret_store",
+                scope_id=payload.get("scope_id"),
+                actor=str(payload.get("actor") or "operator"))
+    except SecretUnavailable as exc:
+        # A backend that cannot accept the write is a configuration problem, not a server bug.
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/secrets/keypair", status_code=201)
+def generate_keypair_endpoint(payload: dict):
+    """Generate a keypair. The private half goes to the backend; only the PUBLIC half returns."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secret_backends import SecretUnavailable
+    from .services.secrets_service import generate_keypair
+
+    for field in ("project_id", "name"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    try:
+        with begin(engine) as connection:
+            return generate_keypair(
+                connection, settings,
+                project_id=payload["project_id"], name=payload["name"],
+                algorithm=payload.get("algorithm") or "ed25519",
+                backend=payload.get("backend") or "platform_secret_store",
+                scope_id=payload.get("scope_id"), comment=payload.get("comment"),
+                actor=str(payload.get("actor") or "operator"))
+    except (SecretUnavailable, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/secrets/{secret_ref_id}/verify")
+def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
+    """Prove the reference still resolves — a row saying 'active' proves only that nobody
+    marked it otherwise."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import verify_secret
+    with begin(engine) as connection:
+        return verify_secret(connection, settings, secret_ref_id,
+                             actor=str((payload or {}).get("actor") or "operator"))
+
+
+@app.post("/v1/deployment-targets/{target_id}/secrets")
+def bind_secret_endpoint(target_id: str, payload: dict):
+    """Point one of a target's declared requirements at a stored secret."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import bind_secret_to_target
+    for field in ("project_id", "name", "secret_ref_id"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    try:
+        with begin(engine) as connection:
+            return bind_secret_to_target(
+                connection, target_id=target_id, name=payload["name"],
+                secret_ref_id=payload["secret_ref_id"], project_id=payload["project_id"],
+                actor=str(payload.get("actor") or "operator"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+# --------------------------------------------------------------------------- #
+# Observability — the collector/store/dashboards BOSS deploys beside the apps
+# --------------------------------------------------------------------------- #
+@app.get("/v1/delivery/defaults")
+def delivery_defaults_endpoint():
+    """What BOSS will clone if you do not say otherwise.
+
+    The onboarding form asked for a bare repo NAME and silently prepended the configured owner,
+    so nothing on screen told an operator which GitHub repository would actually be fetched.
+    Configuration that is invisible is configuration nobody can verify.
+    """
+    owner = getattr(settings, "target_github_owner", "") or ""
+    repo = getattr(settings, "target_github_repo", "") or ""
+    return {
+        "owner": owner, "repo": repo,
+        "repo_url": f"https://github.com/{owner}/{repo}" if owner and repo else "",
+        "host": getattr(settings, "target_repo_host", "github") or "github",
+    }
+
+
+@app.get("/v1/delivery/repos")
+def delivery_repos_endpoint(project_id: Optional[str] = None):
+    """Repositories BOSS has built in or deployed from — so nobody types one from memory."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_sources import known_repos
+    with begin(engine) as connection:
+        return {"repos": known_repos(connection, settings, project_id)}
+
+
+@app.get("/v1/delivery/repos/{owner}/{repo}/refs")
+def delivery_repo_refs_endpoint(owner: str, repo: str):
+    """Branches available to deploy, plus what BOSS has already shipped from this repo."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_sources import repo_refs
+    with begin(engine) as connection:
+        return repo_refs(connection, settings, owner, repo)
+
+
+@app.get("/v1/delivery/repos/{owner}/{repo}/apps")
+def delivery_repo_apps_endpoint(owner: str, repo: str, ref: str = ""):
+    """Runnable apps in a repo, so `app entry` can be picked instead of guessed."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_sources import repo_apps
+    return repo_apps(settings, owner, repo, ref)
+
+
+@app.get("/v1/observability/stack")
+def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] = None):
+    """What the stack WOULD monitor, plus whether it is currently running.
+
+    The app list is derived from `deployment_targets`, so this also answers "will my new app
+    appear on a dashboard?" before the stack is redeployed.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.observability_stack import (DEFAULT_PORTS, grafana_url, scrape_targets,
+                                               stack_status)
+    with begin(engine) as connection:
+        targets = scrape_targets(connection, project_id)
+        source = connection.execute(
+            text("SELECT id, config FROM telemetry_sources WHERE project_id=:p "
+                 "AND kind='prometheus' AND name='boss-prometheus'"),
+            {"p": project_id}).mappings().first()
+
+    status = (stack_status(engine, settings, host_target_id=host_target_id)
+              if host_target_id else {"running": None})
+    host = status.get("host") or ""
+    base = f"http://{host}:{DEFAULT_PORTS['grafana']}" if host else ""
+    return {
+        "project_id": project_id,
+        "deployed": bool(source),
+        "prometheus": (source or {}).get("config"),
+        "grafana_url": base,
+        "status": status,
+        "apps": [{**t, "dashboard_url": grafana_url(base, t["app"]) if base else None}
+                 for t in targets],
+    }
+
+
+@app.post("/v1/observability/stack/deploy")
+def deploy_observability_stack_endpoint(payload: dict):
+    """Render the collector/Prometheus/Grafana stack from the registry and put it on the host.
+
+    Re-running is how a newly onboarded app gets a dashboard: the scrape config is regenerated
+    from `deployment_targets` every time, so the two cannot drift.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.observability_stack import deploy_stack
+
+    for field in ("project_id", "host_target_id"):
+        if not payload.get(field):
+            raise HTTPException(status_code=422, detail=f"{field} is required")
+    result = deploy_stack(engine, settings, project_id=payload["project_id"],
+                          host_target_id=payload["host_target_id"],
+                          ports=payload.get("ports"),
+                          actor=str(payload.get("actor") or "operator"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result)
+    return result
+
+
+@app.get("/v1/delivery/health")
+def delivery_health_endpoint(project_id: str):
+    """Health of everything BOSS has deployed for this project.
+
+    Distinct from the deployment's own status: a run that finished 'succeeded' says the deploy
+    worked, not that the app is still serving. This answers the second question.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_health import health_view
+    with begin(engine) as connection:
+        return health_view(connection, project_id)
+
+
+@app.post("/v1/delivery/health/sweep")
+def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
+    """Probe due targets now instead of waiting for the worker's idle sweep.
+
+    Exists so an operator looking at a stale graph can refresh it, and so the first sample
+    after registering a target does not require waiting out an interval.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_health import sweep
+    return sweep(engine, settings, project_id=project_id)
+
+
+def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) -> dict:
+    """Run a planned deployment off-request and hand back something to poll.
+
+    A deployment takes minutes. Running it inside the request meant the console had nothing to
+    show until it ended, a slow deploy was indistinguishable from a hang, and a proxy timeout
+    looked like a failure for work that had actually succeeded.
+
+    Shared by deploy, redeploy and retry rather than written once and copied: the first version
+    made only `deploy` asynchronous, so pressing Redeploy still blocked for a minute and showed
+    nothing — the same bug, on the button next to the fixed one.
+    """
+    import threading
+
+    from .services.delivery_pipeline import execute_deployment
+
+    def _run() -> None:
+        try:
+            execute_deployment(engine, settings, run_id, actor=actor)
+        except Exception:  # noqa: BLE001 — already recorded on the run; never crash the thread
+            pass
+
+    threading.Thread(target=_run, name=f"deploy-{run_id}", daemon=True).start()
+    return {"deployment_run_id": run_id, "status": "started", "trigger": trigger,
+            "poll": f"/v1/delivery/deployments/{run_id}"}
+
+
+@app.post("/v1/delivery/deploy")
+def delivery_deploy_endpoint(payload: dict):
+    """Deploy a target at a chosen ref, without waiting for a merge.
+
+    The manual half of the trigger story: automatic on merge, this for everything else
+    (shipping a hotfix, re-shipping after a host fix, deploying a target that was onboarded
+    after its last merge).
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_pipeline import execute_deployment
+    from .services.resource_plane import ResourcePlaneService
+
+    target_id = payload.get("target_id")
+    if not target_id:
+        raise HTTPException(status_code=422, detail="target_id is required")
+    actor = str(payload.get("actor") or "operator")
+
+    with begin(engine) as connection:
+        target = connection.execute(
+            text("SELECT * FROM deployment_targets WHERE id=:i"),
+            {"i": target_id}).mappings().first()
+        if not target:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        if target["status"] != "active":
+            raise HTTPException(status_code=409,
+                                detail=f"target is {target['status']}, not active")
+
+        # A deployment needs SOMETHING TO BUILD. `deploy_ssh` resolves the repo, branch and
+        # file lineage from a code task run, so a manual deploy has to say which one — either
+        # explicitly, or by inheriting the one the target last shipped.
+        #
+        # Without this the run was planned with an empty code_task_run_id and died at execution
+        # with "code task run not found:", which is what the console's Deploy button did for
+        # every target. Planning was tested; executing was not.
+        source_run = payload.get("code_task_run_id")
+        if not source_run:
+            prior = connection.execute(
+                text("SELECT release_packet FROM deployment_runs "
+                     "WHERE deployment_target_id = :t AND status = 'succeeded' "
+                     "ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
+                {"t": target_id}).mappings().first()
+            source_run = ((prior or {}).get("release_packet") or {}).get("code_task_run_id")
+        # No prior deployment is fine: the connector builds from the target's own repo. What
+        # is NOT fine is having no repo at all, because then there is genuinely nothing to fetch.
+        if not source_run and not target.get("repo"):
+            raise HTTPException(status_code=422, detail=(
+                f"{target['app_name']} has no repo recorded, so there is nothing to build. "
+                f"Set the repo on the target, or pass code_task_run_id explicitly."))
+
+        # DEFAULT TO THE REPO'S DEFAULT BRANCH, not the source run's branch.
+        #
+        # Without a ref, the deploy falls back to cloning the code task's work branch — which is
+        # FROZEN at whatever that task built, while main has moved on. Pressing Deploy therefore
+        # shipped a stale build and silently ROLLED BACK the live app: the stock app lost its
+        # day-trading API to a deploy whose only intent was "ship this again".
+        #
+        # The base branch is read from the source run's own spec rather than assumed, because
+        # "main" is a guess about someone else's repository.
+        ref = payload.get("ref") or payload.get("commit_ref")
+        if not ref and source_run:
+            spec_row = connection.execute(
+                text("SELECT spec FROM code_task_runs WHERE id = :i"),
+                {"i": source_run}).mappings().first()
+            ref = ((spec_row or {}).get("spec") or {}).get("base_branch") or "main"
+        ref = ref or "main"
+
+        planned = ResourcePlaneService(settings).plan_deployment_run(
+            connection,
+            project_id=target["project_id"], deployment_target_id=target_id,
+            commit_ref=ref,
+            release_packet={"source": "manual_deploy", "repo": target["repo"],
+                            "requested_by": actor,
+                            **({"code_task_run_id": source_run} if source_run else {})},
+            expected_cost_usd_micros=0, reservation_id=None, actor=actor)
+        run_id = planned.get("deployment_run_id") or planned.get("id")
+        connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
+                           {"i": run_id})
+
+    if payload.get("plan_only"):
+        return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual"}
+
+    # `wait=true` keeps the blocking behaviour for scripts and tests that want one call.
+    if payload.get("wait"):
+        return {"deployment_run_id": run_id,
+                **execute_deployment(engine, settings, run_id, actor=actor)}
+
+    return _start_deployment_in_background(run_id, actor, trigger="manual")
+
+
+@app.post("/v1/deployment-targets/{target_id}/auto-deploy")
+def set_auto_deploy_endpoint(target_id: str, payload: dict):
+    """Turn deploy-on-merge on/off, or pause it.
+
+    `paused` is separate from `auto_deploy` on purpose: during an incident an operator wants
+    automation to stop without losing the configuration that says this target is normally
+    automatic — and without having to remember to turn it back on correctly.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    sets, params = [], {"i": target_id}
+    if payload.get("auto_deploy") is not None:
+        sets.append("auto_deploy = :a")
+        params["a"] = bool(payload["auto_deploy"])
+    if payload.get("paused") is not None:
+        sets.append("paused = :pz")
+        params["pz"] = bool(payload["paused"])
+    if not sets:
+        raise HTTPException(status_code=422, detail="auto_deploy or paused is required")
+
+    with begin(engine) as connection:
+        result = connection.execute(
+            text(f"UPDATE deployment_targets SET {', '.join(sets)}, updated_at=now() "
+                 f"WHERE id=:i"), params)
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        row = connection.execute(
+            text("SELECT id, app_name, auto_deploy, paused FROM deployment_targets WHERE id=:i"),
+            {"i": target_id}).mappings().first()
+    return dict(row)
+
+
+@app.get("/v1/delivery/deployments")
+def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
+    """Recent DEPLOYMENTS, newest first.
+
+    Replaces the pipeline table that listed every code task run which had ever opened a PR —
+    eighteen rows, nearly all with no deployment at all. A code task that never deployed is not
+    a deployment; it is already visible under Code Tasks, and repeating it here was noise
+    wearing the costume of a report.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text("SELECT d.id, d.status, d.environment, d.commit_ref, d.trigger, "
+                 "       d.started_at, d.finished_at, d.duration_ms, d.failure_reason, "
+                 "       d.app_name, t.app_name AS target_app, t.domains, "
+                 "       jsonb_array_length(COALESCE(d.steps,'[]'::jsonb)) AS step_count "
+                 "FROM deployment_runs d LEFT JOIN deployment_targets t "
+                 "  ON t.id = d.deployment_target_id "
+                 "WHERE d.project_id = :p ORDER BY d.created_at DESC LIMIT :l"),
+            {"p": project_id, "l": max(1, min(limit, 50))}).mappings().all()
+    return {"deployments": [{
+        "id": r["id"], "status": r["status"], "environment": r["environment"],
+        "app_name": r["target_app"] or r["app_name"], "commit_ref": r["commit_ref"],
+        "trigger": r["trigger"], "duration_ms": r["duration_ms"],
+        "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+        "finished_at": r["finished_at"].isoformat() if r["finished_at"] else None,
+        "failure_reason": r["failure_reason"], "step_count": r["step_count"],
+        "url": (r["domains"] or [None])[0],
+    } for r in rows]}
+
+
+@app.get("/v1/delivery/deployments/{deployment_run_id}")
+def get_deployment_run_endpoint(deployment_run_id: str):
+    """Live progress of one deployment: steps, timings, logs, outcome.
+
+    This is what makes an honest progress display possible. The steps are written as they
+    happen, so a run that is still going reports exactly how far it has got, and one that died
+    mid-step shows where.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_steps import planned_steps
+
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT d.*, t.app_name AS target_app, t.domains "
+                 "FROM deployment_runs d LEFT JOIN deployment_targets t "
+                 "  ON t.id = d.deployment_target_id WHERE d.id = :i"),
+            {"i": deployment_run_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="no such deployment run")
+
+    done = list(row["steps"] or [])
+    seen = {s.get("step") for s in done}
+    # Show the steps still to come, greyed out. A list that grows one row at a time cannot tell
+    # an operator how much is left.
+    upcoming = [s for s in planned_steps() if s["step"] not in seen]
+    terminal = row["status"] in ("succeeded", "failed", "blocked", "rolled_back")
+
+    return {
+        "deployment_run_id": row["id"], "status": row["status"],
+        "app_name": row["target_app"] or row["app_name"],
+        "environment": row["environment"], "commit_ref": row["commit_ref"],
+        "trigger": row["trigger"], "failure_reason": row["failure_reason"],
+        "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+        "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+        "duration_ms": row["duration_ms"],
+        "url": (row["domains"] or [None])[0],
+        "health": row["health_check_results"],
+        "steps": done + ([] if terminal else upcoming),
+        "running": not terminal,
+    }
+
+
+@app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
+def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
+    """Ship the same target again as a NEW deployment run.
+
+    Separate from /execute on purpose. /execute retries THIS run; /redeploy records a new one, so
+    "what is running and since when" stays answerable instead of being overwritten by its own
+    replacement.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail=p.get("reason")
+                                or f"no deployment run {deployment_run_id}")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "providerops_manage"
+        )
+    from .services.delivery_pipeline import redeploy
+    actor = str(p.get("actor") or "operator")
+    # Planned here, executed off-request — same contract as Deploy, so the console watches one
+    # kind of thing however the deployment was started.
+    result = redeploy(engine, settings, deployment_run_id,
+                      commit_ref=(p.get("commit_ref") or None),
+                      actor=actor, execute=bool(p.get("wait")))
+    # A missing deployment is a 404, not a 200 carrying the word "not_found". A caller that
+    # checks the status code — which is most of them — would otherwise read a typo'd id as a
+    # successful redeploy.
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail=result.get("reason")
+                            or f"no deployment run {deployment_run_id}")
+    if p.get("wait"):
+        return result
+    return _start_deployment_in_background(result["deployment_run_id"], actor,
+                                           trigger="redeploy")
+
+
+@app.get("/v1/delivery/targets/{target_id}/preflight")
+def delivery_preflight_endpoint(target_id: str, project_id: str):
+    """Is this target deployable right now, and if not exactly what is missing?
+
+    Cheap and read-only, so an operator never has to run a deployment to discover a
+    credential is absent — which is how provider_account_id was found the first time.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_connectors import preflight
+    with begin(engine) as c:
+        row = c.execute(text("SELECT * FROM deployment_targets WHERE id=:i AND project_id=:p"),
+                        {"i": target_id, "p": project_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        # Same connection: preflight resolves the target's bound credential through it, so the
+        # operator sees a credential problem here rather than in the middle of a deployment.
+        return preflight(dict(row), settings, c)
+
+
+@app.get("/v1/delivery/pipeline")
+def delivery_pipeline_endpoint(project_id: str, limit: int = 25):
+    """Code task -> PR -> deployment -> health, assembled in ONE query pass.
+
+    One endpoint on purpose: a CI/CD view whose stages arrive separately can show a merged PR
+    next to a stale deployment status and quietly mislead. The delivery story has to be
+    internally consistent or it is worse than no view.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_pipeline import pipeline_view
+    with begin(engine) as c:
+        return pipeline_view(c, project_id, limit=limit)
+
+
+@app.get("/v1/shepherd/overview")
+def shepherd_overview_endpoint(project_id: str, limit: int = 40):
+    """Everything the Task Shepherd console renders: reasoning, ledger, escalations, spend.
+
+    One endpoint on purpose — the console's whole point is showing HOW it is thinking, and
+    that story is incoherent if the timeline, the ledger and the money arrive separately and
+    can disagree with each other.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import calibration
+    from .services.task_shepherd import CLASS_NAMES
+    with begin(engine) as c:
+        reasoning = [dict(r) for r in c.execute(text(
+            "SELECT id, task_ref, step_no, observe, signals, hypothesis, confidence, "
+            "check_result, check_confirmed, failure_class, remedy_chosen, rationale, "
+            "predicted_cost_usd_micros, predicted_outcome, actual_cost_usd_micros, "
+            "actual_outcome, stopped_because, created_at "
+            "FROM shepherd_reasoning WHERE project_id=:p "
+            "ORDER BY created_at DESC LIMIT :l"), {"p": project_id, "l": limit}).mappings()]
+        ledger = [dict(r) for r in c.execute(text(
+            "SELECT task_ref, failure_class, remedy_id, status, used_at, "
+            "cost_usd_micros, outcome FROM shepherd_ledger WHERE project_id=:p "
+            "ORDER BY created_at DESC LIMIT 200"), {"p": project_id}).mappings()]
+        escalations = [dict(r) for r in c.execute(text(
+            "SELECT id, task_ref, question, options, evidence, status, created_at "
+            "FROM shepherd_escalations WHERE project_id=:p AND status='open' "
+            "ORDER BY created_at DESC LIMIT 50"), {"p": project_id}).mappings()]
+        spend = dict(c.execute(text(
+            "SELECT COALESCE(SUM(CASE WHEN r.pull_request_url IS NOT NULL "
+            "         THEN c.usd ELSE 0 END),0) AS productive, "
+            "       COALESCE(SUM(CASE WHEN r.pull_request_url IS NULL "
+            "         THEN c.usd ELSE 0 END),0) AS unproductive "
+            "FROM code_task_runs r JOIN LATERAL ("
+            "  SELECT COALESCE(SUM(cost_usd_micros),0)/1e6 AS usd FROM llm_calls "
+            "  WHERE code_task_run_id=r.id) c ON true "
+            "WHERE r.project_id=:p AND r.created_at > now() - interval '7 days'"),
+            {"p": project_id}).mappings().first() or {})
+        cal = calibration(c, project_id)
+    return {
+        "project_id": project_id,
+        "class_names": {str(k): v for k, v in CLASS_NAMES.items()},
+        "reasoning": reasoning, "ledger": ledger, "escalations": escalations,
+        "spend": {k: round(float(v or 0), 2) for k, v in spend.items()},
+        "calibration": cal["remedies"],
+    }
+
+
+@app.post("/v1/shepherd/propose")
+def shepherd_propose_endpoint(payload: dict):
+    """Run one reasoning step against a run. Read-only: proposes, never acts."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import propose
+    return propose(engine, settings, payload["run_id"])
+
+
+@app.post("/v1/shepherd/sweep")
+def shepherd_sweep_endpoint(payload: dict):
+    """Propose for every run that ended without a PR and has no open escalation."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import sweep
+    return {"proposals": sweep(engine, settings, payload["project_id"],
+                               limit=int(payload.get("limit") or 20))}
+
+
+@app.post("/v1/shepherd/escalations/{escalation_id}/answer")
+def shepherd_answer_endpoint(escalation_id: str, payload: dict):
+    """Answer a shepherd's question. The answer is provenance, not just a state change."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as c:
+        n = c.execute(text(
+            "UPDATE shepherd_escalations SET status='answered', answer=:a, "
+            "answered_by=:by, answered_at=now() WHERE id=:id AND status='open'"),
+            {"a": str(payload.get("answer") or ""), "by": str(payload.get("actor") or "operator"),
+             "id": escalation_id}).rowcount
+    if not n:
+        raise HTTPException(status_code=404, detail="no open escalation with that id")
+    return {"ok": True, "escalation_id": escalation_id}
+
+
 @app.post("/v1/code-tasks/{run_id}/retry")
 def retry_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Resume a failed/blocked code task as a new attempt in the same lineage, carrying its prior
     findings forward so the agent fixes the identified issues instead of regenerating from scratch."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        # Retry enqueues a new governed attempt (budget + jobs) under the victim run's
+        # project. Without this gate, knowing a run_id was enough to spend another
+        # tenant's budget and mutate their lineage.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "task_create"
+        )
     from .services.code_task_service import retry_code_task
     try:
-        return retry_code_task(engine, settings, jobs, run_id, fix_note=(payload or {}).get("fix_note", ""))
+        rr = p.get("repair_retries")
+        # profile/repair_retries were accepted by retry_code_task() and DROPPED here, so a
+        # caller asking to "retry this in lean mode" silently got the project default. The
+        # console's Retry button, the MCP tool and this endpoint must all be able to move the
+        # cost/rigor dial, or the only way to change it is to abandon the lineage and create a
+        # new task — which rebuilds from scratch and loses the branch.
+        return retry_code_task(
+            engine, settings, jobs, run_id,
+            fix_note=p.get("fix_note", ""),
+            profile=(p.get("profile") or None),
+            repair_retries=(int(rr) if isinstance(rr, int) else None),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -5286,16 +6866,31 @@ def confirm_code_task_feedback_endpoint(thread_id: str, payload: Optional[dict] 
 
 
 @app.post("/v1/code-tasks/{run_id}/override")
-def override_code_task_endpoint(run_id: str, payload: dict):
+def override_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     """Human gate override: waive the named failed gate(s) + open the PR from the preserved diff
     (no re-run). Gates not waived still block; the PR keeps its own merge-gate Decision."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        # Waiving failed gates and opening a PR is a governed write — same bar as starting work.
+        require_project_actor(
+            connection, run_row["project_id"], actor, "task_create"
+        )
     from .services.code_task_service import override_code_task
     try:
         return override_code_task(engine, settings, jobs, run_id,
-            waive_gates=payload.get("waive_gates") or [],
-            actor=payload.get("actor") or "operator", reason=payload.get("reason") or "")
+            waive_gates=p.get("waive_gates") or [],
+            actor=actor, reason=p.get("reason") or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -5310,6 +6905,19 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "infra_provision"
+        )
     mode = str(p.get("mode", "dry_run")).lower()
     from .services.deploy_service import deploy_ssh, plan_ssh_deploy, render_plan_markdown
     try:
@@ -5349,10 +6957,24 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        run_row = connection.execute(
+            text("SELECT project_id FROM code_task_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        ).mappings().first()
+        if not run_row:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        require_project_actor(
+            connection, run_row["project_id"], actor, "task_create"
+        )
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
     from .services.preview_service import (
-        start_preview, start_container_preview, start_rootfs_preview, stop_preview,
+        AmbiguousAppError, PreviewNotReady, start_preview, start_container_preview,
+        start_rootfs_preview, stop_preview,
     )
     # Replace (don't accumulate): stop any prior running preview for this run so there's one live
     # preview per task — a fresh "Run preview" regenerates it.
@@ -5379,6 +7001,20 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     for fn in attempts:
         try:
             res = fn(engine, settings, run_id, ttl_minutes=ttl)
+        except AmbiguousAppError as exc:
+            # Refusing on purpose. Trying the next substrate would guess the same way, so stop
+            # and tell the operator WHICH apps were found and how to disambiguate.
+            raise HTTPException(status_code=409, detail={
+                "error": "preview_ambiguous_app",
+                "message": str(exc),
+                "candidates": exc.candidates,
+                "next_action": ("Retry the task so it records the files it built, or add a "
+                                "boss.preview.command file naming the entrypoint."),
+            })
+        except PreviewNotReady as exc:
+            # No PR yet. Trying the other substrates cannot change that, so stop immediately
+            # rather than reporting a generic "preview could not start" after three attempts.
+            raise HTTPException(status_code=409, detail=exc.as_detail())
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         except RuntimeError as exc:
@@ -5504,10 +7140,24 @@ async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: s
 
 
 @app.post("/v1/previews/{preview_id}/stop")
-def stop_preview_endpoint(preview_id: str):
+def stop_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
     """Tear down a running preview."""
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    with begin(engine) as connection:
+        preview_row = connection.execute(
+            text("SELECT project_id FROM app_previews WHERE id = :preview_id"),
+            {"preview_id": preview_id},
+        ).mappings().first()
+        if not preview_row:
+            raise HTTPException(status_code=404, detail="Preview not found.")
+        require_project_actor(
+            connection, preview_row["project_id"], actor, "task_create"
+        )
     from .services.preview_service import stop_preview
     try:
         return stop_preview(engine, preview_id, settings)
@@ -6228,11 +7878,13 @@ def propose_command(payload: CommandProposeRequest, request: Request) -> Command
         return CommandProposeResponse(**result)
 
 
-@app.post("/v1/agent/chat", response_model=AgentChatResponse)
-def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
-    """Persist one conversational turn and route it to an existing BOSS initiator."""
+def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: str) -> AgentChatResponse:
+    """Shared handler for the BOSS chat interface. One brain (AgentService →
+    IntentRouter) behind both the canonical endpoint and its deprecated alias, so
+    all callers hit identical routing/persistence/confirmation logic and the
+    (now tool-grounded) discuss path."""
     _enforce_high_cost_rate_limit(
-        request, payload.project_id, payload.actor, endpoint="/v1/agent/chat"
+        request, payload.project_id, payload.actor, endpoint=endpoint
     )
     with begin(engine) as connection:
         require_project_actor(
@@ -6257,6 +7909,23 @@ def agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse
         except AgentThreadOwnershipError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         return AgentChatResponse(**result)
+
+
+@app.post("/v1/engine/agent/chat", response_model=AgentChatResponse)
+def engine_agent_chat(payload: AgentChatRequest, request: Request) -> AgentChatResponse:
+    """The BOSS chat interface — one engine-native agent: routes intents, persists
+    threads, gates confirmations, and answers questions grounded in live engine
+    data via the read-tool layer. This is the canonical endpoint."""
+    return _run_agent_chat(payload, request, endpoint="/v1/engine/agent/chat")
+
+
+@app.post("/v1/agent/chat", response_model=AgentChatResponse, deprecated=True)
+def agent_chat(payload: AgentChatRequest, request: Request, response: Response) -> AgentChatResponse:
+    """DEPRECATED alias of POST /v1/engine/agent/chat — identical behavior. Kept so
+    existing callers keep working; migrate to the engine endpoint."""
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</v1/engine/agent/chat>; rel="successor-version"'
+    return _run_agent_chat(payload, request, endpoint="/v1/agent/chat")
 
 
 @app.get("/v1/agent/threads")
@@ -6309,12 +7978,19 @@ def list_tasks(
         rows = connection.execute(
             text(
                 """
-                SELECT id, project_id, title, description, status, priority, risk_tier,
-                       owner_role_id, parent_task_id, dependency_task_ids, due_at,
-                       data_boundary, dedupe_key, created_at, updated_at
-                FROM tasks
-                WHERE project_id = :project_id AND status <> 'archived'
-                ORDER BY created_at DESC
+                SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority,
+                       t.risk_tier, t.owner_role_id, t.parent_task_id, t.dependency_task_ids,
+                       t.due_at, t.data_boundary, t.dedupe_key, t.created_at, t.updated_at,
+                       j.status AS latest_job_status,
+                       EXISTS(SELECT 1 FROM decisions d WHERE d.task_id = t.id
+                              AND d.status IN ('pending', 'delegated')) AS has_open_decision
+                FROM tasks t
+                LEFT JOIN LATERAL (
+                    SELECT status FROM jobs WHERE task_id = t.id
+                    ORDER BY created_at DESC LIMIT 1
+                ) j ON TRUE
+                WHERE t.project_id = :project_id AND t.status <> 'archived'
+                ORDER BY t.created_at DESC
                 LIMIT :limit OFFSET :offset
                 """
             ),
@@ -6879,6 +8555,8 @@ def get_job(job_id: str) -> JobSummary:
             text(
                 """
                 SELECT id, project_id, task_id, kind, status, data_boundary, priority,
+                       work_item_id, tracker_binding_id, allocation_id,
+                       priority_score, workload_class, resource_units,
                        max_attempts, attempt, run_after
                 FROM jobs
                 WHERE id = :job_id
@@ -8498,6 +10176,1440 @@ def delete_secret_ref(
         except SecretRefNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
     return Response(status_code=204)
+
+
+@app.get(
+    "/v1/github/connections",
+    response_model=GitHubConnectionListResponse,
+)
+def list_github_connections(project_id: str) -> GitHubConnectionListResponse:
+    with begin(engine) as connection:
+        return GitHubConnectionListResponse(
+            project_id=project_id,
+            items=[
+                GitHubConnectionSummary(**item)
+                for item in github_connections.list_connections(
+                    connection, project_id
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/connections",
+    response_model=GitHubConnectionSummary,
+    status_code=201,
+)
+def create_github_connection(
+    payload: GitHubConnectionCreateRequest,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.create_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_label=payload.connection_label,
+                auth_method=payload.auth_method,
+                credential_ref=payload.credential_ref,
+                app_id=payload.app_id,
+                installation_id=payload.installation_id,
+                api_base_url=payload.api_base_url,
+                required_permissions=payload.required_permissions,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (SecretRefNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+@app.get(
+    "/v1/github/connections/{connection_id}",
+    response_model=GitHubConnectionSummary,
+)
+def get_github_connection(
+    connection_id: str,
+    project_id: str,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_connections.get_connection(
+                connection, project_id, connection_id
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+def _transition_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+    action: str,
+) -> GitHubConnectionSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.transition_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_id=connection_id,
+                action=action,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubConnectionSummary(**item)
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/enable",
+    response_model=GitHubConnectionSummary,
+)
+def enable_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "enable")
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/disable",
+    response_model=GitHubConnectionSummary,
+)
+def disable_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "disable")
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/revoke",
+    response_model=GitHubConnectionSummary,
+)
+def revoke_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionLifecycleRequest,
+) -> GitHubConnectionSummary:
+    return _transition_github_connection(connection_id, payload, "revoke")
+
+
+@app.get("/v1/github/repository-activity")
+def github_repository_activity(project_id: str, days: int = 30):
+    """What BOSS DID in each repo — runs, PRs opened/merged, success + first-pass rates,
+    median time-to-PR, spend and $/PR, plus recent runs. Powers the GitHub area's KPIs,
+    which otherwise only showed whether a connection existed."""
+    from .services import repo_registry
+    with begin(engine) as connection:
+        activity = repo_registry.repository_activity(connection, project_id, days=days)
+    try:
+        repo_registry.fill_merged_counts(
+            activity, token=getattr(settings, "github_token", "") or "")
+    except Exception:  # merge state is best-effort enrichment, never a hard failure
+        pass
+    return {"project_id": project_id, "days": days, "items": activity}
+
+
+@app.get(
+    "/v1/github/repository-bindings",
+    response_model=GitHubRepositoryBindingListResponse,
+)
+def list_github_repository_bindings(
+    project_id: str,
+    connection_id: Optional[str] = None,
+) -> GitHubRepositoryBindingListResponse:
+    with begin(engine) as connection:
+        return GitHubRepositoryBindingListResponse(
+            project_id=project_id,
+            items=[
+                GitHubRepositoryBindingSummary(**item)
+                for item in github_connections.list_repository_bindings(
+                    connection,
+                    project_id,
+                    connection_id=connection_id,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/repository-bindings",
+    response_model=GitHubRepositoryBindingSummary,
+    status_code=201,
+)
+def create_github_repository_binding(
+    payload: GitHubRepositoryBindingCreateRequest,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.create_repository_binding(
+                connection,
+                project_id=payload.project_id,
+                connection_id=payload.connection_id,
+                repository=payload.repository,
+                role=payload.role,
+                default_branch=payload.default_branch,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.get(
+    "/v1/github/repository-bindings/{binding_id}",
+    response_model=GitHubRepositoryBindingSummary,
+)
+def get_github_repository_binding(
+    binding_id: str,
+    project_id: str,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_connections.get_repository_binding(
+                connection, project_id, binding_id
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.patch(
+    "/v1/github/repository-bindings/{binding_id}",
+    response_model=GitHubRepositoryBindingSummary,
+)
+def update_github_repository_binding(
+    binding_id: str,
+    payload: GitHubRepositoryBindingUpdateRequest,
+) -> GitHubRepositoryBindingSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_connections.update_repository_binding(
+                connection,
+                project_id=payload.project_id,
+                binding_id=binding_id,
+                role=payload.role,
+                status=payload.status,
+                default_branch=payload.default_branch,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except (
+            GitHubConnectionNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubRepositoryBindingSummary(**item)
+
+
+@app.post(
+    "/v1/github/connections/{connection_id}/test",
+    response_model=GitHubConnectionTestResponse,
+)
+def test_github_connection(
+    connection_id: str,
+    payload: GitHubConnectionTestRequest,
+) -> GitHubConnectionTestResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_connections.test_connection(
+                connection,
+                project_id=payload.project_id,
+                connection_id=connection_id,
+                binding_id=payload.repository_binding_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except (
+            GitHubConnectionNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubConnectionTestResponse(
+            status=result["status"],
+            duplicate=result["duplicate"],
+            receipt_id=result["receipt_id"],
+            connection=GitHubConnectionSummary(**result["connection"]),
+            repository_binding=GitHubRepositoryBindingSummary(
+                **result["repository_binding"]
+            ),
+            detail=result["detail"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-policies",
+    response_model=GitHubBranchPolicyListResponse,
+)
+def list_github_branch_policies(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    include_history: bool = False,
+) -> GitHubBranchPolicyListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchPolicyListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchPolicySummary(**item)
+                for item in github_branches.list_policies(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    include_history=include_history,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-policies",
+    response_model=GitHubBranchPolicySummary,
+    status_code=201,
+)
+def create_github_branch_policy(
+    payload: GitHubBranchPolicyCreateRequest,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branches.create_policy(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                protected_ref_patterns=payload.protected_ref_patterns,
+                allowed_branch_prefixes=payload.allowed_branch_prefixes,
+                branch_name_pattern=payload.branch_name_pattern,
+                allowed_update_methods=payload.allowed_update_methods,
+                allowed_merge_methods=payload.allowed_merge_methods,
+                required_checks=payload.required_checks,
+                required_approvals=payload.required_approvals,
+                require_pull_request=payload.require_pull_request,
+                require_linear_history=payload.require_linear_history,
+                require_signed_commits=payload.require_signed_commits,
+                automation_updates_enabled=payload.automation_updates_enabled,
+                force_push_allowed=payload.force_push_allowed,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.get(
+    "/v1/github/branch-policies/{policy_id}",
+    response_model=GitHubBranchPolicySummary,
+)
+def get_github_branch_policy(
+    policy_id: str,
+    project_id: str,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branches.get_policy(connection, project_id, policy_id)
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.patch(
+    "/v1/github/branch-policies/{policy_id}",
+    response_model=GitHubBranchPolicySummary,
+)
+def revise_github_branch_policy(
+    policy_id: str,
+    payload: GitHubBranchPolicyUpdateRequest,
+) -> GitHubBranchPolicySummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branches.revise_policy(
+                connection,
+                project_id=payload.project_id,
+                policy_id=policy_id,
+                updates=payload.model_dump(
+                    exclude={"project_id", "actor"},
+                    exclude_none=True,
+                ),
+                actor=payload.actor,
+            )
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchPolicySummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-policies/{policy_id}/evaluate",
+    response_model=GitHubBranchPolicyEvaluationResponse,
+)
+def evaluate_github_branch_policy(
+    policy_id: str,
+    payload: GitHubBranchPolicyEvaluateRequest,
+) -> GitHubBranchPolicyEvaluationResponse:
+    with begin(engine) as connection:
+        try:
+            policy = github_branches.get_policy(
+                connection, payload.project_id, policy_id
+            )
+            result = github_branches.evaluate_policy(
+                policy,
+                ref=payload.ref,
+                operation=payload.operation,
+                method=payload.method,
+            )
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return GitHubBranchPolicyEvaluationResponse(**result)
+
+
+@app.get(
+    "/v1/github/branch-snapshots",
+    response_model=GitHubBranchSnapshotListResponse,
+)
+def list_github_branch_snapshots(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> GitHubBranchSnapshotListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchSnapshotListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchSnapshotSummary(**item)
+                for item in github_branches.list_snapshots(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-snapshots/capture",
+    response_model=GitHubBranchSnapshotCaptureResponse,
+)
+def capture_github_branch_snapshot(
+    payload: GitHubBranchSnapshotCaptureRequest,
+) -> GitHubBranchSnapshotCaptureResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_branches.capture_snapshot(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                source_ref=payload.source_ref,
+                target_ref=payload.target_ref,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubBranchPolicyNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except (GitHubConnectionStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchSnapshotCaptureResponse(
+            status=result["status"],
+            duplicate=result["duplicate"],
+            receipt_id=result["receipt_id"],
+            snapshot=(
+                GitHubBranchSnapshotSummary(**result["snapshot"])
+                if result["snapshot"]
+                else None
+            ),
+            error=result["error"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-snapshots/{snapshot_id}",
+    response_model=GitHubBranchSnapshotSummary,
+)
+def get_github_branch_snapshot(
+    snapshot_id: str,
+    project_id: str,
+) -> GitHubBranchSnapshotSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branches.get_snapshot(
+                connection, project_id, snapshot_id
+            )
+        except GitHubBranchSnapshotNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchSnapshotSummary(**item)
+
+
+@app.get(
+    "/v1/github/branch-leases",
+    response_model=GitHubBranchLeaseListResponse,
+)
+def list_github_branch_leases(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    ref_name: Optional[str] = None,
+    include_history: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubBranchLeaseListResponse:
+    with begin(engine) as connection:
+        return GitHubBranchLeaseListResponse(
+            project_id=project_id,
+            items=[
+                GitHubBranchLeaseSummary(**item)
+                for item in github_branch_leases.list(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    ref_name=ref_name,
+                    include_history=include_history,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/branch-leases",
+    response_model=GitHubBranchLeaseAcquireResponse,
+    status_code=201,
+)
+def acquire_github_branch_lease(
+    payload: GitHubBranchLeaseAcquireRequest,
+) -> GitHubBranchLeaseAcquireResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_branch_leases.acquire(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                ref_name=payload.ref_name,
+                owner_kind=payload.owner_kind,
+                owner_id=payload.owner_id,
+                run_id=payload.run_id,
+                worktree_path=payload.worktree_path,
+                acquire_key=payload.acquire_key,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except GitHubRepositoryBindingNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseAcquireResponse(
+            lease=GitHubBranchLeaseSummary(**result["lease"]),
+            lease_token=result["lease_token"],
+            duplicate=result["duplicate"],
+        )
+
+
+@app.get(
+    "/v1/github/branch-leases/{lease_id}",
+    response_model=GitHubBranchLeaseSummary,
+)
+def get_github_branch_lease(
+    lease_id: str,
+    project_id: str,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_branch_leases.get(connection, project_id, lease_id)
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/heartbeat",
+    response_model=GitHubBranchLeaseSummary,
+)
+def heartbeat_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseHeartbeatRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.heartbeat(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/release",
+    response_model=GitHubBranchLeaseSummary,
+)
+def release_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseReleaseRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.release(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.post(
+    "/v1/github/branch-leases/{lease_id}/reclaim",
+    response_model=GitHubBranchLeaseSummary,
+)
+def reclaim_github_branch_lease(
+    lease_id: str,
+    payload: GitHubBranchLeaseReclaimRequest,
+) -> GitHubBranchLeaseSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_branch_leases.reclaim_expired(
+                connection,
+                project_id=payload.project_id,
+                lease_id=lease_id,
+                reason=payload.reason,
+                actor=payload.actor,
+            )
+        except GitHubBranchLeaseNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubBranchLeaseConflictError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubBranchLeaseSummary(**item)
+
+
+@app.get(
+    "/v1/github/code-sync-runs",
+    response_model=GitHubCodeSyncRunListResponse,
+)
+def list_github_code_sync_runs(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubCodeSyncRunListResponse:
+    with begin(engine) as connection:
+        return GitHubCodeSyncRunListResponse(
+            project_id=project_id,
+            items=[
+                GitHubCodeSyncRunSummary(**item)
+                for item in github_code_sync.list_runs(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/code-sync-runs/plan",
+    response_model=GitHubCodeSyncRunSummary,
+    status_code=201,
+)
+def plan_github_code_sync(
+    payload: GitHubCodeSyncPlanRequest,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.plan(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                snapshot_id=payload.snapshot_id,
+                dedupe_key=payload.dedupe_key,
+                resolution_branch=payload.resolution_branch,
+                actor=payload.actor,
+            )
+        except (
+            GitHubBranchSnapshotNotFoundError,
+            GitHubBranchPolicyNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/code-sync-runs/{sync_run_id}",
+    response_model=GitHubCodeSyncRunSummary,
+)
+def get_github_code_sync_run(
+    sync_run_id: str,
+    project_id: str,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get(connection, project_id, sync_run_id)
+        except GitHubCodeSyncNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.post(
+    "/v1/github/code-sync-runs/{sync_run_id}/apply",
+    response_model=GitHubCodeSyncRunSummary,
+)
+def apply_github_code_sync(
+    sync_run_id: str,
+    payload: GitHubCodeSyncApplyRequest,
+) -> GitHubCodeSyncRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.apply(
+                connection,
+                project_id=payload.project_id,
+                sync_run_id=sync_run_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubCodeSyncNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubCodeSyncStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubCodeSyncRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/conflict-sets",
+    response_model=GitHubConflictSetListResponse,
+)
+def list_github_conflict_sets(
+    project_id: str,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubConflictSetListResponse:
+    with begin(engine) as connection:
+        return GitHubConflictSetListResponse(
+            project_id=project_id,
+            items=[
+                GitHubConflictSetSummary(**item)
+                for item in github_code_sync.list_conflicts(
+                    connection,
+                    project_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.get(
+    "/v1/github/conflict-sets/{conflict_set_id}",
+    response_model=GitHubConflictSetSummary,
+)
+def get_github_conflict_set(
+    conflict_set_id: str,
+    project_id: str,
+) -> GitHubConflictSetSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get_conflict(
+                connection, project_id, conflict_set_id
+            )
+        except GitHubConflictSetNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubConflictSetSummary(**item)
+
+
+@app.get(
+    "/v1/github/resolution-plans",
+    response_model=GitHubResolutionPlanListResponse,
+)
+def list_github_resolution_plans(
+    project_id: str,
+    conflict_set_id: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubResolutionPlanListResponse:
+    with begin(engine) as connection:
+        return GitHubResolutionPlanListResponse(
+            project_id=project_id,
+            items=[
+                GitHubResolutionPlanSummary(**item)
+                for item in github_code_sync.list_resolution_plans(
+                    connection,
+                    project_id,
+                    conflict_set_id=conflict_set_id,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/conflict-sets/{conflict_set_id}/resolution-plans",
+    response_model=GitHubResolutionPlanSummary,
+    status_code=201,
+)
+def create_github_resolution_plan(
+    conflict_set_id: str,
+    payload: GitHubResolutionPlanCreateRequest,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.propose_resolution(
+                connection,
+                project_id=payload.project_id,
+                conflict_set_id=conflict_set_id,
+                resolved_files=payload.resolved_files,
+                validation_evidence=payload.validation_evidence,
+                actor=payload.actor,
+            )
+        except GitHubConflictSetNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubCodeSyncStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.get(
+    "/v1/github/resolution-plans/{plan_id}",
+    response_model=GitHubResolutionPlanSummary,
+)
+def get_github_resolution_plan(
+    plan_id: str,
+    project_id: str,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_code_sync.get_resolution_plan(
+                connection, project_id, plan_id
+            )
+        except GitHubResolutionPlanNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.post(
+    "/v1/github/resolution-plans/{plan_id}/approve",
+    response_model=GitHubResolutionPlanSummary,
+)
+def approve_github_resolution_plan(
+    plan_id: str,
+    payload: GitHubResolutionPlanApproveRequest,
+) -> GitHubResolutionPlanSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_code_sync.approve_resolution(
+                connection,
+                project_id=payload.project_id,
+                plan_id=plan_id,
+                review_evidence=payload.review_evidence,
+                actor=payload.actor,
+            )
+        except GitHubResolutionPlanNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (GitHubCodeSyncStateError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionPlanSummary(**item)
+
+
+@app.post(
+    "/v1/github/resolution-plans/{plan_id}/apply",
+    response_model=GitHubResolutionApplyResponse,
+)
+def apply_github_resolution_plan(
+    plan_id: str,
+    payload: GitHubResolutionPlanApplyRequest,
+) -> GitHubResolutionApplyResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_code_sync.apply_resolution(
+                connection,
+                project_id=payload.project_id,
+                plan_id=plan_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubResolutionPlanNotFoundError,
+            GitHubConflictSetNotFoundError,
+            GitHubCodeSyncNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubCodeSyncStateError,
+            GitHubCodeSyncStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubResolutionApplyResponse(
+            plan=GitHubResolutionPlanSummary(**result["plan"]),
+            conflict_set=GitHubConflictSetSummary(**result["conflict_set"]),
+            sync_run=GitHubCodeSyncRunSummary(**result["sync_run"]),
+        )
+
+
+@app.get(
+    "/v1/github/merge-authorizations",
+    response_model=GitHubMergeAuthorizationListResponse,
+)
+def list_github_merge_authorizations(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    target_ref: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubMergeAuthorizationListResponse:
+    with begin(engine) as connection:
+        return GitHubMergeAuthorizationListResponse(
+            project_id=project_id,
+            items=[
+                GitHubMergeAuthorizationSummary(**item)
+                for item in github_merge_authorizations.list(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    target_ref=target_ref,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/merge-authorizations",
+    response_model=GitHubMergeAuthorizationSummary,
+    status_code=201,
+)
+def create_github_merge_authorization(
+    payload: GitHubMergeAuthorizationCreateRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.request_authorization(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                pull_request_number=payload.pull_request_number,
+                source_ref=payload.source_ref,
+                target_ref=payload.target_ref,
+                merge_method=payload.merge_method,
+                dedupe_key=payload.dedupe_key,
+                evidence_bundle=payload.evidence_bundle,
+                expires_in_seconds=payload.expires_in_seconds,
+                code_sync_run_id=payload.code_sync_run_id,
+                resolution_plan_id=payload.resolution_plan_id,
+                actor=payload.actor,
+            )
+        except (
+            GitHubRepositoryBindingNotFoundError,
+            GitHubBranchPolicyNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.get(
+    "/v1/github/merge-authorizations/{authorization_id}",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def get_github_merge_authorization(
+    authorization_id: str,
+    project_id: str,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_merge_authorizations.get(
+                connection, project_id, authorization_id
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/authorize",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def authorize_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationApproveRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.authorize(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                review_evidence=payload.review_evidence,
+                actor=payload.actor,
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/enqueue",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def enqueue_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationEnqueueRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.enqueue(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                actor=payload.actor,
+            )
+        except GitHubMergeAuthorizationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubMergeAuthorizationStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.post(
+    "/v1/github/merge-authorizations/{authorization_id}/apply",
+    response_model=GitHubMergeAuthorizationSummary,
+)
+def apply_github_merge(
+    authorization_id: str,
+    payload: GitHubMergeAuthorizationApplyRequest,
+) -> GitHubMergeAuthorizationSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_merge_authorizations.apply(
+                connection,
+                project_id=payload.project_id,
+                authorization_id=authorization_id,
+                lease_id=payload.lease_id,
+                lease_token=payload.lease_token,
+                fencing_token=payload.fencing_token,
+                actor=payload.actor,
+            )
+        except (
+            GitHubMergeAuthorizationNotFoundError,
+            GitHubBranchLeaseNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubMergeAuthorizationStateError,
+            GitHubMergeAuthorizationStaleError,
+            GitHubBranchLeaseConflictError,
+            GitHubBranchLeaseTokenError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubMergeAuthorizationSummary(**item)
+
+
+@app.get(
+    "/v1/github/reconciliation-runs",
+    response_model=GitHubReconciliationRunListResponse,
+)
+def list_github_reconciliation_runs(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubReconciliationRunListResponse:
+    with begin(engine) as connection:
+        return GitHubReconciliationRunListResponse(
+            project_id=project_id,
+            items=[
+                GitHubReconciliationRunSummary(**item)
+                for item in github_reconciler.list_runs(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/poll",
+    response_model=GitHubReconciliationPollResponse,
+    status_code=201,
+)
+def schedule_github_reconciliation_poll(
+    payload: GitHubReconciliationPollRequest,
+) -> GitHubReconciliationPollResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            items = github_reconciler.schedule_poll(
+                connection,
+                project_id=payload.project_id,
+                repository_binding_id=payload.repository_binding_id,
+                refs=payload.refs,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except (
+            GitHubReconciliationNotFoundError,
+            GitHubRepositoryBindingNotFoundError,
+        ) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubReconciliationStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationPollResponse(
+            project_id=payload.project_id,
+            items=[GitHubReconciliationRunSummary(**item) for item in items],
+        )
+
+
+@app.get(
+    "/v1/github/reconciliation-runs/{run_id}",
+    response_model=GitHubReconciliationRunSummary,
+)
+def get_github_reconciliation_run(
+    run_id: str,
+    project_id: str,
+) -> GitHubReconciliationRunSummary:
+    with begin(engine) as connection:
+        try:
+            item = github_reconciler.get_run(connection, project_id, run_id)
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return GitHubReconciliationRunSummary(**item)
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/{run_id}/execute",
+    response_model=GitHubReconciliationExecuteResponse,
+)
+def execute_github_reconciliation_run(
+    run_id: str,
+    payload: GitHubReconciliationExecuteRequest,
+) -> GitHubReconciliationExecuteResponse:
+    with begin(engine) as connection:
+        try:
+            result = github_reconciler.execute(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                job_id=payload.job_id,
+                worker_id=payload.worker_id,
+                lease_token=payload.lease_token,
+            )
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            LeaseNotFoundError,
+            GitHubReconciliationStateError,
+            GitHubReconciliationProviderError,
+            GitHubConnectionStateError,
+            GitHubRepositoryBindingNotFoundError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationExecuteResponse(
+            run=GitHubReconciliationRunSummary(**result["run"]),
+            job=result["job"],
+        )
+
+
+@app.post(
+    "/v1/github/reconciliation-runs/{run_id}/repair",
+    response_model=GitHubReconciliationRunSummary,
+    status_code=201,
+)
+def repair_github_reconciliation_run(
+    run_id: str,
+    payload: GitHubReconciliationRepairRequest,
+) -> GitHubReconciliationRunSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            item = github_reconciler.repair(
+                connection,
+                project_id=payload.project_id,
+                run_id=run_id,
+                dedupe_key=payload.dedupe_key,
+                actor=payload.actor,
+            )
+        except GitHubReconciliationNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubReconciliationStateError,
+            GitHubConnectionStateError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return GitHubReconciliationRunSummary(**item)
+
+
+@app.get(
+    "/v1/github/reconciliation-signals",
+    response_model=GitHubReconciliationSignalListResponse,
+)
+def list_github_reconciliation_signals(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=200),
+) -> GitHubReconciliationSignalListResponse:
+    with begin(engine) as connection:
+        return GitHubReconciliationSignalListResponse(
+            project_id=project_id,
+            items=[
+                GitHubReconciliationSignalSummary(**item)
+                for item in github_reconciler.list_signals(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    status=status,
+                    limit=limit,
+                )
+            ],
+        )
+
+
+@app.get(
+    "/v1/github/repository-ref-states",
+    response_model=GitHubRepositoryRefStateListResponse,
+)
+def list_github_repository_ref_states(
+    project_id: str,
+    repository_binding_id: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=200),
+) -> GitHubRepositoryRefStateListResponse:
+    with begin(engine) as connection:
+        return GitHubRepositoryRefStateListResponse(
+            project_id=project_id,
+            items=[
+                GitHubRepositoryRefStateSummary(**item)
+                for item in github_reconciler.list_ref_states(
+                    connection,
+                    project_id,
+                    repository_binding_id=repository_binding_id,
+                    limit=limit,
+                )
+            ],
+        )
 
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)
@@ -10151,6 +13263,12 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
                 max_attempts=payload.max_attempts,
                 run_after_seconds=payload.run_after_seconds,
                 data_boundary=payload.data_boundary,
+                work_item_id=payload.work_item_id,
+                tracker_binding_id=payload.tracker_binding_id,
+                allocation_id=payload.allocation_id,
+                priority_score=payload.priority_score,
+                workload_class=payload.workload_class,
+                resource_units=payload.resource_units,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -10266,6 +13384,15 @@ def create_budget_allocation(
         return budget_allocation_summary_from_service(allocation)
 
 
+@app.get("/v1/budget/insights")
+def budget_insights(project_id: str):
+    """BOSS-280 P2 — automated cost insights: deterministic top-cost-saves generated from the
+    real spend ledger (llm_calls). Each insight names the money and the one capturing action."""
+    from boss_engine.services.cost_insights import build_insights
+    with begin(engine) as connection:
+        return JSONResponse(content=jsonable_encoder(build_insights(connection, project_id)))
+
+
 @app.get("/v1/budget/status", response_model=BudgetStatusResponse)
 def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
     if scope_type != "project":
@@ -10293,6 +13420,11 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
             active_reservations_count=snapshot["active_reservations_count"],
             top_cost_drivers=snapshot["top_cost_drivers"],
             operational_intensity=snapshot.get("operational_intensity"),
+            soft_cap_pct=snapshot.get("soft_cap_pct"),
+            auto_lite_mode_pct=snapshot.get("auto_lite_mode_pct"),
+            freeze_provisioning_pct=snapshot.get("freeze_provisioning_pct"),
+            freeze_tier2_pct=snapshot.get("freeze_tier2_pct"),
+            tier2_frozen=snapshot.get("tier2_frozen"),
         )
 
 
@@ -10813,6 +13945,7 @@ def execute_decision(
                 note=payload.note,
                 delegate_to=payload.delegate_to,
                 external_ref=payload.external_ref,
+                force=payload.force,
             )
         except DecisionNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -12087,6 +15220,1016 @@ def fail_workflow_compensation(
             )
         except workflow_runtime.WorkflowError as error:
             raise_workflow_error(error)
+
+
+# ── Ranked work, quotas, tracker plugins, and delivery presence ─────────────
+def _raise_work_orchestration_error(error: Exception) -> None:
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/work-orchestration/overview")
+def get_work_orchestration_overview(
+    project_id: str = Query(...),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return work_orchestration.overview(connection, project_id)
+
+
+@app.post("/v1/work-orchestration/items")
+def upsert_ranked_work_item(
+    payload: WorkItemUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            work_item = work_orchestration.upsert_work_item(
+                connection,
+                project_id=payload.project_id,
+                subject_type=payload.subject_type,
+                subject_id=payload.subject_id,
+                title=payload.title,
+                description=payload.description,
+                status=payload.status,
+                strategic_value=payload.strategic_value,
+                customer_impact=payload.customer_impact,
+                urgency=payload.urgency,
+                cost_of_delay=payload.cost_of_delay,
+                risk_reduction=payload.risk_reduction,
+                dependency_pressure=payload.dependency_pressure,
+                confidence=payload.confidence,
+                manual_adjustment=payload.manual_adjustment,
+                rationale=payload.rationale,
+                workload_class=payload.workload_class,
+                estimated_units=payload.estimated_units,
+                due_at=payload.due_at,
+                owner_actor=payload.owner_actor,
+                evidence=payload.evidence,
+                source=payload.source,
+                actor=payload.actor,
+            )
+            binding = work_orchestration.bind_tracker(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item["id"],
+                provider_key=None,
+                actor=payload.actor,
+            )
+            allocation = work_orchestration.ensure_allocation(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item["id"],
+                actor=payload.actor,
+            )
+            sync_job = work_orchestration.enqueue_tracker_sync(
+                connection,
+                project_id=payload.project_id,
+                binding_id=binding["id"],
+                actor=payload.actor,
+            )
+            return {
+                "work_item": work_item,
+                "tracker_binding": binding,
+                "allocation": allocation,
+                "tracker_sync_job": sync_job,
+            }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/quotas")
+def upsert_resource_quota(
+    payload: ResourceQuotaUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            quota = work_orchestration.upsert_quota(
+                connection,
+                project_id=payload.project_id,
+                scope_type=payload.scope_type,
+                scope_id=payload.scope_id,
+                resource_kind=payload.resource_kind,
+                reserved_min=payload.reserved_min,
+                soft_limit=payload.soft_limit,
+                hard_limit=payload.hard_limit,
+                burst_limit=payload.burst_limit,
+                allocation_weight=payload.allocation_weight,
+                borrow_enabled=payload.borrow_enabled,
+                policy=payload.policy,
+                actor=payload.actor,
+            )
+            allocation_plan = work_orchestration.plan_allocations(
+                connection,
+                project_id=payload.project_id,
+                resource_kind=payload.resource_kind,
+                actor=payload.actor,
+            )
+            return {
+                "quota": quota,
+                "allocation_plan": allocation_plan,
+            }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/allocations/plan")
+def plan_resource_allocations(
+    payload: ResourceAllocationPlanRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.plan_allocations(
+                connection,
+                project_id=payload.project_id,
+                resource_kind=payload.resource_kind,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/tracker-bindings")
+def upsert_work_tracker_binding(
+    payload: WorkTrackerBindingUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            binding = work_orchestration.bind_tracker(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=payload.work_item_id,
+                provider_key=payload.provider_key,
+                external_workspace_id=payload.external_workspace_id,
+                external_project_id=payload.external_project_id,
+                external_issue_id=payload.external_issue_id,
+                external_key=payload.external_key,
+                external_url=payload.external_url,
+                external_state=payload.external_state,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+            sync_job = (
+                None
+                if binding["sync_status"] == "synced"
+                else work_orchestration.enqueue_tracker_sync(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=binding["id"],
+                    actor=payload.actor,
+                )
+            )
+            return {**binding, "tracker_sync_job": sync_job}
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/tracker-sync/execute")
+def execute_work_tracker_sync(
+    payload: WorkTrackerSyncExecuteRequest,
+) -> dict[str, Any]:
+    """Execute a tracker write only inside a fenced, receipt-producing job."""
+    with begin(engine) as connection:
+        try:
+            leased_job = jobs.require_active_lease(
+                connection,
+                payload.worker_id,
+                payload.created_by_job_id,
+                payload.lease_token,
+            )
+            if (
+                leased_job["project_id"] != payload.project_id
+                or leased_job["kind"] != "work_tracker.issue.sync"
+                or (leased_job["payload"] or {}).get("binding_id")
+                != payload.binding_id
+            ):
+                raise ValueError(
+                    "Active lease does not authorize this work-tracker sync."
+                )
+            context = work_orchestration.tracker_sync_context(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+            )
+            provider_key = context["provider"]["provider_key"]
+            tenant = connection.execute(
+                text(
+                    """
+                    SELECT w.org_id, p.workspace_id
+                    FROM projects p
+                    JOIN workspaces w ON w.id=p.workspace_id
+                    WHERE p.id=:project_id
+                    """
+                ),
+                {"project_id": payload.project_id},
+            ).mappings().one()
+            effect_payload = {
+                "binding_id": payload.binding_id,
+                "provider": provider_key,
+                "title": context["work_item"]["title"],
+                "description_html": context["description_html"],
+            }
+            receipt, created = receipts.create_or_reuse(
+                connection,
+                tenant["org_id"],
+                tenant["workspace_id"],
+                payload.project_id,
+                f"work-tracker-sync:{provider_key}:{payload.binding_id}",
+                f"{provider_key}.issue.ensure",
+                {
+                    "binding_id": payload.binding_id,
+                    "work_item_id": context["work_item"]["id"],
+                    "provider": provider_key,
+                },
+                effect_payload,
+                created_by_job_id=payload.created_by_job_id,
+                data_boundary=leased_job["data_boundary"],
+            )
+            if not created and receipt["status"] == "succeeded":
+                return {
+                    "status": "succeeded",
+                    "receipt_id": receipt["id"],
+                    "binding": context["binding"],
+                    "reused": True,
+                }
+            if provider_key != "plane":
+                error = {
+                    "reason": "tracker_plugin_executor_not_configured",
+                    "provider": provider_key,
+                }
+                receipts.mark_failed(connection, receipt["id"], error)
+                work_orchestration.mark_tracker_sync_failed(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    error=error,
+                    actor=payload.worker_id,
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": receipt["id"],
+                    "reason": error["reason"],
+                }
+            provider_project_id = (
+                context["binding"]["external_project_id"]
+                or context["provider"]["configuration"].get("project_id")
+            )
+            if not provider_project_id:
+                issue = None
+                failure_reason = "plane_project_not_configured"
+            else:
+                issue = PlaneClient(settings).create_issue(
+                    str(provider_project_id),
+                    name=context["work_item"]["title"],
+                    description_html=context["description_html"],
+                )
+                failure_reason = "plane_issue_create_failed"
+            if issue is None:
+                error = {
+                    "reason": failure_reason,
+                    "provider": "plane",
+                }
+                receipts.mark_failed(connection, receipt["id"], error)
+                work_orchestration.mark_tracker_sync_failed(
+                    connection,
+                    project_id=payload.project_id,
+                    binding_id=payload.binding_id,
+                    error=error,
+                    actor=payload.worker_id,
+                )
+                return {
+                    "status": "failed",
+                    "receipt_id": receipt["id"],
+                    "reason": failure_reason,
+                }
+            external_issue_id = str(issue["id"])
+            sequence_id = issue.get("sequence_id")
+            external_key = (
+                str(issue.get("identifier") or "")
+                or (f"#{sequence_id}" if sequence_id is not None else None)
+            )
+            binding = work_orchestration.mark_tracker_synced(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+                external_issue_id=external_issue_id,
+                external_key=external_key,
+                external_url=None,
+                external_state=str(issue.get("state") or "Backlog"),
+                actor=payload.worker_id,
+            )
+            result = {
+                "binding_id": payload.binding_id,
+                "external_issue_id": external_issue_id,
+                "external_key": external_key,
+                "external_url": binding.get("external_url"),
+            }
+            receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                external_issue_id,
+                result,
+            )
+            return {
+                "status": "succeeded",
+                "receipt_id": receipt["id"],
+                "binding": binding,
+                "reused": False,
+            }
+        except (LeaseNotFoundError, ValueError) as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/bot-identities")
+def upsert_delivery_bot_identity(
+    payload: DeliveryBotIdentityUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.upsert_bot_identity(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                agent_key=payload.agent_key,
+                display_name=payload.display_name,
+                external_identity=payload.external_identity,
+                agent_definition_id=payload.agent_definition_id,
+                credential_secret_ref_id=payload.credential_secret_ref_id,
+                avatar_url=payload.avatar_url,
+                policy=payload.policy,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/status-channels")
+def upsert_delivery_status_channel(
+    payload: DeliveryStatusChannelUpsertRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.upsert_status_channel(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                channel_key=payload.channel_key,
+                display_name=payload.display_name,
+                purpose=payload.purpose,
+                external_channel_id=payload.external_channel_id,
+                external_url=payload.external_url,
+                bot_identity_id=payload.bot_identity_id,
+                event_kinds=payload.event_kinds,
+                allowed_data_boundaries=payload.allowed_data_boundaries,
+                configuration=payload.configuration,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/presence-events")
+def record_delivery_presence_event(
+    payload: DeliveryPresenceEventCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.record_delivery_event(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                event_kind=payload.event_kind,
+                subject_type=payload.subject_type,
+                subject_id=payload.subject_id,
+                status=payload.status,
+                summary=payload.summary,
+                dedupe_key=payload.dedupe_key,
+                channel_id=payload.channel_id,
+                bot_identity_id=payload.bot_identity_id,
+                external_url=payload.external_url,
+                receipt_id=payload.receipt_id,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+# ── Agent Studio, executable Panels, and durable A2A coordination ────────────
+def _raise_agent_studio_error(error: Exception) -> None:
+    if isinstance(
+        error,
+        (
+            AgentDefinitionNotFoundError,
+            AgentVersionNotFoundError,
+            PanelDefinitionNotFoundError,
+            PanelVersionNotFoundError,
+            A2ANotFoundError,
+        ),
+    ):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if isinstance(
+        error,
+        (
+            AgentVersionStateError,
+            PanelVersionStateError,
+            A2AStateError,
+        ),
+    ):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if isinstance(error, A2ATransportUnavailable):
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/agent-studio/catalog")
+def get_agent_studio_catalog(
+    project_id: str = Query(...),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "agents": agent_studio.list_agents(connection, project_id),
+            "panels": agent_studio.list_panels(connection, project_id),
+            "workflows": workflow_runtime.list_definition_details(
+                connection, project_id, include_retired=False
+            ),
+            "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
+            "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),
+            "workflow_runs": workflow_runtime.list_runs(
+                connection, project_id, status=None, limit=50
+            ),
+            "tests": agent_studio.list_agent_tests(connection, project_id, 50),
+            "a2a": {
+                "channels": a2a.list_channels(connection, project_id),
+                "subscriptions": a2a.list_subscriptions(connection, project_id),
+                "messages": a2a.list_messages(connection, project_id, limit=100),
+                "health": a2a.health(connection, project_id),
+            },
+        }
+
+
+@app.post("/v1/agent-studio/catalog-smoke")
+def run_agent_studio_catalog_smoke(
+    payload: AgentStudioActorRequest,
+) -> dict[str, Any]:
+    """Run the deterministic authority/contract check for every catalog agent.
+
+    The smoke suite is intentionally a fast, zero-model, zero-tool evaluation.
+    It records durable per-agent test evidence and never reclassifies an absent
+    active version as a pass.
+    """
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.run_catalog_smoke(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/workflows/validate")
+def validate_agent_studio_workflow(
+    payload: WorkflowDraftValidateRequest,
+) -> dict[str, Any]:
+    """Compile a workflow draft without publishing or producing side effects."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "workflow_manage"
+        )
+        try:
+            normalized = workflow_runtime.validate_workflow_spec(payload.spec)
+        except workflow_runtime.WorkflowError as error:
+            raise_workflow_error(error)
+        steps = normalized["steps"]
+        return {
+            "valid": True,
+            "normalized_spec": normalized,
+            "checks": [
+                {
+                    "kind": "graph",
+                    "passed": True,
+                    "detail": f"{len(steps)} reachable step(s); no unbounded cycles.",
+                },
+                {
+                    "kind": "bindings",
+                    "passed": True,
+                    "detail": "Required typed bindings are present.",
+                },
+                {
+                    "kind": "side_effects",
+                    "passed": True,
+                    "detail": "Validation did not publish a version or execute work.",
+                },
+            ],
+        }
+
+
+@app.get("/v1/agent-studio/agents")
+def list_agent_definitions(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": agent_studio.list_agents(connection, project_id),
+        }
+
+
+@app.post("/v1/agent-studio/agents")
+def create_agent_definition(
+    payload: AgentDefinitionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_agent(
+                connection,
+                project_id=payload.project_id,
+                agent_key=payload.agent_key,
+                name=payload.name,
+                description=payload.description,
+                owner=payload.owner,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agents/{agent_id}/versions")
+def create_agent_version(
+    agent_id: str, payload: AgentVersionCreateRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_agent_version(
+                connection,
+                agent_id,
+                project_id=payload.project_id,
+                role_key=payload.role_key,
+                model_policy=payload.model_policy,
+                prompts=payload.prompts,
+                rules=payload.rules,
+                requested_skills=payload.requested_skills,
+                requested_integrations=payload.requested_integrations,
+                scopes=payload.scopes,
+                limits=payload.limits,
+                output_contract=payload.output_contract,
+                a2a_policy=payload.a2a_policy,
+                provenance=payload.provenance,
+                agent_module_id=payload.agent_module_id,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/validate")
+def validate_agent_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.validate_agent_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/publish")
+def publish_agent_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.publish_agent_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/tests")
+def run_agent_version_test(
+    version_id: str, payload: AgentTestRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.run_agent_test(
+                connection,
+                project_id=payload.project_id,
+                agent_version_id=version_id,
+                scenario=payload.scenario,
+                assertions=payload.assertions,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/agent-versions/{version_id}/runs")
+def run_agent_version(
+    version_id: str, payload: AgentStudioRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.start_agent_run(
+                connection,
+                project_id=payload.project_id,
+                agent_version_id=version_id,
+                input_data=payload.input,
+                actor=payload.actor,
+                dedupe_key=payload.dedupe_key,
+                task_id=payload.task_id,
+                workflow_run_id=payload.workflow_run_id,
+                budget_reservation_id=payload.budget_reservation_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/agent-studio/panels")
+def list_panel_definitions(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": agent_studio.list_panels(connection, project_id),
+        }
+
+
+@app.post("/v1/agent-studio/panels")
+def create_panel_definition(
+    payload: PanelDefinitionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_panel(
+                connection,
+                project_id=payload.project_id,
+                panel_key=payload.panel_key,
+                name=payload.name,
+                description=payload.description,
+                purpose=payload.purpose,
+                owner=payload.owner,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panels/{panel_id}/versions")
+def create_panel_version(
+    panel_id: str, payload: PanelVersionCreateRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.create_panel_version(
+                connection,
+                panel_id,
+                project_id=payload.project_id,
+                members=payload.members,
+                topology=payload.topology,
+                context_policy=payload.context_policy,
+                independence_policy=payload.independence_policy,
+                quorum_policy=payload.quorum_policy,
+                bounds=payload.bounds,
+                evidence_policy=payload.evidence_policy,
+                consolidation_policy=payload.consolidation_policy,
+                dissent_policy=payload.dissent_policy,
+                escalation_policy=payload.escalation_policy,
+                output_contract=payload.output_contract,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panel-versions/{version_id}/publish")
+def publish_panel_version(
+    version_id: str, payload: AgentStudioActorRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.publish_panel_version(
+                connection, payload.project_id, version_id, actor=payload.actor
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/agent-studio/panel-versions/{version_id}/runs")
+def run_panel_version(
+    version_id: str, payload: PanelRunRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.start_panel_run(
+                connection,
+                project_id=payload.project_id,
+                panel_version_id=version_id,
+                input_data=payload.input,
+                context=payload.context,
+                actor=payload.actor,
+                dedupe_key=payload.dedupe_key,
+                task_id=payload.task_id,
+                workflow_run_id=payload.workflow_run_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/channels")
+def list_a2a_channels(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": a2a.list_channels(connection, project_id),
+        }
+
+
+@app.post("/v1/a2a/channels")
+def create_a2a_channel(payload: A2AChannelCreateRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.create_channel(
+                connection,
+                project_id=payload.project_id,
+                channel_key=payload.channel_key,
+                name=payload.name,
+                description=payload.description,
+                allowed_message_kinds=payload.allowed_message_kinds,
+                allowed_schema_versions=payload.allowed_schema_versions,
+                retention_seconds=payload.retention_seconds,
+                max_payload_bytes=payload.max_payload_bytes,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/subscriptions")
+def create_a2a_subscription(
+    payload: A2ASubscriptionCreateRequest,
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.create_subscription(
+                connection,
+                project_id=payload.project_id,
+                channel_id=payload.channel_id,
+                subscriber_kind=payload.subscriber_kind,
+                subscriber_id=payload.subscriber_id,
+                consumer_group=payload.consumer_group,
+                recipient_filter=payload.recipient_filter,
+                ack_mode=payload.ack_mode,
+                visibility_timeout_seconds=payload.visibility_timeout_seconds,
+                max_attempts=payload.max_attempts,
+                data_boundaries=list(payload.data_boundaries),
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages")
+def publish_a2a_message(payload: A2AMessagePublishRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.publish(
+                connection,
+                project_id=payload.project_id,
+                channel_id=payload.channel_id,
+                message_kind=payload.message_kind,
+                schema_name=payload.schema_name,
+                schema_version=payload.schema_version,
+                sender_kind=payload.sender_kind,
+                sender_id=payload.sender_id,
+                sender_version_id=payload.sender_version_id,
+                recipient=payload.recipient,
+                payload=payload.payload,
+                dedupe_key=payload.dedupe_key,
+                data_boundary=payload.data_boundary,
+                priority=payload.priority,
+                ttl_seconds=payload.ttl_seconds,
+                ack_mode=payload.ack_mode,
+                conversation_id=payload.conversation_id,
+                correlation_id=payload.correlation_id,
+                causation_id=payload.causation_id,
+                trace_id=payload.trace_id,
+                reply_to_id=payload.reply_to_id,
+                lineage=payload.lineage,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/messages")
+def list_a2a_messages(
+    project_id: str = Query(...),
+    limit: int = Query(100, ge=1, le=500),
+    status: Optional[str] = Query(None),
+    trace_id: Optional[str] = Query(None),
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": a2a.list_messages(
+                connection,
+                project_id,
+                limit=limit,
+                status=status,
+                trace_id=trace_id,
+            ),
+        }
+
+
+@app.post("/v1/a2a/messages/{message_id}/cancel")
+def cancel_a2a_message(
+    message_id: str, payload: A2AMessageCancelRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.cancel(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages/{message_id}/replay", status_code=201)
+def replay_a2a_message(
+    message_id: str, payload: A2AMessageReplayRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return a2a.replay(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                dedupe_key=payload.dedupe_key,
+                reason=payload.reason,
+                ttl_seconds=payload.ttl_seconds,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/messages/{message_id}/dispatch")
+def dispatch_a2a_message(
+    message_id: str, payload: A2ADispatchRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        try:
+            job = jobs.require_active_lease(
+                connection,
+                payload.worker_id,
+                payload.created_by_job_id,
+                payload.lease_token,
+            )
+            if (
+                job["kind"] != "a2a.dispatch"
+                or (job["payload"] or {}).get("message_id") != message_id
+            ):
+                raise A2AStateError(
+                    "Active lease does not authorize this A2A message."
+                )
+            return a2a.dispatch(
+                connection,
+                project_id=payload.project_id,
+                message_id=message_id,
+                created_by_job_id=payload.created_by_job_id,
+                actor=payload.worker_id,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/poll")
+def poll_a2a(payload: A2APollRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "agent_chat"
+        )
+        try:
+            return {
+                "items": a2a.poll(
+                    connection,
+                    project_id=payload.project_id,
+                    subscription_id=payload.subscription_id,
+                    consumer_name=payload.consumer_name,
+                    count=payload.count,
+                    block_ms=payload.block_ms,
+                    actor=payload.actor,
+                )
+            }
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.post("/v1/a2a/deliveries/{delivery_id}/acknowledge")
+def acknowledge_a2a_delivery(
+    delivery_id: str, payload: A2AAcknowledgeRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        try:
+            return a2a.acknowledge(
+                connection,
+                project_id=payload.project_id,
+                delivery_id=delivery_id,
+                acknowledgement=payload.acknowledgement,
+                actor_kind=payload.actor_kind,
+                actor_id=payload.actor_id,
+                result=payload.result,
+                evidence_refs=payload.evidence_refs,
+                reason=payload.reason,
+            )
+        except Exception as error:  # noqa: BLE001
+            _raise_agent_studio_error(error)
+
+
+@app.get("/v1/a2a/health")
+def get_a2a_health(project_id: str = Query(...)) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return a2a.health(connection, project_id)
+
+
+@app.get("/v1/a2a/audit")
+def get_a2a_audit(
+    project_id: str = Query(...), limit: int = Query(100, ge=1, le=500)
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return a2a.audit_feed(connection, project_id, limit)
 
 
 mount_edition_routers(app, settings.boss_edition)

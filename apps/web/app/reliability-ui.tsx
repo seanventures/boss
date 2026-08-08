@@ -75,7 +75,7 @@ function IncidentRow({ projectId, incident }: { projectId: string; incident: Rel
         <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>
           {incident.signal_count} signal{incident.signal_count === 1 ? "" : "s"} · confidence{" "}
           {Number(incident.confidence ?? 0).toFixed(2)} · last seen{" "}
-          {new Date(incident.last_seen).toLocaleString()}
+          <span suppressHydrationWarning>{new Date(incident.last_seen).toLocaleString()}</span>
         </div>
       </div>
       <Pill text={incident.status} color={STATUS_COLOR[incident.status] ?? "#8b949e"} />

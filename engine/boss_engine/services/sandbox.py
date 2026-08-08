@@ -97,6 +97,7 @@ class EphemeralSandbox:
         base_branch: str = "main",
         work_branch: Optional[str] = None,
         token: Optional[str] = None,
+        repo_host: str = "github",
     ) -> Path:
         """Shallow-clone ``owner/repo`` into a fresh temp dir and check out a work
         branch. ``token`` (PAT or short-lived GitHub-App installation token) is
@@ -109,10 +110,9 @@ class EphemeralSandbox:
         self._owns_dir = True
         self.base_branch = base_branch
 
-        if token:
-            clone_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
-        else:
-            clone_url = f"https://github.com/{owner}/{repo}.git"
+        # BOSS-267: the host's authenticated clone-URL form lives in ONE place now.
+        from .repo_host import clone_url_for
+        clone_url = clone_url_for(repo_host, owner, repo, token or "")
 
         depth = max(1, int(self.settings.sandbox_clone_depth or 1))
         self._git(
@@ -126,6 +126,34 @@ class EphemeralSandbox:
         # them into the diff (uses .git/info/exclude — untracked, repo-safe).
         self._write_local_excludes()
         self.base_sha = self._git(["rev-parse", "HEAD"]).strip()
+
+        # FETCH THE INTEGRATION BRANCH so an agent can reconcile against it.
+        # A lineage branch is cloned --depth 1 --branch X, so the agent's world is that branch
+        # and nothing else. Asked to merge two apps where one lives on the integration branch,
+        # it saw one app and correctly left one app — twice, for $20, because the instruction
+        # named a directory that was not in its working tree. GitHub's update-branch declines
+        # when there is a real conflict, so tier 1 cannot help either.
+        # Fetching it costs one shallow fetch and gives the agent something to actually merge.
+        # Best-effort: a repo without the branch, or no network for it, proceeds as before.
+        self.integration_ref = None
+        self.integration_fetch_error = None
+        integration = (getattr(self.settings, "sandbox_integration_branch", None)
+                       or "main")
+        if base_branch != integration:
+            try:
+                self._git(["fetch", "--depth", str(depth), "origin",
+                           f"{integration}:refs/remotes/origin/{integration}"],
+                          redact=token)
+                self.integration_ref = f"origin/{integration}"
+                self.integration_fetch_error = None
+            except Exception as exc:  # noqa: BLE001 — never fail provisioning over this
+                self.integration_ref = None
+                # RECORD THE FAILURE. The first version swallowed this silently, so when a
+                # consolidation produced one app instead of two there was no way to tell
+                # whether the fetch had happened, the agent had ignored it, or the prompt was
+                # wrong — three very different fixes, and no evidence to choose between them.
+                # A best-effort step still has to say whether it succeeded.
+                self.integration_fetch_error = f"{type(exc).__name__}: {exc}"[:200]
 
         self.work_branch = work_branch or f"boss/{self.task_id}"
         # A feedback-iteration clones its own accumulated branch (base_branch == work_branch),

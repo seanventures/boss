@@ -10,6 +10,8 @@ from .runner import run_worker_cycle
 
 
 LOGGER = logging.getLogger("boss.worker")
+QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
+_last_qa_benchmark_sweep_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -17,6 +19,45 @@ def configure_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+
+def _sweep_deployment_health(client: ControlPlaneClient) -> None:
+    """Take health samples for deployed apps, on the worker's idle path.
+
+    Monitoring reported every app as "unknown" because nothing ever probed one: the sweep was
+    written, its docstring said "runs on the worker's idle path", and no caller was ever added.
+    A monitoring feature that only samples when a human presses a button is not monitoring —
+    uptime, latency and incidents all need a series, and a series needs a clock.
+
+    Idle path, not a timer: the worker is here because it has no job to run, so a probe costs
+    nothing that mattered. The sweep decides for itself which targets are DUE, so calling it
+    every poll interval does not mean probing every poll interval.
+
+    Swallows everything. A stale dashboard is a small problem; a worker that dies taking health
+    samples is a large one.
+    """
+    try:
+        client.sweep_deployment_health()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("health_sweep_failed", exc_info=True)
+
+
+def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
+    """Keep the benchmark evidence ledger current while the worker is idle.
+
+    The service compares report hashes and emits an event only when durable evidence
+    changed, so invoking it at the poll interval is inexpensive and cannot create a
+    tuning change or an external side effect.
+    """
+    global _last_qa_benchmark_sweep_monotonic
+    now = time.monotonic()
+    if now - _last_qa_benchmark_sweep_monotonic < QA_BENCHMARK_SWEEP_INTERVAL_SECONDS:
+        return
+    try:
+        client.sweep_qa_benchmark_evaluations()
+        _last_qa_benchmark_sweep_monotonic = now
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("qa_benchmark_sweep_failed", exc_info=True)
 
 
 def main() -> None:
@@ -68,6 +109,8 @@ def main() -> None:
                 time.sleep(settings.poll_interval_seconds)
                 continue
             if not ran_job:
+                _sweep_deployment_health(client)
+                _sweep_qa_benchmark_evaluations(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:
         client.close()

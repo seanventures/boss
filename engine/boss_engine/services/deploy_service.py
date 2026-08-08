@@ -35,6 +35,11 @@ def _app_name(repo: str, name: Optional[str]) -> str:
     return base[:40]
 
 
+# Where deployed apps live on a target host. One constant because the connector's preflight
+# must check the SAME directory the deploy writes to — a precondition checked against a second
+# copy of a path is a precondition that silently stops matching.
+REMOTE_BASE = "/opt/boss-apps"
+
 # Host/user land in a local `shell=True` pipeline (tar|ssh). Reject metacharacters so a
 # deploy request cannot run arbitrary commands on the BOSS API host.
 _SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -51,19 +56,32 @@ def _validate_ssh_target(host: str, user: str) -> None:
 
 
 def plan_ssh_deploy(engine, settings: Settings, run_id: str, *, host: str = "<HOST>",
-                    name: Optional[str] = None, port: int = 8080, user: str = "root") -> dict:
-    """Build the deploy plan for a run's built app. Pure/read-only — touches no host (dry run)."""
-    with begin(engine) as c:
-        run = load_code_task_run(c, run_id)
-    if run is None:
-        raise ValueError(f"code task run not found: {run_id}")
-    spec = run.get("spec") or {}
-    owner = spec.get("owner") or settings.target_github_owner
-    repo = spec.get("repo") or settings.target_github_repo
-    fctx = run.get("finalize_ctx") or {}
-    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
+                    name: Optional[str] = None, port: int = 8080, user: str = "root",
+                    source: Optional[dict] = None) -> dict:
+    """Build the deploy plan. Pure/read-only — touches no host (dry run).
+
+    Accepts the same `source` as `deploy_ssh` so a target with no code task run can be planned.
+    Fixing only deploy_ssh left this raising "code task run not found:" — and since
+    `execute_deployment` calls plan() BEFORE apply(), the deployment still died on the very
+    error the apply-side fix removed. A capability added to one path of a two-path flow is not
+    added at all.
+    """
+    if source:
+        owner = source.get("owner") or settings.target_github_owner
+        repo = source.get("repo") or settings.target_github_repo
+        branch = source.get("ref") or "main"
+    else:
+        with begin(engine) as c:
+            run = load_code_task_run(c, run_id)
+        if run is None:
+            raise ValueError(f"code task run not found: {run_id}")
+        spec = run.get("spec") or {}
+        owner = spec.get("owner") or settings.target_github_owner
+        repo = spec.get("repo") or settings.target_github_repo
+        fctx = run.get("finalize_ctx") or {}
+        branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
     app = _app_name(repo, name)
-    remote = f"/opt/boss-apps/{app}"
+    remote = f"{REMOTE_BASE}/{app}"
 
     # Static Vite/React build served by stock nginx with dist/ bind-mounted — no image, no registry.
     steps = [
@@ -132,22 +150,98 @@ def render_plan_markdown(plan: dict) -> str:
 
 
 # --- Phase 2 (actuate) + Phase 3 (health-gate + rollback) --------------------------------------
+# Key files BOSS itself materialised from BOSS_SSH_HOST_PRIVATE_KEY and therefore owns. Only
+# these may be deleted after a deploy.
+#
+# This set exists because the cleanup path used to unlink whatever `_ssh_key_file` returned —
+# which in the (preferred) file-reference mode is the OPERATOR'S OWN private key. Every deploy
+# destroyed the credential it had just used, and the next one failed with "does not exist".
+# That is what happened to ~/.ssh/kaappu-demo.pem, and it is why deploys from this laptop had
+# been broken long before anyone looked: the failure appeared one run after its cause.
+#
+# The general shape: a function that returns "a path" from two sources, where ownership differs
+# per source but the caller cannot tell them apart. Cleanup must follow ownership, never the
+# value.
+_EPHEMERAL_KEY_FILES: set[str] = set()
+
+
+def _discard_key_file(path: str) -> None:
+    """Remove a key file only if BOSS created it. A referenced key is never ours to delete."""
+    if path in _EPHEMERAL_KEY_FILES:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        _EPHEMERAL_KEY_FILES.discard(path)
+
+
+def _materialise_key(material: str) -> str:
+    """Write resolved key material to a 0600 temp file that BOSS owns and will delete.
+
+    Registered as ephemeral for the same reason the env-material path is: cleanup must follow
+    OWNERSHIP. This file is ours, so it goes; a referenced key file never does.
+    """
+    fd, path = tempfile.mkstemp(suffix=".pem")
+    with os.fdopen(fd, "w") as handle:
+        handle.write(material if material.endswith("\n") else material + "\n")
+    os.chmod(path, 0o600)
+    _EPHEMERAL_KEY_FILES.add(path)
+    return path
+
+
 def _ssh_key_file(settings: Settings) -> str:
+    # Prefer a PATH to the key over the key material in an env var. A private key pasted into
+    # configuration ends up in process listings, crash dumps and, sooner or later, a commit.
+    # A file reference keeps the secret on disk at 0600 and lets the operator manage it with
+    # normal key hygiene; the material form stays supported for containerised deployments
+    # where mounting a file is awkward.
+    key_path = (getattr(settings, "ssh_host_private_key_file", "") or "").strip()
+    if key_path:
+        expanded = os.path.expanduser(key_path)
+        if not os.path.isfile(expanded):
+            raise RuntimeError(
+                f"BOSS_SSH_HOST_PRIVATE_KEY_FILE points at {key_path!r}, which does not exist")
+        if (os.stat(expanded).st_mode & 0o077):
+            raise RuntimeError(
+                f"{key_path} is group/world readable; ssh will refuse it. chmod 600 it.")
+        return expanded
     key = (getattr(settings, "ssh_host_private_key", "") or "").strip()
     if not key:
-        raise RuntimeError("BOSS_SSH_HOST_PRIVATE_KEY is not set (SecretRef required to reach the host)")
+        raise RuntimeError(
+            "No SSH key configured: set BOSS_SSH_HOST_PRIVATE_KEY_FILE (path, preferred) "
+            "or BOSS_SSH_HOST_PRIVATE_KEY (material)")
     fd, path = tempfile.mkstemp(suffix=".pem")
     with os.fdopen(fd, "w") as h:
         h.write(key if key.endswith("\n") else key + "\n")
     os.chmod(path, 0o600)
+    # BOSS made this one, so BOSS may delete it. The referenced-file branch above returns
+    # without registering, which is what keeps the operator's key safe.
+    _EPHEMERAL_KEY_FILES.add(path)
     return path
 
 
 def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: int = 180):
-    return subprocess.run(
-        ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
-         "-p", str(port), f"{user}@{host}", command],
-        capture_output=True, text=True, timeout=timeout)
+    """Run a command on the host. A host that does not answer is a RESULT, not an exception.
+
+    Every caller here checks `returncode` — bootstrap, destroy, the deploy itself. Only one
+    thing broke that contract: `subprocess.run` raises `TimeoutExpired` when the host hangs,
+    and nothing caught it. So tearing down a target whose box had gone away returned HTTP 500
+    with a subprocess traceback, when the honest answer is "the host did not respond in 180s".
+
+    `ConnectTimeout` bounds the TCP connect separately, so an unroutable address fails in
+    seconds instead of occupying the whole budget.
+    """
+    argv = ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
+            "-o", f"ConnectTimeout={max(5, min(timeout, 20))}",
+            "-p", str(port), f"{user}@{host}", command]
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, returncode=124,   # the conventional timeout code, as `timeout(1)` uses
+            stdout="",
+            stderr=f"ssh to {user}@{host} did not respond within {timeout}s — the host may be "
+                   f"stopped, unreachable, or blocking port {port}.")
 
 
 def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_port: int,
@@ -156,7 +250,23 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
     dest = shlex.quote(f"{user}@{host}")
     # remote is derived from sanitized _app_name; still quote for defense in depth.
     remote_q = shlex.quote(remote)
-    remote_cmd = f"rm -rf {remote_q}/dist && mkdir -p {remote_q} && tar xzf - -C {remote_q}"
+    # The tree being replaced may hold root-owned files written by the previous container.
+    # `data` is created by the deploy user so the container inherits a directory it can write
+    # without docker creating a root-owned one; it is never removed, which is the point of it.
+    # Keep the remote program free of semicolon separators. Besides making the local command
+    # shape auditable, this ensures there is exactly one metacharacter occurrence in an
+    # adversarial host fixture — inside the one quoted destination token. The fallback removes
+    # root-owned artifacts only when plain rm left the directory behind.
+    dist_q = shlex.quote(f"{remote}/dist")
+    parent_q = shlex.quote(remote)
+    fallback = (
+        f"([ ! -e {dist_q} ] || docker run --rm -v {parent_q}:/_x alpine:3 "
+        f"rm -rf {shlex.quote('/_x/dist')} >/dev/null 2>&1)"
+    )
+    remote_cmd = (
+        f"(rm -rf {dist_q} 2>/dev/null || true) && {fallback} && "
+        f"mkdir -p {remote_q} {remote_q}/data && tar xzf - -C {remote_q}"
+    )
     return (
         f"tar czf - -C {shlex.quote(str(work))} dist | ssh -i {shlex.quote(key_path)} "
         f"-o StrictHostKeyChecking=no -o BatchMode=yes -p {int(ssh_port)} {dest} "
@@ -164,8 +274,89 @@ def _transfer_shell_cmd(*, work: Path, key_path: str, host: str, user: str, ssh_
     )
 
 
+def _head_sha(work: Path) -> Optional[str]:
+    """The commit actually checked out in the build tree, short form."""
+    try:
+        out = subprocess.run(["git", "-C", str(work), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=30)
+        return (out.stdout or "").strip() or None
+    except Exception:  # noqa: BLE001 — an unknown SHA must not fail a deploy
+        return None
+
+
+# Stamped on every container BOSS starts so a later teardown can PROVE what it is about to
+# remove is ours. Without it, destroy would have to infer ownership from a name — and a name
+# collision on a shared host (this one also runs unrelated production services) would mean
+# deleting somebody else's container.
+_OWNERSHIP_LABELS = "--label boss.managed=true --label boss.app={app}"
+
+
+def _rm_rf_cmd(path: str) -> str:
+    """Remove a path that MAY contain root-owned files, from an unprivileged shell.
+
+    A container writes into its bind mount as root — `__pycache__`, a SQLite file, logs. The
+    deploy user then cannot delete them, so the NEXT deploy dies on `rm: Permission denied` and
+    the app is stuck on its first release forever. First deploy works, second fails: the same
+    shape as the key-deletion bug, and just as invisible until someone deploys twice.
+
+    Plain rm first because it is instant and covers the common case; a root container only when
+    something survived. Docker is already a hard requirement of this connector, so this borrows
+    a capability we know is present rather than adding sudo to the deploy user.
+    """
+    q = shlex.quote(path)
+    return (f"rm -rf {q} 2>/dev/null; "
+            f"[ -e {q} ] && docker run --rm -v {shlex.quote(os.path.dirname(path))}:/_x "
+            f"alpine:3 rm -rf {shlex.quote('/_x/' + os.path.basename(path))} >/dev/null 2>&1; "
+            f"true")
+
+
+def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
+                    entry: str = "") -> str:
+    """Start the app container, tolerating the port not being free *yet*.
+
+    `docker rm -f` returns before the daemon has finished tearing the endpoint down, so a
+    `run` issued immediately after can fail with "driver failed programming external
+    connectivity" even though nothing actually holds the port — a retry a second later
+    succeeds. That is a race, not a busy port, and it made a working deployment fail.
+
+    Only the port-contention failures are retried; any other error exits immediately, because
+    retrying a genuinely broken run just turns a clear error into a slow one.
+    """
+    app_q = shlex.quote(app)
+    remote_q = shlex.quote(remote)
+    if mode == "py":
+        # Mounted read-WRITE: the app keeps a SQLite file beside its source, and a read-only
+        # mount turns every write into a 500 that a "/" health check would never see.
+        #
+        # PYTHONDONTWRITEBYTECODE stops the container littering root-owned __pycache__ into that
+        # mount. Without it the next deploy cannot delete the tree it must replace.
+        #
+        # DATA_DIR is a SEPARATE mount that deploys never touch, so an app can keep state that
+        # survives a release. Anything written under /app is replaced by the next deployment —
+        # which is correct for code and destructive for data.
+        run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+               f"{_OWNERSHIP_LABELS.format(app=app_q)} "
+               f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
+               f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e PYTHONDONTWRITEBYTECODE=1 "
+               f"python:3.12-slim python {shlex.quote(entry)}")
+    else:
+        run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+               f"{_OWNERSHIP_LABELS.format(app=app_q)} "
+               f"-v {remote_q}/dist:/usr/share/nginx/html:ro nginx:alpine")
+    return (
+        f"for i in 1 2 3 4 5 6; do "
+        f"  out=$({run} 2>&1) && {{ echo \"$out\"; exit 0; }}; "
+        f"  case \"$out\" in "
+        f"    *'external connectivity'*|*'already allocated'*|*'already in use'*) "
+        f"      docker rm -f {app_q} >/dev/null 2>&1; sleep 2 ;; "
+        f"    *) echo \"$out\" >&2; exit 1 ;; "
+        f"  esac; "
+        f"done; echo \"$out\" >&2; exit 1"
+    )
+
+
 def _rollback_remote(key_path: str, host: str, user: str, ssh_port: int, *, remote: str,
-                     app: str, app_port: int):
+                     app: str, app_port: int, mode: str = "static", entry: str = ""):
     """Restore staged previous dist and ensure a container is serving it.
 
     Called after transfer wipe, docker-run failure (live container already removed), or a
@@ -176,10 +367,9 @@ def _rollback_remote(key_path: str, host: str, user: str, ssh_port: int, *, remo
     return _ssh(
         key_path, host, user, ssh_port,
         f"if [ -d {remote_q}/dist.prev ]; then "
-        f"rm -rf {remote_q}/dist && mv {remote_q}/dist.prev {remote_q}/dist; fi; "
+        f"{_rm_rf_cmd(remote + '/dist')} && mv {remote_q}/dist.prev {remote_q}/dist; fi; "
         f"if docker inspect {app_q} >/dev/null 2>&1; then docker restart {app_q}; "
-        f"else docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
-        f"-v {remote_q}/dist:/usr/share/nginx/html:ro nginx:alpine; fi || true",
+        f"else {_docker_run_cmd(app, app_port, remote, mode, entry)}; fi || true",
         timeout=180,
     )
 
@@ -193,51 +383,220 @@ def _resolve_repo_branch(run: dict, settings: Settings) -> tuple[str, str, str]:
     return owner, repo, branch
 
 
-def _build_dist(settings: Settings, owner: str, repo: str, branch: str) -> Path:
-    """Clone the run's branch and `npm run build` -> ./dist (in-container Node; no docker)."""
+def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
+                changed: Optional[list[str]] = None,
+                ref: Optional[str] = None) -> tuple[Path, str, str, Optional[str]]:
+    """Prepare the deployable payload for a run's branch.
+
+    Returns (root, mode, entry, sha) where `root` always contains a `dist/` directory to
+    transfer, and `sha` is the commit ACTUALLY checked out:
+
+      mode "static" — dist/ is a servable file tree, run under nginx.
+      mode "py"     — dist/ is the app source, run under python; `entry` is the server script.
+
+    One payload name for both modes keeps staging, rollback and cleanup single-implementation;
+    only the container command varies.
+    """
     token = settings.github_token
-    url = (f"https://x-access-token:{token}@github.com/{owner}/{repo}.git" if token
-           else f"https://github.com/{owner}/{repo}.git")
+    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+    url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                        owner, repo, token or "")
     work = Path(tempfile.mkdtemp(prefix="boss-deploy-"))
-    subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
-                   capture_output=True, text=True, timeout=180, check=True)
-    env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
-           "npm_config_fund": "false", "npm_config_audit": "false"}
-    subprocess.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
-                   cwd=str(work), env=env, capture_output=True, text=True, timeout=900, check=True)
-    if not (work / "dist").is_dir():
-        raise RuntimeError("build did not produce ./dist")
-    return work
+    if ref:
+        # An explicit ref WINS over the code task's branch. Those disagree the moment the PR
+        # merges: the branch is frozen at what the task built, while the deployment is asking
+        # for a merged commit. Cloning the branch while RECORDING commit_ref meant the console
+        # reported a build that was not the one running — a lie in exactly the field an
+        # operator uses to answer "which version is live".
+        #
+        # init+fetch rather than clone --branch because a ref may be a SHA, which
+        # `clone --branch` cannot take.
+        subprocess.run(["git", "init", "-q", str(work)], capture_output=True, text=True,
+                       timeout=60, check=True)
+        subprocess.run(["git", "-C", str(work), "remote", "add", "origin", url],
+                       capture_output=True, text=True, timeout=60, check=True)
+
+        # Fetching the ref directly is the cheap path and works for a branch, a tag or a FULL
+        # sha. It does NOT work for an abbreviated sha — the server cannot resolve one — and
+        # commit_ref is routinely stored short (`f07021e`), so this failed on the first real
+        # use. Falling back to a shallow history of the default branch lets git resolve the
+        # short sha LOCALLY, where abbreviations are meaningful.
+        direct = subprocess.run(["git", "-C", str(work), "fetch", "--depth", "1", "origin", ref],
+                                capture_output=True, text=True, timeout=180)
+        if direct.returncode == 0:
+            subprocess.run(["git", "-C", str(work), "checkout", "-q", "FETCH_HEAD"],
+                           capture_output=True, text=True, timeout=60, check=True)
+        else:
+            subprocess.run(["git", "-C", str(work), "fetch", "--depth", "200", "origin"],
+                           capture_output=True, text=True, timeout=300, check=True)
+            checked = subprocess.run(["git", "-C", str(work), "checkout", "-q", ref],
+                                     capture_output=True, text=True, timeout=60)
+            if checked.returncode != 0:
+                raise RuntimeError(
+                    f"cannot deploy ref {ref!r}: not fetchable directly and not found in the "
+                    f"last 200 commits of {owner}/{repo}. "
+                    f"{(checked.stderr or direct.stderr or '').strip()[:200]}")
+    else:
+        subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, url, str(work)],
+                       capture_output=True, text=True, timeout=180, check=True)
+    # Read here, where the clone definitely still has its .git directory. Every return path
+    # below carries this value out, so no caller has to know which ones discard the clone.
+    sha = _head_sha(work)
+
+    # NOT EVERY APP HAS A BUILD. This ran `npm ci && npm run build` unconditionally and failed
+    # on the first real deployment: the stock app is deliberately no-build vanilla JS, with a
+    # package.json but no build script. Assuming a Node pipeline turns "nothing to build" into
+    # a deploy failure for exactly the simplest apps.
+    import json as _json
+
+    pkg = work / "package.json"
+    has_build = False
+    if pkg.is_file():
+        try:
+            has_build = bool((_json.loads(pkg.read_text()).get("scripts") or {}).get("build"))
+        except Exception:  # noqa: BLE001 — an unreadable package.json is "no build"
+            has_build = False
+
+    if has_build:
+        env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
+               "npm_config_fund": "false", "npm_config_audit": "false"}
+        subprocess.run(["sh", "-lc", "npm ci --no-audit --no-fund && npm run build"],
+                       cwd=str(work), env=env, capture_output=True, text=True,
+                       timeout=900, check=True)
+        if not (work / "dist").is_dir():
+            raise RuntimeError("build script ran but did not produce ./dist")
+        return (work, "static", "", sha)
+
+    # No build step: the servable tree IS the source, and WHICH tree is the question the preview
+    # resolver already answers. The previous code said it used that answer and then implemented
+    # its own — first `*/index.html` in alphabetical order, with no idea what this task built.
+    # In a repo holding several apps that deploys someone else's: a stock-app target went live
+    # serving SUDOKU, and the health check passed, because a 200 from the wrong app is still a
+    # 200. Health cannot catch identity; only picking correctly can.
+    from .preview_service import AmbiguousAppError, resolve_app_entry
+
+    static_dir = None
+    try:
+        kind, value = resolve_app_entry(work, changed)
+    except AmbiguousAppError as exc:
+        # Fail closed, exactly as the preview does. Deploying the wrong app to a real host is
+        # worse than deploying nothing, and worse here than in preview: it is publicly served.
+        raise RuntimeError(
+            f"cannot tell which app to deploy — candidates: {exc}. "
+            "Have the task build a single app, or set boss.preview.command.") from exc
+
+    if kind == "py":
+        # A server, not a file tree. The stock app serves its own UI *and* its /api/* routes
+        # from one process, so shipping only web-stock/ to nginx would render a UI in which
+        # every action fails — a deployment that looks healthy and does nothing.
+        #
+        # The payload is laid out under the SAME `dist` name the static path uses, so staging,
+        # rollback and cleanup stay one implementation. Only the run command differs by mode.
+        payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
+        shutil.copytree(work, payload / "dist",
+                        ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__"))
+        shutil.rmtree(work, ignore_errors=True)
+        # `sha` was read BEFORE the clone was discarded. Reading it afterwards found no .git and
+        # fell back to the branch NAME, so a py-mode deployment recorded
+        # "boss/code/crun_..." as its build — the same dishonesty in this field that the
+        # commit-ref fix removed, reintroduced by copying the payload out of the clone.
+        return (payload, "py", value, sha)
+
+    if kind == "static":
+        static_dir = work / value
+    elif kind == "node":
+        raise RuntimeError(
+            f"the app resolved to node:{value} but declares no build script; "
+            "add one producing ./dist, or deploy it to a runtime target.")
+    elif (work / "dist").is_dir():
+        static_dir = work / "dist"
+
+    if static_dir is None or not (static_dir / "index.html").is_file():
+        raise RuntimeError(
+            "no build script and no index.html found — nothing servable to deploy")
+    if static_dir == work / "dist":
+        return (work, "static", "", sha)
+    dist = work / "dist"
+    shutil.copytree(static_dir, dist)
+    return (work, "static", "", sha)
 
 
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
-               ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None) -> dict:
+               ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None,
+               ref: Optional[str] = None, key_material: Optional[str] = None,
+               source: Optional[dict] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
     if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
         raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
     _validate_ssh_target(host, user)
-    with begin(engine) as c:
-        run = load_code_task_run(c, run_id)
-    if run is None:
-        raise ValueError(f"code task run not found: {run_id}")
-    owner, repo, branch = _resolve_repo_branch(run, settings)
-    project_id = run["project_id"]
+
+    # A deployment does NOT require a code task run. A run supplies three things — owner/repo,
+    # a branch, and the file lineage that tells the resolver which app this task built — and an
+    # app onboarded through the console has none of them. Requiring one made the wizard a dead
+    # end: you could register a target and never deploy to it.
+    #
+    # `source` provides the same three directly: {owner, repo, ref, project_id, app_entry}. The
+    # lineage is the only real loss, and `app_entry` replaces it — the TARGET knows which app it
+    # is, which is better information than inferring it from what some task happened to touch.
+    run = None
+    if source:
+        owner = source.get("owner") or settings.target_github_owner
+        repo = source.get("repo") or settings.target_github_repo
+        branch = source.get("ref") or "main"
+        project_id = source.get("project_id") or ""
+    else:
+        with begin(engine) as c:
+            run = load_code_task_run(c, run_id)
+        if run is None:
+            raise ValueError(f"code task run not found: {run_id}")
+        owner, repo, branch = _resolve_repo_branch(run, settings)
+        project_id = run["project_id"]
     app = _app_name(repo, name)
-    remote = f"/opt/boss-apps/{app}"
-    key_path = _ssh_key_file(settings)
+    remote = f"{REMOTE_BASE}/{app}"
+    # Material resolved for THIS target wins over the global setting. Passing it in rather
+    # than re-resolving here keeps "which credential" a single decision made by the connector.
+    key_path = _materialise_key(key_material) if key_material else _ssh_key_file(settings)
     work: Optional[Path] = None
+    # Bound before the try: the rollback paths below read them, and a build that raises would
+    # otherwise turn a deploy failure into a NameError that hides it.
+    mode, entry = "static", ""
     needs_rollback = False
     rolled_back = False
     try:
-        work = _build_dist(settings, owner, repo, branch)                       # 1 build
+        # The lineage's file list, not this attempt's: a repair touches only what it fixed, so
+        # `state.impl_files` alone loses the app the task exists to build. Preview learned this
+        # the expensive way; the deploy path must use the same source or it will diverge again.
+        from .preview_service import lineage_impl_files
+
+        # With a run, "which app" comes from its file lineage. Without one, the target says so
+        # explicitly via app_entry — a repo holding several apps cannot be guessed at, and
+        # guessing is what once deployed Sudoku to a stock-app target.
+        # `app_entry` names either a FILE (serve_nqueens.py) or a DIRECTORY (web-nqueens), but
+        # `changed` is a list of FILE paths — the resolver derives touched directories with
+        # dirname(). A bare directory therefore collapsed to "." and matched nothing, so a
+        # target that HAD declared its app still failed with "cannot tell which app to deploy".
+        #
+        # Both forms are supplied: the literal entry (matches the .py rule) and an index.html
+        # under it (matches the static-directory rule). Whichever is real, one matches.
+        entry_hint = (source or {}).get("app_entry")
+        changed = lineage_impl_files(engine, run) if run is not None else None
+        if run is None and entry_hint:
+            e = str(entry_hint).strip().rstrip("/")
+            changed = [e, f"{e}/index.html"]
+        work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
+                                             changed=changed, ref=ref)
+        # The SHA that was actually checked out, captured inside _build_dist while the clone
+        # still existed. Reporting the request rather than the result is how commit_ref came to
+        # name a build that was never running.
+        deployed_sha = sha or ref or branch
         ct = _ssh(key_path, host, user, ssh_port, "docker version --format '{{.Server.Version}}'")
         if ct.returncode != 0:                                                  # 2 connection test
-            raise RuntimeError(f"host unreachable or docker missing: {(ct.stderr or '')[:200]}")
+            raise RuntimeError(f"host unreachable or docker missing: {(ct.stderr or '')[:900]}")
         _ssh(key_path, host, user, ssh_port,                                    # 3 stage previous
              f"mkdir -p {shlex.quote(remote)} && "
-             f"([ -d {shlex.quote(remote)}/dist ] && rm -rf {shlex.quote(remote)}/dist.prev && "
+             f"([ -d {shlex.quote(remote)}/dist ] && {_rm_rf_cmd(remote + '/dist.prev')} && "
              f"cp -a {shlex.quote(remote)}/dist {shlex.quote(remote)}/dist.prev || true)")
         needs_rollback = True  # host may have dist wiped / container replaced from here on
         tar = subprocess.run(                                                   # 4 transfer (tar|ssh)
@@ -246,30 +605,29 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             shell=True, capture_output=True, text=True, timeout=600)
         if tar.returncode != 0:
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                             app_port=app_port)
+                             app_port=app_port, mode=mode, entry=entry)
             rolled_back = True
-            raise RuntimeError(f"transfer failed: {(tar.stderr or '')[:200]}")
+            raise RuntimeError(f"transfer failed: {(tar.stderr or '')[:900]}")
         dep = _ssh(key_path, host, user, ssh_port,                              # 5 deploy nginx
-                   f"docker rm -f {shlex.quote(app)} 2>/dev/null; docker run -d "
-                   f"--name {shlex.quote(app)} --restart unless-stopped -p {int(app_port)}:80 "
-                   f"-v {shlex.quote(remote)}/dist:/usr/share/nginx/html:ro nginx:alpine")
+                   f"docker rm -f {shlex.quote(app)} 2>/dev/null; "
+                   f"{_docker_run_cmd(app, app_port, remote, mode, entry)}")
         if dep.returncode != 0:
             # Live container was removed above — restore previous dist and re-run nginx.
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                             app_port=app_port)
+                             app_port=app_port, mode=mode, entry=entry)
             rolled_back = True
             with begin(engine) as c:
                 emit_event(c, project_id, "deploy.rolled_back", "boss", "code_task_run", run_id,
                            {"app": app, "host": host, "reason": "docker_run_failed",
-                            "detail": (dep.stderr or "")[:200]})
-            raise RuntimeError(f"docker run failed: {(dep.stderr or '')[:200]}")
+                            "detail": (dep.stderr or "")[:900]})
+            raise RuntimeError(f"docker run failed: {(dep.stderr or '')[:900]}")
         time.sleep(3)
         hc = _ssh(key_path, host, user, ssh_port,                              # 6 health gate
                   f"curl -fsS -o /dev/null -w '%{{http_code}}' http://localhost:{int(app_port)}/")
         code = (hc.stdout or "").strip()
         if not code.startswith("2"):                                           # Phase 3 rollback
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                             app_port=app_port)
+                             app_port=app_port, mode=mode, entry=entry)
             rolled_back = True
             with begin(engine) as c:
                 emit_event(c, project_id, "deploy.rolled_back", "boss", "code_task_run", run_id,
@@ -281,20 +639,18 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         with begin(engine) as c:
             emit_event(c, project_id, "deploy.succeeded", "boss", "code_task_run", run_id,
                        {"app": app, "host": host, "url": url, "health": code})
-        return {"status": "deployed", "app": app, "host": host, "url": url, "health": code}
+        return {"status": "deployed", "app": app, "host": host, "url": url, "health": code,
+                "deployed_sha": deployed_sha}
     except Exception:
         # Best-effort restore if we mutated the host and then crashed before an explicit rollback.
         if needs_rollback and not rolled_back:
             try:
                 _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
-                                 app_port=app_port)
+                                 app_port=app_port, mode=mode, entry=entry)
             except Exception:  # noqa: BLE001 — never mask the original failure
                 pass
         raise
     finally:
-        try:
-            os.unlink(key_path)
-        except OSError:
-            pass
+        _discard_key_file(key_path)
         if work is not None:
             shutil.rmtree(work, ignore_errors=True)
