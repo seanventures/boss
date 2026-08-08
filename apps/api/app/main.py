@@ -962,6 +962,15 @@ async def lifespan(_: FastAPI):
         print(f"[lifespan] preview reconciliation: {result}")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] preview reconciliation skipped: {exc}")
+    # A deployment runs in a background THREAD of this process. If the process dies mid-flight
+    # its row stays `running` forever: the console polls it every two seconds for eternity and
+    # an operator reads "still deploying" about work that stopped when the API restarted.
+    # Nothing else can adopt that thread, so startup is the only honest place to close it out.
+    try:
+        from .services.delivery_pipeline import fail_orphaned_deployments
+        print(f"[lifespan] orphaned deployments: {fail_orphaned_deployments(engine)}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] orphaned-deployment sweep skipped: {exc}")
     try:
         from .services.execution_substrate import effective_substrates
         print(f"[lifespan] execution substrates: {effective_substrates(settings)}")
@@ -5534,12 +5543,17 @@ def delivery_execute_endpoint(deployment_run_id: str):
     """
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.delivery_pipeline import execute_deployment
-    result = execute_deployment(engine, settings, deployment_run_id)
-    if result.get("status") == "not_found":
+    # Existence is checked HERE so an unknown id is still a 404. Once the run is known to exist
+    # the work goes to the background, like every other way of starting a deployment — the
+    # retry button should not be the one control that hangs the browser for a minute.
+    with begin(engine) as connection:
+        known = connection.execute(
+            text("SELECT 1 FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id}).first()
+    if not known:
         raise HTTPException(status_code=404,
                             detail=f"no deployment run {deployment_run_id}")
-    return result
+    return _start_deployment_in_background(deployment_run_id, "operator", trigger="retry")
 
 
 # --------------------------------------------------------------------------- #
@@ -5558,6 +5572,16 @@ def list_deployment_targets_alias(project_id: str, limit: int = 50,
     return list_deployment_targets(project_id=project_id, limit=limit, offset=offset)
 
 
+def _same_name(typed: Any, stored: Any) -> bool:
+    """Is the confirmation the operator typed the app name, ignoring surrounding space?
+
+    Destroy is guarded by typing the name back. That guard is meant to stop an accidental
+    removal, not to be unpassable: a target registered with a stray space in its name could
+    never be confirmed, because the space is invisible in every place the name is shown.
+    """
+    return str(typed or "").strip() == str(stored or "").strip()
+
+
 @app.post("/v1/deployment-targets", status_code=201)
 def create_deployment_target_endpoint(payload: dict):
     """Register where an app is deployed. This is the whole of onboarding.
@@ -5568,6 +5592,12 @@ def create_deployment_target_endpoint(payload: dict):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.core import make_id
     from .services.deployment_connectors import connector_for, supported_kinds
+
+    # Trim EVERY string the operator typed, not just the one field that bit us. A leading space
+    # in `app_name` is invisible in a form and then reappears as a container called
+    # " nqueens-app", a target no lookup finds, and a destroy confirmation that can never match
+    # because nobody types the space. Normalising once here beats every later reader guessing.
+    payload = {k: (v.strip() if isinstance(v, str) else v) for k, v in payload.items()}
 
     required = ("project_id", "app_name", "repo", "environment", "target_kind", "target_ref")
     for field in required:
@@ -5582,6 +5612,20 @@ def create_deployment_target_endpoint(payload: dict):
     resources = [{"kind": "container_runtime", "name": "docker"}]
     if app_port:
         resources.append({"kind": "app_port", "name": str(int(app_port))})
+    # Which file or directory IS this app. Only needed when the repo holds several — guessing
+    # in a shared repo is what once deployed Sudoku to a stock-app target.
+    if payload.get("app_entry"):
+        resources.append({"kind": "app_entry", "name": str(payload["app_entry"])})
+    # Recorded per target so a project can deploy from more than one owner's repo.
+    if payload.get("repo_owner"):
+        resources.append({"kind": "repo_owner", "name": str(payload["repo_owner"])})
+
+    # Accept either "boss-sandbox" or "paramg/boss-sandbox". An operator copying a repo from
+    # GitHub pastes the second form; rejecting it (or silently mis-cloning) is a trap.
+    repo_field = str(payload["repo"]).strip()
+    if "/" in repo_field:
+        owner_part, repo_part = repo_field.rsplit("/", 1)
+        payload = {**payload, "repo": repo_part, "repo_owner": owner_part.split("/")[-1]}
 
     target_id = payload.get("id") or make_id("deptgt")
     with begin(engine) as connection:
@@ -5599,7 +5643,8 @@ def create_deployment_target_endpoint(payload: dict):
             raise HTTPException(status_code=409, detail=(
                 f"{payload['app_name']} is already registered for {payload['environment']} "
                 f"(target {clash['id']}, status {clash['status']})."
-                + (" Restore it instead of onboarding a second one."
+                + (" Restore it to reuse its configuration and history, or delete it "
+                   "permanently to start from scratch."
                    if clash["status"] != "active" else "")))
 
         connection.execute(text("""
@@ -5712,7 +5757,10 @@ def teardown_deployment_target_endpoint(target_id: str, payload: dict):
             raise HTTPException(status_code=404, detail="no such deployment target")
         target = dict(row)
 
-        if not stop_only and payload.get("confirm") != target["app_name"]:
+        # Compare trimmed on BOTH sides: a name stored with a stray space (registered before
+        # the create endpoint normalised its input) is otherwise impossible to confirm, because
+        # nobody types a leading space and no UI shows one.
+        if not stop_only and not _same_name(payload.get("confirm"), target["app_name"]):
             raise HTTPException(
                 status_code=428,
                 detail=(f"confirm must equal the app name {target['app_name']!r} to remove it"
@@ -5745,6 +5793,59 @@ def teardown_deployment_target_endpoint(target_id: str, payload: dict):
     if report.get("refused"):
         raise HTTPException(status_code=409, detail=report)
     return report
+
+
+@app.post("/v1/deployment-targets/{target_id}/purge")
+def purge_deployment_target_endpoint(target_id: str, payload: dict):
+    """Delete a target and its records outright, so the name can be reused.
+
+    DELETE retires rather than deletes, because deployment runs and health samples reference a
+    target and erasing them destroys the history of everything ever shipped there. That is the
+    right default — but it left "I want to start over" with no route except restoring the thing
+    you were trying to be rid of.
+
+    So: purge is a separate, explicit act. It requires the app name typed, and it refuses while
+    the target is still ACTIVE — tear it down first, so nobody deletes the records of an app
+    that is still running and then wonders why the host has a container nothing knows about.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.core import emit_event
+
+    with begin(engine) as connection:
+        row = connection.execute(text("SELECT * FROM deployment_targets WHERE id=:i"),
+                                 {"i": target_id}).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such deployment target")
+        target = dict(row)
+
+        if not _same_name(payload.get("confirm"), target["app_name"]):
+            raise HTTPException(status_code=428, detail=(
+                f"confirm must equal the app name {target['app_name']!r} to delete it and its "
+                f"deployment history permanently"))
+        if target["status"] == "active":
+            raise HTTPException(status_code=409, detail=(
+                f"{target['app_name']} is still active. Remove the deployment first (Stop or "
+                f"Destroy), then delete — otherwise the host keeps a container that no target "
+                f"describes."))
+
+        samples = connection.execute(
+            text("DELETE FROM deployment_health_samples WHERE deployment_target_id=:i"),
+            {"i": target_id}).rowcount
+        runs = connection.execute(
+            text("DELETE FROM deployment_runs WHERE deployment_target_id=:i"),
+            {"i": target_id}).rowcount
+        connection.execute(text("DELETE FROM deployment_targets WHERE id=:i"), {"i": target_id})
+
+        # Recorded BEFORE the row is gone is impossible, so it is recorded after — but the event
+        # keeps the name and counts, which is the whole point of an audit trail for a delete.
+        emit_event(connection, target["project_id"], "delivery.target_purged",
+                   str(payload.get("actor") or "operator"), "deployment_target", target_id,
+                   {"app_name": target["app_name"], "environment": target["environment"],
+                    "deployment_runs_deleted": runs, "health_samples_deleted": samples})
+
+    return {"target_id": target_id, "app_name": target["app_name"], "deleted": True,
+            "deployment_runs_deleted": runs, "health_samples_deleted": samples}
 
 
 @app.post("/v1/deployment-targets/{target_id}/bootstrap")
@@ -5885,6 +5986,52 @@ def bind_secret_endpoint(target_id: str, payload: dict):
 # --------------------------------------------------------------------------- #
 # Observability — the collector/store/dashboards BOSS deploys beside the apps
 # --------------------------------------------------------------------------- #
+@app.get("/v1/delivery/defaults")
+def delivery_defaults_endpoint():
+    """What BOSS will clone if you do not say otherwise.
+
+    The onboarding form asked for a bare repo NAME and silently prepended the configured owner,
+    so nothing on screen told an operator which GitHub repository would actually be fetched.
+    Configuration that is invisible is configuration nobody can verify.
+    """
+    owner = getattr(settings, "target_github_owner", "") or ""
+    repo = getattr(settings, "target_github_repo", "") or ""
+    return {
+        "owner": owner, "repo": repo,
+        "repo_url": f"https://github.com/{owner}/{repo}" if owner and repo else "",
+        "host": getattr(settings, "target_repo_host", "github") or "github",
+    }
+
+
+@app.get("/v1/delivery/repos")
+def delivery_repos_endpoint(project_id: Optional[str] = None):
+    """Repositories BOSS has built in or deployed from — so nobody types one from memory."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_sources import known_repos
+    with begin(engine) as connection:
+        return {"repos": known_repos(connection, settings, project_id)}
+
+
+@app.get("/v1/delivery/repos/{owner}/{repo}/refs")
+def delivery_repo_refs_endpoint(owner: str, repo: str):
+    """Branches available to deploy, plus what BOSS has already shipped from this repo."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_sources import repo_refs
+    with begin(engine) as connection:
+        return repo_refs(connection, settings, owner, repo)
+
+
+@app.get("/v1/delivery/repos/{owner}/{repo}/apps")
+def delivery_repo_apps_endpoint(owner: str, repo: str, ref: str = ""):
+    """Runnable apps in a repo, so `app entry` can be picked instead of guessed."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.delivery_sources import repo_apps
+    return repo_apps(settings, owner, repo, ref)
+
+
 @app.get("/v1/observability/stack")
 def observability_stack_endpoint(project_id: str, host_target_id: Optional[str] = None):
     """What the stack WOULD monitor, plus whether it is currently running.
@@ -5968,6 +6115,32 @@ def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     return sweep(engine, settings, project_id=project_id)
 
 
+def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) -> dict:
+    """Run a planned deployment off-request and hand back something to poll.
+
+    A deployment takes minutes. Running it inside the request meant the console had nothing to
+    show until it ended, a slow deploy was indistinguishable from a hang, and a proxy timeout
+    looked like a failure for work that had actually succeeded.
+
+    Shared by deploy, redeploy and retry rather than written once and copied: the first version
+    made only `deploy` asynchronous, so pressing Redeploy still blocked for a minute and showed
+    nothing — the same bug, on the button next to the fixed one.
+    """
+    import threading
+
+    from .services.delivery_pipeline import execute_deployment
+
+    def _run() -> None:
+        try:
+            execute_deployment(engine, settings, run_id, actor=actor)
+        except Exception:  # noqa: BLE001 — already recorded on the run; never crash the thread
+            pass
+
+    threading.Thread(target=_run, name=f"deploy-{run_id}", daemon=True).start()
+    return {"deployment_run_id": run_id, "status": "started", "trigger": trigger,
+            "poll": f"/v1/delivery/deployments/{run_id}"}
+
+
 @app.post("/v1/delivery/deploy")
 def delivery_deploy_endpoint(payload: dict):
     """Deploy a target at a chosen ref, without waiting for a merge.
@@ -6011,12 +6184,12 @@ def delivery_deploy_endpoint(payload: dict):
                      "ORDER BY finished_at DESC NULLS LAST LIMIT 1"),
                 {"t": target_id}).mappings().first()
             source_run = ((prior or {}).get("release_packet") or {}).get("code_task_run_id")
-        if not source_run:
-            # Actionable rather than a raw ValueError from three layers down.
+        # No prior deployment is fine: the connector builds from the target's own repo. What
+        # is NOT fine is having no repo at all, because then there is genuinely nothing to fetch.
+        if not source_run and not target.get("repo"):
             raise HTTPException(status_code=422, detail=(
-                f"{target['app_name']} has never been deployed, so there is no build to ship. "
-                f"Deploy it from a merged PR (auto-deploy or the code task's deployment), or "
-                f"pass code_task_run_id explicitly."))
+                f"{target['app_name']} has no repo recorded, so there is nothing to build. "
+                f"Set the repo on the target, or pass code_task_run_id explicitly."))
 
         # DEFAULT TO THE REPO'S DEFAULT BRANCH, not the source run's branch.
         #
@@ -6028,18 +6201,20 @@ def delivery_deploy_endpoint(payload: dict):
         # The base branch is read from the source run's own spec rather than assumed, because
         # "main" is a guess about someone else's repository.
         ref = payload.get("ref") or payload.get("commit_ref")
-        if not ref:
+        if not ref and source_run:
             spec_row = connection.execute(
                 text("SELECT spec FROM code_task_runs WHERE id = :i"),
                 {"i": source_run}).mappings().first()
             ref = ((spec_row or {}).get("spec") or {}).get("base_branch") or "main"
+        ref = ref or "main"
 
         planned = ResourcePlaneService(settings).plan_deployment_run(
             connection,
             project_id=target["project_id"], deployment_target_id=target_id,
             commit_ref=ref,
             release_packet={"source": "manual_deploy", "repo": target["repo"],
-                            "requested_by": actor, "code_task_run_id": source_run},
+                            "requested_by": actor,
+                            **({"code_task_run_id": source_run} if source_run else {})},
             expected_cost_usd_micros=0, reservation_id=None, actor=actor)
         run_id = planned.get("deployment_run_id") or planned.get("id")
         connection.execute(text("UPDATE deployment_runs SET trigger='manual' WHERE id=:i"),
@@ -6047,8 +6222,13 @@ def delivery_deploy_endpoint(payload: dict):
 
     if payload.get("plan_only"):
         return {"deployment_run_id": run_id, "status": "planned", "trigger": "manual"}
-    return {"deployment_run_id": run_id,
-            **execute_deployment(engine, settings, run_id, actor=actor)}
+
+    # `wait=true` keeps the blocking behaviour for scripts and tests that want one call.
+    if payload.get("wait"):
+        return {"deployment_run_id": run_id,
+                **execute_deployment(engine, settings, run_id, actor=actor)}
+
+    return _start_deployment_in_background(run_id, actor, trigger="manual")
 
 
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")
@@ -6083,6 +6263,81 @@ def set_auto_deploy_endpoint(target_id: str, payload: dict):
     return dict(row)
 
 
+@app.get("/v1/delivery/deployments")
+def list_deployment_runs_endpoint(project_id: str, limit: int = 10):
+    """Recent DEPLOYMENTS, newest first.
+
+    Replaces the pipeline table that listed every code task run which had ever opened a PR —
+    eighteen rows, nearly all with no deployment at all. A code task that never deployed is not
+    a deployment; it is already visible under Code Tasks, and repeating it here was noise
+    wearing the costume of a report.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text("SELECT d.id, d.status, d.environment, d.commit_ref, d.trigger, "
+                 "       d.started_at, d.finished_at, d.duration_ms, d.failure_reason, "
+                 "       d.app_name, t.app_name AS target_app, t.domains, "
+                 "       jsonb_array_length(COALESCE(d.steps,'[]'::jsonb)) AS step_count "
+                 "FROM deployment_runs d LEFT JOIN deployment_targets t "
+                 "  ON t.id = d.deployment_target_id "
+                 "WHERE d.project_id = :p ORDER BY d.created_at DESC LIMIT :l"),
+            {"p": project_id, "l": max(1, min(limit, 50))}).mappings().all()
+    return {"deployments": [{
+        "id": r["id"], "status": r["status"], "environment": r["environment"],
+        "app_name": r["target_app"] or r["app_name"], "commit_ref": r["commit_ref"],
+        "trigger": r["trigger"], "duration_ms": r["duration_ms"],
+        "started_at": r["started_at"].isoformat() if r["started_at"] else None,
+        "finished_at": r["finished_at"].isoformat() if r["finished_at"] else None,
+        "failure_reason": r["failure_reason"], "step_count": r["step_count"],
+        "url": (r["domains"] or [None])[0],
+    } for r in rows]}
+
+
+@app.get("/v1/delivery/deployments/{deployment_run_id}")
+def get_deployment_run_endpoint(deployment_run_id: str):
+    """Live progress of one deployment: steps, timings, logs, outcome.
+
+    This is what makes an honest progress display possible. The steps are written as they
+    happen, so a run that is still going reports exactly how far it has got, and one that died
+    mid-step shows where.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.deployment_steps import STEP_LABELS, planned_steps
+
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT d.*, t.app_name AS target_app, t.domains "
+                 "FROM deployment_runs d LEFT JOIN deployment_targets t "
+                 "  ON t.id = d.deployment_target_id WHERE d.id = :i"),
+            {"i": deployment_run_id}).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="no such deployment run")
+
+    done = list(row["steps"] or [])
+    seen = {s.get("step") for s in done}
+    # Show the steps still to come, greyed out. A list that grows one row at a time cannot tell
+    # an operator how much is left.
+    upcoming = [s for s in planned_steps() if s["step"] not in seen]
+    terminal = row["status"] in ("succeeded", "failed", "blocked", "rolled_back")
+
+    return {
+        "deployment_run_id": row["id"], "status": row["status"],
+        "app_name": row["target_app"] or row["app_name"],
+        "environment": row["environment"], "commit_ref": row["commit_ref"],
+        "trigger": row["trigger"], "failure_reason": row["failure_reason"],
+        "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+        "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+        "duration_ms": row["duration_ms"],
+        "url": (row["domains"] or [None])[0],
+        "health": row["health_check_results"],
+        "steps": done + ([] if terminal else upcoming),
+        "running": not terminal,
+    }
+
+
 @app.post("/v1/delivery/deployments/{deployment_run_id}/redeploy")
 def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] = None):
     """Ship the same target again as a NEW deployment run.
@@ -6095,16 +6350,22 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     p = payload or {}
     from .services.delivery_pipeline import redeploy
+    actor = str(p.get("actor") or "operator")
+    # Planned here, executed off-request — same contract as Deploy, so the console watches one
+    # kind of thing however the deployment was started.
     result = redeploy(engine, settings, deployment_run_id,
                       commit_ref=(p.get("commit_ref") or None),
-                      actor=str(p.get("actor") or "operator"))
+                      actor=actor, execute=bool(p.get("wait")))
     # A missing deployment is a 404, not a 200 carrying the word "not_found". A caller that
     # checks the status code — which is most of them — would otherwise read a typo'd id as a
     # successful redeploy.
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail=result.get("reason")
                             or f"no deployment run {deployment_run_id}")
-    return result
+    if p.get("wait"):
+        return result
+    return _start_deployment_in_background(result["deployment_run_id"], actor,
+                                           trigger="redeploy")
 
 
 @app.get("/v1/delivery/targets/{target_id}/preflight")

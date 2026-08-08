@@ -56,17 +56,30 @@ def _validate_ssh_target(host: str, user: str) -> None:
 
 
 def plan_ssh_deploy(engine, settings: Settings, run_id: str, *, host: str = "<HOST>",
-                    name: Optional[str] = None, port: int = 8080, user: str = "root") -> dict:
-    """Build the deploy plan for a run's built app. Pure/read-only — touches no host (dry run)."""
-    with begin(engine) as c:
-        run = load_code_task_run(c, run_id)
-    if run is None:
-        raise ValueError(f"code task run not found: {run_id}")
-    spec = run.get("spec") or {}
-    owner = spec.get("owner") or settings.target_github_owner
-    repo = spec.get("repo") or settings.target_github_repo
-    fctx = run.get("finalize_ctx") or {}
-    branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
+                    name: Optional[str] = None, port: int = 8080, user: str = "root",
+                    source: Optional[dict] = None) -> dict:
+    """Build the deploy plan. Pure/read-only — touches no host (dry run).
+
+    Accepts the same `source` as `deploy_ssh` so a target with no code task run can be planned.
+    Fixing only deploy_ssh left this raising "code task run not found:" — and since
+    `execute_deployment` calls plan() BEFORE apply(), the deployment still died on the very
+    error the apply-side fix removed. A capability added to one path of a two-path flow is not
+    added at all.
+    """
+    if source:
+        owner = source.get("owner") or settings.target_github_owner
+        repo = source.get("repo") or settings.target_github_repo
+        branch = source.get("ref") or "main"
+    else:
+        with begin(engine) as c:
+            run = load_code_task_run(c, run_id)
+        if run is None:
+            raise ValueError(f"code task run not found: {run_id}")
+        spec = run.get("spec") or {}
+        owner = spec.get("owner") or settings.target_github_owner
+        repo = spec.get("repo") or settings.target_github_repo
+        fctx = run.get("finalize_ctx") or {}
+        branch = fctx.get("work_branch") or f"boss/code/{fctx.get('root_run_id') or run_id}"
     app = _app_name(repo, name)
     remote = f"{REMOTE_BASE}/{app}"
 
@@ -481,19 +494,36 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
 
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
                ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None,
-               ref: Optional[str] = None, key_material: Optional[str] = None) -> dict:
+               ref: Optional[str] = None, key_material: Optional[str] = None,
+               source: Optional[dict] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
     if not bool(getattr(settings, "ssh_host_deploy_allowed", False)):
         raise PermissionError("BOSS_SSH_HOST_DEPLOY_ALLOWED is false — the outward deploy gate is off")
     _validate_ssh_target(host, user)
-    with begin(engine) as c:
-        run = load_code_task_run(c, run_id)
-    if run is None:
-        raise ValueError(f"code task run not found: {run_id}")
-    owner, repo, branch = _resolve_repo_branch(run, settings)
-    project_id = run["project_id"]
+
+    # A deployment does NOT require a code task run. A run supplies three things — owner/repo,
+    # a branch, and the file lineage that tells the resolver which app this task built — and an
+    # app onboarded through the console has none of them. Requiring one made the wizard a dead
+    # end: you could register a target and never deploy to it.
+    #
+    # `source` provides the same three directly: {owner, repo, ref, project_id, app_entry}. The
+    # lineage is the only real loss, and `app_entry` replaces it — the TARGET knows which app it
+    # is, which is better information than inferring it from what some task happened to touch.
+    run = None
+    if source:
+        owner = source.get("owner") or settings.target_github_owner
+        repo = source.get("repo") or settings.target_github_repo
+        branch = source.get("ref") or "main"
+        project_id = source.get("project_id") or ""
+    else:
+        with begin(engine) as c:
+            run = load_code_task_run(c, run_id)
+        if run is None:
+            raise ValueError(f"code task run not found: {run_id}")
+        owner, repo, branch = _resolve_repo_branch(run, settings)
+        project_id = run["project_id"]
     app = _app_name(repo, name)
     remote = f"{REMOTE_BASE}/{app}"
     # Material resolved for THIS target wins over the global setting. Passing it in rather
@@ -511,8 +541,23 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         # the expensive way; the deploy path must use the same source or it will diverge again.
         from .preview_service import lineage_impl_files
 
+        # With a run, "which app" comes from its file lineage. Without one, the target says so
+        # explicitly via app_entry — a repo holding several apps cannot be guessed at, and
+        # guessing is what once deployed Sudoku to a stock-app target.
+        # `app_entry` names either a FILE (serve_nqueens.py) or a DIRECTORY (web-nqueens), but
+        # `changed` is a list of FILE paths — the resolver derives touched directories with
+        # dirname(). A bare directory therefore collapsed to "." and matched nothing, so a
+        # target that HAD declared its app still failed with "cannot tell which app to deploy".
+        #
+        # Both forms are supplied: the literal entry (matches the .py rule) and an index.html
+        # under it (matches the static-directory rule). Whichever is real, one matches.
+        entry_hint = (source or {}).get("app_entry")
+        changed = lineage_impl_files(engine, run) if run is not None else None
+        if run is None and entry_hint:
+            e = str(entry_hint).strip().rstrip("/")
+            changed = [e, f"{e}/index.html"]
         work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
-                                             changed=lineage_impl_files(engine, run), ref=ref)
+                                             changed=changed, ref=ref)
         # The SHA that was actually checked out, captured inside _build_dist while the clone
         # still existed. Reporting the request rather than the result is how commit_ref came to
         # name a build that was never running.

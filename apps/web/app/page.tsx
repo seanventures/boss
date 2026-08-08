@@ -128,7 +128,9 @@ import { fetchCodeTasksFeed, fetchPreviews } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
-import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction } from "./actions";
+import { MonitoringArea } from "./monitoring-ui";
+import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction,
+         listDeploymentsAction } from "./actions";
 import { fetchReliabilityFeed } from "../lib/reliability";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
@@ -505,6 +507,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const deliveryPipeline = await getDeliveryPipelineAction().catch(() => null);
   const deploymentHealth = await getDeploymentHealthAction().catch(() => null);
   const deliverySecrets = await listSecretsAction().catch(() => null);
+  const recentDeployments = await listDeploymentsAction(10).catch(() => null);
   // The host target is whichever active target we can borrow a host+credential from; the stack
   // is one per host, not one per app.
   const obsHost = (deliveryPipeline?.targets || []).find((t: any) => t.status === "active")?.id;
@@ -6217,8 +6220,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>From a merged PR to a running deployment — and where it stopped.</h2>
             </div>
           </div>
-          <DeliveryPipeline initial={deliveryPipeline} health={deploymentHealth}
-                            secrets={deliverySecrets} observability={observability} />
+          <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
+                            deployments={recentDeployments} />
+        </section>
+
+        {/* Monitoring is its own area: "did it ship" and "is it working" are different
+            questions asked at different times, and one page answering both buries whichever
+            you did not come for. */}
+        <section className="panel-stack" data-area="monitoring" aria-label="Monitoring">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Monitoring</span>
+              <h2>Health of what BOSS has deployed, and the dashboards behind it.</h2>
+            </div>
+          </div>
+          <MonitoringArea health={deploymentHealth} observability={observability}
+                          hostTargetId={obsHost} />
         </section>
 
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">

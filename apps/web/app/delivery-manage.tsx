@@ -20,11 +20,14 @@ import { useEffect, useState, useTransition } from "react";
 
 import {
   bindSecretAction, bootstrapTargetAction, createTargetAction, deployObservabilityAction,
+  getDeliveryDefaultsAction, listRefsAction, listRepoAppsAction, listReposAction,
+  purgeTargetAction,
   deployTargetAction,
   generateKeypairAction, preflightTargetAction, putSecretAction, reactivateTargetAction,
   setAutoDeployAction,
   teardownTargetAction, verifySecretAction,
 } from "./actions";
+import { LiveDeployment } from "./deploy-ui";
 
 type Secret = {
   secret_ref_id: string; name: string; backend: string; secret_kind: string;
@@ -91,10 +94,71 @@ function Working({ label }: { label: string }) {
  * three times in this console — Destroy, the wizard's Continue, and Create target — and each
  * was reported as "nothing happens". Disabling now means only "a request is in flight".
  */
+/** `https://1.2.3.4/` -> `1.2.3.4`. Operators paste URLs; the ssh layer needs a host.
+ *
+ *  Rejecting the paste would be defensible, but silently passing it through is not: it becomes
+ *  `ubuntu@http://1.2.3.4/`, which fails much later with a DNS error that names something the
+ *  operator never typed. Normalising at the edge keeps the failure legible.
+ */
+function hostOnly(value: string): string {
+  return (value || "").trim()
+    .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "")   // scheme
+    .replace(/\/+$/, "");                            // trailing slashes
+}
+
 function missingFields(required: Record<string, unknown>): string[] {
   return Object.entries(required)
     .filter(([, v]) => v === undefined || v === null || String(v).trim() === "")
     .map(([k]) => k);
+}
+
+/**
+ * A button that shows its own progress.
+ *
+ * The spinner used to sit BESIDE the controls, so during a 30-second deploy the only feedback
+ * was a 13px element several controls away from the one that was pressed. People look at what
+ * they clicked; that is where the state has to be. The label becomes "Destroying… 7s" and the
+ * button dims, so "is this working?" is answered without hunting.
+ *
+ * `busy` disables it too — a second click during a deploy would start a second deploy.
+ */
+function ActionButton({ busy, label, busyLabel, danger, onClick, title, style }: {
+  busy?: boolean; label: string; busyLabel?: string; danger?: boolean;
+  onClick: () => void; title?: string; style?: React.CSSProperties;
+}) {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    if (!busy) { setSecs(0); return; }
+    const t = setInterval(() => setSecs((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
+
+  return (
+    <button
+      title={title}
+      disabled={!!busy}
+      onClick={onClick}
+      style={{
+        ...btn,
+        ...(danger ? { borderColor: "rgba(248,81,73,.5)", color: "#f85149" } : {}),
+        ...(busy ? { opacity: 0.75, cursor: "progress" } : {}),
+        display: "inline-flex", alignItems: "center", gap: 6,
+        ...(style || {}),
+      }}>
+      {busy && (
+        <svg width="12" height="12" viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="5"
+                  opacity="0.2" />
+          <path d="M20 4 a16 16 0 0 1 16 16" fill="none" stroke="currentColor" strokeWidth="5"
+                strokeLinecap="round">
+            <animateTransform attributeName="transform" type="rotate" from="0 20 20"
+                              to="360 20 20" dur="0.9s" repeatCount="indefinite" />
+          </path>
+        </svg>
+      )}
+      {busy ? `${busyLabel || label}… ${secs}s` : label}
+    </button>
+  );
 }
 
 function Field({ label, ...rest }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
@@ -285,7 +349,9 @@ export function MonitoringPanel({ initial, hostTargetId }: {
       </div>
 
       <div style={{ ...box, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button style={btn} disabled={pending}
+        <ActionButton busy={!!busy}
+                label={data.deployed ? "Redeploy stack" : "Deploy monitoring stack"}
+                busyLabel="Deploying stack"
                 title="Regenerate the config from the registry and deploy"
                 onClick={() => start(async () => {
                   if (!hostTargetId) {
@@ -300,9 +366,7 @@ export function MonitoringPanel({ initial, hostTargetId }: {
                   setMsg(out?.error
                     ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 200)}`
                     : `stack deployed — ${out.apps?.length ?? 0} app(s) on ${out.grafana_url}`);
-                })}>
-          {data.deployed ? "Redeploy stack" : "Deploy monitoring stack"}
-        </button>
+                })} />
         {data.grafana_url && (
           <a href={data.grafana_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
             Open Grafana ↗
@@ -357,30 +421,77 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
   const [step, setStep] = useState(1);
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // What BOSS is configured to clone. Shown rather than assumed: the form used to take a bare
+  // repo NAME and silently prepend an owner from config, so nothing on screen said which
+  // GitHub repository would actually be fetched.
+  const [defaults, setDefaults] = useState<{ owner?: string; repo?: string; repo_url?: string }>({});
+  const [repos, setRepos] = useState<{ full_name: string; url: string; code_tasks: number }[]>([]);
+  // Apps the chosen repo actually contains. BOSS computes this list anyway when resolving a
+  // deploy — showing it up front turns a guess into a choice, instead of failing a minute later
+  // with a wall of candidates.
+  const [apps, setApps] = useState<{ entry: string; kind: string; label: string }[]>([]);
+  const [appsAmbiguous, setAppsAmbiguous] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getDeliveryDefaultsAction().then((d) => {
+      if (!live || !d || d.error) return;
+      setDefaults(d);
+      // Set the VALUE, not a placeholder. Showing the default repo as placeholder text made an
+      // empty field look filled — an operator typed nothing because it already read
+      // "boss-sandbox", then got "fill in: repo" for a field that appeared complete.
+      setForm((f) => (f.repo ? f : { ...f, repo: d.repo || "" }));
+    });
+    // BOSS already knows every repo it has worked in — asking an operator to type one from
+    // memory is both unnecessary and a chance to typo a name that fails later at clone time.
+    listReposAction().then((d) => { if (live && d?.repos) setRepos(d.repos); });
+    return () => { live = false; };
+  }, []);
   const [targetId, setTargetId] = useState<string | null>(null);
   const [preflight, setPreflight] = useState<{ ready: boolean; problems: string[] } | null>(null);
 
   const [form, setForm] = useState({
     app_name: "", repo: "", environment: "staging", target_kind: "ssh",
-    target_ref: "", domain: "", scheme: "http", app_port: "",
+    target_ref: "", domain: "", scheme: "http", app_port: "", app_entry: "",
     secret_ref_id: "", auto_deploy: false,
   });
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
   const say = (line: string) => setLog((l) => [...l, line]);
 
   const create = () => start(async () => {
+    // Normalise before validating, so a pasted URL is accepted rather than rejected for a
+    // reason the operator cannot see.
+    const user = form.target_ref.includes("@") ? form.target_ref.split("@")[0] : "";
+    const hostPart = hostOnly(form.target_ref.includes("@")
+      ? form.target_ref.slice(form.target_ref.indexOf("@") + 1) : form.target_ref);
+    const targetRef = user ? `${user}@${hostPart}` : hostPart;
+    const domain = hostOnly(form.domain);
+    if (targetRef !== form.target_ref || domain !== form.domain) {
+      setForm((f) => ({ ...f, target_ref: targetRef, domain }));
+      say(`normalised: host=${targetRef}${domain ? `, domain=${domain}` : ""}`);
+    }
+
     const gaps = missingFields({
-      "app name": form.app_name, repo: form.repo, "host (user@host)": form.target_ref,
+      "app name": form.app_name, repo: form.repo, "host (user@host)": targetRef,
     });
     if (gaps.length) { say(`fill in: ${gaps.join(", ")}`); return; }
+    if (!targetRef.includes("@")) {
+      say("host must include the ssh user, e.g. ubuntu@3.94.66.139");
+      return;
+    }
+    if (appsAmbiguous && !form.app_entry) {
+      say(`this repo contains ${apps.length} runnable apps — choose which one this target is, `
+          + "or the deploy cannot tell them apart");
+      return;
+    }
     setBusy("Creating target");
     try {
     say("registering target…");
     const out = await createTargetAction({
       app_name: form.app_name, repo: form.repo, environment: form.environment,
-      target_kind: form.target_kind, target_ref: form.target_ref,
-      domains: form.domain ? [form.domain] : [],
+      target_kind: form.target_kind, target_ref: targetRef,
+      domains: domain ? [domain] : [],
       app_port: form.app_port ? Number(form.app_port) : undefined,
+      app_entry: form.app_entry || undefined,
       health_checks: [{ kind: "http", path: "/", expect: 200, scheme: form.scheme }],
     });
     if (out?.error) { say(`failed: ${out.error}`); return; }
@@ -449,8 +560,17 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Field label="app name" value={form.app_name}
                    onChange={(e) => set("app_name", e.target.value)} placeholder="stock-app" />
-            <Field label="repo" value={form.repo}
-                   onChange={(e) => set("repo", e.target.value)} placeholder="boss-sandbox" />
+            <label style={{ display: "grid", gap: 3 }}>
+              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>repo</span>
+              <input style={input} list="boss-known-repos" value={form.repo}
+                     placeholder="owner/name"
+                     onChange={(e) => set("repo", e.target.value)} />
+              {/* A datalist rather than a select: it offers what BOSS knows while still
+                  accepting a repo it has never seen, which is the whole point of onboarding. */}
+              <datalist id="boss-known-repos">
+                {repos.map((r) => <option key={r.full_name} value={r.full_name} />)}
+              </datalist>
+            </label>
             <label style={{ display: "grid", gap: 3 }}>
               <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>environment</span>
               <select style={input} value={form.environment}
@@ -487,6 +607,28 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             </label>
             <Field label="port (blank = BOSS picks)" value={form.app_port}
                    onChange={(e) => set("app_port", e.target.value)} placeholder="auto" />
+            <label style={{ display: "grid", gap: 3 }}>
+              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
+                app entry {appsAmbiguous ? "(required — this repo has several)" : "(optional)"}
+              </span>
+              <select style={input} value={form.app_entry}
+                      onFocus={() => {
+                        if (apps.length || !form.repo) return;
+                        const [o, n] = form.repo.includes("/")
+                          ? form.repo.split("/") : [defaults.owner || "", form.repo];
+                        listRepoAppsAction(o, n).then((d) => {
+                          if (d?.apps) { setApps(d.apps); setAppsAmbiguous(!!d.ambiguous); }
+                        });
+                      }}
+                      onChange={(e) => set("app_entry", e.target.value)}>
+                <option value="">
+                  {apps.length ? "— choose which app this target is —" : "— click to load apps —"}
+                </option>
+                {apps.map((a) => (
+                  <option key={a.entry} value={a.entry}>{a.label}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <label style={{ display: "grid", gap: 3 }}>
             <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
@@ -503,12 +645,31 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             </select>
           </label>
           <div className="detail" style={{ fontSize: 12 }}>
+            BOSS will clone{" "}
+            <code>
+              {form.repo
+                ? (form.repo.includes("/")
+                    ? `https://github.com/${form.repo}`
+                    : `https://github.com/${defaults.owner || "?"}/${form.repo}`)
+                : (defaults.repo_url || "— enter a repo —")}
+            </code>
+            {!form.repo?.includes("/") && defaults.owner &&
+              ` (owner ${defaults.owner} comes from BOSS config; paste owner/name to override)`}
+          </div>
+          <div className="detail" style={{ fontSize: 12 }}>
+            <strong>app entry</strong> is the file or directory that SERVES this app —
+            <code>serve_nqueens.py</code>, not the <code>nqueens_core</code> package it imports.
+            Click the field to load the apps BOSS finds in this repo. A single-app repo can
+            leave it blank.
+          </div>
+          <div className="detail" style={{ fontSize: 12 }}>
             No key yet? Generate one in <strong>Secrets</strong> above, install the public half
             on the host, then come back — that install is the one step BOSS cannot do for you,
             because anything that could would already need access to the host.
           </div>
           <div>
-            <button style={btn} disabled={pending} onClick={create}>Create target →</button>
+            <ActionButton label="Create target →" busyLabel="Creating target"
+                          busy={busy === "Creating target"} onClick={create} />
             <button style={{ ...btn, marginLeft: 8 }} onClick={() => setOpen(false)}>Cancel</button>
           </div>
         </div>
@@ -521,7 +682,8 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             else on that host is using.
           </div>
           <div>
-            <button style={btn} disabled={pending} onClick={bootstrap}>Prepare host →</button>
+            <ActionButton label="Prepare host →" busyLabel="Preparing host"
+                          busy={busy === "Preparing host"} onClick={bootstrap} />
           </div>
         </div>
       )}
@@ -533,7 +695,8 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             directory — everything that would otherwise fail mid-deployment.
           </div>
           <div>
-            <button style={btn} disabled={pending} onClick={check}>Run preflight</button>
+            <ActionButton label="Run preflight" busyLabel="Running preflight"
+                          busy={busy === "Running preflight"} onClick={check} />
             <button style={{ ...btn, marginLeft: 8, opacity: preflight?.ready ? 1 : 0.65 }}
                     disabled={pending}
                     onClick={() => {
@@ -634,11 +797,9 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
   }
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <button style={btn} disabled={pending} onClick={() => run("stop")}
-              title="Stop the container; files and data stay, so a redeploy brings it back">
-        Stop
-      </button>
-      {busy && <Working label={busy} />}
+      <ActionButton label="Stop" busyLabel="Stopping" busy={busy === "Stopping"}
+                    title="Stop the container; files and data stay, so a redeploy brings it back"
+                    onClick={() => run("stop")} />
       <input style={{ ...input, minWidth: 130 }} value={confirm}
              placeholder={`type ${target.app_name}`}
              onChange={(e) => setConfirm(e.target.value)} />
@@ -647,14 +808,13 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
                onChange={(e) => setWithData(e.target.checked)} />
         also delete data
       </label>
-      {/* Deliberately NOT disabled: the click is what surfaces the reason. Only `pending`
-          blocks it, so a second click cannot fire a second teardown. */}
-      <button style={{ ...btn, borderColor: "rgba(248,81,73,.5)", color: "#f85149",
-                       opacity: confirm === target.app_name ? 1 : 0.65 }}
-              disabled={pending}
-              onClick={() => run("destroy")}>
-        {withData ? "Destroy + data" : "Destroy"}
-      </button>
+      {/* Not disabled for a missing confirmation: the click is what surfaces the reason. It IS
+          disabled while running, so a second click cannot fire a second teardown. */}
+      <ActionButton danger busy={!!busy && busy !== "Stopping"}
+                    label={withData ? "Destroy + data" : "Destroy"}
+                    busyLabel={withData ? "Destroying + data" : "Destroying"}
+                    style={{ opacity: confirm === target.app_name ? 1 : 0.65 }}
+                    onClick={() => run("destroy")} />
       <button style={btn} disabled={pending} onClick={() => setOpen(false)}>Cancel</button>
       {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
     </span>
@@ -662,14 +822,35 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
 }
 
 export function TargetControls({ target }: {
-  target: { id: string; app_name: string; status?: string;
-            auto_deploy?: boolean; paused?: boolean };
+  target: { id: string; app_name: string; status?: string; repo?: string;
+            repo_owner?: string | null; auto_deploy?: boolean; paused?: boolean };
 }) {
   const [pending, start] = useTransition();
   const [state, setState] = useState({ auto: !!target.auto_deploy, paused: !!target.paused });
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState("");
   const [ref, setRef] = useState("");
+  const [runId, setRunId] = useState<string | null>(null);
+  // Branches for THIS target's repo, so "which build" is a choice rather than a memory test.
+  // Loaded lazily: a page with several targets should not fan out to the repo host on render.
+  const [refs, setRefs] = useState<{ name: string; sha: string }[]>([]);
+  const [refsLoaded, setRefsLoaded] = useState(false);
+  const loadRefs = async () => {
+    if (refsLoaded || !target.repo) return;
+    setRefsLoaded(true);
+    // The owner comes from the repo string, else the target, else the project default. Asking
+    // GitHub for `//boss-sandbox/refs` returns a 404 and an empty list, which looks exactly
+    // like a repo with no branches — the picker fails silently, which is the worst way to fail.
+    let owner = target.repo.includes("/") ? target.repo.split("/")[0] : (target.repo_owner || "");
+    const name = target.repo.includes("/")
+      ? target.repo.split("/").slice(1).join("/") : target.repo;
+    if (!owner) owner = (await getDeliveryDefaultsAction())?.owner || "";
+    if (!owner) return;
+    const d = await listRefsAction(owner, name);
+    if (d?.branches) setRefs(d.branches);
+    if (!ref && d?.default_branch) setRef(d.default_branch);
+  };
 
   // A retired target cannot be deployed — the API refuses with 409 — so deploy controls would
   // only fail. But it is NOT gone: destroy retires rather than deletes, so the credential
@@ -682,7 +863,7 @@ export function TargetControls({ target }: {
         <span className="detail" style={{ fontSize: 12 }}>
           {target.status} — its configuration is kept
         </span>
-        <button style={btn} disabled={pending}
+        <ActionButton label="Restore" busyLabel="Restoring" busy={busy === "Restoring"}
                 title="Reactivate, re-prepare the host, and deploy again"
                 onClick={() => start(async () => {
                   setMsg(null); setBusy("Restoring");
@@ -700,10 +881,32 @@ export function TargetControls({ target }: {
                   }
                   setMsg("restored and host prepared — press Deploy to ship it again");
                   } finally { setBusy(null); }
-                })}>
-          Restore
-        </button>
-        {busy && <Working label={busy} />}
+                })} />
+        {/* Restore reuses the configuration and history; delete throws both away so the name
+            is free again. Both are offered because "start from scratch" is a legitimate intent
+            that restore cannot express. */}
+        <input style={{ ...input, minWidth: 130 }} value={confirm}
+               placeholder={`type ${target.app_name}`}
+               onChange={(e) => setConfirm(e.target.value)} />
+        <ActionButton danger label="Delete permanently" busyLabel="Deleting"
+                busy={busy === "Deleting"}
+                style={{ opacity: confirm === target.app_name ? 1 : 0.65 }}
+                title="Delete this target and its deployment history so the name can be reused"
+                onClick={() => start(async () => {
+                  if (confirm !== target.app_name) {
+                    setMsg(`type “${target.app_name}” to delete it permanently — its deployment `
+                           + `history goes with it`);
+                    return;
+                  }
+                  setMsg(null); setBusy("Deleting");
+                  let out: any;
+                  try { out = await purgeTargetAction(target.id, confirm); }
+                  finally { setBusy(null); }
+                  setMsg(out?.error
+                    ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 180)}`
+                    : `deleted — ${out.deployment_runs_deleted} run(s) and `
+                      + `${out.health_samples_deleted} health sample(s) removed. The name is free.`);
+                })} />
         {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
       </span>
     );
@@ -717,6 +920,7 @@ export function TargetControls({ target }: {
   });
 
   return (
+   <div style={{ display: "grid", gap: 8 }}>
     <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12 }}>
       <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <input type="checkbox" checked={state.auto} disabled={pending}
@@ -729,23 +933,37 @@ export function TargetControls({ target }: {
                onChange={(e) => toggle({ paused: e.target.checked })} />
         paused
       </label>
-      <input style={{ ...input, minWidth: 110 }} value={ref} placeholder="ref (default HEAD)"
+      <input style={{ ...input, minWidth: 150 }} value={ref} list={`refs-${target.id}`}
+             placeholder="branch or sha (default: main)" onFocus={loadRefs}
              onChange={(e) => setRef(e.target.value)} />
-      <button style={btn} disabled={pending}
+      <datalist id={`refs-${target.id}`}>
+        {refs.map((r) => <option key={r.name} value={r.name}>{r.sha}</option>)}
+      </datalist>
+      {/* Deploy no longer BLOCKS until the deployment ends, so this button no longer reports
+          the outcome — it hands over to the live stepper below, which does. Reporting
+          `out.status` here now would print "started" and stop, which is how a working deploy
+          came to look like a button that does nothing. */}
+      <ActionButton label="Deploy" busyLabel="Starting" busy={busy === "Deploying"}
               onClick={() => start(async () => {
-                setMsg(null); setBusy("Deploying");
+                setMsg(null); setBusy("Deploying"); setRunId(null);
                 let out: any;
                 try {
                   out = await deployTargetAction(target.id, ref);
                 } finally { setBusy(null); }
-                setMsg(out?.error ? `failed: ${out.error}`
-                  : `${out.status}${out.healthy === false ? " (unhealthy)" : ""}`);
-              })}>
-        Deploy
-      </button>
-      {busy && <Working label={busy} />}
+                if (out?.error || !out?.deployment_run_id) {
+                  setMsg(`failed: ${out?.error || "no deployment was started"}`);
+                  return;
+                }
+                setRunId(out.deployment_run_id);
+              })} />
       <TeardownControls target={target} />
       {msg && <span className="detail">{msg}</span>}
     </div>
+    {runId && (
+      <div style={{ maxWidth: 760 }}>
+        <LiveDeployment runId={runId} />
+      </div>
+    )}
+   </div>
   );
 }

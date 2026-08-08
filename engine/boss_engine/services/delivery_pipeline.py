@@ -167,7 +167,8 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
 
 
 def redeploy(engine, settings: Settings, deployment_run_id: str, *,
-             commit_ref: Optional[str] = None, actor: str = "operator") -> dict[str, Any]:
+             commit_ref: Optional[str] = None, actor: str = "operator",
+             execute: bool = True) -> dict[str, Any]:
     """Ship the same target again, as a NEW deployment_run.
 
     Deliberately not a re-execution of the existing row. An operator asking "what is running and
@@ -203,12 +204,66 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
             actor=actor,
         )
         new_id = planned.get("deployment_run_id") or planned.get("id")
+        # Say WHY this run exists. Without it the row reads as a manual deploy nobody remembers
+        # asking for, and "why did this deploy?" — the question `trigger` was added to answer —
+        # goes back to being unanswerable.
+        c.execute(sql("UPDATE deployment_runs SET trigger='redeploy' WHERE id=:i"),
+                  {"i": new_id})
         emit_event(c, prior["project_id"], "delivery.redeploy_requested", actor,
                    "deployment_run", new_id,
                    {"redeploy_of": deployment_run_id,
                     "commit_ref": commit_ref or prior["commit_ref"]})
 
-    return execute_deployment(engine, settings, new_id, actor=actor)
+    # `execute=False` plans the run and hands back its id so the CALLER can run it in the
+    # background. Deploy was made asynchronous and redeploy was not, which left one of the two
+    # buttons blocking its HTTP request for a minute with nothing to show — the exact problem
+    # the async change existed to remove. A rule applied on one path is not a rule.
+    if not execute:
+        return {"status": "planned", "deployment_run_id": new_id,
+                "redeploy_of": deployment_run_id}
+    return {"deployment_run_id": new_id,
+            **execute_deployment(engine, settings, new_id, actor=actor)}
+
+
+def fail_orphaned_deployments(engine) -> dict[str, Any]:
+    """Close out deployments whose executing process no longer exists.
+
+    Called at API startup. A deployment executes in a background thread, so a restart abandons
+    it — and the row keeps saying `running`, which the console polls forever and an operator
+    reads as "still going". The work really did stop; saying so is the only accurate option.
+
+    Deliberately narrow: only rows already marked started, and only at startup, when nothing of
+    this process can be mid-deployment. A periodic sweep with a timeout would eventually kill a
+    slow but healthy deploy, which is a worse failure than a stale row.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        rows = c.execute(
+            sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
+                "failure_reason = COALESCE(failure_reason, "
+                "  'the API restarted while this deployment was running, so it was abandoned "
+                "mid-flight. The host may hold a partial release — redeploy to be sure.'), "
+                "updated_at=now() "
+                "WHERE status IN ('running','planning') RETURNING id")).mappings().all()
+    return {"abandoned": len(rows), "ids": [r["id"] for r in rows][:10]}
+
+
+def _target_view(row) -> dict[str, Any]:
+    """A target as the console needs it: the row, plus the resources unpacked.
+
+    `required_resources` is a list of {kind, name} — correct for the connector, hostile to a
+    UI that wants to know the owner of the repo it is about to clone. Unpacking here means
+    every reader gets the same answer; leaving it packed is how a branch picker came to ask
+    GitHub for `//boss-sandbox/refs` and quietly render no branches at all.
+    """
+    target = dict(row)
+    resources = {str(r.get("kind")): r.get("name")
+                 for r in (target.get("required_resources") or []) if isinstance(r, dict)}
+    target["repo_owner"] = resources.get("repo_owner")
+    target["app_entry"] = resources.get("app_entry")
+    target["app_port"] = resources.get("app_port")
+    return target
 
 
 def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, Any]:
@@ -236,15 +291,18 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
             ORDER BY r.updated_at DESC LIMIT :l
         """), {"p": project_id, "l": limit}).mappings().all()
 
+    # SELECT * on purpose. A hand-listed projection here is how the console lost `domains`,
+    # `auto_deploy` and the repo owner one field at a time: every new column had to be
+    # remembered in a second place, and forgetting was silent. `target_for` was fixed this way
+    # and this query was not — a rule applied on one path is not a rule.
     targets = connection.execute(
-        sql("SELECT id, app_name, environment, repo, target_kind, target_ref, status "
-            "FROM deployment_targets WHERE project_id = :p ORDER BY environment"),
+        sql("SELECT * FROM deployment_targets WHERE project_id = :p ORDER BY environment"),
         {"p": project_id}).mappings().all()
 
     return {
         "project_id": project_id,
         "stages": [dict(r) for r in runs],
-        "targets": [dict(t) for t in targets],
+        "targets": [_target_view(t) for t in targets],
         # Stated plainly so the console can say "nothing is configured" rather than
         # rendering an empty table that looks like a failure.
         "configured": bool(targets),
@@ -268,6 +326,7 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
     """
     from ..db import begin
     from .deployment_connectors import connector_for, preflight
+    from .deployment_steps import StepRecorder
 
     # Two plain reads instead of a join with a hand-listed projection. The projection version
     # silently dropped `required_resources`, so the connector never saw the target's declared
@@ -292,27 +351,37 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
         project_id = row["project_id"]
         run_id = (row["release_packet"] or {}).get("code_task_run_id") or ""
 
-    if not run_id:
-        # Fail here, with a sentence, rather than 300 lines later with
-        # "code task run not found: " — an error naming an empty string tells the reader
-        # nothing about which decision was missing.
+    # A run without a code_task_run_id is no longer an error: the connector builds from the
+    # target's own repo at the requested ref. That is what makes a freshly onboarded app
+    # deployable at all — requiring a prior code task made the wizard a dead end.
+    if not run_id and not (row.get("commit_ref") or target.get("repo")):
         with begin(engine) as c:
             c.execute(sql("UPDATE deployment_runs SET status='blocked', failure_reason=:r, "
                           "updated_at=now() WHERE id=:i"),
-                      {"r": "no code_task_run_id: nothing to build from", "i": deployment_run_id})
-            emit_event(c, project_id, "delivery.blocked", actor, "deployment_run",
-                       deployment_run_id, {"why": "no code_task_run_id in release_packet"})
+                      {"r": "no code task run, repo or ref: nothing to build from",
+                       "i": deployment_run_id})
         return {"status": "blocked", "deployment_run_id": deployment_run_id,
-                "problems": ["this deployment names no code task run, so there is no build to "
-                             "ship — deploy from a merged PR, or pass code_task_run_id"]}
+                "problems": ["this deployment names neither a code task run nor a repo/ref, "
+                             "so there is nothing to build"]}
+
+    # Progress is recorded as it happens, so the console has something to render and a crash
+    # leaves evidence of how far it got.
+    rec = StepRecorder(engine, deployment_run_id)
+    with rec.step("resolve") as h:
+        h.log(f"target={target.get('app_name')} env={target.get('environment')}\n"
+              f"repo={target.get('repo')} ref={row.get('commit_ref') or '(default branch)'}\n"
+              f"host={target.get('target_ref')}")
 
     # Cheap gate first: never build or transfer anything for a target that cannot accept it.
     # The connection lets preflight RESOLVE the target's bound credential rather than assume
     # a global one — otherwise a per-target secret is checked at deploy time, which is the
     # expensive place to discover it is missing.
-    with begin(engine) as c:
-        pre = preflight(target, settings, c)
+    with rec.step("preflight") as h:
+        with begin(engine) as c:
+            pre = preflight(target, settings, c)
+        h.log("ready" if pre["ready"] else "\n".join(pre["problems"]))
     if not pre["ready"]:
+        rec.finish()
         with begin(engine) as c:
             c.execute(sql("UPDATE deployment_runs SET status='blocked', failure_reason=:r, "
                           "updated_at=now() WHERE id=:i"),
@@ -323,7 +392,10 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
 
     conn = connector_for(target)
     try:
-        plan = conn.plan(engine, settings, target, run_id)
+        with rec.step("build", label="Plan and build") as h:
+            plan = conn.plan(engine, settings, target, run_id, ref=row.get("commit_ref"))
+            h.log(f"strategy={plan.get('strategy', '')}\n"
+                  f"branch={plan.get('branch', '')}")
         with begin(engine) as c:
             c.execute(sql("UPDATE deployment_runs SET status='running', started_at=now(), "
                           "release_packet = COALESCE(release_packet,'{}'::jsonb) "
@@ -336,22 +408,41 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
 
         # The deployment's own commit_ref is what we promised to ship, so it is what gets
         # built — not whatever the code task's branch happens to point at now.
-        applied = conn.apply(engine, settings, target, run_id, plan, ref=row.get("commit_ref"))
-        health = conn.observe(target, settings)
+        with rec.step("transfer", label="Build, transfer and release") as h:
+            applied = conn.apply(engine, settings, target, run_id, plan,
+                                 ref=row.get("commit_ref"))
+            h.log(json.dumps({k: v for k, v in (applied or {}).items()
+                              if k not in ("plan",)}, default=str)[:2000])
+            if (applied or {}).get("status") == "blocked":
+                raise RuntimeError("; ".join(applied.get("problems") or ["blocked"]))
+
+        with rec.step("observe", label="Health check") as h:
+            health = conn.observe(target, settings)
+            h.log(json.dumps(health, default=str)[:2000])
+            if not health.get("healthy"):
+                checks = health.get("checks") or [{}]
+                first = checks[0]
+                h.failed(first.get("error")
+                         or f"{first.get('url', 'target')} returned {first.get('status')}, "
+                            f"expected {first.get('expected')}")
         # The VERDICT is health, not the apply result.
         ok = bool(health.get("healthy"))
         status = "succeeded" if ok else "failed"
         reason = None if ok else json.dumps(health)[:400]
 
+        # Total wall-clock, written in the SAME statement as the status. The recorder's own
+        # flush happens moments earlier, and a separate write for the duration lost the race —
+        # which is why "how long did it take" kept coming back empty.
+        total_ms = rec.finish()
         with begin(engine) as c:
             # Record the SHA that was actually checked out. Storing the REQUESTED ref is how
             # this field came to name a build that was never running.
             c.execute(sql("UPDATE deployment_runs SET status=:s, finished_at=now(), "
                           "health_check_results=CAST(:h AS JSONB), failure_reason=:r, "
-                          "commit_ref=COALESCE(:sha, commit_ref), "
+                          "commit_ref=COALESCE(:sha, commit_ref), duration_ms=:d, "
                           "updated_at=now() WHERE id=:i"),
                       {"s": status, "h": json.dumps(health, default=str),
-                       "r": reason, "i": deployment_run_id,
+                       "r": reason, "i": deployment_run_id, "d": total_ms,
                        "sha": (applied or {}).get("deployed_sha")})
             emit_event(c, project_id, f"delivery.{status}", actor, "deployment_run",
                        deployment_run_id,
@@ -360,10 +451,12 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
         return {"status": status, "healthy": ok, "applied": applied, "health": health}
 
     except Exception as exc:  # noqa: BLE001
+        total_ms = rec.finish()
         with begin(engine) as c:
             c.execute(sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
-                          "failure_reason=:r, updated_at=now() WHERE id=:i"),
-                      {"r": f"{type(exc).__name__}: {exc}"[:400], "i": deployment_run_id})
+                          "failure_reason=:r, duration_ms=:d, updated_at=now() WHERE id=:i"),
+                      {"r": f"{type(exc).__name__}: {exc}"[:400], "i": deployment_run_id,
+                       "d": total_ms})
             emit_event(c, project_id, "delivery.failed", actor, "deployment_run",
                        deployment_run_id, {"error": f"{type(exc).__name__}: {exc}"[:300]})
         return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:300]}

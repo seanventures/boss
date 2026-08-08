@@ -1003,6 +1003,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active="code_tasks"] .frame > section:is([data-area="code_tasks"], :has([data-area="code_tasks"])),
 .bx-content[data-active="shepherd"] .frame > section:is([data-area="shepherd"], :has([data-area="shepherd"])),
 .bx-content[data-active="delivery"] .frame > section:is([data-area="delivery"], :has([data-area="delivery"])),
+.bx-content[data-active="monitoring"] .frame > section:is([data-area="monitoring"], :has([data-area="monitoring"])),
 .bx-content[data-active="reliability"] .frame > section:is([data-area="reliability"], :has([data-area="reliability"])),
 .bx-content[data-active="foundations"] .frame > section:is([data-area="foundations"], :has([data-area="foundations"])),
 .bx-content[data-active="components"] .frame > section:is([data-area="components"], :has([data-area="components"])),

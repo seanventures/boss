@@ -20,6 +20,7 @@ generalisation came before one working case.
 """
 from __future__ import annotations
 
+import json as _json
 import os
 import shlex
 import urllib.error
@@ -27,6 +28,8 @@ import urllib.request
 from typing import Any, Optional, Protocol
 
 from ..config import Settings
+from ..db import begin as begin_conn
+from ..ports import sql as sql_text
 
 
 # What a connector needs before it can place anything. Machine-readable rather than prose in a
@@ -44,7 +47,62 @@ class DeploymentConnector(Protocol):
                   connection=None) -> dict[str, Any]: ...
     def destroy(self, target: dict, settings: Settings, connection=None, *,
                 include_data: bool = False, stop_only: bool = False) -> dict[str, Any]: ...
-    def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict: ...
+    def plan(self, engine, settings: Settings, target: dict, run_id: str,
+             ref: Optional[str] = None) -> dict: ...
+    def _ensure_port(self, engine, settings: Settings, target: dict,
+                     connection=None) -> dict:
+        """Give this target a port nothing else on the host is using, and remember it.
+
+        The onboarding form says "blank = BOSS picks", and nothing did the picking: an undeclared
+        port fell through to the 8080 default, which is occupied on the first real host and made
+        `docker run` fail on external connectivity. A default is a guess about someone else's
+        machine, and here it was a wrong one.
+
+        Bootstrap already knows how to read the host's listeners and choose a free port; this
+        reuses it rather than adding a second port-selection rule that could disagree.
+        """
+        # Two separate obligations, and conflating them hid the second: a target may already
+        # KNOW its port while its domain still fails to name it. Returning early on the first
+        # left the stored domain pointing at the host's default port — which on a shared machine
+        # is another service entirely, so the console linked to somebody else's app.
+        chosen = _app_port(target, default=0)
+        if not chosen:
+            report = self.bootstrap(target, settings, connection)
+            chosen = report.get("suggested_port")
+            if not chosen:
+                return target
+
+        resources = [r for r in (target.get("required_resources") or [])
+                     if not (isinstance(r, dict) and r.get("kind") == "app_port")]
+        resources.append({"kind": "app_port", "name": str(chosen)})
+
+        from ..db import begin
+
+        with begin(engine) as c:
+            c.execute(sql_text(
+                "UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
+                "updated_at = now() WHERE id = :i"),
+                {"r": _json.dumps(resources), "i": target.get("id")})
+            # The domain must name the PORT the app is published on. A domain of "1.2.3.4"
+            # with the app on :3010 sends the health check to port 80 — and on a shared host
+            # that is somebody else's web server, which cheerfully returns 200. That is a
+            # deployment reported healthy on the strength of an unrelated service: the exact
+            # false-green this connector exists to prevent.
+            #
+            # So: fill it when absent AND correct it when it names no port.
+            existing = (target.get("domains") or [None])[0]
+            _u, host, _p = _split_ref(target.get("target_ref", ""))
+            needs_port = (not existing) or (":" not in str(existing).split("/")[0])
+            if needs_port:
+                base = str(existing).split("/")[0] if existing else host
+                fixed = f"{base}:{chosen}"
+                c.execute(sql_text(
+                    "UPDATE deployment_targets SET domains = CAST(:d AS JSONB) WHERE id = :i"),
+                    {"d": _json.dumps([fixed]), "i": target.get("id")})
+                target = {**target, "domains": [fixed]}
+
+        return {**target, "required_resources": resources}
+
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None) -> dict: ...
     def observe(self, target: dict, settings: Settings) -> dict: ...
@@ -69,7 +127,26 @@ def _app_port(target: dict, default: int = 8080) -> int:
     return default
 
 
-def _health_url(domain: str, check: dict) -> str:
+def _resource(target: dict, kind: str) -> Optional[str]:
+    """Read a declared resource off the target — one accessor, so a new kind cannot be read
+    two slightly different ways."""
+    for res in target.get("required_resources") or []:
+        if isinstance(res, dict) and res.get("kind") == kind:
+            return str(res.get("name") or "") or None
+    return None
+
+
+def _app_entry(target: dict) -> Optional[str]:
+    """Which file or directory IS this app, when there is no code task lineage to infer it from.
+
+    A repo holding several apps cannot be guessed at — guessing is what once deployed Sudoku to
+    a stock-app target — so a target in a shared repo has to say. Single-app repos can leave it
+    unset and the resolver finds the only candidate.
+    """
+    return _resource(target, "app_entry")
+
+
+def _health_url(domain: str, check: dict, app_port: Optional[int] = None) -> str:
     """Where observe() looks. `scheme` is explicit, never inferred from the shape of a domain.
 
     Inferring it (e.g. "has a port, so http") is the kind of rule that is invisible until it is
@@ -77,6 +154,12 @@ def _health_url(domain: str, check: dict) -> str:
     which rather than the code guessing.
     """
     scheme = str(check.get("scheme") or "https").lower()
+    # A domain with no port, for an app published on one, checks the host's default port —
+    # which on a shared machine belongs to someone else and answers 200. Belt and braces with
+    # _ensure_port: this catches targets whose domain was set by hand.
+    host_part = str(domain).split("/")[0]
+    if app_port and ":" not in host_part and scheme == "http":
+        domain = f"{host_part}:{app_port}"
     return f"{scheme}://{domain}{check.get('path', '/')}"
 
 
@@ -468,18 +551,87 @@ class SSHContainerConnector:
         }
 
     # -- plan -------------------------------------------------------------------
-    def plan(self, engine, settings: Settings, target: dict, run_id: str) -> dict:
+    def _source_for(self, target: dict, settings: Settings, run_id: str,
+                    ref: Optional[str] = None) -> Optional[dict]:
+        """Where the build comes from when there is no code task run. ONE definition, used by
+        both plan() and apply() — two would drift, which is how plan() kept demanding a run
+        after apply() had stopped needing one."""
+        if run_id:
+            return None
+        return {"owner": (_resource(target, "repo_owner")
+                          or getattr(settings, "target_github_owner", "")),
+                "repo": target.get("repo"), "ref": ref or "main",
+                "project_id": target.get("project_id"),
+                "app_entry": _app_entry(target)}
+
+    def plan(self, engine, settings: Settings, target: dict, run_id: str,
+             ref: Optional[str] = None) -> dict:
         """Read-only. An operator must be able to see what a promotion would do."""
         from .deploy_service import plan_ssh_deploy
 
         user, host, _ = _split_ref(target.get("target_ref", ""))
         plan = plan_ssh_deploy(engine, settings, run_id, host=host, user=user,
-                               name=target.get("app_name"))
+                               name=target.get("app_name"),
+                               source=self._source_for(target, settings, run_id, ref))
         plan["connector"] = self.kind
         plan["domains"] = target.get("domains") or []
         return plan
 
     # -- apply ------------------------------------------------------------------
+    def _ensure_port(self, engine, settings: Settings, target: dict,
+                     connection=None) -> dict:
+        """Give this target a port nothing else on the host is using, and remember it.
+
+        The onboarding form says "blank = BOSS picks", and nothing did the picking: an undeclared
+        port fell through to the 8080 default, which is occupied on the first real host and made
+        `docker run` fail on external connectivity. A default is a guess about someone else's
+        machine, and here it was a wrong one.
+
+        Bootstrap already knows how to read the host's listeners and choose a free port; this
+        reuses it rather than adding a second port-selection rule that could disagree.
+        """
+        # Two separate obligations, and conflating them hid the second: a target may already
+        # KNOW its port while its domain still fails to name it. Returning early on the first
+        # left the stored domain pointing at the host's default port — which on a shared machine
+        # is another service entirely, so the console linked to somebody else's app.
+        chosen = _app_port(target, default=0)
+        if not chosen:
+            report = self.bootstrap(target, settings, connection)
+            chosen = report.get("suggested_port")
+            if not chosen:
+                return target
+
+        resources = [r for r in (target.get("required_resources") or [])
+                     if not (isinstance(r, dict) and r.get("kind") == "app_port")]
+        resources.append({"kind": "app_port", "name": str(chosen)})
+
+        from ..db import begin
+
+        with begin(engine) as c:
+            c.execute(sql_text(
+                "UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
+                "updated_at = now() WHERE id = :i"),
+                {"r": _json.dumps(resources), "i": target.get("id")})
+            # The domain must name the PORT the app is published on. A domain of "1.2.3.4"
+            # with the app on :3010 sends the health check to port 80 — and on a shared host
+            # that is somebody else's web server, which cheerfully returns 200. That is a
+            # deployment reported healthy on the strength of an unrelated service: the exact
+            # false-green this connector exists to prevent.
+            #
+            # So: fill it when absent AND correct it when it names no port.
+            existing = (target.get("domains") or [None])[0]
+            _u, host, _p = _split_ref(target.get("target_ref", ""))
+            needs_port = (not existing) or (":" not in str(existing).split("/")[0])
+            if needs_port:
+                base = str(existing).split("/")[0] if existing else host
+                fixed = f"{base}:{chosen}"
+                c.execute(sql_text(
+                    "UPDATE deployment_targets SET domains = CAST(:d AS JSONB) WHERE id = :i"),
+                    {"d": _json.dumps([fixed]), "i": target.get("id")})
+                target = {**target, "domains": [fixed]}
+
+        return {**target, "required_resources": resources}
+
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None) -> dict:
         """Place the artifact. Refuses if validate() is unhappy — a plan built on a broken
@@ -506,9 +658,18 @@ class SSHContainerConnector:
         from .deploy_service import deploy_ssh
 
         user, host, port = _split_ref(target.get("target_ref", ""))
+        # No code task run? Build straight from the target's repo at `ref`. The target knows
+        # its own repo and (optionally) which entrypoint is its app, which is exactly the
+        # information a run would otherwise have carried.
+        # Resolve a port BEFORE building: discovering "8080 is taken" after a clone and a
+        # transfer wastes the whole build, which is the failure preflight exists to prevent.
+        with begin_conn(engine) as _c:
+            target = self._ensure_port(engine, settings, target, _c)
+
+        source = self._source_for(target, settings, run_id, ref)
         result = deploy_ssh(engine, settings, run_id, host=host, user=user, ssh_port=port,
                             app_port=_app_port(target), name=target.get("app_name"), ref=ref,
-                            key_material=key_material)
+                            key_material=key_material, source=source)
         result["connector"] = self.kind
         return result
 
@@ -530,7 +691,7 @@ class SSHContainerConnector:
             if check.get("kind") != "http":
                 results.append({"check": check, "skipped": "unsupported kind"})
                 continue
-            url = _health_url(domains[0], check)
+            url = _health_url(domains[0], check, _app_port(target, default=0) or None)
             expect = int(check.get("expect", 200))
             try:
                 req = urllib.request.Request(url, method="GET")

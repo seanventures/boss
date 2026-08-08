@@ -2439,6 +2439,12 @@ export async function verifySecretAction(secretRefId: string): Promise<any> {
   return post(`/v1/secrets/${encodeURIComponent(secretRefId)}/verify`, { actor: "operator" });
 }
 
+/** Delete a retired target and its history outright, so the name can be reused. */
+export async function purgeTargetAction(targetId: string, confirm: string): Promise<any> {
+  return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/purge`,
+              { confirm, actor: "operator" });
+}
+
 /** Bring a retired target back. Its credential, port, domain and health check were kept, so
  *  this is a status change rather than a second trip through onboarding. */
 export async function reactivateTargetAction(targetId: string): Promise<any> {
@@ -2455,6 +2461,37 @@ export async function reactivateTargetAction(targetId: string): Promise<any> {
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Live progress of one deployment: steps, timings, logs. Polled by the console. */
+export async function getDeploymentAction(runId: string): Promise<any> {
+  return get(`/v1/delivery/deployments/${encodeURIComponent(runId)}`);
+}
+
+/** Recent deployments — actual deployments, not every code task that opened a PR. */
+export async function listDeploymentsAction(limit = 10): Promise<any> {
+  return get(`/v1/delivery/deployments?project_id=${encodeURIComponent(PROJECT_ID)}&limit=${limit}`);
+}
+
+/** Runnable apps in a repo — so `app entry` is picked, not guessed. */
+export async function listRepoAppsAction(owner: string, repo: string, ref = ""): Promise<any> {
+  return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/apps`
+             + (ref ? `?ref=${encodeURIComponent(ref)}` : ""));
+}
+
+/** Repositories BOSS has built in or deployed from. */
+export async function listReposAction(): Promise<any> {
+  return get(`/v1/delivery/repos?project_id=${encodeURIComponent(PROJECT_ID)}`);
+}
+
+/** Branches available for a repo, default first, with what BOSS already shipped from it. */
+export async function listRefsAction(owner: string, repo: string): Promise<any> {
+  return get(`/v1/delivery/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/refs`);
+}
+
+/** What BOSS will clone unless the target says otherwise — owner, repo, and the full URL. */
+export async function getDeliveryDefaultsAction(): Promise<any> {
+  return get("/v1/delivery/defaults");
 }
 
 export async function createTargetAction(input: Record<string, unknown>): Promise<any> {

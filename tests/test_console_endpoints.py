@@ -112,12 +112,19 @@ def main() -> int:
             call("DELETE", f"/v1/deployment-targets/{t['id']}")
             _purge(t["id"])
 
+    # The app name is deliberately typed with surrounding whitespace. An operator pasting a name
+    # into the onboard form did exactly this, and the space survived into the database: the
+    # target could then not be found by name, its destroy confirmation could never be typed
+    # (nobody types a leading space, and no UI shows one), and every list rendered a name that
+    # looked right. The API must normalise it, not the form — the form is one of several callers.
     code, target = call("POST", "/v1/deployment-targets", {
-        "project_id": PROJECT, "app_name": "e2e-probe", "repo": "boss-sandbox",
-        "environment": "dev", "target_kind": "ssh", "target_ref": "ubuntu@3.94.66.139",
+        "project_id": PROJECT, "app_name": "  e2e-probe  ", "repo": "boss-sandbox",
+        "environment": "dev", "target_kind": "ssh", "target_ref": " ubuntu@3.94.66.139 ",
         "domains": ["3.94.66.139:3011"],
         "health_checks": [{"kind": "http", "path": "/", "expect": 200, "scheme": "http"}]})
     check("POST create target", code, (201,), target)
+    check("create trims whitespace out of the app name",
+          200 if target.get("app_name") == "e2e-probe" else 0, (200,), target)
     tid = target.get("id", "")
     if not tid:
         print("  (cannot continue without a target id)")
@@ -141,12 +148,35 @@ def main() -> int:
         check(f"{method} {label}", code, want, body)
 
     print("== Deploy controls ==")
-    # A target with no build must refuse with a SENTENCE, not a stack trace from three layers
-    # down — this is the bug an operator hit as "nothing happens".
+    # Deploy is ASYNCHRONOUS now: it returns an id to watch, not an outcome. This once asserted
+    # a 422 for "no prior build", which was correct when a manual deploy could only re-ship a
+    # code task run — a target with just a repo is now a first-class case, so refusing it would
+    # be the bug. What must survive is that the refusal, when there is one, is legible and
+    # RECORDED: this probe target's key was never installed on the host, so it cannot get past
+    # preflight, and the run has to say so rather than vanish.
+    import time as _time
+
     code, body = call("POST", "/v1/delivery/deploy", {"target_id": tid, "actor": "operator"})
-    check("POST deploy with no build -> 422", code, (422,), body)
-    check("the 422 explains itself",
-          200 if "never been deployed" in json.dumps(body) else 0, (200,), body)
+    check("POST deploy returns immediately", code, (200,), body)
+    check("it hands back a run to watch",
+          200 if body.get("deployment_run_id") else 0, (200,), body)
+    run_id = body.get("deployment_run_id", "")
+    verdict: dict = {}
+    for _ in range(40):
+        _time.sleep(2)
+        _, verdict = call("GET", f"/v1/delivery/deployments/{run_id}")
+        if not verdict.get("running"):
+            break
+    check("the unreachable host is reported, not swallowed",
+          200 if verdict.get("status") in ("blocked", "failed") else 0,
+          (200,), {"status": verdict.get("status"), "reason": verdict.get("failure_reason")})
+    check("and the reason is a sentence",
+          200 if (verdict.get("failure_reason") or "").strip() else 0, (200,), verdict)
+    check("and a step owns the failure",
+          200 if any(s.get("status") == "failed" for s in (verdict.get("steps") or []))
+          or verdict.get("status") == "blocked" else 0,
+          (200,), {"steps": [(s.get("step"), s.get("status"))
+                             for s in (verdict.get("steps") or [])]})
 
     code, body = call("POST", "/v1/delivery/deploy",
                       {"target_id": "deptgt_stocks_aws", "plan_only": True, "actor": "operator"})
@@ -155,6 +185,37 @@ def main() -> int:
     check("execute unknown run -> 404", code, (404,), body)
     code, body = call("POST", "/v1/delivery/deployments/deprun_nope/redeploy", {})
     check("redeploy unknown run -> 404", code, (404,), body)
+
+    print("== What the redesigned console reads ==")
+    # The wizard needs an OWNER to ask GitHub for branches. Targets store `repo` bare, so the
+    # owner lives in required_resources — and a hand-listed projection dropped it, which turned
+    # the branch picker into a request for `/repos//boss-sandbox/refs`, a 404, and an empty list
+    # that looked exactly like a repo with no branches.
+    code, body = call("GET", f"/v1/delivery/pipeline?project_id={PROJECT}&limit=3")
+    check("GET pipeline", code, (200,), body)
+    targets = body.get("targets") or []
+    for field in ("repo_owner", "app_entry", "app_port", "domains"):
+        check(f"pipeline targets carry {field}",
+              200 if targets and field in targets[0] else 0, (200,),
+              {"first_target_keys": sorted(targets[0]) if targets else []})
+
+    # Recent deployments replaced the pipeline table. Duration and step count are the two
+    # columns it exists to show; a missing key renders as an em-dash and reads as "no data".
+    code, body = call("GET", f"/v1/delivery/deployments?project_id={PROJECT}&limit=5")
+    check("GET recent deployments", code, (200,), body)
+    rows = body.get("deployments") or []
+    for field in ("duration_ms", "step_count", "trigger", "commit_ref", "app_name"):
+        check(f"deployment rows carry {field}",
+              200 if rows and field in rows[0] else 0, (200,),
+              {"first_row_keys": sorted(rows[0]) if rows else []})
+
+    # One finished deployment, read the way the stepper reads it.
+    if rows:
+        code, run = call("GET", f"/v1/delivery/deployments/{rows[0]['id']}")
+        check("GET one deployment", code, (200,), run)
+        check("it reports steps", 200 if isinstance(run.get("steps"), list) else 0, (200,), run)
+        check("it says whether it is still running",
+              200 if isinstance(run.get("running"), bool) else 0, (200,), run)
 
     print("== Teardown and restore ==")
     code, body = call("POST", f"/v1/deployment-targets/{tid}/teardown", {})

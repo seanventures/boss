@@ -2096,6 +2096,17 @@ ALTER TABLE deployment_targets ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL 
 -- staging" must be answerable from the row itself.
 ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS trigger TEXT;
 
+-- Per-step progress of a deployment, written AS IT HAPPENS.
+--
+-- The deploy used to record nothing until it finished, so a console had no data to render and
+-- a crash left no trace of how far it got. Steps are appended live: [{step, status, started_at,
+-- ended_at, log}], where log holds a bounded tail of that step's output — enough to see the
+-- docker error, small enough that a runaway build cannot fill the table.
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- Total wall-clock, so "how long did it take" does not require subtracting timestamps in every
+-- reader that asks.
+ALTER TABLE deployment_runs ADD COLUMN IF NOT EXISTS duration_ms INTEGER;
+
 -- Health of what BOSS has DEPLOYED, sampled over time.
 --
 -- deployment_runs records the ACT of deploying; it says nothing about whether the thing is
