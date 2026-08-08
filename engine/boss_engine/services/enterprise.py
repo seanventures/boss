@@ -674,6 +674,22 @@ class EnterpriseService:
                 ),
                 {"project_id": project_id, "member_id": member_id},
             )
+            # Older BOSS versions mirrored every project member into
+            # org_members. MemberDirectory deliberately falls back to an active
+            # org member when the project row is inactive, so only disabling the
+            # project row leaves a deprovisioned SCIM user authorized and visible.
+            # Retain both rows for audit history, but disable the matching
+            # org-level mirror as part of the same deprovisioning transaction.
+            connection.execute(
+                text(
+                    """
+                    UPDATE org_members
+                    SET status = 'inactive', updated_at = now()
+                    WHERE org_id = :org_id AND member_id = :member_id
+                    """
+                ),
+                {"org_id": org_id, "member_id": member_id},
+            )
         emit_event(
             connection,
             project_id,
