@@ -27,6 +27,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait as _futures_wait
 from pathlib import Path
+from typing import Optional
 
 from ..config import Settings
 from ..ports import sql
@@ -39,7 +40,6 @@ from .code_task_service import (
     _engine_ports,
     _persist_sandbox_id,
     _release,
-    _set_phase,
     _transaction,
     load_code_task_run,
 )

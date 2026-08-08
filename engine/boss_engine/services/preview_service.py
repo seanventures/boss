@@ -850,7 +850,7 @@ def _respawn_process_preview(engine, settings: Settings, preview_id: str) -> Non
             capture_output=True, text=True, timeout=120)
         if clone.returncode != 0:
             return
-        _changed = lineage_impl_files(engine, run)
+        _changed = lineage_impl_files(engine, {"id": row["run_id"]})
         command = _detect_command(workdir, _changed)
         if not command:
             return

@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import sql
-from .core import emit_event, make_id
+from .core import emit_event
 from .deployment_health import DEPLOYED_PREDICATE as _DEPLOYED
 
 # Where the stack lives on the host — beside the apps, not inside any of them.
