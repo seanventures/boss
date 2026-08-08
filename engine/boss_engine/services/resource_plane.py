@@ -1551,7 +1551,7 @@ class ResourcePlaneService:
         target_ref: str,
         domains: list[str],
         required_resources: list[dict[str, Any]],
-        secret_refs: list[str],
+        secret_refs: list[str | dict[str, Any]],
         health_checks: list[dict[str, Any]],
         rollback_points: list[dict[str, Any]],
         actor: str,
@@ -1600,7 +1600,7 @@ class ResourcePlaneService:
                 "target_ref": self._require_text(target_ref, "target_ref"),
                 "domains": json.dumps(self._normalize_string_list(domains)),
                 "required_resources": json.dumps(required_resources),
-                "secret_refs": json.dumps(self._normalize_string_list(secret_refs)),
+                "secret_refs": json.dumps(self._normalize_deployment_secret_refs(secret_refs)),
                 "health_checks": json.dumps(health_checks),
                 "rollback_points": json.dumps(rollback_points),
                 "actor": actor,
@@ -8315,6 +8315,20 @@ class ResourcePlaneService:
 
     def _normalize_string_list(self, values: list[str]) -> list[str]:
         return [item.strip() for item in values if isinstance(item, str) and item.strip()]
+
+    def _normalize_deployment_secret_refs(
+        self, values: list[str | dict[str, Any]]
+    ) -> list[str | dict[str, Any]]:
+        """Keep legacy secret-ref strings and structured requirement bindings intact."""
+        normalized: list[str | dict[str, Any]] = []
+        for item in values:
+            if isinstance(item, str):
+                cleaned = item.strip()
+                if cleaned:
+                    normalized.append(cleaned)
+            elif isinstance(item, dict):
+                normalized.append(item)
+        return normalized
 
     def _require_text(self, value: str, field_name: str) -> str:
         cleaned = value.strip()

@@ -7011,13 +7011,37 @@ def test_deployment_target_registry_is_api_driven(client):
     payload = created.json()
     assert payload["status"] == "created"
     assert payload["domains"] == ["staging-api.boss.local"]
+    assert payload["secret_refs"] == ["env:OPENAI_API_KEY"]
+
+    structured = client.post(
+        "/v1/deployments",
+        json={
+            "project_id": "boss-dogfood",
+            "app_name": "boss-worker",
+            "repo": "seanheiney/boss",
+            "environment": "production",
+            "target_kind": "cloudflare.worker",
+            "target_ref": "boss-worker-production",
+            "secret_refs": [
+                {"name": "worker_token", "secret_ref_id": "sref_worker_token"}
+            ],
+            "actor": "ceo",
+        },
+    )
+    assert structured.status_code == 201
+    assert structured.json()["secret_refs"] == [
+        {"name": "worker_token", "secret_ref_id": "sref_worker_token"}
+    ]
 
     deployments = client.get(
         "/v1/deployments",
         params={"project_id": "boss-dogfood"},
     )
     assert deployments.status_code == 200
-    assert deployments.json()["items"][0]["app_name"] == "boss-api"
+    assert {item["app_name"] for item in deployments.json()["items"]} == {
+        "boss-api",
+        "boss-worker",
+    }
 
 
 def test_deployment_run_plans_changeset_and_release_packet(client):

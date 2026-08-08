@@ -4427,7 +4427,7 @@ export type DeploymentTargetSummary = {
   target_ref: string;
   domains: string[];
   required_resources: Array<Record<string, unknown>>;
-  secret_refs: string[];
+  secret_refs: Array<string | Record<string, unknown>>;
   health_checks: Array<Record<string, unknown>>;
   rollback_points: Array<Record<string, unknown>>;
   status: string;
@@ -4453,7 +4453,7 @@ export type DeploymentTargetCreateRequest = {
   target_ref: string;
   domains?: string[];
   required_resources?: Array<Record<string, unknown>>;
-  secret_refs?: string[];
+  secret_refs?: Array<string | Record<string, unknown>>;
   health_checks?: Array<Record<string, unknown>>;
   rollback_points?: Array<Record<string, unknown>>;
   actor?: string;

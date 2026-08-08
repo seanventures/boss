@@ -4553,7 +4553,10 @@ paths:
                   items: { type: object }
                 secret_refs:
                   type: array
-                  items: { type: string }
+                  items:
+                    oneOf:
+                      - { type: string }
+                      - { type: object }
                 health_checks:
                   type: array
                   items: { type: object }
