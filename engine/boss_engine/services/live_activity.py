@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Claude Code writes one JSONL per session under a slugified copy of the sandbox path.
 _PROJECTS_ROOT = Path(os.path.expanduser("~/.claude/projects"))

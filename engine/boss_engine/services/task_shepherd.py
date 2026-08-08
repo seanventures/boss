@@ -17,7 +17,6 @@ a model. Persistence lives in the service layer above.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 

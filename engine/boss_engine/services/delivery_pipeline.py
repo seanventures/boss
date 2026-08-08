@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import sql
-from .core import emit_event, make_id
+from .core import emit_event
 
 # Environments a merge may deploy to WITHOUT a human. Everything else needs a promotion
 # decision. Deliberately a set rather than a flag: adding "production" here should be a

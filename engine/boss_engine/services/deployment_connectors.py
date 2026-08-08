@@ -600,7 +600,7 @@ class SSHContainerConnector:
 
             res = _ssh(key, host, user, port, "; ".join(steps), timeout=120)
             after = _ssh(key, host, user, port,
-                         f"df -Pk / | tail -1 | awk '{{print $4}}'", timeout=20)
+                         "df -Pk / | tail -1 | awk '{print $4}'", timeout=20)
         finally:
             if ephemeral:
                 _discard_key_file(ephemeral)

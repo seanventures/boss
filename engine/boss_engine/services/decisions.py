@@ -334,7 +334,9 @@ class DecisionService:
                 },
             )
             refreshed = self.get_row(connection, decision_id)
-            self._handle_approved_follow_on(connection, refreshed, actor, force=force)
+            self._handle_approved_follow_on(
+                connection, refreshed, actor, note=note, force=force
+            )
             return self.get_row(connection, decision_id)
 
         if action == "reject":
@@ -547,15 +549,19 @@ class DecisionService:
         return self.get_row(connection, decision_id)
 
     def _handle_approved_follow_on(
-        self, connection: Connection, row: dict[str, Any], actor: str, force: bool = False
+        self,
+        connection: Connection,
+        row: dict[str, Any],
+        actor: str,
+        *,
+        note: Optional[str] = None,
+        force: bool = False,
     ) -> None:
-        """`force` MUST be threaded in, not assumed.
+        """Approval context must be explicitly threaded into the follow-on.
 
-        It was added to transition() and then referenced here, where it was never a name in
-        scope — so EVERY approval that reached the merge branch died with
-        "NameError: name 'force' is not defined". The approval path was simply broken, and it
-        stayed broken because nothing exercised an end-to-end approve. Defaulting to False
-        keeps the safe behaviour for any caller that does not pass it."""
+        A forced merge is valid only with its operator rationale recorded in the
+        audit event. Defaulting to a non-forced, empty-note context keeps the
+        safe behaviour for callers that do not supply either value."""
         recommendation = row["recommendation"] or {}
         action = recommendation.get("action")
         if action == "execute_agent_tool":

@@ -26,7 +26,7 @@ from ..config import Settings
 from ..ports import sql
 from .core import emit_event, make_id
 from .task_shepherd import (
-    CLASS_NAMES, NOT_A_FAILURE, REMEDIES, ShepherdState, Verdict, classify, escalation,
+    CLASS_NAMES, NOT_A_FAILURE, ShepherdState, Verdict, classify, escalation,
     estimate_cost, needs_operator_confirmation, next_step, task_budget,
 )
 
