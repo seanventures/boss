@@ -1061,6 +1061,13 @@ export type QaBenchmarkApp = {
   acceptance_scenarios: string[];
   completion_contract: string[];
   verification_commands: string[];
+  scoring_dimensions: Array<{
+    id: string;
+    label: string;
+    weight: number;
+    evidence: string;
+  }>;
+  score_baselines: Record<string, number>;
 };
 
 export type QaBenchmarkAppsResponse = { benchmark_apps: QaBenchmarkApp[] };
@@ -1080,7 +1087,34 @@ export type QaBenchmarkReport = {
     timed_out?: boolean | null;
   }>;
   passed: boolean;
+  scorecard: {
+    version: string;
+    baselines: Record<string, number>;
+    dimensions: Array<{
+      id: string;
+      label: string;
+      weight: number;
+      evidence: string;
+      status: "scored" | "not_scored";
+      score: number | null;
+      reason?: string;
+    }>;
+    observed_weight: number;
+    evidence_coverage_pct: number;
+    overall_score: number | null;
+    overall_status: "provisional" | "complete";
+    tuning_note: string;
+  };
   message: string;
+};
+
+export type QaBenchmarkTuningProposalRequest = {
+  project_id: string;
+  /** A developer-authored PR or configuration-diff reference. */
+  change_ref: string;
+  diff_summary: string;
+  actor?: string;
+  risk_tier?: number;
 };
 
 // One per-stage model call recorded for a code task (GET /v1/code-tasks/{id}/activity) —
@@ -5607,6 +5641,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
     getQaBenchmarkReport(runId: string) {
       return request<QaBenchmarkReport>(
         "GET", `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/report`,
+      );
+    },
+    createQaBenchmarkTuningProposal(
+      runId: string,
+      payload: QaBenchmarkTuningProposalRequest,
+    ) {
+      return request<SelfImprovementProposalDetail>(
+        "POST",
+        `/v1/qa/benchmark-apps/runs/${encodeURIComponent(runId)}/tuning-proposal`,
+        { body: payload },
       );
     },
     getDiscoveries(projectId: string, limit = 50) {

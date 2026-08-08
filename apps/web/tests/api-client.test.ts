@@ -6,8 +6,9 @@ describe("createBossApiClient", () => {
   it("lists and launches QA benchmark apps through the governed API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const responses = [
-      { benchmark_apps: [{ id: "bugbox", name: "BugBox", tagline: "Mini issue tracker", summary: "CRUD", focus: [], acceptance_scenarios: [], completion_contract: [], verification_commands: [] }] },
+      { benchmark_apps: [{ id: "bugbox", name: "BugBox", tagline: "Mini issue tracker", summary: "CRUD", focus: [], acceptance_scenarios: [], completion_contract: [], verification_commands: [], scoring_dimensions: [], score_baselines: {} }] },
       { status: "queued", run_id: "crun_benchmark", benchmark: { id: "bugbox", name: "BugBox" } },
+      { id: "imp_tuning" },
     ];
     const client = createBossApiClient({
       baseUrl: "http://127.0.0.1:8000",
@@ -23,6 +24,11 @@ describe("createBossApiClient", () => {
     const launch = await client.startQaBenchmarkApp("bugbox", {
       project_id: "boss-dogfood", actor: "executive_console", repo: "boss-sandbox",
     });
+    const proposal = await client.createQaBenchmarkTuningProposal("crun_benchmark", {
+      project_id: "boss-dogfood",
+      change_ref: "github://boss/pull/141",
+      diff_summary: "Adjust strict repair policy.",
+    });
 
     expect(catalog.benchmark_apps[0].id).toBe("bugbox");
     expect(launch.run_id).toBe("crun_benchmark");
@@ -31,6 +37,8 @@ describe("createBossApiClient", () => {
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
       project_id: "boss-dogfood", actor: "executive_console", repo: "boss-sandbox",
     });
+    expect(proposal.id).toBe("imp_tuning");
+    expect(calls[2].url).toBe("http://127.0.0.1:8000/v1/qa/benchmark-apps/runs/crun_benchmark/tuning-proposal");
   });
 
   it("posts conversational turns through the agent contract", async () => {

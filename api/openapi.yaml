@@ -6610,6 +6610,33 @@ paths:
       responses:
         '200': { description: Durable observed evidence; incomplete checks remain not recorded }
         '404': { description: Code task not found or is not a benchmark run }
+  /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal:
+    post:
+      summary: Create a decision-gated improvement proposal from benchmark evidence
+      description: >
+        Requires a developer-authored PR or configuration-diff reference. This endpoint
+        turns observed scorecard gaps into the existing governed self-improvement proposal
+        workflow; it never generates or applies the candidate change directly.
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, change_ref, diff_summary]
+              properties:
+                project_id: { type: string }
+                change_ref: { type: string, description: Developer-authored PR or config-diff reference }
+                diff_summary: { type: string }
+                actor: { type: string, default: vp_agents }
+                risk_tier: { type: integer, minimum: 1, maximum: 3, default: 2 }
+      responses:
+        '201': { description: Self-improvement proposal and its review decision created }
+        '403': { description: Actor lacks self-improvement management authority }
+        '404': { description: QA benchmark run not found }
+        '422': { description: Run has insufficient observed evidence or candidate change control is incomplete }
   /v1/code-tasks/{run_id}/feedback:
     get:
       summary: Read the durable feedback thread for a code-task lineage
@@ -6846,6 +6873,23 @@ paths:
         - { name: project_id, in: query, required: true, schema: { type: string } }
       responses:
         '200': { description: Agents, Panels, Workflow graphs/runs, tests, and A2A health/feed }
+  /v1/agent-studio/catalog-smoke:
+    post:
+      summary: Deterministically test every active Agent Studio catalog version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '200': { description: Per-agent durable test results, aggregate status, and zero-effect telemetry }
+        '403': { description: Actor lacks role-review authority }
+        '422': { description: Catalog is too large or an agent version is invalid }
   /v1/agent-studio/workflows/validate:
     post:
       summary: Validate and normalize a Workflow draft without publishing or executing it

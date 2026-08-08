@@ -416,6 +416,25 @@ function QaBenchmarkEvidence({ runId, benchmarkName }: { runId: string; benchmar
                 note={`${result.command}${result.exit_code != null ? ` · exit ${result.exit_code}` : ""}`} />
             ))}
           </div>
+          <div style={{ marginTop: 12, display: "grid", gap: 5 }}>
+            <div className="ct-block-title" style={{ fontSize: 12.5 }}>
+              Benchmark scorecard <span className={`cap-badge tone-${report.scorecard.overall_score == null ? "muted" : report.scorecard.overall_status === "complete" ? "green" : "amber"}`}>
+                {report.scorecard.overall_score == null ? "unscored" : `${report.scorecard.overall_score}/100 · ${report.scorecard.overall_status}`}
+              </span>
+            </div>
+            <p className="detail" style={{ margin: 0 }}>
+              Evidence coverage: {report.scorecard.evidence_coverage_pct}% weighted. Missing dimensions stay unscored and do not improve the overall result.
+            </p>
+            {report.scorecard.dimensions.map((dimension) => (
+              <div key={dimension.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13 }}>
+                <span>{dimension.label} <span className="detail">({dimension.weight}%)</span></span>
+                <span className={dimension.status === "scored" ? "detail" : "detail"}>
+                  {dimension.status === "scored" ? `${dimension.score}/100` : "not scored"}
+                </span>
+              </div>
+            ))}
+            <p className="detail" style={{ margin: 0 }}>{report.scorecard.tuning_note}</p>
+          </div>
           <p className="detail" style={{ marginTop: 8 }}>{report.message}</p>
         </>
       ) : null}

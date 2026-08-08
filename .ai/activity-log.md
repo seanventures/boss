@@ -3,6 +3,27 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — QA benchmark evidence and governed tuning loop
+
+- Extended BOSS-327 with a versioned, evidence-aware scorecard and a deterministic
+  all-agent catalog smoke test. Missing capability, browser, or independent-innovation
+  evidence remains explicitly unscored.
+- Added Plane issue `5c1eede4-a47f-4640-9902-23bd8efdf992` for the developer runner
+  and baseline-improvement loop, held In Progress pending PR merge.
+- Added `make qa-benchmark BENCHMARK=<id> PROJECT_ID=<id>` and
+  `scripts/run_qa_benchmark.py`, which launch through the BOSS control plane, wait for
+  durable completion, and export a JSON report without directly calling a provider,
+  model, sandbox, or SCM API.
+- Added `qa_benchmark_baseline_tuning`: scorecard gaps can become an existing
+  `ImprovementProposal` only with a developer-authored PR/config diff, isolated
+  comparable control, approval, QA-only canary, staged rollout, and rollback. It cannot
+  self-apply a candidate or silently normalize a degraded baseline.
+- Focused validation: 9 engine/API-boundary tests, workflow-runtime validation, Ruff,
+  145 web tests, web lint/typecheck, and production build pass. The API database fixture
+  was not available locally, so endpoint behavior is covered by an isolated boundary test
+  and will run in the normal Postgres suite.
+
+---
 ## 2026-08-08 — Codex — BOSS-327 governed QA benchmark apps
 
 - Added the pinned BugBox, HookWatch, and ApproveIt benchmark catalog so BOSS can evaluate

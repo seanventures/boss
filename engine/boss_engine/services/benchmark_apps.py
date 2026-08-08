@@ -20,6 +20,86 @@ COMPLETION_CONTRACT = [
     "Automated final verification report records actual command outcomes and no required TODOs remain.",
 ]
 
+# Scores are a tuning instrument, not a replacement for acceptance evidence. The
+# numeric baselines are deliberately explicit and may be revised only alongside
+# a benchmark version; missing evidence remains unscored.
+SCORING_DIMENSIONS = (
+    {
+        "id": "functionality",
+        "label": "Functionality",
+        "weight": 22,
+        "evidence": "Authoritative benchmark verification and acceptance-path tests.",
+    },
+    {
+        "id": "capability",
+        "label": "Capability coverage",
+        "weight": 12,
+        "evidence": "Scenario-to-test mapping for each original-spec capability.",
+    },
+    {
+        "id": "interface",
+        "label": "Interface quality",
+        "weight": 12,
+        "evidence": "Browser evidence covering responsive, loading, empty, error, and keyboard states.",
+    },
+    {
+        "id": "quality",
+        "label": "App quality",
+        "weight": 14,
+        "evidence": "Tests, independent review, security, and consistency evidence.",
+    },
+    {
+        "id": "speed",
+        "label": "Speed",
+        "weight": 8,
+        "evidence": "Recorded end-to-end governed-run duration against the 15-minute baseline.",
+    },
+    {
+        "id": "efficiency",
+        "label": "Efficiency",
+        "weight": 8,
+        "evidence": "Acceptance scenarios delivered per agent turn and per verification attempt.",
+    },
+    {
+        "id": "cost",
+        "label": "Cost discipline",
+        "weight": 6,
+        "evidence": "Recorded model cost against the $5 benchmark baseline.",
+    },
+    {
+        "id": "tokens",
+        "label": "Token consumption",
+        "weight": 6,
+        "evidence": "Recorded stage token usage against the 200k-token baseline.",
+    },
+    {
+        "id": "effort",
+        "label": "Implementation effort",
+        "weight": 4,
+        "evidence": "Recorded turns, changed files, and repair attempts.",
+    },
+    {
+        "id": "innovation",
+        "label": "Innovation",
+        "weight": 4,
+        "evidence": "Independent, cited design or product-review assessment; never model self-score.",
+    },
+    {
+        "id": "reliability",
+        "label": "Reliability",
+        "weight": 4,
+        "evidence": "Retry/repair behavior, regressions, and durable gate outcomes.",
+    },
+)
+
+SCORE_BASELINES = {
+    "duration_ms": 15 * 60 * 1000,
+    "cost_usd_micros": 5_000_000,
+    "tokens": 200_000,
+    "turns": 80,
+    "files_changed": 30,
+}
+
 
 _APPS: tuple[dict[str, Any], ...] = (
     {
@@ -85,6 +165,8 @@ def list_benchmark_apps() -> list[dict[str, Any]]:
         {
             **deepcopy(app),
             "completion_contract": list(COMPLETION_CONTRACT),
+            "scoring_dimensions": [deepcopy(dimension) for dimension in SCORING_DIMENSIONS],
+            "score_baselines": dict(SCORE_BASELINES),
             "verification_commands": [
                 "npm run build",
                 "npm run typecheck",
@@ -139,12 +221,314 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
                 "name": benchmark["name"],
                 "verification_commands": verification,
                 "completion_contract": list(COMPLETION_CONTRACT),
+                "scoring_dimensions": [
+                    deepcopy(dimension) for dimension in SCORING_DIMENSIONS
+                ],
+                "score_baselines": dict(SCORE_BASELINES),
             }
         },
     }
 
 
-def completion_report(run: dict[str, Any]) -> dict[str, Any]:
+def _score_ratio(actual: int | float, baseline: int | float) -> int:
+    """100 at or below the target; declines linearly but never below zero."""
+    if baseline <= 0:
+        return 0
+    return max(0, min(100, round(100 * float(baseline) / max(float(actual), 1))))
+
+
+def benchmark_scorecard(
+    run: dict[str, Any],
+    *,
+    benchmark: dict[str, Any],
+    verify_status: str,
+    llm_calls: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Score only objectively observed inputs and expose the missing-evidence gap."""
+    state = run.get("state") or {}
+    context = run.get("finalize_ctx") or {}
+    calls = llm_calls or []
+    phase_timings = context.get("phase_timings") or []
+    duration_ms = sum(
+        int(item.get("ms") or 0)
+        for item in phase_timings
+        if isinstance(item, dict)
+    )
+    state_cost = state.get("cost_usd_micros")
+    cost = (
+        state_cost
+        if state_cost is not None
+        else (run.get("usage") or {}).get("cost_usd_micros")
+    )
+    token_observed = any(isinstance(call, dict) for call in calls)
+    tokens = sum(
+        int(call.get("total_tokens") or 0)
+        for call in calls
+        if isinstance(call, dict)
+    )
+    turns = state.get("turns")
+    files_changed = state.get("files_changed")
+    repair_attempts = len(context.get("repair_log") or [])
+    observed_reviews: list[bool] = []
+    if state.get("tests_passed") is not None:
+        observed_reviews.append(bool(state["tests_passed"]))
+    if state.get("adversarial_verdict") not in {None, "skipped", "not_run"}:
+        observed_reviews.append(state["adversarial_verdict"] == "survived")
+    if state.get("security_verdict") not in {None, "skipped", "not_run"}:
+        observed_reviews.append(state["security_verdict"] == "clean")
+    if state.get("regressions_ok") is not None:
+        observed_reviews.append(bool(state["regressions_ok"]))
+    if state.get("consistency_verdict") not in {None, "skipped", "not_run"}:
+        observed_reviews.append(
+            state["consistency_verdict"] in {"consistent", "pass", "survived"}
+        )
+    explicit_innovation = state.get("independent_innovation_score")
+    innovation_evidence = state.get("independent_innovation_evidence")
+
+    scores: dict[str, dict[str, Any]] = {}
+
+    def observed(dimension: str, score: int, evidence: list[str]):
+        scores[dimension] = {"status": "scored", "score": score, "evidence": evidence}
+
+    def unobserved(dimension: str, reason: str):
+        scores[dimension] = {"status": "not_scored", "score": None, "reason": reason}
+
+    if verify_status == "pass":
+        observed("functionality", 100, ["npm run verify exited 0"])
+    elif verify_status == "fail":
+        observed("functionality", 0, ["npm run verify failed"])
+    else:
+        unobserved("functionality", "Authoritative verification was not recorded.")
+
+    unobserved(
+        "capability",
+        "Scenario-to-test mapping has not been attached to the run evidence.",
+    )
+    unobserved(
+        "interface",
+        "Browser-state evidence has not been attached to the run evidence.",
+    )
+    if observed_reviews:
+        observed(
+            "quality",
+            round(100 * sum(bool(value) for value in observed_reviews) / len(observed_reviews)),
+            ["Recorded governed quality-gate outcomes."],
+        )
+    else:
+        unobserved("quality", "No governed quality-gate outcomes were recorded.")
+    if duration_ms:
+        observed(
+            "speed",
+            _score_ratio(duration_ms, SCORE_BASELINES["duration_ms"]),
+            [f"{duration_ms} ms recorded"],
+        )
+    else:
+        unobserved("speed", "Phase timing evidence was not recorded.")
+    if turns is not None and files_changed is not None:
+        scenario_count = max(1, len(benchmark.get("acceptance_scenarios") or []))
+        turn_score = _score_ratio(int(turns), SCORE_BASELINES["turns"])
+        scenario_score = min(100, round(100 * scenario_count / max(int(turns), 1)))
+        file_score = _score_ratio(int(files_changed), SCORE_BASELINES["files_changed"])
+        observed(
+            "efficiency",
+            round((turn_score + scenario_score + file_score) / 3),
+            ["Recorded turns, changed files, and original-spec scenarios."],
+        )
+    else:
+        unobserved("efficiency", "Turns and changed-file evidence are both required.")
+    if cost is not None:
+        observed(
+            "cost",
+            _score_ratio(int(cost), SCORE_BASELINES["cost_usd_micros"]),
+            [f"{int(cost)} USD micros recorded"],
+        )
+    else:
+        unobserved("cost", "Observed model cost was not recorded.")
+    if token_observed:
+        observed(
+            "tokens",
+            _score_ratio(tokens, SCORE_BASELINES["tokens"]),
+            [f"{tokens} tokens recorded"],
+        )
+    else:
+        unobserved("tokens", "Stage token telemetry was not recorded.")
+    if turns is not None or files_changed is not None:
+        effort_scores = []
+        if turns is not None:
+            effort_scores.append(_score_ratio(int(turns), SCORE_BASELINES["turns"]))
+        if files_changed is not None:
+            effort_scores.append(_score_ratio(int(files_changed), SCORE_BASELINES["files_changed"]))
+        observed(
+            "effort",
+            round(sum(effort_scores) / len(effort_scores)),
+            ["Recorded implementation turns/files."],
+        )
+    else:
+        unobserved("effort", "Implementation-effort telemetry was not recorded.")
+    if isinstance(explicit_innovation, (int, float)) and innovation_evidence:
+        observed("innovation", max(0, min(100, round(explicit_innovation))), [str(innovation_evidence)])
+    else:
+        unobserved("innovation", "Independent innovation assessment with cited evidence is required.")
+    if verify_status == "pass":
+        observed("reliability", max(0, 100 - min(100, repair_attempts * 20)), [f"{repair_attempts} repair attempt(s) recorded"])
+    elif verify_status == "fail":
+        observed("reliability", 0, ["Authoritative verification failed"])
+    else:
+        unobserved("reliability", "Authoritative verification was not recorded.")
+
+    weights = {item["id"]: item["weight"] for item in SCORING_DIMENSIONS}
+    scored_weight = sum(
+        weights[key] for key, value in scores.items() if value["status"] == "scored"
+    )
+    weighted_sum = sum(
+        weights[key] * value["score"]
+        for key, value in scores.items()
+        if value["status"] == "scored"
+    )
+    return {
+        "version": "1.0",
+        "baselines": dict(SCORE_BASELINES),
+        "dimensions": [
+            {**dimension, **scores[dimension["id"]]}
+            for dimension in SCORING_DIMENSIONS
+        ],
+        "observed_weight": scored_weight,
+        "evidence_coverage_pct": round(100 * scored_weight / 100),
+        "overall_score": round(weighted_sum / scored_weight, 1) if scored_weight else None,
+        "overall_status": "provisional" if scored_weight < 100 else "complete",
+        "tuning_note": "Compare only runs with the same benchmark revision and scorecard baselines.",
+    }
+
+
+def tuning_recommendation(report: dict[str, Any]) -> dict[str, Any]:
+    """Turn observed benchmark evidence into a proposal-ready, non-mutating packet.
+
+    This deliberately does not choose a model, edit a workflow, or claim causality. It
+    identifies measurable gaps and states the control/intervention evidence required
+    before a separately supplied PR or config diff can enter the existing governed
+    self-improvement workflow.
+    """
+    scorecard = report.get("scorecard") or {}
+    dimensions = scorecard.get("dimensions") or []
+    if report.get("run_status") not in {"completed", "failed"}:
+        return {
+            "status": "not_ready",
+            "reason": "The benchmark run is not terminal; wait for durable evidence.",
+            "source_run_id": report.get("run_id"),
+            "benchmark_id": report.get("benchmark_id"),
+        }
+
+    measured_gaps = [
+        {
+            "dimension": item.get("id"),
+            "label": item.get("label"),
+            "score": item.get("score"),
+            "weight": item.get("weight"),
+            "evidence": item.get("evidence") or [],
+        }
+        for item in dimensions
+        if isinstance(item, dict)
+        and item.get("status") == "scored"
+        and isinstance(item.get("score"), (int, float))
+        and item["score"] < 100
+    ]
+    missing_evidence = [
+        item.get("id")
+        for item in dimensions
+        if isinstance(item, dict) and item.get("status") == "not_scored"
+    ]
+    observed_weight = int(scorecard.get("observed_weight") or 0)
+    if not measured_gaps:
+        reason = (
+            "No measured score gap is available for tuning. Attach missing evidence or "
+            "compare a separately identified regression; do not invent an optimization."
+        )
+        return {
+            "status": "not_ready",
+            "reason": reason,
+            "source_run_id": report.get("run_id"),
+            "benchmark_id": report.get("benchmark_id"),
+            "observed_weight": observed_weight,
+            "missing_evidence": missing_evidence,
+        }
+
+    return {
+        "status": "ready_for_candidate",
+        "source_run_id": report.get("run_id"),
+        "benchmark_id": report.get("benchmark_id"),
+        "benchmark_name": report.get("benchmark_name"),
+        "scorecard_version": scorecard.get("version"),
+        "observed_weight": observed_weight,
+        "overall_score": scorecard.get("overall_score"),
+        "measured_gaps": measured_gaps,
+        "missing_evidence": missing_evidence,
+        "required_experiment": (
+            "Run the same pinned benchmark and scorecard revision as a control; vary only "
+            "the proposed workflow, model-routing, repair-budget, or test-strategy change."
+        ),
+        "guardrails": [
+            "A traceable PR or config-diff reference is required before a proposal can be created.",
+            "The proposal is decision-gated and cannot apply a change directly.",
+            "A canary and rollback plan are required before rollout.",
+        ],
+    }
+
+
+def tuning_proposal_inputs(
+    report: dict[str, Any], *, change_ref: str, diff_summary: str
+) -> dict[str, Any]:
+    """Build the required change-control fields for the existing proposal service."""
+    recommendation = tuning_recommendation(report)
+    if recommendation["status"] != "ready_for_candidate":
+        raise ValueError(recommendation["reason"])
+    change_ref = (change_ref or "").strip()
+    diff_summary = (diff_summary or "").strip()
+    if not change_ref or not diff_summary:
+        raise ValueError("change_ref and diff_summary are required for a tuning proposal.")
+
+    gaps = recommendation["measured_gaps"]
+    gap_summary = ", ".join(
+        f"{gap['dimension']}={gap['score']}" for gap in gaps
+    )
+    source_ref = (
+        f"/v1/qa/benchmark-apps/runs/{recommendation['source_run_id']}/report"
+    )
+    return {
+        "title": f"Tune BOSS workflow from {recommendation['benchmark_name']} evidence",
+        "summary": (
+            f"Benchmark evidence {source_ref} observed score gaps: {gap_summary}. "
+            "This proposal is a candidate for an isolated comparison, not a claim that "
+            "the candidate caused an improvement."
+        ),
+        "change_ref": change_ref,
+        "diff_summary": diff_summary,
+        "expected_impact": [
+            f"Improve measured {gap['dimension']} score from {gap['score']} without regressing functionality."
+            for gap in gaps
+        ],
+        "test_plan": [
+            recommendation["required_experiment"],
+            f"Attach the control and candidate reports, each using {source_ref}'s benchmark revision.",
+            "Require authoritative verification to pass and preserve all existing policy gates.",
+        ],
+        "canary_scope": [
+            f"QA benchmark {recommendation['benchmark_id']} only before any broader rollout.",
+            "No production customer workload changes during the benchmark canary.",
+        ],
+        "rollback_plan": [
+            "Revert the referenced PR or config diff through the normal change-control path.",
+            "Restore the last approved workflow/model-routing configuration and rerun the control benchmark.",
+        ],
+        "success_metrics": [
+            f"Candidate improves one or more observed gaps ({gap_summary}) against its comparable control.",
+            "Functionality remains verified and no observed score dimension regresses.",
+            "Cost, token, and reliability evidence remain attached before rollout approval.",
+        ],
+        "recommendation": recommendation,
+    }
+
+
+def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Render only observed evidence; an absent command is never treated as a pass."""
     spec = run.get("spec") or {}
     context = run.get("finalize_ctx") or {}
@@ -199,6 +583,12 @@ def completion_report(run: dict[str, Any]) -> dict[str, Any]:
         "required_verification_commands": benchmark.get("verification_commands") or [],
         "results": command_results,
         "passed": is_complete,
+        "scorecard": benchmark_scorecard(
+            run,
+            benchmark=benchmark,
+            verify_status=verify_status,
+            llm_calls=llm_calls,
+        ),
         "message": (
             "Benchmark acceptance evidence is complete."
             if is_complete

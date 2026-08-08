@@ -435,6 +435,7 @@ from .schemas import (
     SecretRefListResponse,
     SecretRefSummary,
     SecretRefUpdateRequest,
+    QABenchmarkTuningProposalRequest,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -5450,11 +5451,88 @@ def qa_benchmark_app_report_endpoint(run_id: str):
 
     with begin(engine) as c:
         run = load_code_task_run(c, run_id)
+        calls = c.execute(
+            text(
+                "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "
+                "FROM llm_calls WHERE code_task_run_id=:run_id ORDER BY created_at"
+            ),
+            {"run_id": run_id},
+        ).mappings().all()
     if run is None:
         raise HTTPException(status_code=404, detail="code task not found")
     if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
         raise HTTPException(status_code=404, detail="code task is not a QA benchmark run")
-    return completion_report(run)
+    return completion_report(run, llm_calls=[dict(call) for call in calls])
+
+
+@app.post(
+    "/v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal",
+    response_model=SelfImprovementProposalDetail,
+    status_code=201,
+)
+def create_qa_benchmark_tuning_proposal(
+    run_id: str,
+    payload: QABenchmarkTuningProposalRequest,
+) -> SelfImprovementProposalDetail:
+    """Create a decision-gated tuning proposal from durable benchmark evidence.
+
+    The endpoint cannot generate or apply a candidate change. ``change_ref`` must
+    identify a developer-authored PR or configuration diff, and the resulting
+    proposal follows the established test, canary, approval, rollout, and rollback
+    state machine.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.benchmark_apps import (
+        completion_report,
+        tuning_proposal_inputs,
+    )
+    from .services.code_task_service import load_code_task_run
+
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "self_improvement_manage",
+            )
+            run = load_code_task_run(connection, run_id)
+            if run is None or run.get("project_id") != payload.project_id:
+                raise HTTPException(status_code=404, detail="QA benchmark run not found.")
+            if not (run.get("finalize_ctx") or {}).get("qa_benchmark"):
+                raise HTTPException(status_code=404, detail="Code task is not a QA benchmark run.")
+            calls = connection.execute(
+                text(
+                    "SELECT total_tokens, cost_usd_micros, latency_ms, turns, ok "
+                    "FROM llm_calls WHERE code_task_run_id=:run_id ORDER BY created_at"
+                ),
+                {"run_id": run_id},
+            ).mappings().all()
+            report = completion_report(run, llm_calls=[dict(call) for call in calls])
+            proposal_input = tuning_proposal_inputs(
+                report,
+                change_ref=payload.change_ref,
+                diff_summary=payload.diff_summary,
+            )
+            row = self_improvement.create_proposal(
+                connection,
+                project_id=payload.project_id,
+                title=proposal_input["title"],
+                summary=proposal_input["summary"],
+                change_ref=proposal_input["change_ref"],
+                diff_summary=proposal_input["diff_summary"],
+                expected_impact=proposal_input["expected_impact"],
+                test_plan=proposal_input["test_plan"],
+                canary_scope=proposal_input["canary_scope"],
+                rollback_plan=proposal_input["rollback_plan"],
+                success_metrics=proposal_input["success_metrics"],
+                actor=payload.actor,
+                risk_tier=payload.risk_tier,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return self_improvement_detail_from_row(row)
 
 
 @app.get("/v1/pipeline-profiles")
@@ -15562,6 +15640,30 @@ def get_agent_studio_catalog(
                 "health": a2a.health(connection, project_id),
             },
         }
+
+
+@app.post("/v1/agent-studio/catalog-smoke")
+def run_agent_studio_catalog_smoke(
+    payload: AgentStudioActorRequest,
+) -> dict[str, Any]:
+    """Run the deterministic authority/contract check for every catalog agent.
+
+    The smoke suite is intentionally a fast, zero-model, zero-tool evaluation.
+    It records durable per-agent test evidence and never reclassifies an absent
+    active version as a pass.
+    """
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            return agent_studio.run_catalog_smoke(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+            )
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
 
 
 @app.post("/v1/agent-studio/workflows/validate")
