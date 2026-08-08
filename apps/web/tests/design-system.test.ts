@@ -35,14 +35,16 @@ describe("BOSS mission-control design system", () => {
   });
 
   it("implements the operational design-system views", () => {
-    expect(page).toContain('className="outcome-bar"');
+    expect(page).toContain('className="cc-composer"');
     expect(operations).toContain('className="mission-task-board"');
-    expect(operations).toContain('className="mission-agent-roster"');
-    expect(page).toContain('className="decision-list"');
+    expect(operations).toContain('className="ar-table"');
+    expect(page).toContain('className="dq"');
     expect(page).toContain('className="mission-evidence-receipt"');
     expect(page).toContain("<MissionAgentRoster");
     expect(page).toContain("<MissionTaskBoard");
-    expect(css).toContain(".mission-roster-header");
+    expect(css).toContain(".cc-composer");
+    expect(css).toContain(".ar-head");
+    expect(css).toContain(".dq-row");
     expect(css).toContain(".mission-task-footer");
     expect(providerConfiguration).toContain('className="provider-subnav"');
     expect(providerConfiguration).toContain('className="provider-table"');

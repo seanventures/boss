@@ -15,6 +15,21 @@
 - Required validation: focused client contract test, full web suite, API Ruff,
   web lint/typecheck, and production build. Plane BOSS-310 and BOSS-311 remain
   In Progress until the reviewable PR merges.
+## 2026-08-08 BOSS-312/BOSS-313 web baseline repair
+
+- Restored SSR test execution for the shared `AgentOrb` by giving its JSX
+  runtime an explicit React binding; the component remains usable from both
+  the server-rendered Command Center and the client roster.
+- Reconciled design-system and mission-operations assertions with Paramg's
+  intentional July 28 Command Center redesign: `cc-composer`, the `ar-*`
+  roster, and the `dq` decision queue replace the retired outcome-bar and
+  legacy roster/decision class contracts.
+- Focused regression coverage passes 8/8, web lint/type generation passes,
+  and the optimized Next production build passes. The full web suite improves
+  from 140/143 to 142/143; its only remaining failure is separately tracked as
+  Plane BOSS-311 and overlaps open contributor PR #114's API-client work.
+- The focused branch is `ai/codex/boss-312-313-web-baseline`; it does not touch
+  any file changed by PR #114.
 
 ## 2026-07-27 BOSS-282 v0.9.1 budget settlement patch
 

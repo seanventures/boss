@@ -1373,3 +1373,15 @@ PR: https://github.com/seanheiney/boss/pull/3
   evidence recorded in the handoff.
 - Draft PR #88 remains cleanly mergeable. Plane BOSS-256–266 stay In Progress
   until merge and carry implementation, validation, and PR evidence.
+
+## 2026-08-08 — BOSS-312/BOSS-313 web baseline repair
+
+- Refreshed `origin/main` at `c8c5090`, verified open contributor PR #114 does
+  not touch the selected Agent Orb/design-test files, and moved Plane BOSS-312
+  and BOSS-313 through Todo to In Progress before editing.
+- Added the explicit React runtime binding required for `AgentOrb` SSR tests.
+- Updated retired `outcome-bar`, legacy roster, and `decision-list` assertions
+  to the current `cc-composer`, `ar-*`, and `dq` Command Center contracts.
+- Validation: 8/8 focused tests pass; web lint/type generation passes; the
+  optimized Next build passes; the full web suite is 142/143 with only the
+  separately tracked BOSS-311 agent-chat/API-client mismatch remaining.

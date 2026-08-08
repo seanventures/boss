@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import React, { type CSSProperties } from "react";
 
 import type { AgentOperationalState } from "../lib/roster";
 
