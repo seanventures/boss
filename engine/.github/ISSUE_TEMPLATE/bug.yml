@@ -1,0 +1,31 @@
+name: Bug report
+description: Report a reproducible BOSS Engine defect.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include secrets, customer data, private URLs, or vulnerability details.
+        Security concerns must follow SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Engine version or commit
+      placeholder: "0.9.1 or abc1234"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include safe commands, inputs, and the expected versus observed behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Logs, trace IDs, receipts, or screenshots without secrets.
+    validations:
+      required: true
