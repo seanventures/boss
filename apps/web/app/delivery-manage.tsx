@@ -831,7 +831,8 @@ function TeardownControls({ target }: { target: { id: string; app_name: string }
   );
 }
 
-export function TargetControls({ target }: {
+export function TargetControls({ target, shipped }: {
+  shipped?: boolean;
   target: { id: string; app_name: string; status?: string; repo?: string;
             repo_owner?: string | null; auto_deploy?: boolean; paused?: boolean };
 }) {
@@ -953,7 +954,14 @@ export function TargetControls({ target }: {
           the outcome — it hands over to the live stepper below, which does. Reporting
           `out.status` here now would print "started" and stop, which is how a working deploy
           came to look like a button that does nothing. */}
-      <ActionButton label="Deploy" busyLabel="Starting" busy={busy === "Deploying"}
+      {/* One action, two honest names. Deploying a target that is already running REPLACES
+          what is there — a new run, so the previous one keeps its history — and calling that
+          "Deploy" invites the question "is there a redeploy somewhere else?". There is not. */}
+      <ActionButton label={shipped ? "Redeploy" : "Deploy"} busyLabel="Starting"
+              title={shipped
+                ? "Ship this target again — a new deployment run at the branch or sha above"
+                : "Ship this target for the first time"}
+              busy={busy === "Deploying"}
               onClick={() => start(async () => {
                 setMsg(null); setBusy("Deploying"); setRunId(null);
                 let out: any;

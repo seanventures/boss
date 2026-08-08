@@ -234,6 +234,14 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
   initial?: Pipeline | null; secrets?: SecretsView | null; deployments?: any;
 }) {
   const data = initial;
+  // Has this target ever shipped? Only used to LABEL the button — an app already running is
+  // being replaced, and calling that "Deploy" reads like it might do nothing, or like there is
+  // a separate redeploy elsewhere. There isn't: it is one action either way.
+  const everShipped = new Set<string>(
+    ((deployments?.deployments || []) as { app_name?: string; status?: string }[])
+      .filter((d) => d.status === "succeeded")
+      .map((d) => d.app_name || ""),
+  );
 
   if (!data) return <div className="detail">Loading delivery pipeline…</div>;
   if (data.error) {
@@ -279,7 +287,7 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
                   {/* Trigger controls sit with the target they act on, so "deploys on merge"
                       is read in the same glance as which host it deploys to. */}
                   <td colSpan={6} style={{ paddingBottom: 10 }}>
-                    <TargetControls target={t} />
+                    <TargetControls target={t} shipped={everShipped.has(t.app_name)} />
                   </td>
                 </tr>
                 </>

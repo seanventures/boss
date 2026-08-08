@@ -152,6 +152,18 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def sweep_deployment_health(self) -> dict[str, Any]:
+        """Probe every deployed target that is due for a health sample.
+
+        Called on the worker's idle path. Goes through the API rather than calling `sweep()`
+        in-process on purpose: probing a target resolves ITS credential and may SSH to the
+        host to work out why it is unreachable, and the worker's settings object carries
+        neither the artifact root nor the platform key that needs. The API has both.
+        """
+        response = self._client.post("/v1/delivery/health/sweep")
+        response.raise_for_status()
+        return response.json()
+
     def create_infra_droplet(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/infra/droplets", json=payload)
         response.raise_for_status()

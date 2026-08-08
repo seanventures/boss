@@ -19,6 +19,27 @@ def configure_logging() -> None:
     )
 
 
+def _sweep_deployment_health(client: ControlPlaneClient) -> None:
+    """Take health samples for deployed apps, on the worker's idle path.
+
+    Monitoring reported every app as "unknown" because nothing ever probed one: the sweep was
+    written, its docstring said "runs on the worker's idle path", and no caller was ever added.
+    A monitoring feature that only samples when a human presses a button is not monitoring —
+    uptime, latency and incidents all need a series, and a series needs a clock.
+
+    Idle path, not a timer: the worker is here because it has no job to run, so a probe costs
+    nothing that mattered. The sweep decides for itself which targets are DUE, so calling it
+    every poll interval does not mean probing every poll interval.
+
+    Swallows everything. A stale dashboard is a small problem; a worker that dies taking health
+    samples is a large one.
+    """
+    try:
+        client.sweep_deployment_health()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("health_sweep_failed", exc_info=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="BOSS worker shell")
     parser.add_argument(
@@ -68,6 +89,7 @@ def main() -> None:
                 time.sleep(settings.poll_interval_seconds)
                 continue
             if not ran_job:
+                _sweep_deployment_health(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:
         client.close()
