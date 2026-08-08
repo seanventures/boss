@@ -1,5 +1,22 @@
 # Codex Handoff
 
+## 2026-08-08 GA security integration and release hold
+
+- Canonical `origin/main` is `8e8dd4e` after PR #136 integrated the critical
+  authentication, secret-binding, delivery-verdict, and MCP HTTP hardening.
+  The former contributor security stack (#105–#114) is closed as superseded;
+  do not resurrect or merge those stale branches.
+- Exact integration evidence passes: 144 web tests; 1,088 Python tests with
+  four intentional skips; repository lint; and smoke. There are no open BOSS
+  GitHub PRs or issues at this handoff.
+- The Plane GA umbrella remains In Progress. Its private sandbox protection
+  gate is externally held: GitHub returned HTTP 403 because branch protection
+  for `seanheiney/boss-sandbox` requires GitHub Pro/Team or a public
+  repository. No live PR demo or GA release is authorized until an owner
+  upgrades/moves the sandbox to a qualifying plan or explicitly approves a
+  public sandbox. GitHub Actions remains globally disabled; do not add status
+  check requirements.
+
 ## 2026-08-08 BOSS-310–311 GA baseline repair
 
 - Branch `ai/codex/boss-310-311-ga-baseline` restores two release gates from
