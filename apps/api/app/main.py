@@ -5936,6 +5936,20 @@ def bootstrap_deployment_target_endpoint(target_id: str, payload: Optional[dict]
                     {"app_port": str(report["suggested_port"])})),
                  "i": target_id})
             report["applied_port"] = report["suggested_port"]
+            # And point the URL at that port. Writing the port without fixing the domain left
+            # the console showing `3.94.66.139` between onboarding and the first deploy — which
+            # is port 80, which on this host is an unrelated product answering 200. The rule
+            # already existed in the connector; only the connector ran it, and the connector
+            # does not run until you deploy.
+            from .services.deployment_connectors import _split_ref, domain_with_port
+            _u, host, _p = _split_ref(target.get("target_ref", ""))
+            fixed = domain_with_port((target.get("domains") or [None])[0], host,
+                                     report["suggested_port"])
+            if fixed:
+                connection.execute(
+                    text("UPDATE deployment_targets SET domains = CAST(:d AS JSONB) "
+                         "WHERE id = :i"), {"d": json.dumps([fixed]), "i": target_id})
+                report["domain"] = fixed
     return report
 
 

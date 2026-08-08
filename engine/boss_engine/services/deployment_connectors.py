@@ -83,19 +83,11 @@ class DeploymentConnector(Protocol):
                 "UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
                 "updated_at = now() WHERE id = :i"),
                 {"r": _json.dumps(resources), "i": target.get("id")})
-            # The domain must name the PORT the app is published on. A domain of "1.2.3.4"
-            # with the app on :3010 sends the health check to port 80 — and on a shared host
-            # that is somebody else's web server, which cheerfully returns 200. That is a
-            # deployment reported healthy on the strength of an unrelated service: the exact
-            # false-green this connector exists to prevent.
-            #
-            # So: fill it when absent AND correct it when it names no port.
-            existing = (target.get("domains") or [None])[0]
+            # Fill the domain when absent AND correct it when it names no port — see
+            # domain_with_port for why an unported domain is dangerous rather than untidy.
             _u, host, _p = _split_ref(target.get("target_ref", ""))
-            needs_port = (not existing) or (":" not in str(existing).split("/")[0])
-            if needs_port:
-                base = str(existing).split("/")[0] if existing else host
-                fixed = f"{base}:{chosen}"
+            fixed = domain_with_port((target.get("domains") or [None])[0], host, chosen)
+            if fixed:
                 c.execute(sql_text(
                     "UPDATE deployment_targets SET domains = CAST(:d AS JSONB) WHERE id = :i"),
                     {"d": _json.dumps([fixed]), "i": target.get("id")})
@@ -125,6 +117,25 @@ def _app_port(target: dict, default: int = 8080) -> int:
             except (TypeError, ValueError):
                 break
     return default
+
+
+def domain_with_port(existing: Optional[str], host: str, port: int) -> Optional[str]:
+    """The domain, guaranteed to name the port the app is published on.
+
+    A domain of "1.2.3.4" with the app on :3005 points at port 80 — and on a shared host that
+    is somebody ELSE's web server, which cheerfully returns 200. That is a false green on the
+    strength of an unrelated service, and on this host port 80 really is another product.
+
+    Returns None when nothing needs changing, so callers can skip the write. One function
+    because two callers need the rule — the connector when it deploys, and bootstrap when it
+    picks the port — and they were only ever going to drift.
+    """
+    base = str(existing).split("/")[0] if existing else (host or "")
+    if not base:
+        return None
+    if ":" in base:
+        return None
+    return f"{base}:{int(port)}"
 
 
 def _render_pool(pool: list[int]) -> str:
@@ -666,19 +677,11 @@ class SSHContainerConnector:
                 "UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
                 "updated_at = now() WHERE id = :i"),
                 {"r": _json.dumps(resources), "i": target.get("id")})
-            # The domain must name the PORT the app is published on. A domain of "1.2.3.4"
-            # with the app on :3010 sends the health check to port 80 — and on a shared host
-            # that is somebody else's web server, which cheerfully returns 200. That is a
-            # deployment reported healthy on the strength of an unrelated service: the exact
-            # false-green this connector exists to prevent.
-            #
-            # So: fill it when absent AND correct it when it names no port.
-            existing = (target.get("domains") or [None])[0]
+            # Fill the domain when absent AND correct it when it names no port — see
+            # domain_with_port for why an unported domain is dangerous rather than untidy.
             _u, host, _p = _split_ref(target.get("target_ref", ""))
-            needs_port = (not existing) or (":" not in str(existing).split("/")[0])
-            if needs_port:
-                base = str(existing).split("/")[0] if existing else host
-                fixed = f"{base}:{chosen}"
+            fixed = domain_with_port((target.get("domains") or [None])[0], host, chosen)
+            if fixed:
                 c.execute(sql_text(
                     "UPDATE deployment_targets SET domains = CAST(:d AS JSONB) WHERE id = :i"),
                     {"d": _json.dumps([fixed]), "i": target.get("id")})

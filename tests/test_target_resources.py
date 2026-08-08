@@ -20,7 +20,7 @@ sys.path.insert(0, ".")
 
 from apps.api.app.main import merge_target_resources  # noqa: E402
 from boss_engine.services.deployment_connectors import (  # noqa: E402
-    _app_entry, _app_port, _publishable_ports, _render_pool,
+    _app_entry, _app_port, _publishable_ports, _render_pool, domain_with_port,
 )
 
 _failures: list[str] = []
@@ -96,6 +96,20 @@ def main() -> int:
         {"required_resources": [{"kind": "publishable_ports", "name": "1-99999"}]})), 501)
     check("the pool prints abbreviated", _render_pool(list(range(1, 20))),
           "1, 2, 3, 4, 5, 6, 7, 8…")
+
+    print("== the URL must name the port ==")
+    # A domain of "3.94.66.139" is port 80, and on that host port 80 is an unrelated product
+    # answering 200 — so an unported domain is a false green waiting to happen, not untidiness.
+    check("an unported domain gains the port",
+          domain_with_port("3.94.66.139", "3.94.66.139", 3005), "3.94.66.139:3005")
+    check("an empty domain falls back to the ssh host",
+          domain_with_port(None, "3.94.66.139", 3005), "3.94.66.139:3005")
+    check("a domain that already names a port is left alone",
+          domain_with_port("3.94.66.139:3004", "3.94.66.139", 3005), None)
+    check("nothing to work with means no change",
+          domain_with_port("", "", 3005), None)
+    check("hostnames work the same way",
+          domain_with_port("app.example.com", "h", 8080), "app.example.com:8080")
 
     print()
     if _failures:
