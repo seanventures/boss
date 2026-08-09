@@ -36,7 +36,7 @@ def _postgres_ports(ctx):
     if edition not in ("enterprise", "enterprise_plus", "ent"):
         return EnginePorts.oss_defaults(ctx.settings)
     try:
-        from apps.api.app.adapters_enterprise import (
+        from apps.api.app.adapters_postgres import (
             PostgresBudgetPort, PostgresDecisionSink, PostgresEntitlementPort,
             PostgresEventSink, PostgresPersistence,
         )

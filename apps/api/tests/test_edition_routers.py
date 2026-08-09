@@ -119,9 +119,18 @@ def test_composition_root_changes_implementations_by_edition(engine):
     finally:
         settings.boss_edition = previous
 
-    assert type(community.persistence).__name__ == "InMemoryPersistence"
-    assert type(community.budget).__name__ == "NoopBudgetPort"
+    # Community persists to Postgres too, and that is deliberate.
+    #
+    # This used to assert InMemoryPersistence for community — encoding a boundary that made
+    # the free tier unable to EXECUTE anything. `POST /v1/code-tasks` wrote the run to
+    # Postgres via raw SQL while `POST /v1/code-tasks/step` read the empty in-memory store and
+    # returned {"status": "not_found", "done": true}. Not an error, so the worker marked the
+    # job succeeded and the run sat at `queued` for ever. Weeks of production runs died that
+    # way. Recording work you cannot perform is not a free tier, it is a broken one.
+    assert type(community.persistence).__name__ == "PostgresPersistence"
     assert type(enterprise.persistence).__name__ == "PostgresPersistence"
+    # What the edition still decides is GOVERNANCE: spend enforcement and entitlements.
+    assert type(community.budget).__name__ == "NoopBudgetPort"
     assert type(enterprise.budget).__name__ == "PostgresBudgetPort"
 
 
