@@ -98,6 +98,26 @@ describe("BOSS mission-control design system", () => {
     expect(codeTasks).toContain("setSent(false)");
   });
 
+  it("never claims a profile the relaunch will not use", () => {
+    // The Launch caption read "Strict profile" on every task card, because the markup was
+    // copied wholesale from the benchmark card — where it is true, since that endpoint forces
+    // strict. On a relaunch it was a claim about someone else's button: the currency build ran
+    // `lean`, and the relaunch was silently adopting the project default, so the label, the
+    // original and the rerun were three different things.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    const relaunch = codeTasks.slice(codeTasks.indexOf("function LaunchTask"),
+                                     codeTasks.indexOf("function ContractDetails"));
+    expect(relaunch).not.toContain("Strict profile");
+    // It must carry the original's profile, and say which one it is.
+    expect(relaunch).toContain('data.set("profile", profile)');
+    expect(relaunch).toContain('data.set("risk_tier"');
+    expect(relaunch).toContain("same as the original");
+    // The benchmark card keeps the claim, because there it is accurate.
+    const benchmark = codeTasks.slice(codeTasks.indexOf("function BenchmarkLaunch"),
+                                      codeTasks.indexOf("function LaunchTask"));
+    expect(benchmark).toContain("Strict profile");
+  });
+
   it("gives the browser tab a real icon", () => {
     // Next's App Router serves app/icon.png as the favicon. Without it the tab shows a
     // generic globe, which is what "the icon is still the old one" looks like from a bookmark.

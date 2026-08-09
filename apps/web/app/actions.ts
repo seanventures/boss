@@ -2410,6 +2410,12 @@ export async function relaunchCodeTaskAction(formData: FormData): Promise<void> 
     owner: String(formData.get("owner") ?? "").trim() || undefined,
     repo: String(formData.get("repo") ?? "").trim() || undefined,
     base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+    // Carry the ORIGINAL run's cost/rigor. Without these a relaunch silently adopted the
+    // project default: the currency build ran `lean`, and re-running it produced something
+    // else entirely while the button claimed "Strict". A re-run that changes the rules is
+    // not a re-run.
+    profile: String(formData.get("profile") ?? "").trim() || undefined,
+    risk_tier: formData.get("risk_tier") ? Number(formData.get("risk_tier")) : undefined,
   });
   revalidatePath("/");
 }

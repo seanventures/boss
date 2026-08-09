@@ -404,6 +404,15 @@ function LaunchTask({ run, projectId, label = "Launch again" }: {
   const [done, setDone] = useState(false);
   const router = useRouter();
   const spec = run.spec ?? {};
+  const st = run.state ?? {};
+  // The profile the original actually RAN with. `spec.profile` is an explicit per-task
+  // override; `state.profile` is what the engine resolved when nothing was set. Reproducing
+  // the effective one is what makes this a re-run rather than a new task that happens to
+  // share a title.
+  const profile = (spec as Record<string, unknown>).profile as string | undefined
+    ?? (st as Record<string, unknown>).profile as string | undefined;
+  const riskTier = (spec as Record<string, unknown>).risk_tier as number | undefined
+    ?? (st as Record<string, unknown>).risk_tier as number | undefined;
   // No instructions means nothing to run: an empty relaunch would be a differently-named
   // no-op that still costs a governed run.
   if (!spec.instructions) return null;
@@ -422,6 +431,8 @@ function LaunchTask({ run, projectId, label = "Launch again" }: {
     data.set("owner", spec.owner ?? "");
     data.set("repo", spec.repo ?? "");
     data.set("base_branch", spec.base_branch ?? "");
+    if (profile) data.set("profile", profile);
+    if (riskTier != null) data.set("risk_tier", String(riskTier));
     try {
       await relaunchCodeTaskAction(data);
       setDone(true);
@@ -439,9 +450,17 @@ function LaunchTask({ run, projectId, label = "Launch again" }: {
         {sent ? "Starting…" : label}
       </button>
       <span className="detail">
+        {/* State the profile this will ACTUALLY use.
+            This caption was copied wholesale from the benchmark card, including its claim
+            about rigor — accurate there, since that endpoint forces the strict profile, and a
+            statement about someone else's button here. The currency build ran `lean`, the
+            relaunch was adopting the project default, and the label agreed with neither. */}
         {sent ? "starting…"
               : done ? "started — it is at the top of this list"
-                     : "Strict profile · starts a budgeted, review-gated task"}
+                     : profile
+                       ? `${profile} profile${riskTier != null ? ` · tier ${riskTier}` : ""}`
+                         + " — same as the original · budgeted, review-gated"
+                       : "project default profile · budgeted, review-gated"}
       </span>
     </div>
   );

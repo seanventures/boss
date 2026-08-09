@@ -1337,6 +1337,11 @@ export type CodeTaskCreatePayload = {
   repo?: string;
   base_branch?: string;
   task_id?: string;
+  // The API has always accepted these; the client type omitted them, so callers that meant
+  // to reproduce a run's cost/rigor silently got the project default instead. Re-running a
+  // `lean` task as whatever-comes-next is not a re-run.
+  profile?: string;
+  risk_tier?: number;
 };
 
 export type MeetingSummary = {
