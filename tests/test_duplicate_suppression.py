@@ -99,6 +99,35 @@ def main() -> int:
         created.append(forced)
         check("allow_duplicate starts a genuinely separate run", forced != first)
 
+        print("== relaunching a stored spec is the SAME work ==")
+        # The button sends back the instructions as stored, which already carry the engine's
+        # deployability note. Appending it again grew the prompt by 460 characters per press
+        # (1987 -> 2447 -> 2907, the same boilerplate three times over) and moved the
+        # fingerprint each time — so three presses of one button produced three identical runs
+        # and the guard never saw a duplicate. Hash the work, not the boilerplate; append the
+        # note once.
+        from boss_engine.services.code_task_service import _DEPLOYABILITY_NOTE
+
+        with begin(engine) as c:
+            stored = c.execute(
+                sql("SELECT spec->>'instructions' FROM code_task_runs WHERE id=:i"),
+                {"i": first}).scalar()
+        copies = stored.count(_DEPLOYABILITY_NOTE.strip())
+        check("the note is present exactly once", copies == 1, f"found {copies} copies")
+
+        with begin(engine) as c:
+            again = start_code_task(c, project_id=project, task_id=None, jobs=jobs,
+                                    **dict(WORK, instructions=stored))
+        check("relaunching the stored spec hits the same run", again == first,
+              f"got {again}; the fingerprint moved")
+
+        with begin(engine) as c:
+            after = c.execute(
+                sql("SELECT spec->>'instructions' FROM code_task_runs WHERE id=:i"),
+                {"i": first}).scalar()
+        check("and the instructions did not grow", len(after) == len(stored),
+              f"{len(stored)} -> {len(after)}")
+
         print("== finishing releases the guard ==")
         # Relaunching a COMPLETED task is legitimate — that is what the Launch button on a
         # finished card is for. Only in-flight work is suppressed.

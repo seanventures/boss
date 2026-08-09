@@ -217,9 +217,12 @@ def start_code_task(
                 "available — give each test command as a single allowlisted executable "
                 "with arguments. Allowed: " + allowed
             )
+    # Hash the work, not the boilerplate. A relaunch passes back instructions that already
+    # carry the deployability note while the original was hashed before it was added — so the
+    # same work produced two different fingerprints and looked like two different tasks.
     fingerprint = work_fingerprint(project_id=project_id, owner=owner, repo=repo,
                                    base_branch=base_branch, title=title,
-                                   instructions=instructions)
+                                   instructions=instructions.replace(_DEPLOYABILITY_NOTE, ""))
     if not allow_duplicate:
         existing = active_duplicate(connection, project_id, fingerprint)
         if existing:
@@ -237,7 +240,13 @@ def start_code_task(
     run_id = make_id("crun")
     spec = {
         "work_fingerprint": fingerprint,
-        "instructions": instructions + _DEPLOYABILITY_NOTE,
+        # Append the note ONCE. Relaunching a task sends back the instructions as stored —
+        # note included — and appending unconditionally added a second copy, then a third:
+        # 1987 chars became 2447 became 2907, the same boilerplate repeated. Worse, it moved
+        # the fingerprint every time, so duplicate detection never matched and three identical
+        # runs started from three presses of one button.
+        "instructions": (instructions if _DEPLOYABILITY_NOTE.strip() in instructions
+                         else instructions + _DEPLOYABILITY_NOTE),
         "acceptance_criteria": acceptance_criteria or [],
         "test_commands": test_commands or [],
         "owner": owner, "repo": repo, "base_branch": base_branch,
