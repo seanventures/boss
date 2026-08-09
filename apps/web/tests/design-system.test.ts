@@ -46,6 +46,22 @@ describe("BOSS mission-control design system", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("shows what the work must do and how it is proven, in ONE component", () => {
+    // A benchmark card and a governed task answer the same two questions — acceptance
+    // criteria, and the commands that verify them. They were rendered two different ways, so
+    // the newer screen looked like a different product and the task list hid the only content
+    // that says what a task was for. `spec.acceptance_criteria` and `spec.test_commands` were
+    // already on every task; nothing had to be invented, only shown.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(codeTasks).toContain("function ContractDetails");
+    // Used by the benchmark catalogue AND by the task cards — three call sites, one renderer.
+    expect(codeTasks.split("<ContractDetails").length - 1).toBeGreaterThanOrEqual(3);
+    expect(codeTasks).toContain("criteria={c.spec?.acceptance_criteria}");
+    expect(codeTasks).toContain("verification={c.spec?.test_commands}");
+    // A <details> inside a <button> is invalid markup whose clicks fight each other.
+    expect(codeTasks).not.toContain('<button key={c.id} className="ct-card"');
+  });
+
   it("gives the browser tab a real icon", () => {
     // Next's App Router serves app/icon.png as the favicon. Without it the tab shows a
     // generic globe, which is what "the icon is still the old one" looks like from a bookmark.

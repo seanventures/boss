@@ -323,6 +323,41 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
   );
 }
 
+/**
+ * What the work must do, and how that is proven — for a benchmark or an ordinary task.
+ *
+ * The QA benchmark cards showed acceptance scenarios and verification commands; the task list
+ * showed a title and a status badge, and threw the rest away. That was not a data gap: every
+ * governed task already carries `spec.acceptance_criteria` and `spec.test_commands`, which are
+ * the same two facts under different names. Two renderings of one idea meant the newer screen
+ * looked like a different product, and the older one hid the only content that answers "what
+ * was this supposed to do, and how do we know it did?".
+ *
+ * Shared rather than copied, because the next field added to one of them should appear in both.
+ * Renders nothing when there is nothing to show — an empty disclosure is a promise of detail
+ * that is not there.
+ */
+function ContractDetails({ criteria, verification, label = "Acceptance criteria & verification" }: {
+  criteria?: string[] | null; verification?: string[] | null; label?: string;
+}) {
+  const items = (criteria ?? []).filter(Boolean);
+  const checks = (verification ?? []).filter(Boolean);
+  if (!items.length && !checks.length) return null;
+  return (
+    <details onClick={(e) => e.stopPropagation()}>
+      <summary className="detail" style={{ cursor: "pointer" }}>{label}</summary>
+      {items.length > 0 && (
+        <ul className="detail" style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+          {items.map((item, i) => <li key={i}>{item}</li>)}
+        </ul>
+      )}
+      {checks.length > 0 && (
+        <p className="detail" style={{ margin: "6px 0 0" }}>Verification: {checks.join(" · ")}</p>
+      )}
+    </details>
+  );
+}
+
 function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaultRepo }: {
   benchmarks: QaBenchmarkApp[];
   projectId: string;
@@ -346,13 +381,9 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
             </div>
             <p className="detail" style={{ margin: 0 }}>{benchmark.summary}</p>
             <p className="detail" style={{ margin: 0 }}>Exercises: {benchmark.focus.join(" · ")}</p>
-            <details>
-              <summary className="detail" style={{ cursor: "pointer" }}>Acceptance scenarios &amp; required evidence</summary>
-              <ul className="detail" style={{ margin: "6px 0 0", paddingLeft: 20 }}>
-                {benchmark.acceptance_scenarios.map((scenario) => <li key={scenario}>{scenario}</li>)}
-              </ul>
-              <p className="detail" style={{ marginBottom: 0 }}>Verification: {benchmark.verification_commands.join(" · ")}</p>
-            </details>
+            <ContractDetails criteria={benchmark.acceptance_scenarios}
+                             verification={benchmark.verification_commands}
+                             label="Acceptance scenarios & required evidence" />
             <form action={startQaBenchmarkAppAction} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <input type="hidden" name="project_id" value={projectId} />
               <input type="hidden" name="actor" value={actor} />
@@ -855,9 +886,19 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               } else {
                 outcome = `running — ${PHASE_LABEL[c.phase] ?? c.phase}`;
               }
+              // An <article> rather than a <button>: the card now contains a disclosure, and a
+              // <details> inside a <button> is invalid markup whose clicks fight each other.
+              // The header keeps the click and the keyboard affordance the button had.
+              const openTask = () => setSelected(c.id);
               return (
-                <button key={c.id} className="ct-card" onClick={() => setSelected(c.id)} style={{ gap: 6 }}>
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
+                <article key={c.id} className="ct-card" style={{ gap: 6, textAlign: "left" }}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={openTask}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTask(); } }}
+                    style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", cursor: "pointer" }}
+                  >
                     <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
                       <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{label}</span>
                       {c.title || "(untitled task)"}
@@ -865,13 +906,17 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                     <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
                   </div>
                   <div className="detail">{outcome}</div>
+                  {/* The same two facts the benchmark cards show, from the fields every governed
+                      task already carries. Absent on ad-hoc tasks, in which case nothing renders. */}
+                  <ContractDetails criteria={c.spec?.acceptance_criteria}
+                                   verification={c.spec?.test_commands} />
                   <div className="ct-card-foot">
                     <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
                     {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
                     {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
                     {(st.cost_usd_micros != null) ? <span className="detail">{fmtUsd(st.cost_usd_micros)}</span> : null}
                   </div>
-                </button>
+                </article>
               );
             };
             // Group runs by lineage (finalize_ctx.root_run_id) so a decomposed build shows as ONE
@@ -909,6 +954,8 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                     </div>
                     <span className={`cap-badge tone-${statusTone(groupStatus)}`} style={{ flexShrink: 0 }}>{doneN}/{total} done</span>
                   </div>
+                  <ContractDetails criteria={members[0].spec?.acceptance_criteria}
+                                   verification={members[0].spec?.test_commands} />
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
