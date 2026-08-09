@@ -400,6 +400,11 @@ class Settings(BaseSettings):
         default=False, alias="BOSS_EXCLUDE_UNTRUSTED_SKILLS"
     )
     boss_edition: str = Field(default="community", alias="BOSS_EDITION")
+    # Profiles the platform will actually run. A profile named here is refused and downgraded
+    # to `balanced` — the whole-platform switch for "this tier is not fit to run yet", which
+    # otherwise means hunting every hardcoded `profile="strict"` and putting them all back
+    # later. Set BOSS_DISABLED_PROFILES="" to allow everything again.
+    disabled_profiles: str = Field(default="strict", alias="BOSS_DISABLED_PROFILES")
     account_connect_url: Optional[str] = Field(
         default=None, alias="BOSS_ACCOUNT_CONNECT_URL"
     )

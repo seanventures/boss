@@ -198,3 +198,36 @@ def set_default_profile(connection, project_id: str, name: str, actor: str) -> N
         )
     emit_event(connection, project_id, "pipeline_profile.default_set", actor,
                "pipeline_profile", name, {"name": name})
+
+
+# --------------------------------------------------------------------------- #
+# Temporarily withdrawing a profile
+# --------------------------------------------------------------------------- #
+FALLBACK_PROFILE = "balanced"
+
+
+def usable_profile(requested: Optional[str], settings=None) -> tuple[str, Optional[str]]:
+    """The profile that will actually run, and why it differs from what was asked for.
+
+    An operator needs to be able to say "strict is not fit to run yet" once, rather than
+    hunting every hardcoded `profile="strict"` in the codebase and remembering to put them all
+    back. `BOSS_DISABLED_PROFILES` is that switch; clearing it restores the profile with no
+    code change.
+
+    Downgrades rather than refuses. A benchmark or a relaunch that errors because a profile is
+    withdrawn is a dead end for whoever pressed the button; running it at `balanced` and
+    saying so keeps the work moving and keeps the substitution visible.
+    """
+    name = (requested or "").strip().lower()
+    if not name:
+        return DEFAULT_PROFILE, None
+    disabled = {
+        p.strip().lower()
+        for p in str(getattr(settings, "disabled_profiles", "") or "").split(",")
+        if p.strip()
+    }
+    if name in disabled:
+        return FALLBACK_PROFILE, (
+            f"the `{name}` profile is disabled on this platform "
+            f"(BOSS_DISABLED_PROFILES); running `{FALLBACK_PROFILE}` instead")
+    return name, None

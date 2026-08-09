@@ -5468,8 +5468,12 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 base_branch=(payload or {}).get("base_branch") or "main",
                 finalize_ctx=task["finalize_ctx"],
                 jobs=jobs,
-                profile=(payload or {}).get("profile") or "strict",
-                risk_tier=2,
+                # Benchmarks asked for `strict` — the most expensive setting BOSS has, and
+                # currently withdrawn while it is being fixed. They ask for `balanced` now:
+                # full review, findings captured, still always ships a PR. A caller may still
+                # pass an explicit profile, and `usable_profile` has the final say either way.
+                profile=(payload or {}).get("profile") or "balanced",
+                risk_tier=int((payload or {}).get("risk_tier") or 1),
             )
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error

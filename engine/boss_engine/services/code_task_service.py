@@ -260,6 +260,18 @@ def start_code_task(
         spec["substrate"] = substrate
     if repo_host:  # BOSS-267: per-task SCM provider (github default; bitbucket, ...)
         spec["repo_host"] = repo_host
+    # A withdrawn profile is downgraded HERE, at the one place every caller funnels through —
+    # the benchmark endpoint, the console, the relaunch button, an agent over MCP. Doing it per
+    # caller would mean finding them all again when the profile is re-enabled.
+    if profile:
+        from .pipeline_profile_service import usable_profile
+
+        effective, substitution = usable_profile(profile, settings)
+        if substitution:
+            spec["profile_substitution"] = substitution
+            logging.getLogger(__name__).info(
+                "code_task.profile_downgraded run=%s %s", run_id, substitution)
+        profile = effective
     if profile:  # per-task cost/rigor override (else the project setting applies)
         spec["profile"] = profile
     if isinstance(risk_tier, int):
