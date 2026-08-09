@@ -2417,7 +2417,13 @@ export async function relaunchCodeTaskAction(formData: FormData): Promise<{ run_
     profile: String(formData.get("profile") ?? "").trim() || undefined,
     risk_tier: formData.get("risk_tier") ? Number(formData.get("risk_tier")) : undefined,
   });
-  revalidatePath("/");
+  // Deliberately NO revalidatePath here.
+  //
+  // Revalidating replaces the client tree with a fresh server render, which remounts the
+  // panel and destroys the state the caller is about to set — so "Launched ✓" was written to
+  // a component that no longer existed, and the button snapped back to its original label
+  // with the run already created. The panel re-reads the list itself via listCodeTasksAction,
+  // which updates the rows without discarding what the operator just did.
   // The id is returned so the button can name what it started. "Started — it is at the top of
   // this list" was a guess about a list this action cannot see, and when the list did not
   // move the operator pressed the button again.

@@ -453,7 +453,8 @@ function LaunchTask({ run, projectId, label = "Launch again", onLaunched, starte
       out = await relaunchCodeTaskAction(data);
     } finally {
       setSent(false);
-      router.refresh();
+      // No router.refresh(): it re-renders the server tree and remounts this card, which is
+      // what erased the launch it had just recorded. The panel reloads its own list instead.
       await onLaunched?.(run.id, out?.run_id,
                          out?.run_id ? undefined : (out?.error ?? "the API returned no run"));
     }
