@@ -105,8 +105,12 @@ describe("BOSS mission-control design system", () => {
     // nothing on screen had changed, so nothing looked like it had happened.
     const relaunch = codeTasks.slice(codeTasks.indexOf("function LaunchTask"),
                                      codeTasks.indexOf("function ContractDetails"));
-    expect(relaunch).toContain("disabled={sent || !!startedId}");
-    expect(relaunch).toContain("Launched ✓");
+    // Once it has launched, the control must not offer to launch again. It used to do that
+    // by staying disabled; it now becomes "View run →", which is stronger — it cannot start a
+    // second run AND it leads somewhere. Assert the guarantee, not either implementation.
+    expect(relaunch).toMatch(/startedId \? \(/);          // a different control once started
+    expect(relaunch).toContain("View run →");
+    expect(relaunch).toContain("onOpen?.(startedId)");
     // And it must NAME what it started rather than promising a place in a list it cannot see.
     expect(relaunch).toContain("startedId.slice");
     // That memory must live in the PARENT. Held inside the card it was destroyed by the very
