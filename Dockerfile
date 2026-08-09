@@ -78,17 +78,24 @@ FROM node:20-bookworm-slim AS web-builder
 
 WORKDIR /app
 
-ARG NEXT_PUBLIC_BOSS_API_URL=
-ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
-ENV NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
-    NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
-
 RUN npm install --global pnpm@9.15.0
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/api-client/package.json ./packages/api-client/package.json
 RUN pnpm install --frozen-lockfile
+
+# The build args come AFTER the dependency install, deliberately.
+#
+# They used to sit at the top of the stage, so changing the API URL — a one-line string that
+# affects only the Next compile — invalidated `pnpm install` and re-ran the entire dependency
+# tree. On an arm64 machine cross-building linux/amd64 that install runs under QEMU, which
+# turned a config tweak into a ten-minute rebuild. Declaring them here keeps the slow,
+# rarely-changing layer cached and re-runs only the compile that actually reads them.
+ARG NEXT_PUBLIC_BOSS_API_URL=
+ARG NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood
+ENV NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
+    NEXT_PUBLIC_BOSS_PROJECT_ID=$NEXT_PUBLIC_BOSS_PROJECT_ID
 
 COPY apps/web ./apps/web
 COPY packages/api-client ./packages/api-client
