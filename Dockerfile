@@ -8,9 +8,44 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system boss && adduser --system --ingroup boss boss
+# A real home for the boss user: npm and the Claude Code CLI both write there, and a
+# non-existent HOME turns every runtime `npm install` into a permissions error rather than a
+# missing-directory one — which reads as a code problem instead of an image problem.
+RUN addgroup --system boss \
+    && adduser --system --ingroup boss --home /home/boss boss \
+    && mkdir -p /home/boss && chown -R boss:boss /home/boss
+ENV HOME=/home/boss
 
 FROM python-base AS api
+
+# The coding toolchain. NOT optional, and its absence is invisible until a task runs.
+#
+# The governed pipeline executes `local_subprocess`: it shallow-clones the target repo with
+# git and runs the project's own commands (npm ci, npm run build, the e2e step) inside THIS
+# container. `infra/containers/api.Dockerfile` installed all of it and said so in a comment;
+# when the images were consolidated into this file, the toolchain was not carried over.
+#
+# The result was a control plane that accepted code tasks and could not perform them. Runs
+# were created, sat at `queued`, and were eventually closed as abandoned — for weeks, with
+# nothing anywhere saying "there is no git in this container". It worked locally throughout,
+# because a developer machine has git and node, which is exactly why nobody noticed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    && npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Playwright Chromium at a shared, world-readable path: the verification step actually
+# launches a browser, and without one the e2e check degrades to a skip that the review panel
+# cannot act on — an unverifiable gate, which is worse than a failing one.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN npx -y playwright install --with-deps chromium \
+    && chmod -R a+rX /opt/pw-browsers \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# The npx above ran as root with HOME already set, leaving a root-owned npm cache that breaks
+# every runtime `npm install` for the boss user. Separate tiny layer so the heavy browser
+# layer above stays cached.
+RUN rm -rf /home/boss/.npm /home/boss/.cache && chown -R boss:boss /home/boss
 
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
