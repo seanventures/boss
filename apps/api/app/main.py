@@ -6632,6 +6632,24 @@ def delivery_health_endpoint(project_id: str):
         return health_view(connection, project_id)
 
 
+@app.post("/v1/shepherd/watch")
+def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = False):
+    """Look at everything currently RUNNING and deal with what is obviously wrong.
+
+    The shepherd's other entry point, `/sweep`, reasons about runs that already failed. This
+    one watches healthy work — which is where the waste is. Called on the worker's idle path
+    so it happens continuously; exposed here so an operator can run it now, and so it can be
+    tested against a real database.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import watch, watch_all
+    if project_id:
+        return watch(engine, settings, project_id, dry_run=dry_run)
+    # No project named: watch everything with work in flight. Neglect is not project-scoped.
+    return watch_all(engine, settings, dry_run=dry_run)
+
+
 @app.post("/v1/delivery/health/sweep")
 def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     """Probe due targets now instead of waiting for the worker's idle sweep.

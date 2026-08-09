@@ -11,6 +11,10 @@ from .runner import run_worker_cycle
 
 LOGGER = logging.getLogger("boss.worker")
 QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
+# The shepherd watches in-flight work. Often enough that a duplicate is killed before it
+# costs anything real, rare enough that it is never the busiest thing on the box.
+SHEPHERD_WATCH_INTERVAL_SECONDS = 120
+_last_shepherd_watch_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 
 
@@ -40,6 +44,32 @@ def _sweep_deployment_health(client: ControlPlaneClient) -> None:
         client.sweep_deployment_health()
     except Exception:  # noqa: BLE001
         LOGGER.debug("health_sweep_failed", exc_info=True)
+
+
+def _watch_running_tasks(client: ControlPlaneClient) -> None:
+    """Let the Task Shepherd see work while it is still running.
+
+    Everything the shepherd could do until now happened after a run had already failed, so
+    the expensive cases — seven identical runs, a lease nobody holds, an hour wedged in one
+    phase — were nobody's job. Running this on the idle path makes watching continuous
+    instead of something a human remembers to do.
+
+    Swallowed like the health sweep: a shepherd that kills the worker is worse than one that
+    misses a duplicate.
+    """
+    global _last_shepherd_watch_monotonic
+    now = time.monotonic()
+    if now - _last_shepherd_watch_monotonic < SHEPHERD_WATCH_INTERVAL_SECONDS:
+        return
+    try:
+        result = client.watch_running_tasks()
+        _last_shepherd_watch_monotonic = now
+        if result.get("acted") or result.get("escalated"):
+            LOGGER.info("shepherd_watch acted=%s escalated=%s in_flight=%s",
+                        len(result.get("acted") or []), len(result.get("escalated") or []),
+                        result.get("in_flight"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("shepherd_watch_failed", exc_info=True)
 
 
 def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
@@ -111,6 +141,7 @@ def main() -> None:
                 continue
             if not ran_job:
                 _sweep_deployment_health(client)
+                _watch_running_tasks(client)
                 _sweep_qa_benchmark_evaluations(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:

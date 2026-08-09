@@ -164,6 +164,17 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def watch_running_tasks(self) -> dict[str, Any]:
+        """Have the shepherd look at in-flight work and act on what is unmistakable.
+
+        On the idle path with the health sweep: the worker is here because it has nothing to
+        run, which is exactly when noticing that seven identical runs are queued costs
+        nothing and saves a great deal.
+        """
+        response = self._client.post("/v1/shepherd/watch", json={})
+        response.raise_for_status()
+        return response.json()
+
     def sweep_qa_benchmark_evaluations(self) -> dict[str, Any]:
         """Persist changed terminal benchmark reports as tuning evidence snapshots.
 

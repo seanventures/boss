@@ -479,3 +479,207 @@ def calibration(connection, project_id: str) -> dict[str, Any]:
             "corroborated_pct": round(100.0 * int(r["corroborated"]) / int(r["n"]), 0),
         })
     return {"project_id": project_id, "remedies": out}
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — watching work that is still running
+# --------------------------------------------------------------------------- #
+def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
+    """Facts about every in-flight run in this project, in one pass.
+
+    One query on purpose. Asking per-run invites a shepherd that is itself the slow thing on
+    the box, and the duplicate check needs the whole set anyway — "is there an older run like
+    this one" is not answerable a row at a time.
+    """
+    from .shepherd_watch import RunSnapshot
+
+    rows = connection.execute(
+        sql("""
+            SELECT r.id, r.project_id, r.status, r.phase, r.title,
+                   r.spec->>'work_fingerprint' AS fp,
+                   EXTRACT(EPOCH FROM (now() - r.created_at))/60.0 AS mins_running,
+                   EXTRACT(EPOCH FROM (now() - r.updated_at))/60.0 AS mins_since_update,
+                   r.created_at,
+                   j.lease_owner,
+                   EXTRACT(EPOCH FROM (now() - COALESCE(j.heartbeat_at, j.created_at)))/60.0
+                     AS mins_since_heartbeat,
+                   j.status AS job_status
+            FROM code_task_runs r
+            LEFT JOIN LATERAL (
+                SELECT lease_owner, heartbeat_at, created_at, status FROM jobs
+                WHERE payload->>'run_id' = r.id ORDER BY created_at DESC LIMIT 1
+            ) j ON TRUE
+            WHERE r.project_id = :p AND r.status IN ('running', 'queued')
+            ORDER BY r.created_at ASC LIMIT :l
+        """), {"p": project_id, "l": limit}).mappings().all()
+
+    # The earliest in-flight run for each fingerprint is the keeper; every later one with the
+    # same fingerprint is redundant. Rows arrive oldest-first, so first-seen wins.
+    first_by_fp: dict[str, str] = {}
+    for row in rows:
+        fp = row["fp"]
+        if fp and fp not in first_by_fp:
+            first_by_fp[fp] = row["id"]
+
+    median, samples = _latency_baseline(connection, project_id)
+    snaps = []
+    for row in rows:
+        fp = row["fp"]
+        keeper = first_by_fp.get(fp) if fp else None
+        snaps.append(RunSnapshot(
+            run_id=row["id"], project_id=row["project_id"], status=row["status"],
+            phase=row["phase"] or "", title=row["title"] or "",
+            minutes_running=float(row["mins_running"] or 0.0),
+            minutes_since_update=float(row["mins_since_update"] or 0.0),
+            work_fingerprint=fp,
+            duplicate_of=keeper if (keeper and keeper != row["id"]) else None,
+            # A job that is queued has no worker YET, which is not the same as abandoned;
+            # only a leased-then-silent job is orphaned, and the lease age decides that.
+            has_live_worker=bool(row["lease_owner"]) and row["job_status"] == "running",
+            minutes_since_heartbeat=(float(row["mins_since_heartbeat"])
+                                     if row["mins_since_heartbeat"] is not None else None),
+            median_minutes=median, sample_size=samples,
+        ))
+    return snaps
+
+
+def _latency_baseline(connection, project_id: str) -> tuple:
+    """How long this project's finished runs actually take. Measured, never assumed.
+
+    A constant here would flag every task in a slow repo and miss a wedged one in a fast
+    project. Only successful runs count: a run that failed after four minutes is not evidence
+    of how long the work takes.
+    """
+    row = connection.execute(
+        sql("""
+            SELECT count(*) AS n,
+                   percentile_cont(0.5) WITHIN GROUP (
+                     ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))/60.0
+                   ) AS median_minutes
+            FROM code_task_runs
+            WHERE project_id = :p AND status = 'completed'
+              AND updated_at > created_at
+              AND created_at > now() - interval '30 days'
+        """), {"p": project_id}).mappings().first()
+    if not row or not row["n"]:
+        return None, 0
+    return (float(row["median_minutes"]) if row["median_minutes"] else None), int(row["n"])
+
+
+def _cancel_run(connection, run_id: str, reason: str) -> None:
+    """Stop a run and the job carrying it.
+
+    Both, or neither matters: leaving the job queued means a worker picks up a cancelled run
+    and does the work anyway, which is the whole cost we were trying not to pay.
+    """
+    connection.execute(
+        sql("UPDATE code_task_runs SET status='cancelled', phase='cancelled', "
+            "error=:e, updated_at=now() WHERE id=:i AND status IN ('running','queued')"),
+        {"i": run_id, "e": reason[:500]})
+    connection.execute(
+        sql("UPDATE jobs SET status='cancelled', updated_at=now() "
+            "WHERE payload->>'run_id' = :i AND status IN ('queued','running')"),
+        {"i": run_id})
+
+
+def _requeue_run(connection, run_id: str) -> None:
+    """Hand an orphaned run back to the queue: clear the dead lease, make it claimable."""
+    connection.execute(
+        sql("UPDATE jobs SET status='queued', lease_owner=NULL, lease_token_hash=NULL, "
+            "lease_expires_at=NULL, run_after=now(), updated_at=now() "
+            "WHERE payload->>'run_id' = :i AND status='running'"),
+        {"i": run_id})
+    connection.execute(
+        sql("UPDATE code_task_runs SET phase='queued', updated_at=now() WHERE id=:i"),
+        {"i": run_id})
+
+
+def projects_with_running_work(engine) -> list:
+    """Every project that currently has something in flight.
+
+    The worker is not project-scoped, and neither is neglect: a shepherd that only watches
+    the project someone remembered to name is not watching.
+    """
+    from ..db import begin
+    with begin(engine) as c:
+        rows = c.execute(
+            sql("SELECT DISTINCT project_id FROM code_task_runs "
+                "WHERE status IN ('running','queued')")).mappings().all()
+    return [r["project_id"] for r in rows]
+
+
+def watch_all(engine, settings: Settings, *, dry_run: bool = False,
+              actor: str = "shepherd") -> dict[str, Any]:
+    """Watch in-flight work across every project that has any."""
+    results = [watch(engine, settings, p, dry_run=dry_run, actor=actor)
+               for p in projects_with_running_work(engine)]
+    return {
+        "projects": len(results),
+        "in_flight": sum(r["in_flight"] for r in results),
+        "acted": [a for r in results for a in r["acted"]],
+        "escalated": [e for r in results for e in r["escalated"]],
+        "dry_run": dry_run,
+    }
+
+
+def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
+          actor: str = "shepherd") -> dict[str, Any]:
+    """Look at everything currently running, and deal with what is obviously wrong.
+
+    This is the half of the shepherd that was missing. `sweep()` reasons about runs that have
+    already stopped; by then the money is spent. Seven identical benchmark runs sat queued and
+    healthy on the production box precisely because nothing looks at healthy work.
+
+    Autonomous only where the verdict is a fact rather than a judgement — a redundant
+    duplicate, an orphaned lease. A stalled or slow run is escalated, because "wedged" and
+    "genuinely hard" are indistinguishable from out here and cancelling the wrong one throws
+    away work that would have landed.
+    """
+    from ..db import begin
+    from .shepherd_watch import HEALTHY, assess, permitted
+
+    acted, escalated, seen = [], [], 0
+    with begin(engine) as c:
+        snaps = _inflight_snapshots(c, project_id)
+    for snap in snaps:
+        seen += 1
+        verdict = assess(snap)
+        if verdict.klass == HEALTHY:
+            continue
+        record = {"run_id": snap.run_id, "title": snap.title, "class": verdict.klass,
+                  "name": verdict.name, "reason": verdict.reason, "action": verdict.action,
+                  "evidence": verdict.evidence}
+        if dry_run:
+            (acted if permitted(verdict) else escalated).append({**record, "dry_run": True})
+            continue
+        if permitted(verdict):
+            with begin(engine) as c:
+                if verdict.action == "cancel":
+                    _cancel_run(c, snap.run_id, f"shepherd: {verdict.reason}")
+                elif verdict.action == "requeue":
+                    _requeue_run(c, snap.run_id)
+                emit_event(c, project_id, f"shepherd.{verdict.action}", actor,
+                           "code_task_run", snap.run_id,
+                           {"class": verdict.name, "reason": verdict.reason,
+                            **verdict.evidence})
+            acted.append(record)
+        else:
+            # One open question per run. A shepherd that re-asks is noise, and an operator who
+            # learns to ignore it is worse than no shepherd — the same rule sweep() follows.
+            with begin(engine) as c:
+                existing = c.execute(
+                    sql("SELECT 1 FROM shepherd_escalations "
+                        "WHERE task_ref=:t AND status='open'"), {"t": snap.run_id}).first()
+                if not existing:
+                    c.execute(
+                        sql("INSERT INTO shepherd_escalations "
+                            "(id, project_id, task_ref, question, options, evidence) "
+                            "VALUES (:i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB))"),
+                        {"i": make_id("shesc"), "p": project_id, "t": snap.run_id,
+                         "q": f"{snap.title or snap.run_id}: {verdict.reason}. Let it continue, "
+                              f"or cancel it?",
+                         "o": json.dumps(["continue", "cancel"]),
+                         "e": json.dumps(verdict.evidence, default=str)})
+                    escalated.append(record)
+    return {"project_id": project_id, "in_flight": seen,
+            "acted": acted, "escalated": escalated, "dry_run": dry_run}

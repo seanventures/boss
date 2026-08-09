@@ -442,6 +442,42 @@ the conclusion.
 and a low cost ceiling: #1 spend cap, #2 turn cap, #3 stale base, #7 no code. Everything else
 still escalates. Ledger + budget + loop detection enforced.
 
+**Phase 4 — watching work that is still running. ✅ DONE.** `shepherd_watch.py` (pure
+classification) + `watch()` / `watch_all()` in `shepherd_service.py`, on the worker's idle
+path every 2 minutes.
+
+Phases 0-3 made the shepherd a coroner. `sweep()` selects `status IN ('failed','blocked')`,
+so everything it could do happened after a run had stopped — and by then the money is spent.
+The gap was found the expensive way: seven identical QA-benchmark runs sat queued on the
+production box, four HookWatch and two BugBox, each a full budgeted pipeline that could
+produce nothing the first was not already producing. All seven were HEALTHY, so nothing had
+a failure to classify. The existing `DUPLICATE_EXECUTION` class did not apply and never
+would have — it means a lease reassigned mid-run, a different problem sharing a word, which
+is exactly why the capability looked present.
+
+Four in-flight classes, each with one permitted action:
+
+| Class | Signal | Action | Autonomous |
+|---|---|---|---|
+| `REDUNDANT_DUPLICATE` | identical work fingerprint already in flight, started earlier | cancel the later one | yes |
+| `ORPHANED` | no worker holds it and the lease has been silent 30 min | requeue | yes |
+| `STALLED` | same phase, no state change for 45 min | escalate | no |
+| `OVER_LATENCY` | 3x this project's median over ≥5 comparable runs | escalate | no |
+
+Autonomy is granted only where the verdict is a FACT rather than a judgement. A duplicate is
+decided by the existence of an older identical run; an orphan by a lease nobody holds. A
+stalled run and a genuinely hard one are indistinguishable from outside, so those escalate —
+cancelling the wrong one throws away work that would have landed, and an operator who has
+been burned once switches the shepherd off.
+
+Prevention sits alongside it: `start_code_task` fingerprints the work and returns the
+in-flight run instead of starting a second, so the common case never reaches the shepherd at
+all. Three presses of Launch produce one run.
+
+**Not yet built:** cross-run learning. The shepherd records what it did, but does not yet use
+its own history to predict which specs stall or which repos run slow. That is the knowledge
+graph, and it needs this phase's data before it can be more than a guess.
+
 **Phase 3 — calibration (ongoing).** Track predicted vs actual. Reorder remedies by measured
 success rate. Retire remedies that never work; promote classes to autonomy once their
 success rate and cost variance justify it.
