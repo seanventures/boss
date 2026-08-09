@@ -76,10 +76,36 @@ def test_paid_surface_classification(path):
         "/v1/mcp/servers",
         "/v1/skills",
         "/v1/events",
+        # Deploying is community. These were paid, which left a CI/CD console that rendered
+        # fully and 404'd on every button: /v1/delivery/deploy was free while everything
+        # needed to REGISTER a destination was not. Half a workflow behind a licence.
+        "/v1/deployments",
+        "/v1/deployment-targets",
+        "/v1/deployment-targets/deptgt_x/bootstrap",
+        "/v1/deployment-targets/deptgt_x/teardown",
+        "/v1/deployment-targets/deptgt_x/purge",
+        "/v1/deployment-targets/deptgt_x/auto-deploy",
+        "/v1/deployment-runs",
+        "/v1/deployment-promotions",
+        "/v1/deployment-environment-policies",
     ],
 )
 def test_community_surface_classification(path):
     assert not is_enterprise_path(path)
+
+
+def test_the_whole_delivery_workflow_is_one_edition():
+    """Deploy and register must not land on opposite sides of the licence.
+
+    The console calls /v1/delivery/* to deploy and /v1/deployment-targets/* to onboard. When
+    those split across editions the UI does not degrade — it breaks, and the failure looks
+    like a bug rather than a missing entitlement."""
+    workflow = [
+        "/v1/delivery/deploy", "/v1/delivery/pipeline", "/v1/delivery/health",
+        "/v1/deployment-targets", "/v1/deployment-targets/deptgt_x/bootstrap",
+        "/v1/deployment-runs",
+    ]
+    assert {is_enterprise_path(p) for p in workflow} == {False}
 
 
 def test_composition_root_changes_implementations_by_edition(engine):
