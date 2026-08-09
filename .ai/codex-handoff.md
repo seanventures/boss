@@ -15,6 +15,20 @@
 - Focused Python, worker, benchmark, real-Postgres API/state/event, bootstrap, Ruff, OpenAPI,
   generated docs, and strict MkDocs checks are the required evidence before merge.
 
+## 2026-08-08 BOSS-333 model-agnostic agent toolchain intake
+
+- Branch `ai/codex/model-agnostic-agent-toolchain` adds a pinned upstream-source
+  manifest, license/provenance ledger, bounded non-executing snapshot assessor,
+  hash-only normalized candidate review, an independently authored deterministic
+  command tripwire, and an authority-preserving context budget packer.
+- The intake never fetches, executes, activates, or stores raw upstream source.
+  Destructive Command Guard is explicitly blocked by its license rider;
+  awesome-claude-skills remains per-item/catalog-only. All upstream hooks,
+  scripts, MCP configuration, and packages remain quarantined.
+- Six API surfaces and three SkillRuntime executors are implemented with RBAC,
+  audit metadata, schema/OpenAPI coverage, and focused tests. Plane BOSS-333
+  remains In Progress until its focused PR merges.
+
 ## 2026-08-08 GA security integration and release hold
 
 - Canonical `origin/main` is `8e8dd4e` after PR #136 integrated the critical

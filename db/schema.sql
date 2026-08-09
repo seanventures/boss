@@ -2707,6 +2707,83 @@ CREATE TABLE IF NOT EXISTS project_skills (
 CREATE INDEX IF NOT EXISTS idx_project_skills_project
   ON project_skills(project_id, enabled, on_demand);
 
+-- Model-agnostic agent toolchain intake. Third-party prompts, hooks, MCP
+-- configuration, commands, and scripts are untrusted supply-chain inputs.
+-- BOSS records immutable provenance and scan evidence but never stores or
+-- executes raw imported source from this registry.
+CREATE TABLE IF NOT EXISTS toolchain_sources (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  repository_url TEXT NOT NULL,
+  pinned_revision TEXT NOT NULL,
+  license_id TEXT NOT NULL,
+  license_status TEXT NOT NULL
+    CHECK (license_status IN ('allowed', 'mixed', 'missing', 'restricted')),
+  integration_mode TEXT NOT NULL
+    CHECK (integration_mode IN (
+      'pattern_only', 'selective_import', 'catalog_only', 'blocked'
+    )),
+  status TEXT NOT NULL DEFAULT 'declared'
+    CHECK (status IN ('declared', 'active', 'quarantined', 'blocked')),
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  adopted_components JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'bootstrap',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, source_key)
+);
+CREATE INDEX IF NOT EXISTS idx_toolchain_sources_project
+  ON toolchain_sources(project_id, status, source_key);
+
+CREATE TABLE IF NOT EXISTS toolchain_import_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_id TEXT NOT NULL REFERENCES toolchain_sources(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL,
+  snapshot_hash TEXT NOT NULL,
+  status TEXT NOT NULL
+    CHECK (status IN ('approved', 'review_required', 'quarantined', 'rejected')),
+  file_count INTEGER NOT NULL CHECK (file_count >= 0),
+  total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0),
+  inventory JSONB NOT NULL DEFAULT '{}'::jsonb,
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT,
+  UNIQUE(project_id, source_id, snapshot_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_toolchain_import_runs_project
+  ON toolchain_import_runs(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS toolchain_candidates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  import_run_id TEXT NOT NULL REFERENCES toolchain_import_runs(id) ON DELETE CASCADE,
+  source_path TEXT NOT NULL,
+  candidate_kind TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  status TEXT NOT NULL
+    CHECK (status IN (
+      'metadata_only', 'review_required', 'quarantined', 'approved', 'rejected'
+    )),
+  risk_tier INTEGER NOT NULL DEFAULT 0 CHECK (risk_tier BETWEEN 0 AND 3),
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  normalized_spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT,
+  UNIQUE(import_run_id, source_path)
+);
+CREATE INDEX IF NOT EXISTS idx_toolchain_candidates_project
+  ON toolchain_candidates(project_id, status, risk_tier, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

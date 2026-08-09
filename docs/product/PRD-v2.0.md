@@ -646,6 +646,17 @@ Capability resolution must intersect the requesting role/group, Workflow step, o
 
 The existing SkillSpec, MCP, capability-bundle, provider-adapter, and project skill registry foundations remain canonical. The Integration Registry generalizes configured connectivity across developer, data, communications, SaaS, model, and provider systems without building a competing skill marketplace.
 
+Third-party agent toolchains enter through a separate supply-chain intake. A
+pinned, license-classified text snapshot may be hashed and assessed, but BOSS
+never executes or stores the raw source, activates upstream hooks/MCP/installers,
+or grants imported instructions authority. Candidates remain normalized
+metadata until independent review and a native BOSS implementation satisfy the
+usual typed capability, policy, test, lease, budget, approval, and Receipt
+gates. The command tripwire is deterministic and model-independent; the
+context packer preserves policy, approval, contract, and proof content in full
+or blocks when the authoritative set cannot fit. The detailed contract is
+`docs/product/AGENT_TOOLCHAIN_INTAKE.md`.
+
 ## Reusable Mapped Workflows
 
 A Workflow is a predetermined, versioned, reusable map for a class of work. It defines typed inputs/outputs, steps, branches, parallel fan-out/join, bounded loops, timers, roles or Agent Groups, Skill/Integration bindings, preconditions, postconditions, policy and evidence gates, approvals, retries/deadletters, compensation/rollback, and completion semantics.

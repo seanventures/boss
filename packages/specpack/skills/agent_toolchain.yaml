@@ -1,0 +1,62 @@
+skills:
+  - id: toolchain.source.assess
+    kind: supply_chain
+    system: true
+    load: on_demand
+    risk_tier: 1
+    mock_mode: false
+    description: Assess a pinned third-party agent-tool snapshot without executing or storing its raw source, and persist provenance, inventory, hashes, risks, and quarantined candidates.
+    data_boundary: internal
+    input_schema: { source_key: string, revision: string, files: array }
+    output_schema: { import_run_id: string, status: string, inventory: object, findings: array, candidates: array }
+    cost: { estimator: fixed, category: internal }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [chief_architect, security_engineer, vp_agents, worker, agent_loop]
+      required_permissions: [pack_manage]
+    policy:
+      requires_receipt: false
+      requires_lease: true
+      raw_source_execution_allowed: false
+      activation_requires_independent_review: true
+
+  - id: toolchain.command.guard
+    kind: deterministic_guard
+    system: true
+    load: eager
+    risk_tier: 0
+    mock_mode: false
+    description: Classify a proposed shell, Git, database, or host command as allow, review, or block before any executor can run it.
+    data_boundary: internal
+    input_schema: { command: string, cwd: "string?" }
+    output_schema: { decision: string, risk_tier: integer, rule_ids: array, reasons: array }
+    cost: { estimator: fixed, category: internal }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: [agent_loop, software_factory, devops_engineer, security_engineer, worker]
+      required_permissions: [local_execute]
+    policy:
+      requires_receipt: false
+      deterministic: true
+      model_cannot_override_block: true
+
+  - id: toolchain.context.pack
+    kind: context_control
+    system: true
+    load: eager
+    risk_tier: 0
+    mock_mode: false
+    description: Assemble deduplicated context under an explicit token budget while preserving policy, approval, contract, and proof content in full and reporting every omission.
+    data_boundary: internal
+    input_schema: { chunks: array, token_budget: integer, reserved_output_tokens: "integer?" }
+    output_schema: { context: string, included_ids: array, omitted_ids: array, estimated_tokens: integer, budget_status: string }
+    cost: { estimator: fixed, category: internal }
+    retry: { max_attempts: 1, backoff: none }
+    permissions:
+      allowed_callers: ["*"]
+      required_permissions: [agent_execute]
+    policy:
+      requires_receipt: false
+      deterministic: true
+      authoritative_context_is_never_truncated: true
+      model_agnostic: true
