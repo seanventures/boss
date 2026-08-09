@@ -727,9 +727,26 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
         verdict = assess(snap)
         if verdict.klass == HEALTHY:
             continue
+        # Every verdict carries the facts it was decided from, not just its conclusion.
+        # Diagnosing why ten runs came back "stalled" instead of "orphaned" took three
+        # deploys of guesswork because the answer — which of has_job / was_leased /
+        # has_live_worker was unexpectedly true — was never in the output. A judgement whose
+        # inputs are invisible cannot be argued with, and the design says CHECK carries the
+        # same weight as the conclusion.
+        observed = {
+            "has_job": snap.has_job,
+            "was_leased": snap.was_leased,
+            "has_live_worker": snap.has_live_worker,
+            "minutes_since_heartbeat": (round(snap.minutes_since_heartbeat, 1)
+                                        if snap.minutes_since_heartbeat is not None else None),
+            "minutes_since_any_lease": (round(snap.minutes_since_any_lease, 1)
+                                        if snap.minutes_since_any_lease is not None else None),
+            "duplicate_of": snap.duplicate_of,
+            "has_fingerprint": bool(snap.work_fingerprint),
+        }
         record = {"run_id": snap.run_id, "title": snap.title, "class": verdict.klass,
                   "name": verdict.name, "reason": verdict.reason, "action": verdict.action,
-                  "evidence": verdict.evidence}
+                  "evidence": {**verdict.evidence, "observed": observed}}
         if dry_run:
             (acted if permitted(verdict) else escalated).append({**record, "dry_run": True})
             continue
