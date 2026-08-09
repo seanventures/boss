@@ -727,7 +727,7 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
     away work that would have landed.
     """
     from ..db import begin
-    from .shepherd_watch import HEALTHY, assess, permitted
+    from .shepherd_watch import MAX_ACTIONS_PER_SWEEP, HEALTHY, act_now, assess
 
     acted, escalated, ineffective, seen = [], [], [], 0
     with begin(engine) as c:
@@ -761,10 +761,18 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
         record = {"run_id": snap.run_id, "title": snap.title, "class": verdict.klass,
                   "name": verdict.name, "reason": verdict.reason, "action": verdict.action,
                   "evidence": {**verdict.evidence, "observed": observed}}
+        may_act, why = act_now(verdict, snap)
         if dry_run:
-            (acted if permitted(verdict) else escalated).append({**record, "dry_run": True})
+            (acted if may_act else escalated).append(
+                {**record, "dry_run": True, "gate": why})
             continue
-        if permitted(verdict):
+        if may_act and len(acted) >= MAX_ACTIONS_PER_SWEEP:
+            # Refuse the rest of the sweep rather than clear someone's board on one bad
+            # judgement. The remaining runs are still here next time, and a capped mistake is
+            # a small incident instead of a systematic one.
+            escalated.append({**record, "gate": "per-sweep action cap reached"})
+            continue
+        if may_act:
             with begin(engine) as c:
                 if verdict.action == "cancel":
                     changed = _cancel_run(c, snap.run_id, f"shepherd: {verdict.reason}")
@@ -785,6 +793,7 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
             else:
                 ineffective.append({**record, "note": "remedy did not apply — nothing changed"})
         else:
+            record = {**record, "gate": why}
             # One open question per run. A shepherd that re-asks is noise, and an operator who
             # learns to ignore it is worse than no shepherd — the same rule sweep() follows.
             with begin(engine) as c:

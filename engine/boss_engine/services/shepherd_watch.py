@@ -349,3 +349,46 @@ def permitted(verdict: WatchVerdict) -> bool:
     on the list. One flag is a single point of failure for spending someone's money.
     """
     return verdict.autonomous and verdict.action in AUTONOMOUS_ACTIONS
+
+# --------------------------------------------------------------------------- #
+# Safety floor
+# --------------------------------------------------------------------------- #
+# The shepherd closed a run TWO MINUTES after an operator pressed Launch. The specific cause
+# was a missing grace period on one class; the general cause is that a wrong autonomous action
+# costs far more than a missed one, and nothing enforced that asymmetry across the board.
+#
+# So: no destructive action on young work, whatever any single class concludes. A verdict may
+# still be reported — the operator sees it — but the shepherd will not act unattended on
+# something that started minutes ago. One rule, applied to every class, present and future.
+#
+# Cancelling a redundant duplicate is exempt and must stay exempt: it is the one action whose
+# safety does not depend on age, because the identical earlier run keeps going. That is also
+# the case where acting FAST is the entire value — a duplicate caught after twenty minutes has
+# already cost twenty minutes of a governed pipeline.
+DESTRUCTIVE_ACTIONS = frozenset({"cancel", "fail"})
+MIN_AGE_FOR_DESTRUCTIVE_MINUTES = 30.0
+
+
+def act_now(verdict: "WatchVerdict", snap: "RunSnapshot") -> tuple[bool, str]:
+    """May the shepherd carry this out unattended, right now, on THIS run?
+
+    Separate from `permitted()` on purpose. `permitted` asks whether the class of action is
+    ever autonomous; this asks whether it is safe on this particular run at this moment. The
+    incident came from having only the first question.
+    """
+    if not permitted(verdict):
+        return False, "not an autonomous action"
+    if verdict.klass == REDUNDANT_DUPLICATE:
+        return True, "duplicate — the earlier identical run continues"
+    if (verdict.action in DESTRUCTIVE_ACTIONS
+            and snap.minutes_running < MIN_AGE_FOR_DESTRUCTIVE_MINUTES):
+        return False, (f"run is {snap.minutes_running:.0f} minutes old; destructive actions "
+                       f"wait until {MIN_AGE_FOR_DESTRUCTIVE_MINUTES:.0f}")
+    return True, "permitted"
+
+
+# How many runs one sweep may act on. A classifier that goes wrong tends to go wrong about
+# EVERYTHING at once — the first version would have requeued eight runs on one pass, and the
+# second would have failed seven. A cap turns a systematic misjudgement into a small, visible
+# incident instead of a clean sweep of someone's work.
+MAX_ACTIONS_PER_SWEEP = 3

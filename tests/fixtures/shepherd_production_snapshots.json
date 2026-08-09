@@ -1,0 +1,143 @@
+{
+  "_why": [
+    "Real rows, captured from the goldeneye and local databases on 2026-08-09.",
+    "",
+    "Five versions of the shepherd shipped with every unit test green and every one of them",
+    "wrong about production. The tests asserted what a snapshot MEANS; none asserted what the",
+    "database actually PUTS IN ONE. `was_leased` was false where I assumed true, `job_status`",
+    "said `deadlettered` where I assumed queued, and a job went terminal one minute after a",
+    "run was launched.",
+    "",
+    "So this file holds shapes observed in the wild, with the verdict each must produce and a",
+    "note on how it was previously got wrong. Add a case whenever the shepherd misjudges",
+    "something real. It is the only kind of test that has ever caught a shepherd defect."
+  ],
+  "cases": [
+    {
+      "name": "goldeneye: job dead-lettered on a 500 in July, run still says queued",
+      "captured": "2026-08-09 from boss-api.local.sean.network",
+      "snapshot": {
+        "run_id": "crun_f0b563f8f1b9489fb818", "project_id": "boss-dogfood",
+        "status": "running", "phase": "coding", "title": "QA benchmark: HookWatch",
+        "minutes_running": 53941.0, "minutes_since_update": 53941.0,
+        "has_job": true, "job_status": "deadlettered", "job_ended_minutes": 53941.0,
+        "job_last_error": "Server error '500 Internal Server Error' for url 'http://api...'",
+        "was_leased": false, "has_live_worker": false,
+        "minutes_since_heartbeat": 53941.0, "minutes_since_any_lease": null
+      },
+      "expect_class": "the job ended; the run never noticed",
+      "expect_action": "fail",
+      "expect_acts_now": true,
+      "previously_misclassified_as": ["orphaned", "starved", "stalled"]
+    },
+    {
+      "name": "THE REGRESSION: run launched 2 minutes ago, carrying job already terminal",
+      "captured": "2026-08-09, immediately after an operator pressed Launch",
+      "snapshot": {
+        "run_id": "crun_cdcf77db47c54e20a5bc", "project_id": "boss-dogfood",
+        "status": "running", "phase": "design", "title": "Per-transaction currency",
+        "minutes_running": 2.0, "minutes_since_update": 1.0,
+        "has_job": true, "job_status": "succeeded", "job_ended_minutes": 1.0,
+        "was_leased": false, "has_live_worker": false, "minutes_since_heartbeat": 2.0
+      },
+      "expect_class": "healthy",
+      "expect_action": "none",
+      "expect_acts_now": false,
+      "previously_misclassified_as": ["job ended — and the run was KILLED two minutes after launch"]
+    },
+    {
+      "name": "seven identical benchmark launches, none carrying a stored fingerprint",
+      "captured": "2026-08-09; the incident this whole feature came from",
+      "snapshot": {
+        "run_id": "crun_08edd63875b64d1694b9", "project_id": "boss-dogfood",
+        "status": "running", "phase": "queued", "title": "QA benchmark: HookWatch",
+        "minutes_running": 540.0, "minutes_since_update": 540.0,
+        "duplicate_of": "crun_437689e8fdcc45adb395",
+        "has_job": true, "job_status": "queued", "was_leased": false,
+        "has_live_worker": false, "minutes_since_heartbeat": 540.0
+      },
+      "expect_class": "redundant duplicate",
+      "expect_action": "cancel",
+      "expect_acts_now": true,
+      "previously_misclassified_as": ["invisible — the runs predate work_fingerprint"]
+    },
+    {
+      "name": "a duplicate caught seconds after it starts is still cancelled",
+      "captured": "the double-click case; acting fast IS the value here",
+      "snapshot": {
+        "run_id": "crun_dup_fresh", "project_id": "boss-dogfood",
+        "status": "running", "phase": "queued", "title": "QA benchmark: BugBox",
+        "minutes_running": 0.4, "minutes_since_update": 0.2,
+        "duplicate_of": "crun_dup_first",
+        "has_job": true, "job_status": "queued", "was_leased": false,
+        "has_live_worker": false, "minutes_since_heartbeat": 0.4
+      },
+      "expect_class": "redundant duplicate",
+      "expect_action": "cancel",
+      "expect_acts_now": true,
+      "note": "exempt from the age floor: the identical earlier run keeps going, so nothing is lost"
+    },
+    {
+      "name": "a worker died holding the lease",
+      "captured": "synthesised from the jobs schema: lease_owner set, heartbeat long stale",
+      "snapshot": {
+        "run_id": "crun_orphan", "project_id": "boss-dogfood",
+        "status": "running", "phase": "implement", "title": "some real work",
+        "minutes_running": 120.0, "minutes_since_update": 120.0,
+        "has_job": true, "job_status": "running", "job_ended_minutes": null,
+        "was_leased": true, "has_live_worker": false,
+        "minutes_since_heartbeat": 90.0, "minutes_since_any_lease": 1.0
+      },
+      "expect_class": "orphaned — no worker, lease expired",
+      "expect_action": "requeue",
+      "expect_acts_now": true,
+      "previously_misclassified_as": ["stalled — asked a human instead of taking the work back"]
+    },
+    {
+      "name": "a healthy run mid-pipeline must never be touched",
+      "captured": "the case that matters most and produces no incident when it works",
+      "snapshot": {
+        "run_id": "crun_healthy", "project_id": "boss-dogfood",
+        "status": "running", "phase": "implement", "title": "real work in progress",
+        "minutes_running": 12.0, "minutes_since_update": 2.0,
+        "has_job": true, "job_status": "running", "was_leased": true,
+        "has_live_worker": true, "minutes_since_heartbeat": 0.4,
+        "minutes_since_any_lease": 0.4, "median_minutes": 15.0, "sample_size": 30
+      },
+      "expect_class": "healthy",
+      "expect_action": "none",
+      "expect_acts_now": false
+    },
+    {
+      "name": "a slow but live run at 4x median is escalated, never cancelled",
+      "captured": "guards the boundary between noticing and interfering",
+      "snapshot": {
+        "run_id": "crun_slow", "project_id": "boss-dogfood",
+        "status": "running", "phase": "implement", "title": "a big task",
+        "minutes_running": 60.0, "minutes_since_update": 3.0,
+        "has_job": true, "job_status": "running", "was_leased": true,
+        "has_live_worker": true, "minutes_since_heartbeat": 0.5,
+        "median_minutes": 15.0, "sample_size": 30
+      },
+      "expect_class": "over expected latency",
+      "expect_action": "escalate",
+      "expect_acts_now": false
+    },
+    {
+      "name": "a governance hold is not a dead worker",
+      "captured": "the claim path defers on budget state and writes the reason to jobs.last_error",
+      "snapshot": {
+        "run_id": "crun_deferred", "project_id": "boss-dogfood",
+        "status": "running", "phase": "queued", "title": "held by policy",
+        "minutes_running": 200.0, "minutes_since_update": 200.0,
+        "has_job": true, "job_status": "queued", "job_deferred_minutes": 42.0,
+        "job_last_error": "Budget state exhausted deferred job code.task",
+        "was_leased": false, "has_live_worker": false, "minutes_since_heartbeat": 200.0
+      },
+      "expect_class": "deferred by policy",
+      "expect_action": "escalate",
+      "expect_acts_now": false,
+      "previously_misclassified_as": ["starved — would have sent someone to restart a healthy worker"]
+    }
+  ]
+}
