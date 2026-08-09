@@ -85,6 +85,29 @@ def main() -> int:
           v.action == "requeue" and permitted(v))
     check("not left to a human as a stall", v.klass != STALLED)
 
+    print("== deferred: a governance hold is not a dead worker ==")
+    # From the worker's side these are identical: it polls, is told "idle", nothing moves.
+    # One means "start a worker", the other means "your budget policy is holding this". The
+    # claim path already writes the reason to jobs.last_error and pushes run_after out; the
+    # shepherd was ignoring both and blaming the worker.
+    from boss_engine.services.shepherd_watch import DEFERRED
+    v = assess(snap(phase="queued", minutes_running=200.0, minutes_since_update=200.0,
+                    has_job=True, job_status="queued", job_deferred_minutes=42.0,
+                    job_last_error="Budget state exhausted deferred job code.task",
+                    was_leased=False, has_live_worker=False, minutes_since_heartbeat=200.0))
+    check("a job held into the future is deferred", v.klass == DEFERRED)
+    check("not blamed on the worker", v.klass != STARVED)
+    check("and it repeats the reason the platform recorded",
+          "Budget state exhausted" in v.reason)
+    check("the remedy points at governance, not a restart",
+          "governance hold" in v.evidence.get("remedy", ""))
+    # A job whose deferral has elapsed is claimable again and must not stay flagged.
+    v = assess(snap(phase="queued", minutes_running=200.0, minutes_since_update=200.0,
+                    has_job=True, job_status="queued", job_deferred_minutes=-5.0,
+                    was_leased=False, has_live_worker=False, minutes_since_heartbeat=200.0,
+                    minutes_since_any_lease=None))
+    check("an expired deferral is no longer a deferral", v.klass != DEFERRED)
+
     print("== starved: a dead worker is not eight unlucky tasks ==")
     # The goldeneye shape: eight runs at status=running / phase=queued, none ever claimed.
     # Classing these ORPHANED would "requeue" them — an UPDATE matching no rows, reported as

@@ -501,13 +501,15 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                    EXTRACT(EPOCH FROM (now() - r.created_at))/60.0 AS mins_running,
                    EXTRACT(EPOCH FROM (now() - r.updated_at))/60.0 AS mins_since_update,
                    r.created_at,
-                   j.lease_owner, j.ever_leased,
+                   j.lease_owner, j.ever_leased, j.deferred_mins, j.last_error_msg,
                    EXTRACT(EPOCH FROM (now() - COALESCE(j.heartbeat_at, j.created_at)))/60.0
                      AS mins_since_heartbeat,
                    j.status AS job_status
             FROM code_task_runs r
             LEFT JOIN LATERAL (
                 SELECT lease_owner, heartbeat_at, created_at, status,
+                       EXTRACT(EPOCH FROM (run_after - now()))/60.0 AS deferred_mins,
+                       last_error->>'message' AS last_error_msg,
                        (lease_owner IS NOT NULL OR heartbeat_at IS NOT NULL) AS ever_leased
                 FROM jobs
                 WHERE payload->>'run_id' = r.id ORDER BY created_at DESC LIMIT 1
@@ -569,6 +571,9 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                                      if row["mins_since_heartbeat"] is not None else None),
             has_job=row["job_status"] is not None,
             job_status=row["job_status"],
+            job_deferred_minutes=(float(row["deferred_mins"])
+                                  if row["deferred_mins"] is not None else None),
+            job_last_error=row["last_error_msg"],
             was_leased=bool(row["ever_leased"]),
             minutes_since_any_lease=since_lease,
             median_minutes=median, sample_size=samples,
@@ -743,6 +748,10 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                                         if snap.minutes_since_heartbeat is not None else None),
             "minutes_since_any_lease": (round(snap.minutes_since_any_lease, 1)
                                         if snap.minutes_since_any_lease is not None else None),
+            "job_status": snap.job_status,
+            "job_deferred_minutes": (round(snap.job_deferred_minutes, 1)
+                                     if snap.job_deferred_minutes is not None else None),
+            "job_last_error": snap.job_last_error,
             "duplicate_of": snap.duplicate_of,
             "has_fingerprint": bool(snap.work_fingerprint),
         }

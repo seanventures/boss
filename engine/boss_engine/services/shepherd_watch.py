@@ -40,6 +40,7 @@ STALLED = 3                 # alive, but the same phase for far too long
 OVER_LATENCY = 4            # running far longer than this kind of work normally takes
 STARVED = 5                 # never claimed by anyone — nothing is consuming the queue
 ABANDONED = 6               # no job exists at all: nothing will ever pick this up
+DEFERRED = 7                # the platform is holding it back on purpose, and said why
 
 WATCH_NAMES = {
     HEALTHY: "healthy",
@@ -49,6 +50,7 @@ WATCH_NAMES = {
     OVER_LATENCY: "over expected latency",
     STARVED: "starved — no worker is consuming the queue",
     ABANDONED: "abandoned — no job exists to carry it",
+    DEFERRED: "deferred by policy",
 }
 
 # --------------------------------------------------------------------------- #
@@ -95,6 +97,12 @@ class RunSnapshot:
     # Job/lease facts. `has_live_worker` is False when nothing owns the job at all.
     has_live_worker: bool = True
     minutes_since_heartbeat: Optional[float] = None
+    # Why the queue is holding this job back, if it is. `run_after` in the future means the
+    # platform deferred it deliberately — a budget state, a resource allocation, a missing
+    # reservation — and `last_error` records which. Both are written by the claim path and
+    # were being ignored, so a governance hold looked identical to a dead worker.
+    job_deferred_minutes: Optional[float] = None
+    job_last_error: Optional[str] = None
     # The job's OWN status. Decides whether requeueing can work: a job sitting at 'running'
     # with nobody on it is stranded and the UPDATE will free it; a job at 'queued' is already
     # claimable and requeueing changes nothing.
@@ -203,7 +211,28 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             evidence={**ev, "remedy": "marked failed; relaunch it if the work is still wanted"},
         )
 
-    # 4. Starved — waiting for a worker that is not coming.
+    # 4. Deferred — held back on purpose, with a reason already on the row.
+    #
+    # Checked before starvation because the two look identical from the worker's side: in both
+    # cases it polls, is told "idle", and nothing moves. But one means "start a worker" and the
+    # other means "your budget policy is holding this" — and sending someone to restart a
+    # healthy worker while a budget gate quietly defers their work is worse than saying
+    # nothing. The claim path writes the reason to `jobs.last_error` and pushes out
+    # `run_after`; the shepherd's job is to read what is already there rather than guess.
+    if snap.job_deferred_minutes and snap.job_deferred_minutes > 0:
+        detail = snap.job_last_error or "no reason recorded"
+        return WatchVerdict(
+            DEFERRED,
+            f"the platform is holding this job for another "
+            f"{snap.job_deferred_minutes:.0f} minutes: {detail}",
+            action="escalate", autonomous=False,
+            evidence={**ev, "deferred_minutes": round(snap.job_deferred_minutes, 1),
+                      "recorded_reason": detail,
+                      "remedy": "this is a governance hold, not a stuck worker — resolve the "
+                                "budget or allocation it names"},
+        )
+
+    # 5. Starved — waiting for a worker that is not coming.
     #
     # The distinction from ORPHANED is the whole point, and getting it wrong is worse than
     # not checking. A job nobody ever claimed cannot be fixed by requeueing it: there is
@@ -236,7 +265,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
                       "remedy": "start or restart the worker; requeueing cannot help"},
         )
 
-    # 5. Stalled — alive, but nothing has moved.
+    # 6. Stalled — alive, but nothing has moved.
     #
     # NOT autonomous. A wedged phase and a genuinely slow one look identical from here, and
     # the difference is worth a human glance rather than a cancelled hour of work.
@@ -248,7 +277,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             action="escalate", autonomous=False, evidence=ev,
         )
 
-    # 6. Over latency — measured against this project's own history, never a constant.
+    # 7. Over latency — measured against this project's own history, never a constant.
     if (snap.median_minutes and snap.sample_size >= LATENCY_MIN_SAMPLES
             and snap.minutes_running >= snap.median_minutes * LATENCY_MULTIPLE):
         return WatchVerdict(
