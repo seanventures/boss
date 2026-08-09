@@ -30,6 +30,7 @@ from typing import Optional
 from ..config import Settings
 from ..ports import get_engine_ports, sql
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
+from .core import emit_event
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import is_iac_task
@@ -145,6 +146,40 @@ def preflight_test_commands(settings, test_commands) -> list[str]:
     return rejected
 
 
+def work_fingerprint(*, project_id: str, owner: str, repo: str, base_branch: str,
+                    title: str, instructions: str) -> str:
+    """A stable identity for "this exact piece of work in this exact place".
+
+    Hashed from the inputs a caller controls, BEFORE the engine decorates them, so the same
+    request always produces the same fingerprint. Whitespace-normalised because a form and an
+    API client disagree about trailing newlines and neither means a different task.
+    """
+    import hashlib
+
+    parts = [project_id, owner, repo, base_branch, " ".join(title.split()),
+             " ".join(instructions.split())]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[str]:
+    """The id of an identical run that is STILL IN FLIGHT, if there is one.
+
+    In flight only. Running the same task again after it finished is a legitimate act — that
+    is what the Launch button on a finished card is for. What is never intended is the same
+    work started twice while the first is still going: nothing can come of the second that the
+    first was not already producing, and each one is a full budgeted pipeline.
+    """
+    if not hasattr(connection, "execute"):
+        return None
+    row = connection.execute(
+        sql("SELECT id FROM code_task_runs "
+            "WHERE project_id = :p AND status IN ('running', 'queued') "
+            "  AND spec->>'work_fingerprint' = :fp "
+            "ORDER BY created_at ASC LIMIT 1"),
+        {"p": project_id, "fp": fingerprint}).first()
+    return row[0] if row else None
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -153,8 +188,23 @@ def start_code_task(
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
     substrate: Optional[str] = None, repo_host: Optional[str] = None,
+    allow_duplicate: bool = False,
 ) -> str:
-    """Create the durable run row and enqueue the single `code.task` job."""
+    """Create the durable run row and enqueue the single `code.task` job.
+
+    Refuses to start work that is ALREADY RUNNING, returning the in-flight run instead.
+
+    This is prevention, not detection, and the difference is the whole point. The Task
+    Shepherd only sweeps runs that have already FAILED, and its `DUPLICATE_EXECUTION` class
+    means a lease reassigned mid-run — not the same task submitted twice. So seven identical
+    healthy benchmark runs presented nothing for anything to react to, and sat there queued,
+    each one a full budgeted pipeline that could produce nothing the first was not already
+    producing. Detecting that after the fact only tells you what you have already spent.
+
+    Deliberately scoped to IN-FLIGHT work: relaunching a finished task is a legitimate act,
+    and `allow_duplicate=True` exists for a caller that genuinely wants two at once (a
+    bake-off comparing two runs of one spec).
+    """
     settings = getattr(jobs, "settings", None)
     if settings is not None:
         bad = preflight_test_commands(settings, test_commands)
@@ -167,8 +217,26 @@ def start_code_task(
                 "available — give each test command as a single allowlisted executable "
                 "with arguments. Allowed: " + allowed
             )
+    fingerprint = work_fingerprint(project_id=project_id, owner=owner, repo=repo,
+                                   base_branch=base_branch, title=title,
+                                   instructions=instructions)
+    if not allow_duplicate:
+        existing = active_duplicate(connection, project_id, fingerprint)
+        if existing:
+            # Idempotent, not an error: the caller wanted this work running, and it is.
+            # Raising would make an impatient second click look like a broken button, which
+            # is what produced the duplicates in the first place.
+            try:
+                emit_event(connection, project_id, "code_task.duplicate_suppressed",
+                           "code_task_service", "code_task_run", existing,
+                           {"title": title, "fingerprint": fingerprint})
+            except Exception:  # noqa: BLE001 — never fail a start over its own audit trail
+                pass
+            return existing
+
     run_id = make_id("crun")
     spec = {
+        "work_fingerprint": fingerprint,
         "instructions": instructions + _DEPLOYABILITY_NOTE,
         "acceptance_criteria": acceptance_criteria or [],
         "test_commands": test_commands or [],
