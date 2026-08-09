@@ -169,29 +169,12 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             evidence={**ev, "minutes_since_heartbeat": snap.minutes_since_heartbeat},
         )
 
-    # 3. Starved — waiting for a worker that is not coming.
+    # 3. Abandoned — there is no job, so there is no future.
     #
-    # The distinction from ORPHANED is the whole point, and getting it wrong is worse than
-    # not checking. A job nobody ever claimed cannot be fixed by requeueing it: there is
-    # nothing to put back, and the UPDATE matches no rows. Reported as "acted", that is a
-    # shepherd claiming to fix something every two minutes while nothing changes — the exact
-    # dishonesty this component exists to prevent.
-    #
-    # Never autonomous, because the remedy is not to this task. Someone has to start a worker.
-    starved = (snap.minutes_since_any_lease is not None
-               and snap.minutes_since_any_lease >= STARVATION_MINUTES)
-    if not snap.was_leased and starved and snap.minutes_running >= STARVATION_MINUTES:
-        return WatchVerdict(
-            STARVED,
-            f"queued {snap.minutes_running:.0f} minutes and never claimed; nothing in this "
-            f"project has been claimed for {snap.minutes_since_any_lease:.0f} minutes — the "
-            f"worker is not consuming the queue",
-            action="escalate", autonomous=False,
-            evidence={**ev, "minutes_since_any_lease": snap.minutes_since_any_lease,
-                      "remedy": "start or restart the worker; requeueing cannot help"},
-        )
-
-    # 4. Abandoned — there is no job, so there is no future.
+    # Checked BEFORE starvation, because "waiting for a worker" presupposes something in the
+    # queue to be picked up. A run with no job is not waiting; there is nothing to wait for,
+    # and describing it as a starved queue would send someone to restart a worker that would
+    # have nothing to do.
     #
     # The state the console shows as "Queued — running…", auto-refreshing every four seconds,
     # forever. Ten of these were sitting on the production box, some since July, one wedged
@@ -208,6 +191,39 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             f"{snap.minutes_running:.0f} minutes — it cannot progress and never will",
             action="fail", autonomous=True,
             evidence={**ev, "remedy": "marked failed; relaunch it if the work is still wanted"},
+        )
+
+    # 4. Starved — waiting for a worker that is not coming.
+    #
+    # The distinction from ORPHANED is the whole point, and getting it wrong is worse than
+    # not checking. A job nobody ever claimed cannot be fixed by requeueing it: there is
+    # nothing to put back, and the UPDATE matches no rows. Reported as "acted", that is a
+    # shepherd claiming to fix something every two minutes while nothing changes — the exact
+    # dishonesty this component exists to prevent.
+    #
+    # Never autonomous, because the remedy is not to this task. Someone has to start a worker.
+    # No lease activity AT ALL reads as None. That is not missing evidence, it is evidence of
+    # absence: nothing in this project has ever been claimed. Skipping the check on None is
+    # what kept ten runs — queued 37 days, never touched — coming back as "stalled, ask a
+    # human" instead of "nobody is consuming this queue". The loudest possible signal arrived
+    # as no signal, twice, because a null was read charitably.
+    starved = (snap.minutes_since_any_lease is None
+               or snap.minutes_since_any_lease >= STARVATION_MINUTES)
+    if (snap.has_job and not snap.was_leased and starved
+            and snap.minutes_running >= STARVATION_MINUTES):
+        # None here means "nothing was EVER claimed", which reads worse than a number, not
+        # better — and formatting it as one crashes.
+        pulse = ("nothing in this project has EVER been claimed"
+                 if snap.minutes_since_any_lease is None
+                 else f"nothing here has been claimed for "
+                      f"{snap.minutes_since_any_lease:.0f} minutes")
+        return WatchVerdict(
+            STARVED,
+            f"queued {snap.minutes_running:.0f} minutes and never claimed; {pulse} — the "
+            f"worker is not consuming the queue",
+            action="escalate", autonomous=False,
+            evidence={**ev, "minutes_since_any_lease": snap.minutes_since_any_lease,
+                      "remedy": "start or restart the worker; requeueing cannot help"},
         )
 
     # 5. Stalled — alive, but nothing has moved.

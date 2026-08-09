@@ -597,7 +597,8 @@ def _minutes_since_any_lease(connection, project_id: str):
     # of the oldest waiting job: how long the queue has gone undrained.
     row = connection.execute(
         sql("SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))/60.0 AS mins "
-            "FROM jobs WHERE project_id = :p AND status = 'queued'"),
+            "FROM jobs WHERE project_id = :p "
+            "  AND status NOT IN ('completed','failed','cancelled')"),
         {"p": project_id}).mappings().first()
     return float(row["mins"]) if row and row["mins"] is not None else None
 

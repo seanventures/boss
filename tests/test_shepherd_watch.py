@@ -96,6 +96,12 @@ def main() -> int:
     v = assess(snap(minutes_running=1.0, has_live_worker=False, minutes_since_heartbeat=1.0,
                     was_leased=False, minutes_since_any_lease=120.0))
     check("a job queued one minute ago is not starved yet", v.klass == HEALTHY)
+    # No lease activity at all comes back as None. Read charitably as "unknown", that turned
+    # the loudest possible signal into none at all — twice, on the same production backlog.
+    v = assess(snap(minutes_running=120.0, minutes_since_update=120.0, has_live_worker=False,
+                    minutes_since_heartbeat=120.0, was_leased=False,
+                    minutes_since_any_lease=None))
+    check("never any lease anywhere is starvation, not ignorance", v.klass == STARVED)
 
     print("== abandoned: the 'Queued — running…' that never moves ==")
     # What the production console actually showed: ten runs auto-refreshing every four
