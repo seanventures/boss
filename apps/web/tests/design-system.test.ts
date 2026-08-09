@@ -81,11 +81,21 @@ describe("BOSS mission-control design system", () => {
     for (const marker of ["function BenchmarkLaunch", "disabled={sent}", "Starting…"]) {
       expect(codeTasks).toContain(marker);
     }
-    // No launch form may submit without arming that guard.
-    const forms = codeTasks.split("<form action=").slice(1)
-      .filter((f) => f.startsWith("{startQaBenchmarkAppAction") || f.startsWith("{relaunchCodeTaskAction"));
-    expect(forms.length).toBeGreaterThan(0);
-    for (const form of forms) expect(form).toContain("onSubmit={() => setSent(true)}");
+    // Assert the PROPERTY, not the markup. The first version required every launch <form> to
+    // carry `onSubmit={() => setSent(true)}` — and went red the moment the forms became
+    // buttons that await the action and refresh, which is strictly better behaviour. A test
+    // that pins HOW a guarantee is met turns an improvement into a failure.
+    //
+    // What must hold: every launch control disables itself while a launch is in flight.
+    const launchButtons = codeTasks.split("<button").slice(1)
+      .filter((b) => b.slice(0, 400).includes("Starting…"));
+    expect(launchButtons.length).toBeGreaterThanOrEqual(2);   // benchmark + relaunch
+    for (const button of launchButtons) {
+      expect(button.slice(0, 400)).toContain("disabled={sent}");
+    }
+    // And the busy state must be able to CLEAR, or the button lies in the other direction:
+    // it sat on "Starting…" forever while the run had in fact been created.
+    expect(codeTasks).toContain("setSent(false)");
   });
 
   it("gives the browser tab a real icon", () => {
