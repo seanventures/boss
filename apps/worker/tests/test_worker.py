@@ -262,6 +262,46 @@ def test_control_plane_client_sends_bearer_api_key():
         client.close()
 
 
+def test_control_plane_client_exposes_the_complete_model_gateway_lifecycle():
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class HttpClient:
+        def post(self, path, json):
+            calls.append((path, json))
+            return Response()
+
+        def close(self):
+            return None
+
+    client = ControlPlaneClient("http://127.0.0.1:8000")
+    client._client.close()
+    client._client = HttpClient()
+    payload = {"project_id": "boss-dogfood"}
+    try:
+        client.acquire_model_gateway_lease(payload)
+        client.heartbeat_model_gateway_lease("mlease_1", payload)
+        client.start_model_gateway_invocation("mlease_1", payload)
+        client.settle_model_gateway_invocation("mlease_1", "minv_1", payload)
+        client.release_model_gateway_lease("mlease_1", payload)
+    finally:
+        client.close()
+
+    assert [path for path, _ in calls] == [
+        "/v1/model-gateway/leases",
+        "/v1/model-gateway/leases/mlease_1/heartbeat",
+        "/v1/model-gateway/leases/mlease_1/invocations",
+        "/v1/model-gateway/leases/mlease_1/invocations/minv_1/settle",
+        "/v1/model-gateway/leases/mlease_1/release",
+    ]
+
+
 def test_idle_worker_sweeps_terminal_benchmark_evidence_without_executing_a_change():
     calls = []
 

@@ -1472,6 +1472,75 @@ describe("createBossApiClient", () => {
     );
   });
 
+  it("uploads model credentials through the write-only entitlement contract", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const source = {
+      id: "src_boss_openai_api",
+      project_id: "boss-dogfood",
+      provider: "openai",
+      source_id: "openai_api",
+      source_kind: "official_api",
+      entitlement_kind: "usage_based_api",
+      owner_type: "project",
+      owner_id: "boss-dogfood",
+      workload_classes_allowed: ["owner_sandbox"],
+      multi_tenant_allowed: true,
+      credential_ref: "OPENAI_API_KEY",
+      credential_secret_ref_id: "sref_openai",
+      cost_mode: "usage_based_api",
+      limit_shape: { max_concurrent: 128 },
+      supported_models: ["gpt-5.2-codex"],
+      task_strengths: ["coding"],
+      risk_tier_max: 3,
+      status: "active",
+      effective_status: "active",
+      auth_method: "api_key",
+      connection_status: "connected",
+      connection_ref: "secretref:sref_openai",
+      oauth_scopes: [],
+      connection_metadata: {},
+      policy_notes: [],
+      observed_capacity: { credential_present: true },
+      runtime_supported: true,
+      created_at: "2026-08-08T00:00:00Z",
+      updated_at: "2026-08-08T00:00:00Z",
+    };
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          source,
+          secret_ref_id: "sref_openai",
+          backend: "platform_secret_store",
+          last4: "test",
+          raw_secret_stored: false,
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+    const stored = await client.uploadModelCredential("openai_api", {
+      project_id: "boss-dogfood",
+      value: "sk-write-only-test",
+      backend: "platform_secret_store",
+      actor: "ceo",
+    });
+
+    expect(stored.raw_secret_stored).toBe(false);
+    expect(stored.source.credential_secret_ref_id).toBe("sref_openai");
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/entitlements/sources/openai_api/credential",
+    );
+    expect(calls[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      project_id: "boss-dogfood",
+      backend: "platform_secret_store",
+    });
+  });
+
   it("uses the v2 Model Entitlement Broker API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const adapter = {

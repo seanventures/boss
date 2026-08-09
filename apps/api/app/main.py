@@ -194,6 +194,22 @@ from .schemas import (
     EntitlementConnectionSessionCreateRequest,
     EntitlementConnectionSessionListResponse,
     EntitlementConnectionSessionSummary,
+    ModelCredentialBindRequest,
+    ModelCredentialUploadRequest,
+    ModelCredentialWriteSummary,
+    ModelGatewayInvocationSettleRequest,
+    ModelGatewayInvocationStartRequest,
+    ModelGatewayInvocationStartResponse,
+    ModelGatewayInvocationSummary,
+    ModelGatewayInvocationListResponse,
+    ModelGatewayLeaseAcquireRequest,
+    ModelGatewayLeaseAcquireResponse,
+    ModelGatewayLeaseHeartbeatRequest,
+    ModelGatewayLeaseListResponse,
+    ModelGatewayLeaseReapRequest,
+    ModelGatewayLeaseReapResponse,
+    ModelGatewayLeaseReleaseRequest,
+    ModelGatewayLeaseSummary,
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
     EnterpriseClusterValidationRunCreateRequest,
@@ -647,6 +663,13 @@ from .services.agent_service import (
     AgentThreadOwnershipError,
 )
 from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.model_gateway import (
+    ModelCapacityDeniedError,
+    ModelCredentialPolicyError,
+    ModelGatewayInvocationError,
+    ModelGatewayLeaseError,
+    ModelGatewayService,
+)
 from .services.work_orchestration import WorkOrchestrationService
 from .services.members import (
     DEFAULT_MEMBER_IDS,
@@ -780,6 +803,7 @@ decisions = DecisionService(settings)
 specpack = SpecPackService(settings)
 agent_runtime = AgentRuntimeService(settings)
 entitlements = EntitlementBrokerService(settings)
+model_gateway = ModelGatewayService(settings)
 capability_bundles = CapabilityBundleService(settings)
 commercial = CommercialService(settings)
 enterprise = EnterpriseService(settings)
@@ -2050,6 +2074,7 @@ def entitlement_source_summary_from_service(
         workload_classes_allowed=payload.get("workload_classes_allowed") or [],
         multi_tenant_allowed=bool(payload["multi_tenant_allowed"]),
         credential_ref=payload.get("credential_ref"),
+        credential_secret_ref_id=payload.get("credential_secret_ref_id"),
         cost_mode=payload["cost_mode"],
         limit_shape=payload.get("limit_shape") or {},
         supported_models=payload.get("supported_models") or [],
@@ -10168,6 +10193,254 @@ def simulate_model_route_decision(
             project_id=payload.project_id,
             decision=model_route_decision_summary_from_service(decision),
         )
+
+
+@app.post(
+    "/v1/entitlements/sources/{source_id}/credential-ref",
+    response_model=EntitlementSourceSummary,
+)
+def bind_model_credential_ref(
+    source_id: str, payload: ModelCredentialBindRequest
+) -> EntitlementSourceSummary:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "entitlement_manage"
+        )
+        try:
+            source = model_gateway.bind_credential_secret_ref(
+                connection,
+                payload.project_id,
+                source_id,
+                payload.secret_ref_id,
+                actor=payload.actor,
+            )
+        except ModelCredentialPolicyError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return entitlement_source_summary_from_service(source)
+
+
+@app.post(
+    "/v1/entitlements/sources/{source_id}/credential",
+    response_model=ModelCredentialWriteSummary,
+    status_code=201,
+)
+def upload_model_credential(
+    source_id: str, payload: ModelCredentialUploadRequest
+) -> ModelCredentialWriteSummary:
+    from .services.secret_backends import SecretUnavailable
+
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "entitlement_manage"
+        )
+        try:
+            result = model_gateway.upload_credential(
+                connection,
+                payload.project_id,
+                source_id,
+                value=payload.value,
+                backend=payload.backend,
+                actor=payload.actor,
+            )
+        except (ModelCredentialPolicyError, SecretUnavailable) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        secret = result["secret"]
+        return ModelCredentialWriteSummary(
+            source=entitlement_source_summary_from_service(result["source"]),
+            secret_ref_id=secret["secret_ref_id"],
+            backend=secret["backend"],
+            fingerprint=secret.get("fingerprint"),
+            last4=secret.get("last4"),
+            raw_secret_stored=False,
+        )
+
+
+@app.post(
+    "/v1/model-gateway/leases",
+    response_model=ModelGatewayLeaseAcquireResponse,
+    status_code=201,
+)
+def acquire_model_gateway_lease(
+    payload: ModelGatewayLeaseAcquireRequest,
+) -> ModelGatewayLeaseAcquireResponse:
+    with begin(engine) as connection:
+        try:
+            result = model_gateway.acquire(
+                connection,
+                payload.project_id,
+                **payload.model_dump(exclude={"project_id"}),
+            )
+        except LeaseNotFoundError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ModelCapacityDeniedError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ModelGatewayLeaseError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ModelGatewayLeaseAcquireResponse(**result)
+
+
+@app.get(
+    "/v1/model-gateway/leases",
+    response_model=ModelGatewayLeaseListResponse,
+)
+def list_model_gateway_leases(
+    project_id: str,
+    status: Optional[str] = None,
+    job_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    provider: Optional[str] = None,
+    limit: int = 100,
+) -> ModelGatewayLeaseListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        return ModelGatewayLeaseListResponse(
+            project_id=project_id,
+            items=model_gateway.list_leases(
+                connection,
+                project_id,
+                status=status,
+                job_id=job_id,
+                agent_id=agent_id,
+                provider=provider,
+                limit=limit,
+            ),
+        )
+
+
+@app.get(
+    "/v1/model-gateway/invocations",
+    response_model=ModelGatewayInvocationListResponse,
+)
+def list_model_gateway_invocations(
+    project_id: str,
+    lease_id: Optional[str] = None,
+    job_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> ModelGatewayInvocationListResponse:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
+    with begin(engine) as connection:
+        return ModelGatewayInvocationListResponse(
+            project_id=project_id,
+            items=model_gateway.list_invocations(
+                connection,
+                project_id,
+                lease_id=lease_id,
+                job_id=job_id,
+                status=status,
+                limit=limit,
+            ),
+        )
+
+
+@app.post(
+    "/v1/model-gateway/leases/reap",
+    response_model=ModelGatewayLeaseReapResponse,
+)
+def reap_model_gateway_leases(
+    payload: ModelGatewayLeaseReapRequest,
+) -> ModelGatewayLeaseReapResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "entitlement_manage"
+        )
+        return ModelGatewayLeaseReapResponse(
+            **model_gateway.reap_expired(
+                connection, payload.project_id, actor=payload.actor
+            )
+        )
+
+
+@app.post(
+    "/v1/model-gateway/leases/{lease_id}/heartbeat",
+    response_model=ModelGatewayLeaseSummary,
+)
+def heartbeat_model_gateway_lease(
+    lease_id: str, payload: ModelGatewayLeaseHeartbeatRequest
+) -> ModelGatewayLeaseSummary:
+    with begin(engine) as connection:
+        try:
+            lease = model_gateway.heartbeat(
+                connection,
+                payload.project_id,
+                lease_id,
+                **payload.model_dump(exclude={"project_id"}),
+            )
+        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return ModelGatewayLeaseSummary(**lease)
+
+
+@app.post(
+    "/v1/model-gateway/leases/{lease_id}/invocations",
+    response_model=ModelGatewayInvocationStartResponse,
+    status_code=201,
+)
+def start_model_gateway_invocation(
+    lease_id: str, payload: ModelGatewayInvocationStartRequest
+) -> ModelGatewayInvocationStartResponse:
+    with begin(engine) as connection:
+        try:
+            result = model_gateway.start_invocation(
+                connection,
+                payload.project_id,
+                lease_id,
+                **payload.model_dump(exclude={"project_id"}),
+            )
+        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ModelGatewayInvocationStartResponse(**result)
+
+
+@app.post(
+    "/v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle",
+    response_model=ModelGatewayInvocationSummary,
+)
+def settle_model_gateway_invocation(
+    lease_id: str,
+    invocation_id: str,
+    payload: ModelGatewayInvocationSettleRequest,
+) -> ModelGatewayInvocationSummary:
+    with begin(engine) as connection:
+        try:
+            invocation = model_gateway.settle_invocation(
+                connection,
+                payload.project_id,
+                lease_id,
+                invocation_id,
+                **payload.model_dump(exclude={"project_id"}),
+            )
+        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ModelGatewayInvocationError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ModelGatewayInvocationSummary(**invocation)
+
+
+@app.post(
+    "/v1/model-gateway/leases/{lease_id}/release",
+    response_model=ModelGatewayLeaseSummary,
+)
+def release_model_gateway_lease(
+    lease_id: str, payload: ModelGatewayLeaseReleaseRequest
+) -> ModelGatewayLeaseSummary:
+    with begin(engine) as connection:
+        try:
+            lease = model_gateway.release(
+                connection,
+                payload.project_id,
+                lease_id,
+                **payload.model_dump(exclude={"project_id"}),
+            )
+        except (LeaseNotFoundError, ModelGatewayLeaseError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return ModelGatewayLeaseSummary(**lease)
 
 
 @app.get("/v1/entitlements/sources", response_model=EntitlementSourceListResponse)

@@ -284,6 +284,8 @@ Core objects:
 - `LocalRunner`
 - `ExecutionNode`
 - `WorkerPool`
+- `ModelGatewayLease`
+- `ModelGatewayInvocation`
 
 Routing inputs:
 
@@ -310,6 +312,10 @@ Invariants:
 - No rate-limit circumvention.
 - No personal subscription use for multi-tenant customer workloads.
 - No paid API fallback without BudgetReservation and approval where policy requires.
+- `ModelGatewayLease` is subordinate to a live `Job` lease, uses its own TTL/heartbeat and per-source fencing token, and consumes a source concurrency slot until terminal.
+- Personal subscription and licensed-seat sources are owner/single-tenant only. Their official OAuth cache stays in the provider CLI; BOSS stores only a local session reference and capacity observations.
+- API, enterprise-gateway, and managed-gateway tokens are accepted only through write-through secret storage and bound by `credential_secret_ref_id`. No public read path resolves them.
+- `ModelGatewayInvocation` is created with a deduplicated external-effect `Receipt` before the adapter call. It persists a request hash and safe metadata, then atomically records success/failure, provider reference, usage, CostReceipt or reservation release, CapacityReceipt, and `llm_calls` telemetry.
 
 ## Budget Reservation Protocol
 
@@ -757,6 +763,16 @@ Model Entitlement:
 - `GET /v1/entitlement-connection-sessions`
 - `POST /v1/entitlements/sources/{source_id}/connection-sessions`
 - `POST /v1/entitlement-connection-sessions/{session_id}/complete`
+- `POST /v1/entitlements/sources/{source_id}/credential-ref`
+- `POST /v1/entitlements/sources/{source_id}/credential` (write-only value; response is metadata)
+- `POST /v1/model-gateway/leases`
+- `GET /v1/model-gateway/leases`
+- `GET /v1/model-gateway/invocations`
+- `POST /v1/model-gateway/leases/reap`
+- `POST /v1/model-gateway/leases/{lease_id}/heartbeat`
+- `POST /v1/model-gateway/leases/{lease_id}/invocations`
+- `POST /v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle`
+- `POST /v1/model-gateway/leases/{lease_id}/release`
 
 Budget:
 

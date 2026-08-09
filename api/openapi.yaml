@@ -2578,6 +2578,212 @@ paths:
       responses:
         '200': { description: Persisted ModelRouteDecision with selected pool, policy result, and rejected source reasons }
         '404': { description: Skill not found }
+  /v1/entitlements/sources/{source_id}/credential-ref:
+    post:
+      summary: Bind an existing active SecretRef to a non-subscription model source
+      description: Subscription OAuth sources must use official connection sessions. The response contains metadata only.
+      parameters:
+        - { name: source_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, secret_ref_id]
+              properties:
+                project_id: { type: string }
+                secret_ref_id: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Entitlement source with opaque SecretRef binding }
+        '422': { description: Inactive, mismatched, or subscription credential binding }
+  /v1/entitlements/sources/{source_id}/credential:
+    post:
+      summary: Write a model API credential through to a secret backend and bind its SecretRef
+      description: The raw value is write-only and never stored in BOSS or returned. Subscription OAuth material is rejected.
+      parameters:
+        - { name: source_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, value]
+              properties:
+                project_id: { type: string }
+                value: { type: string, writeOnly: true }
+                backend:
+                  type: string
+                  default: platform_secret_store
+                  enum: [platform_secret_store, vault, local_runner]
+                actor: { type: string, default: system }
+      responses:
+        '201': { description: SecretRef metadata and connected entitlement source; never the raw value }
+        '422': { description: Backend unavailable or credential policy denied }
+  /v1/model-gateway/leases:
+    get:
+      summary: List model capacity leases for operational visibility
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: job_id, in: query, schema: { type: string } }
+        - { name: agent_id, in: query, schema: { type: string } }
+        - { name: provider, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        '200': { description: Filtered leases without bearer tokens or token hashes }
+        '400': { description: Invalid limit }
+    post:
+      summary: Route and acquire fenced job-scoped model capacity
+      description: Requires an active parent job lease. Paid sources reserve budget before a capacity lease is created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, job_id, worker_id, job_lease_token, agent_id, skill_id, dedupe_key]
+              properties:
+                project_id: { type: string }
+                job_id: { type: string }
+                worker_id: { type: string }
+                job_lease_token: { type: string, writeOnly: true }
+                agent_id: { type: string }
+                skill_id: { type: string }
+                preferred_capabilities: { type: array, items: { type: string } }
+                risk_tier: { type: integer, minimum: 0, maximum: 3, default: 1 }
+                consumer_owner_id: { type: string }
+                estimated_cost_usd_micros: { type: integer, minimum: 0, default: 0 }
+                max_usage: { type: object }
+                dedupe_key: { type: string }
+                ttl_seconds: { type: integer, minimum: 30, maximum: 3600, default: 300 }
+      responses:
+        '201': { description: Opaque model lease token plus non-secret route, source, fence, budget, and expiry data }
+        '409': { description: Job lease invalid, no authorized capacity, owner-scope violation, concurrency full, or budget denied }
+  /v1/model-gateway/invocations:
+    get:
+      summary: List model invocations with receipt, usage, cost, and terminal state
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: lease_id, in: query, schema: { type: string } }
+        - { name: job_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        '200': { description: Filtered invocation evidence without prompt or credential material }
+        '400': { description: Invalid limit }
+  /v1/model-gateway/leases/reap:
+    post:
+      summary: Mark expired model capacity leases terminal and release unused reservations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: system }
+      responses:
+        '200': { description: Number of expired leases reaped with audit events }
+  /v1/model-gateway/leases/{lease_id}/heartbeat:
+    post:
+      summary: Heartbeat model capacity while the parent job lease remains active
+      parameters:
+        - { name: lease_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_id, lease_token, job_lease_token]
+              properties:
+                project_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+                job_lease_token: { type: string, writeOnly: true }
+                ttl_seconds: { type: integer, minimum: 30, maximum: 3600, default: 300 }
+      responses:
+        '200': { description: Refreshed model capacity lease }
+        '409': { description: Model or job lease invalid, terminal, or expired }
+  /v1/model-gateway/leases/{lease_id}/invocations:
+    post:
+      summary: Start a deduplicated receipted provider invocation under model capacity
+      description: Stores only a request hash and non-secret metadata, never prompt content.
+      parameters:
+        - { name: lease_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_id, lease_token, job_lease_token, request_hash, dedupe_key]
+              properties:
+                project_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+                job_lease_token: { type: string, writeOnly: true }
+                request_hash: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
+                dedupe_key: { type: string }
+                metadata: { type: object }
+      responses:
+        '201': { description: In-progress invocation and external-effect Receipt identity }
+        '409': { description: Model or job lease invalid, terminal, or expired }
+        '422': { description: Metadata contains prompt, content, token, secret, or other disallowed fields }
+  /v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle:
+    post:
+      summary: Settle provider result, receipt, budget, capacity, and usage telemetry
+      parameters:
+        - { name: lease_id, in: path, required: true, schema: { type: string } }
+        - { name: invocation_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_id, lease_token, job_lease_token, succeeded]
+              properties:
+                project_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+                job_lease_token: { type: string, writeOnly: true }
+                succeeded: { type: boolean }
+                provider_ref: { type: string }
+                usage_units: { type: object }
+                actual_cost_usd_micros: { type: integer, minimum: 0 }
+                observed_capacity: { type: object }
+                error: { type: object }
+      responses:
+        '200': { description: Terminal invocation with cost and usage evidence }
+        '404': { description: Invocation not found }
+        '409': { description: Model or job lease invalid, terminal, or expired }
+  /v1/model-gateway/leases/{lease_id}/release:
+    post:
+      summary: Release unused model capacity and its budget reservation
+      parameters:
+        - { name: lease_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_id, lease_token, job_lease_token, reason]
+              properties:
+                project_id: { type: string }
+                worker_id: { type: string }
+                lease_token: { type: string, writeOnly: true }
+                job_lease_token: { type: string, writeOnly: true }
+                reason: { type: string }
+      responses:
+        '200': { description: Released capacity lease and reservation }
+        '409': { description: Lease invalid or invocation already started }
   /v1/entitlements/sources:
     get:
       summary: List configured entitlement sources for a project
@@ -2614,6 +2820,9 @@ paths:
                   items: { type: string }
                 multi_tenant_allowed: { type: boolean, default: false }
                 credential_ref: { type: string }
+                credential_secret_ref_id:
+                  type: string
+                  description: Opaque SecretRef identifier; never credential material.
                 cost_mode: { type: string }
                 limit_shape: { type: object }
                 supported_models:

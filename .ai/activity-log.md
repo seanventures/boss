@@ -1469,6 +1469,23 @@ PR: https://github.com/seanheiney/boss/pull/3
 - Validation: 8/8 focused tests pass; web lint/type generation passes; the
   optimized Next build passes; the full web suite is 142/143 with only the
   separately tracked BOSS-311 agent-chat/API-client mismatch remaining.
+## 2026-08-08 — BOSS-335 unified model gateway
+
+- Audited the existing entitlement broker, secret backends, budget governor,
+  Job lease service, receipts, capacity receipts, provider catalog and model
+  telemetry before selecting the missing execution-control slice.
+- Added SecretRef-backed manual API/service credentials and official-session
+  separation for OpenAI/Codex, Anthropic/Claude Code, Google/Gemini, xAI/Grok,
+  Cursor and BOSS enterprise/managed gateways.
+- Added durable per-job model capacity leases, source fencing/concurrency,
+  owner/tenant enforcement, budget reservation, heartbeats, expiry/reaping,
+  receipted invocations, cost/capacity/token settlement and operator list APIs.
+- Updated PRD, technical spec, OpenAPI, provider/model catalog, architecture
+  decision and traceability. Six focused gateway tests, 28 widened backend/
+  worker tests, all 146 web tests, repository lint, production build, strict
+  docs, fresh-schema replay and contract checks pass. Publish as one focused
+  draft PR and keep Plane BOSS-335 In Progress until merge.
+
 ## 2026-08-08 — BOSS-333 sanitized agent toolchain intake
 
 - Audited and pinned seven requested upstream repositories without executing

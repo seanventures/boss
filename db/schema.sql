@@ -391,6 +391,7 @@ CREATE TABLE IF NOT EXISTS entitlement_sources (
   workload_classes_allowed JSONB NOT NULL DEFAULT '[]'::jsonb,
   multi_tenant_allowed BOOLEAN NOT NULL DEFAULT false,
   credential_ref TEXT,
+  credential_secret_ref_id TEXT,
   cost_mode TEXT NOT NULL DEFAULT 'usage_based_api',
   limit_shape JSONB NOT NULL DEFAULT '{}'::jsonb,
   supported_models JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -414,6 +415,7 @@ ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_status TEXT 
 ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_ref TEXT;
 ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS oauth_scopes JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS connection_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE entitlement_sources ADD COLUMN IF NOT EXISTS credential_secret_ref_id TEXT;
 
 CREATE TABLE IF NOT EXISTS entitlement_connection_sessions (
   id TEXT PRIMARY KEY,
@@ -1268,6 +1270,17 @@ ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
 ALTER TABLE secret_refs ADD COLUMN IF NOT EXISTS revoked_by TEXT;
 CREATE INDEX IF NOT EXISTS idx_secret_refs_project
   ON secret_refs(project_id, provider, status);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'entitlement_sources_credential_secret_ref_id_fkey'
+  ) THEN
+    ALTER TABLE entitlement_sources
+      ADD CONSTRAINT entitlement_sources_credential_secret_ref_id_fkey
+      FOREIGN KEY (credential_secret_ref_id) REFERENCES secret_refs(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
 DO $$ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -2414,6 +2427,72 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_active ON budget_reservations(project_id, status, expires_at);
+
+-- Job-scoped model capacity.  Agents receive a short-lived opaque lease, never
+-- provider credential material.  The worker's durable job lease remains the
+-- root authority and every paid lease is tied to a BudgetReservation.
+CREATE TABLE IF NOT EXISTS model_gateway_leases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  worker_id TEXT NOT NULL,
+  route_decision_id TEXT NOT NULL REFERENCES routing_logs(id),
+  entitlement_source_id TEXT NOT NULL REFERENCES entitlement_sources(id),
+  entitlement_pool_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model_id TEXT,
+  auth_method TEXT NOT NULL,
+  credential_secret_ref_id TEXT REFERENCES secret_refs(id) ON DELETE SET NULL,
+  consumer_owner_id TEXT,
+  lease_token_hash TEXT NOT NULL,
+  fencing_token BIGINT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'completed', 'failed', 'released', 'expired')),
+  estimated_cost_usd_micros BIGINT NOT NULL DEFAULT 0 CHECK (estimated_cost_usd_micros >= 0),
+  budget_reservation_id TEXT REFERENCES budget_reservations(id),
+  allocation_id TEXT REFERENCES resource_allocations(id),
+  max_usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  UNIQUE(project_id, dedupe_key),
+  UNIQUE(entitlement_source_id, fencing_token)
+);
+CREATE INDEX IF NOT EXISTS idx_model_gateway_leases_active_source
+  ON model_gateway_leases(entitlement_source_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_model_gateway_leases_job
+  ON model_gateway_leases(project_id, job_id, acquired_at DESC);
+
+-- A lease can start an auditable provider effect exactly once.  Request bodies
+-- are deliberately absent: only a caller-supplied hash and non-secret metadata
+-- are retained for replay detection and observability.
+CREATE TABLE IF NOT EXISTS model_gateway_invocations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  model_gateway_lease_id TEXT NOT NULL REFERENCES model_gateway_leases(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,
+  receipt_id TEXT NOT NULL REFERENCES receipts(id),
+  request_hash TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'in_progress'
+    CHECK (status IN ('in_progress', 'succeeded', 'failed')),
+  provider_ref TEXT,
+  usage_units JSONB NOT NULL DEFAULT '{}'::jsonb,
+  actual_cost_usd_micros BIGINT CHECK (actual_cost_usd_micros >= 0),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_model_gateway_invocations_lease
+  ON model_gateway_invocations(model_gateway_lease_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS cost_receipts (
   id TEXT PRIMARY KEY,

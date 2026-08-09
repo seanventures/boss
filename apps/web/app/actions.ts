@@ -1256,6 +1256,30 @@ export async function connectEntitlementSourceAction(
   revalidatePath("/");
 }
 
+export async function uploadModelCredentialAction(
+  formData: FormData,
+): Promise<void> {
+  const sourceId = formData.get("source_id");
+  const value = formData.get("credential_value");
+  const backend = getOptionalString(formData, "backend") ?? "platform_secret_store";
+  if (typeof sourceId !== "string" || !sourceId.trim()) {
+    throw new Error("source_id is required");
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("credential_value is required");
+  }
+  if (!["platform_secret_store", "vault", "local_runner"].includes(backend)) {
+    throw new Error("unsupported model credential backend");
+  }
+  await client.uploadModelCredential(sourceId.trim(), {
+    project_id: getProjectId(formData),
+    value: value.trim(),
+    backend: backend as "platform_secret_store" | "vault" | "local_runner",
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function createEntitlementConnectionSessionAction(
   formData: FormData,
 ): Promise<void> {

@@ -3938,6 +3938,7 @@ class EntitlementSourceSummary(BaseModel):
     workload_classes_allowed: list[str]
     multi_tenant_allowed: bool
     credential_ref: Optional[str] = None
+    credential_secret_ref_id: Optional[str] = None
     cost_mode: str
     limit_shape: dict[str, Any]
     supported_models: list[str]
@@ -3973,6 +3974,7 @@ class EntitlementSourceUpsertRequest(BaseModel):
     workload_classes_allowed: list[str] = Field(default_factory=list)
     multi_tenant_allowed: bool = False
     credential_ref: Optional[str] = None
+    credential_secret_ref_id: Optional[str] = None
     cost_mode: str = "usage_based_api"
     limit_shape: dict[str, Any] = Field(default_factory=dict)
     supported_models: list[str] = Field(default_factory=list)
@@ -4212,6 +4214,164 @@ class ModelRouteDecisionSimulateRequest(RoutingPreviewRequest):
 class ModelRouteDecisionSimulateResponse(BaseModel):
     project_id: str
     decision: ModelRouteDecisionSummary
+
+
+class ModelCredentialBindRequest(BaseModel):
+    project_id: str
+    secret_ref_id: str
+    actor: str = "system"
+
+
+class ModelCredentialUploadRequest(BaseModel):
+    project_id: str
+    value: str = Field(min_length=1)
+    backend: Literal["platform_secret_store", "vault", "local_runner"] = (
+        "platform_secret_store"
+    )
+    actor: str = "system"
+
+
+class ModelCredentialWriteSummary(BaseModel):
+    source: EntitlementSourceSummary
+    secret_ref_id: str
+    backend: str
+    fingerprint: Optional[str] = None
+    last4: Optional[str] = None
+    raw_secret_stored: Literal[False] = False
+
+
+class ModelGatewayLeaseSummary(BaseModel):
+    id: str
+    project_id: str
+    job_id: str
+    agent_id: str
+    worker_id: str
+    route_decision_id: str
+    entitlement_source_id: str
+    entitlement_pool_id: str
+    source_id: str
+    provider: str
+    model_id: Optional[str] = None
+    auth_method: str
+    credential_secret_ref_id: Optional[str] = None
+    consumer_owner_id: Optional[str] = None
+    fencing_token: int
+    status: str
+    estimated_cost_usd_micros: int
+    budget_reservation_id: Optional[str] = None
+    allocation_id: Optional[str] = None
+    max_usage: dict[str, Any]
+    dedupe_key: str
+    acquired_at: str
+    heartbeat_at: str
+    expires_at: str
+    completed_at: Optional[str] = None
+    result: dict[str, Any]
+
+
+class ModelGatewayLeaseAcquireRequest(BaseModel):
+    project_id: str
+    job_id: str
+    worker_id: str
+    job_lease_token: str
+    agent_id: str
+    skill_id: str
+    preferred_capabilities: list[str] = Field(default_factory=list)
+    risk_tier: int = Field(default=1, ge=0, le=3)
+    consumer_owner_id: Optional[str] = None
+    estimated_cost_usd_micros: int = Field(default=0, ge=0)
+    max_usage: dict[str, Any] = Field(default_factory=dict)
+    dedupe_key: str = Field(min_length=1, max_length=250)
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class ModelGatewayLeaseAcquireResponse(BaseModel):
+    lease: ModelGatewayLeaseSummary
+    lease_token: Optional[str] = None
+    duplicate: bool
+
+
+class ModelGatewayLeaseListResponse(BaseModel):
+    project_id: str
+    items: list[ModelGatewayLeaseSummary]
+
+
+class ModelGatewayLeaseHeartbeatRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+    job_lease_token: str
+    ttl_seconds: int = Field(default=300, ge=30, le=3600)
+
+
+class ModelGatewayInvocationStartRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+    job_lease_token: str
+    request_hash: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    dedupe_key: str = Field(min_length=1, max_length=250)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelGatewayInvocationSummary(BaseModel):
+    id: str
+    project_id: str
+    model_gateway_lease_id: str
+    job_id: str
+    agent_id: str
+    receipt_id: str
+    request_hash: str
+    dedupe_key: str
+    status: str
+    provider_ref: Optional[str] = None
+    usage_units: dict[str, Any]
+    actual_cost_usd_micros: Optional[int] = None
+    metadata: dict[str, Any]
+    error: dict[str, Any]
+    started_at: str
+    completed_at: Optional[str] = None
+
+
+class ModelGatewayInvocationStartResponse(BaseModel):
+    invocation: ModelGatewayInvocationSummary
+    duplicate: bool
+
+
+class ModelGatewayInvocationListResponse(BaseModel):
+    project_id: str
+    items: list[ModelGatewayInvocationSummary]
+
+
+class ModelGatewayInvocationSettleRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+    job_lease_token: str
+    succeeded: bool
+    provider_ref: Optional[str] = None
+    usage_units: dict[str, Any] = Field(default_factory=dict)
+    actual_cost_usd_micros: Optional[int] = Field(default=None, ge=0)
+    observed_capacity: dict[str, Any] = Field(default_factory=dict)
+    error: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelGatewayLeaseReleaseRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    lease_token: str
+    job_lease_token: str
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ModelGatewayLeaseReapRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+
+class ModelGatewayLeaseReapResponse(BaseModel):
+    project_id: str
+    reaped: int
 
 
 class GitHubConnectionSummary(BaseModel):
