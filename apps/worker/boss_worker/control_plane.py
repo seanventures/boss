@@ -168,7 +168,8 @@ class ControlPlaneClient:
         """Persist changed terminal benchmark reports as tuning evidence snapshots.
 
         Unlike an improvement rollout, this is analysis-only: the API does not create
-        a candidate diff, spend budget, or apply any configuration.
+        a candidate diff, spend budget, or apply any configuration. It may advance a
+        measurement baseline after the separately governed rollout is already complete.
         """
         response = self._client.post("/v1/qa/benchmark-apps/tuning-sweep", json={})
         response.raise_for_status()

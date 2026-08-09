@@ -436,6 +436,10 @@ from .schemas import (
     SecretRefSummary,
     SecretRefUpdateRequest,
     QABenchmarkTuningProposalRequest,
+    ImprovementProgramCreateRequest,
+    ImprovementProgramStatusRequest,
+    ImprovementTrialActionRequest,
+    ImprovementTrialCreateRequest,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -5505,15 +5509,23 @@ def sweep_qa_benchmark_evaluations(payload: dict | None = None):
     limit = int(payload.get("limit") or 100)
     actor = str(payload.get("actor") or "qa_benchmark_scheduler").strip()
     from boss_engine.services.benchmark_tuning import sweep_terminal_benchmarks
+    from boss_engine.services.improvement_programs import reconcile_program_baselines
 
     try:
         with begin(engine) as connection:
-            return sweep_terminal_benchmarks(
+            result = sweep_terminal_benchmarks(
                 connection,
                 project_id=project_id,
                 actor=actor,
                 limit=limit,
             )
+            result["baseline_reconciliation"] = reconcile_program_baselines(
+                connection,
+                project_id=project_id,
+                actor="improvement_program_scheduler",
+                limit=limit,
+            )
+            return result
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -5586,6 +5598,211 @@ def create_qa_benchmark_tuning_proposal(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
     return self_improvement_detail_from_row(row)
+
+
+@app.get("/v1/improvement-programs")
+def list_improvement_programs(project_id: str, limit: int = 50):
+    """List durable feedback loops and their pinned baselines."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": improvement_programs.list_programs(
+                connection, project_id=project_id, limit=limit
+            ),
+        }
+
+
+@app.post("/v1/improvement-programs", status_code=201)
+def create_improvement_program(payload: ImprovementProgramCreateRequest):
+    """Pin an observed QA baseline and deterministic comparison policy."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "self_improvement_manage",
+            )
+            return improvement_programs.create_program(
+                connection,
+                project_id=payload.project_id,
+                name=payload.name,
+                objective=payload.objective,
+                baseline_evaluation_id=payload.baseline_evaluation_id,
+                actor=payload.actor,
+                minimum_evidence_weight=payload.minimum_evidence_weight,
+                minimum_overall_delta=payload.minimum_overall_delta,
+                maximum_dimension_regression=payload.maximum_dimension_regression,
+                hard_gates=payload.hard_gates,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.patch("/v1/improvement-programs/{program_id}")
+def update_improvement_program(
+    program_id: str, payload: ImprovementProgramStatusRequest
+):
+    """Pause, resume, or retire a feedback loop without losing its ledger."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            program = improvement_programs.get_program(connection, program_id)
+            require_project_actor(
+                connection,
+                program["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            return improvement_programs.update_program_status(
+                connection,
+                program_id=program_id,
+                status=payload.status,
+                actor=payload.actor,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/improvement-programs/{program_id}/trials")
+def list_improvement_trials(program_id: str, limit: int = 50):
+    """List reproducible candidate comparisons for one feedback loop."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            program = improvement_programs.get_program(connection, program_id)
+            return {
+                "program": program,
+                "items": improvement_programs.list_trials(
+                    connection, program_id=program_id, limit=limit
+                ),
+            }
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/v1/improvement-programs/{program_id}/trials", status_code=201)
+def create_improvement_trial(
+    program_id: str, payload: ImprovementTrialCreateRequest
+):
+    """Evaluate one candidate against the program's pinned control."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            program = improvement_programs.get_program(connection, program_id)
+            require_project_actor(
+                connection,
+                program["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            return improvement_programs.create_trial(
+                connection,
+                program_id=program_id,
+                candidate_evaluation_id=payload.candidate_evaluation_id,
+                candidate_change_ref=payload.candidate_change_ref,
+                candidate_diff_summary=payload.candidate_diff_summary,
+                changed_variable=payload.changed_variable,
+                control_configuration=payload.control_configuration,
+                candidate_configuration=payload.candidate_configuration,
+                isolation_evidence_refs=payload.isolation_evidence_refs,
+                actor=payload.actor,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/v1/improvement-programs/trials/{trial_id}/promote",
+    status_code=201,
+)
+def promote_improvement_trial(
+    trial_id: str, payload: ImprovementTrialActionRequest
+):
+    """Turn a measured winner into a normal approval-gated proposal."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            trial = improvement_programs.get_trial(connection, trial_id)
+            require_project_actor(
+                connection,
+                trial["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            updated_trial, proposal = improvement_programs.promote_trial(
+                connection,
+                trial_id=trial_id,
+                actor=payload.actor,
+                risk_tier=payload.risk_tier,
+                self_improvement_service=self_improvement,
+            )
+            return {
+                "trial": updated_trial,
+                "proposal": self_improvement_detail_from_row(proposal),
+            }
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/improvement-programs/trials/{trial_id}/adopt-baseline")
+def adopt_improvement_trial_baseline(
+    trial_id: str, payload: ImprovementTrialActionRequest
+):
+    """Move the baseline only after the linked proposal is fully rolled out."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            trial = improvement_programs.get_trial(connection, trial_id)
+            require_project_actor(
+                connection,
+                trial["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            program, updated_trial = improvement_programs.adopt_trial_baseline(
+                connection, trial_id=trial_id, actor=payload.actor
+            )
+            return {"program": program, "trial": updated_trial}
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/pipeline-profiles")

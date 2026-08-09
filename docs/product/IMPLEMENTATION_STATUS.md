@@ -131,6 +131,8 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - denied write attempts emit `policy.denied` events when the project can be resolved
   - self-improvement proposal, canary, rollout, and rollback records
   - fail-closed self-improvement evidence gates for tests, canary scope, rollback steps, metrics, and evidence refs
+  - governed Improvement Programs with frozen benchmark baselines, hashed metric contracts, evidence floors, hard gates, and deterministic single-variable control/candidate trials
+  - winning-trial-only proposal promotion plus worker reconciliation that moves a measurement baseline only after the linked proposal reaches governed `rolled_out` state
   - audit export and replay-bundle artifact generation
   - compliance evidence bundle generation for members, roles, policies, break-glass grants, decisions, receipts, reservations, cost receipts, deadletters, and compliance-relevant events
   - data-boundary classification persisted on tasks, jobs, artifacts, and receipts, with task-to-job/artifact inheritance and audit export visibility

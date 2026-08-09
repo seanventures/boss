@@ -41,6 +41,8 @@ nav:
       - Roadmap: product/ROADMAP-v2.0.md
       - Assurance contracts: product/ASSURANCE_CONTRACTS.md
       - Traceability: product/TRACEABILITY.md
+  - Architecture:
+      - Governed autonomous improvement: architecture/AUTONOMOUS_IMPROVEMENT_LOOP.md
   - Operations:
       - Infrastructure runbook: operations/INFRA_RUNBOOK.md
       - Webhooks: operations/WEBHOOKS.md

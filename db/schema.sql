@@ -2874,6 +2874,55 @@ CREATE INDEX IF NOT EXISTS idx_qa_benchmark_evaluations_project_created
 CREATE INDEX IF NOT EXISTS idx_qa_benchmark_evaluations_benchmark_status
   ON qa_benchmark_evaluations(project_id, benchmark_id, status, updated_at DESC);
 
+-- Governed autonomous-improvement programs pin a known-good measurement contract.
+-- Programs and trials are evidence/control records only: a winning trial may create a
+-- normal self-improvement proposal, but it cannot apply its candidate or move a baseline.
+CREATE TABLE IF NOT EXISTS improvement_programs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  benchmark_id TEXT NOT NULL,
+  baseline_evaluation_id TEXT NOT NULL REFERENCES qa_benchmark_evaluations(id),
+  metric_contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metric_contract_hash TEXT NOT NULL,
+  minimum_evidence_weight INTEGER NOT NULL DEFAULT 50 CHECK (minimum_evidence_weight BETWEEN 1 AND 100),
+  minimum_overall_delta DOUBLE PRECISION NOT NULL DEFAULT 1,
+  maximum_dimension_regression DOUBLE PRECISION NOT NULL DEFAULT 0,
+  hard_gates JSONB NOT NULL DEFAULT '{"functionality": 100}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active', -- active | paused | retired
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_improvement_programs_project_status
+  ON improvement_programs(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS improvement_trials (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  program_id TEXT NOT NULL REFERENCES improvement_programs(id) ON DELETE CASCADE,
+  control_evaluation_id TEXT NOT NULL REFERENCES qa_benchmark_evaluations(id),
+  candidate_evaluation_id TEXT NOT NULL REFERENCES qa_benchmark_evaluations(id),
+  candidate_change_ref TEXT NOT NULL,
+  candidate_diff_summary TEXT NOT NULL,
+  changed_variable TEXT NOT NULL,
+  control_configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+  candidate_configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+  isolation_evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL, -- candidate_wins | rejected | inconclusive | proposed | adopted | superseded
+  verdict JSONB NOT NULL DEFAULT '{}'::jsonb,
+  verdict_hash TEXT NOT NULL,
+  proposal_id TEXT REFERENCES self_improvement_proposals(id),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (control_evaluation_id <> candidate_evaluation_id),
+  UNIQUE(program_id, candidate_evaluation_id, candidate_change_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_improvement_trials_program_status
+  ON improvement_trials(program_id, status, updated_at DESC);
+
 -- Fail-closed quality evidence for a governed coding-pipeline run (see QualityGate ObjectSpec).
 CREATE TABLE IF NOT EXISTS quality_gates (
   id TEXT PRIMARY KEY,

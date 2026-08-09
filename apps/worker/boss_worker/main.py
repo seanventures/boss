@@ -46,8 +46,9 @@ def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
     """Keep the benchmark evidence ledger current while the worker is idle.
 
     The service compares report hashes and emits an event only when durable evidence
-    changed, so invoking it at the poll interval is inexpensive and cannot create a
-    tuning change or an external side effect.
+    changed. It also reconciles a frozen measurement baseline only after the linked
+    proposal is already rolled out, so invoking it at the poll interval cannot create
+    a tuning change or an external side effect.
     """
     global _last_qa_benchmark_sweep_monotonic
     now = time.monotonic()

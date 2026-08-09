@@ -2562,6 +2562,82 @@ class QABenchmarkTuningProposalRequest(BaseModel):
         return self
 
 
+class ImprovementProgramCreateRequest(BaseModel):
+    project_id: str
+    name: str
+    objective: str
+    baseline_evaluation_id: str
+    minimum_evidence_weight: int = Field(default=50, ge=1, le=100)
+    minimum_overall_delta: float = Field(default=1.0, ge=0)
+    maximum_dimension_regression: float = Field(default=0.0, ge=0)
+    hard_gates: dict[str, float] = Field(default_factory=lambda: {"functionality": 100})
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def validate_program(self) -> "ImprovementProgramCreateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.name = _require_text(self.name, "name")
+        self.objective = _require_text(self.objective, "objective")
+        self.baseline_evaluation_id = _require_text(
+            self.baseline_evaluation_id, "baseline_evaluation_id"
+        )
+        self.actor = _require_text(self.actor, "actor")
+        if not self.hard_gates:
+            raise ValueError("hard_gates must contain at least one metric.")
+        return self
+
+
+class ImprovementProgramStatusRequest(BaseModel):
+    status: Literal["active", "paused", "retired"]
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def validate_actor(self) -> "ImprovementProgramStatusRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class ImprovementTrialCreateRequest(BaseModel):
+    candidate_evaluation_id: str
+    candidate_change_ref: str
+    candidate_diff_summary: str
+    changed_variable: str
+    control_configuration: dict[str, Any]
+    candidate_configuration: dict[str, Any]
+    isolation_evidence_refs: list[str]
+    actor: str = "vp_agents"
+
+    @model_validator(mode="after")
+    def validate_trial(self) -> "ImprovementTrialCreateRequest":
+        self.candidate_evaluation_id = _require_text(
+            self.candidate_evaluation_id, "candidate_evaluation_id"
+        )
+        self.candidate_change_ref = _require_text(
+            self.candidate_change_ref, "candidate_change_ref"
+        )
+        self.candidate_diff_summary = _require_text(
+            self.candidate_diff_summary, "candidate_diff_summary"
+        )
+        self.changed_variable = _require_text(self.changed_variable, "changed_variable")
+        self.actor = _require_text(self.actor, "actor")
+        if not self.control_configuration or not self.candidate_configuration:
+            raise ValueError("control_configuration and candidate_configuration are required.")
+        self.isolation_evidence_refs = _require_non_empty_string_list(
+            self.isolation_evidence_refs, "isolation_evidence_refs"
+        )
+        return self
+
+
+class ImprovementTrialActionRequest(BaseModel):
+    actor: str = "vp_agents"
+    risk_tier: int = Field(default=2, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def validate_actor(self) -> "ImprovementTrialActionRequest":
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class SelfImprovementProposalSummary(BaseModel):
     id: str
     project_id: str

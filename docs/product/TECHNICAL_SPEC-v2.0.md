@@ -466,6 +466,29 @@ An Assurance Case references, but does not contain or redefine, AgentGroupRuns, 
 
 Metric evaluators and verifier runs are leased jobs with dedupe, retry/deadletter, and budgets/receipts where spendy. Fixed/solved claims require reproducible red-to-green evidence. Caused-by claims require an isolation experiment or remain `inconclusive`. Surface ownership is revalidated at the provider/deployment boundary.
 
+## Governed Improvement Programs
+
+`improvement_programs` pins a project, benchmark evaluation, metric contract/hash,
+evidence floor, minimum overall delta, maximum per-dimension regression, and hard
+gates. `improvement_trials` joins that frozen control to one candidate evaluation,
+the traceable PR/config diff, control and candidate configuration manifests,
+isolation evidence, a deterministic verdict/hash, and an optional
+`self_improvement_proposals` link.
+
+Trial creation is a synchronous deterministic policy boundary. It rejects mismatched
+projects or metric contracts and configuration manifests with anything other than the
+single declared changed variable. A lower evidence weight or missing control dimension
+is inconclusive; failed hard gates, dimension regression, or insufficient overall delta
+reject the candidate. Only `candidate_wins` can create a proposal. Proposal creation is
+not application: the existing hold-default decision, canary, staged rollout, and rollback
+state machine retains authority. Baseline adoption requires the linked proposal to have
+status `rolled_out` and emits a separate audited event.
+
+OpenTelemetry is the analytics interchange boundary. Langfuse may consume trace and
+evaluation projections; DSPy or another optimizer may submit versioned candidate
+artifacts. Neither system may update BOSS canonical state except through authenticated,
+policy-checked APIs.
+
 ## BOSS Account Connect
 
 BOSS Account Connect owns hosted login, account identity, cloud org/workspace membership, license entitlements, marketplace identity, team invites, billing portal, managed connector authorization, hosted model/provider credential management, optional telemetry/health sync, and cloud backup/sync if enabled.
@@ -742,6 +765,16 @@ Budget:
 - `POST /v1/budget/release`
 - `POST /v1/budget/consume`
 - `GET /v1/budget/forecast`
+
+Improvement Programs:
+
+- `GET /v1/improvement-programs`
+- `POST /v1/improvement-programs`
+- `PATCH /v1/improvement-programs/{program_id}`
+- `GET /v1/improvement-programs/{program_id}/trials`
+- `POST /v1/improvement-programs/{program_id}/trials`
+- `POST /v1/improvement-programs/trials/{trial_id}/promote`
+- `POST /v1/improvement-programs/trials/{trial_id}/adopt-baseline`
 
 Commercial:
 

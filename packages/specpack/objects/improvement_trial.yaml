@@ -1,0 +1,25 @@
+kind: ObjectSpec
+id: improvement_trial
+version: 0.1.0
+name: Improvement Trial
+description: >
+  A reproducible, single-variable comparison between control and candidate QA
+  evaluations under one pinned Improvement Program measurement contract.
+storage:
+  table: improvement_trials
+required_fields:
+  - program_id
+  - control_evaluation_id
+  - candidate_evaluation_id
+  - candidate_change_ref
+  - changed_variable
+  - isolation_evidence_refs
+  - verdict_hash
+rules:
+  exactly_one_configuration_variable_changes: true
+  same_benchmark_scorecard_and_metric_contract: true
+  candidate_evidence_cannot_drop: true
+  hard_gate_regression_rejects_candidate: true
+  winner_only_creates_governed_proposal: true
+  stale_control_cannot_replace_newer_baseline: true
+  never_directly_applies_candidate: true

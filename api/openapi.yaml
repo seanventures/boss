@@ -6730,7 +6730,8 @@ paths:
       summary: Materialize changed terminal benchmark evidence for the tuning ledger
       description: >
         Worker-safe analysis-only sweep. It stores scorecard/recommendation snapshots but
-        does not call a model or provider, create a candidate diff, or apply a change.
+        does not call a model or provider, create a candidate diff, or apply a change. It
+        also adopts measurement baselines whose linked governed rollout is already complete.
       requestBody:
         required: false
         content:
@@ -6771,6 +6772,124 @@ paths:
         '403': { description: Actor lacks self-improvement management authority }
         '404': { description: QA benchmark run not found }
         '422': { description: Run has insufficient observed evidence or candidate change control is incomplete }
+  /v1/improvement-programs:
+    get:
+      summary: List governed autonomous-improvement programs
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
+      responses:
+        '200': { description: Programs with pinned baseline and metric contract }
+    post:
+      summary: Create a program from a durable baseline evaluation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, name, objective, baseline_evaluation_id]
+              properties:
+                project_id: { type: string }
+                name: { type: string }
+                objective: { type: string }
+                baseline_evaluation_id: { type: string }
+                minimum_evidence_weight: { type: integer, minimum: 1, maximum: 100, default: 50 }
+                minimum_overall_delta: { type: number, minimum: 0, default: 1 }
+                maximum_dimension_regression: { type: number, minimum: 0, default: 0 }
+                hard_gates: { type: object, additionalProperties: { type: number } }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '201': { description: Active improvement program with immutable initial baseline }
+        '403': { description: Actor lacks self-improvement management authority }
+        '422': { description: Invalid baseline or metric policy }
+  /v1/improvement-programs/{program_id}:
+    patch:
+      summary: Pause, resume, or retire an improvement program
+      parameters:
+        - { name: program_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [active, paused, retired] }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '200': { description: Updated durable program state }
+        '403': { description: Actor lacks self-improvement management authority }
+        '422': { description: Invalid transition input }
+  /v1/improvement-programs/{program_id}/trials:
+    get:
+      summary: List single-variable trials for an improvement program
+      parameters:
+        - { name: program_id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
+      responses:
+        '200': { description: Trial verdict ledger }
+        '404': { description: Program not found }
+    post:
+      summary: Evaluate a candidate against the pinned control
+      parameters:
+        - { name: program_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate_evaluation_id, candidate_change_ref, candidate_diff_summary, changed_variable, control_configuration, candidate_configuration, isolation_evidence_refs]
+              properties:
+                candidate_evaluation_id: { type: string }
+                candidate_change_ref: { type: string }
+                candidate_diff_summary: { type: string }
+                changed_variable: { type: string }
+                control_configuration: { type: object }
+                candidate_configuration: { type: object }
+                isolation_evidence_refs: { type: array, minItems: 1, items: { type: string } }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '201': { description: Deterministic candidate_wins, rejected, or inconclusive verdict }
+        '403': { description: Actor lacks self-improvement management authority }
+        '422': { description: Candidate is not a comparable single-variable experiment }
+  /v1/improvement-programs/trials/{trial_id}/promote:
+    post:
+      summary: Promote a winning trial into the governed proposal state machine
+      parameters:
+        - { name: trial_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: vp_agents }
+                risk_tier: { type: integer, minimum: 1, maximum: 3, default: 2 }
+      responses:
+        '201': { description: Linked improvement proposal and hold-default decision }
+        '403': { description: Actor lacks self-improvement management authority }
+        '422': { description: Trial is not an unpromoted winner }
+  /v1/improvement-programs/trials/{trial_id}/adopt-baseline:
+    post:
+      summary: Adopt the candidate evaluation after governed rollout completes
+      parameters:
+        - { name: trial_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actor: { type: string, default: vp_agents }
+      responses:
+        '200': { description: Program baseline advanced and trial marked adopted }
+        '403': { description: Actor lacks self-improvement management authority }
+        '422': { description: Linked proposal has not completed rollout }
   /v1/code-tasks/{run_id}/feedback:
     get:
       summary: Read the durable feedback thread for a code-task lineage

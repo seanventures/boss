@@ -3,6 +3,25 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — BOSS-334 governed autonomous improvement programs
+
+- Evaluated the attached OSS shortlist against official sources. Selected Langfuse as the
+  preferred optional analytics/evaluation integration, DSPy as an optimizer/candidate
+  generator, Temporal as a future durable-executor adapter/reference, and OpenTelemetry as
+  the vendor-neutral telemetry boundary. BOSS keeps canonical state and all promotion gates.
+- Added durable `ImprovementProgram` and `ImprovementTrial` ledgers. Programs freeze a QA
+  baseline and metric-contract hash; trials mechanically enforce one changed configuration
+  key, comparable control/candidate scorecards, evidence coverage, hard gates, regression
+  tolerance, overall delta, evidence references, and a hashed verdict.
+- Only measured winners can create the existing hold-default self-improvement proposal.
+  Baselines remain frozen through decision, canary, and staged rollout, and the worker's
+  analysis sweep adopts them only after the linked proposal is durably `rolled_out`.
+- Added typed write validation, project RBAC, events, APIs/OpenAPI, SpecPack objects/workflow,
+  architecture/product/technical docs, and Postgres cleanup support. Focused service/worker/
+  benchmark suites and a real-Postgres end-to-end program → trial → proposal → rollout gate →
+  automatic baseline adoption test pass; bootstrap is idempotent and Ruff passes.
+
+---
 ## 2026-08-08 — Codex — QA benchmark evidence and governed tuning loop
 
 - Extended BOSS-327 with a versioned, evidence-aware scorecard and a deterministic
