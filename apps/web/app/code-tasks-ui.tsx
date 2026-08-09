@@ -365,13 +365,15 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
  * one of those is a budgeted governed pipeline. Disabling on submit and saying "Starting…" is
  * the whole fix, and it is the same fix the delivery buttons needed.
  */
-function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRepo }: {
+function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRepo,
+                          onLaunched, onOpen, startedId, failed }: {
   benchmark: QaBenchmarkApp; projectId: string; actor: string;
   defaultOwner?: string; defaultRepo?: string;
+  startedId?: string | null; failed?: string | null;
+  onOpen?: (runId: string) => void;
+  onLaunched?: (key: string, runId?: string, error?: string) => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
-  const [done, setDone] = useState(false);
-  const router = useRouter();
 
   const launch = async () => {
     setSent(true);
@@ -381,24 +383,41 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
     data.set("benchmark_id", benchmark.id);
     data.set("owner", defaultOwner ?? "");
     data.set("repo", defaultRepo ?? "");
+    let out: { run_id?: string; error?: string } | undefined;
     try {
-      await startQaBenchmarkAppAction(data);
-      setDone(true);
+      out = await startQaBenchmarkAppAction(data);
     } finally {
       setSent(false);
-      router.refresh();
+      await onLaunched?.(benchmark.id, out?.run_id,
+                         out?.run_id ? undefined : (out?.error ?? "the API returned no run"));
     }
   };
 
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-      <button className="cap-btn primary" disabled={sent} onClick={() => void launch()}>
-        {sent ? "Starting…" : `Launch ${benchmark.name}`}
-      </button>
+      {/* Once launched this becomes a way IN to the run, exactly like the task cards. The
+          state lives in the PARENT: held here it was destroyed by the reload the launch
+          triggers, so the button reverted and the operator saw nothing happen. */}
+      {startedId ? (
+        <button className="cap-btn primary" onClick={() => onOpen?.(startedId)}
+                title="Open the run this launched">
+          View run →
+        </button>
+      ) : (
+        <button className="cap-btn primary" disabled={sent} onClick={() => void launch()}>
+          {sent ? "Starting…" : `Launch ${benchmark.name}`}
+        </button>
+      )}
       <span className="detail">
         {sent ? "starting…"
-              : done ? "started — it is in the task list below"
-                     : "Strict profile · starts a budgeted, review-gated task"}
+              : failed ? failed
+              : startedId
+                ? `started ${startedId.slice(0, 13)}… — it builds the app before there is `
+                  + `anything to preview`
+                // The profile the endpoint actually asks for. It said "Strict" while the
+                // endpoint had been changed to balanced — a caption describing a decision
+                // made somewhere else, which is how it was wrong in the first place.
+                : "Balanced profile · full review, findings attached to the PR"}
       </span>
     </div>
   );
@@ -531,12 +550,18 @@ function ContractDetails({ criteria, verification, label = "Acceptance criteria 
   );
 }
 
-function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaultRepo }: {
+function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaultRepo,
+                             launched, onLaunched, onOpen }: {
   benchmarks: QaBenchmarkApp[];
   projectId: string;
   actor: string;
   defaultOwner?: string;
   defaultRepo?: string;
+  // Held by CodeTasksHome, keyed by benchmark id, because a launch reloads the list and any
+  // state inside these cards goes with it.
+  launched?: Record<string, { run_id?: string; error?: string }>;
+  onLaunched?: (key: string, runId?: string, error?: string) => void | Promise<void>;
+  onOpen?: (runId: string) => void;
 }) {
   if (!benchmarks.length) return null;
   return (
@@ -558,7 +583,10 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
                              verification={benchmark.verification_commands}
                              label="Acceptance scenarios & required evidence" />
             <BenchmarkLaunch benchmark={benchmark} projectId={projectId} actor={actor}
-                             defaultOwner={defaultOwner} defaultRepo={defaultRepo} />
+                             defaultOwner={defaultOwner} defaultRepo={defaultRepo}
+                             onLaunched={onLaunched} onOpen={onOpen}
+                             startedId={launched?.[benchmark.id]?.run_id}
+                             failed={launched?.[benchmark.id]?.error} />
           </article>
         ))}
       </div>
@@ -1060,6 +1088,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
         benchmarks={benchmarks}
         projectId={projectId}
         actor={actor}
+        launched={launched}
+        onLaunched={noteLaunch}
+        onOpen={(id) => void openRun(id)}
         defaultOwner={lastRepo?.owner}
         defaultRepo={lastRepo?.repo}
       />

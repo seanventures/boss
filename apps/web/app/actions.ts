@@ -2455,18 +2455,33 @@ export async function getQaBenchmarkReportAction(runId: string) {
   }
 }
 
-export async function startQaBenchmarkAppAction(formData: FormData): Promise<void> {
+export async function startQaBenchmarkAppAction(
+  formData: FormData,
+): Promise<{ run_id?: string; error?: string }> {
   const projectId = getProjectId(formData);
   const benchmarkId = String(formData.get("benchmark_id") ?? "").trim();
-  if (!benchmarkId) return;
-  await client.startQaBenchmarkApp(benchmarkId, {
-    project_id: projectId,
-    actor: getActor(formData),
-    owner: String(formData.get("owner") ?? "").trim() || undefined,
-    repo: String(formData.get("repo") ?? "").trim() || undefined,
-    base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
-  });
-  revalidatePath("/");
+  if (!benchmarkId) return { error: "no benchmark named" };
+  try {
+    const started = await client.startQaBenchmarkApp(benchmarkId, {
+      project_id: projectId,
+      actor: getActor(formData),
+      owner: String(formData.get("owner") ?? "").trim() || undefined,
+      repo: String(formData.get("repo") ?? "").trim() || undefined,
+      base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+    });
+    // Deliberately NO revalidatePath, and the id is returned.
+    //
+    // Revalidating replaces the client tree while this promise is still resolving, so the
+    // component that awaited it is remounted and every state update afterwards lands on an
+    // instance nobody renders. The run WAS created on every click; the button simply reverted
+    // to "Launch ApproveIt" with nothing on screen having changed. That is the same defect
+    // fixed for the relaunch button — and left in its sibling, which is how it reached an
+    // operator who had been waiting hours to press it.
+    return { run_id: (started as { run_id?: string })?.run_id };
+  } catch (e) {
+    // A silent throw here is indistinguishable from a dead button. Say what happened.
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 // Per-stage model-call activity for a code task (the internal detail behind each phase).

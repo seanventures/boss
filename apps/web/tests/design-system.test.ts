@@ -136,10 +136,32 @@ describe("BOSS mission-control design system", () => {
     expect(relaunch).toContain('data.set("profile", profile)');
     expect(relaunch).toContain('data.set("risk_tier"');
     expect(relaunch).toContain("same as the original");
-    // The benchmark card keeps the claim, because there it is accurate.
+    // Nor may the benchmark card. It said "Strict profile" long after the endpoint had been
+    // changed to ask for balanced — a caption describing a decision made in another file,
+    // which is exactly how it came to be wrong. It must name what the endpoint requests.
     const benchmark = codeTasks.slice(codeTasks.indexOf("function BenchmarkLaunch"),
                                       codeTasks.indexOf("function LaunchTask"));
-    expect(benchmark).toContain("Strict profile");
+    expect(benchmark).not.toContain("Strict profile");
+    expect(benchmark).toContain("Balanced profile");
+    const api = readFileSync(resolve(__dirname, "../../../apps/api/app/main.py"), "utf8");
+    expect(api).toContain('(payload or {}).get("profile") or "balanced"');
+  });
+
+  it("both launch buttons behave the same way", () => {
+    // The relaunch button was fixed and its sibling was not. So the QA benchmark card kept
+    // the original defect — action fires, run is created, revalidatePath replaces the tree,
+    // the callback lands on a remounted component, and the button reverts to "Launch
+    // ApproveIt" with nothing on screen having changed. An operator who had waited hours to
+    // press it saw a dead button. Fixing one path and not its twin is the recurring shape of
+    // this whole area, so the test now covers both.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    const benchmark = codeTasks.slice(codeTasks.indexOf("function BenchmarkLaunch"),
+                                     codeTasks.indexOf("function LaunchTask"));
+    expect(benchmark).toMatch(/startedId \? \(/);        // becomes a link once launched
+    expect(benchmark).toContain("View run →");
+    expect(benchmark).not.toContain("router.refresh()");  // would wipe the state it just set
+    // The parent holds the memory for BOTH, keyed differently but the same mechanism.
+    expect(codeTasks).toContain("startedId={launched?.[benchmark.id]?.run_id}");
   });
 
   it("owns the list it claims a new run will appear in", () => {
