@@ -443,6 +443,11 @@ function LaunchTask({ run, projectId, label = "Run this task again", onLaunched,
   const [sent, setSent] = useState(false);
   const router = useRouter();
   const spec = run.spec ?? {};
+  // Offering to re-run work that is still going is an invitation to waste money. The API
+  // would refuse it anyway — the duplicate guard returns the in-flight run — but a button
+  // that looks available and then quietly does something else is the worse failure: it
+  // teaches the operator that controls here are decorative.
+  const inFlight = run.status === "running" || run.status === "queued";
   const st = run.state ?? {};
   // The profile the original actually RAN with. `spec.profile` is an explicit per-task
   // override; `state.profile` is what the engine resolved when nothing was set. Reproducing
@@ -497,10 +502,12 @@ function LaunchTask({ run, projectId, label = "Run this task again", onLaunched,
           View run →
         </button>
       ) : (
-        <button className="cap-btn primary" disabled={sent}
+        <button className="cap-btn primary" disabled={sent || inFlight}
                 onClick={(e) => { e.stopPropagation(); void launch(); }}
-                title="Start a NEW governed run from this task's spec — the original keeps its history">
-          {sent ? "Starting…" : label}
+                title={inFlight
+                  ? "This task is still running — wait for it to finish before running it again"
+                  : "Start a NEW governed run from this task's spec — the original keeps its history"}>
+          {sent ? "Starting…" : inFlight ? "Running…" : label}
         </button>
       )}
       <span className="detail">
@@ -511,6 +518,7 @@ function LaunchTask({ run, projectId, label = "Run this task again", onLaunched,
             relaunch was adopting the project default, and the label agreed with neither. */}
         {sent ? "starting…"
               : failed ? failed
+              : inFlight ? "still running — re-run it once it finishes"
               : startedId
                 // Name the run. The previous text promised a position in a list this
                 // component cannot see, and when the list did not move it read as a failure.
@@ -1160,10 +1168,21 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
             // Group runs by lineage (finalize_ctx.root_run_id) so a decomposed build shows as ONE
             // collapsible bucket — one thing to look at, not N loose rows. Singletons render flat.
             const fc = (c: CodeTaskRun) => (c.finalize_ctx ?? {}) as Record<string, unknown>;
+            const benchGroupTotal = (members: CodeTaskRun[],
+                                     f: (c: CodeTaskRun) => Record<string, unknown>) =>
+              (f(members[0]).decomposition_total as number) || members.length;
             const order: string[] = [];
             const groups = new Map<string, CodeTaskRun[]>();
             for (const c of tasks) {
-              const key = (fc(c).root_run_id as string) || c.id;
+              // Every run of one benchmark belongs together. Pressing Launch ApproveIt three
+              // times over a week is three attempts at ONE thing — scored against the same
+              // rubric, compared with each other — and scattering them as loose rows among
+              // unrelated tasks loses exactly the comparison the benchmark exists to make.
+              // Lineage still wins where it applies: a decomposed build stays one bucket.
+              const bench = (fc(c).qa_benchmark as { id?: string } | undefined)?.id;
+              const key = (fc(c).root_run_id as string)
+                || (bench ? `qa:${bench}` : null)
+                || c.id;
               if (!groups.has(key)) { groups.set(key, []); order.push(key); }
               groups.get(key)!.push(c);
             }
@@ -1171,13 +1190,19 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               const members = groups.get(key)!;
               if (members.length === 1) return renderCard(members[0], `${gi + 1}.`);
               // Decomposed build → one bucket. Aggregate status + one PR/approval for the whole thing.
-              const total = (fc(members[0]).decomposition_total as number) || members.length;
+              // A benchmark bucket counts ATTEMPTS; a decomposed build counts its planned
+              // parts. Reusing "N tasks" for both would call three attempts a three-part build.
+              const total = benchGroupTotal(members, fc);
               const doneN = members.filter((m) => m.status === "completed").length;
               const groupStatus = members.some((m) => m.status === "blocked" || m.status === "failed")
                 ? "blocked" : members.some((m) => m.status === "running" || m.status === "queued")
                 ? "running" : doneN >= total ? "completed" : "running";
               const prRun = members.find((m) => m.pull_request_url);
-              const name = (members.find((m) => m.title)?.title || "Decomposed build").replace(/^\[\d+\/\d+\]\s*/, "");
+              const benchGroup = (fc(members[0]).qa_benchmark as { name?: string } | undefined);
+              const name = benchGroup?.name
+                ? `${benchGroup.name} — QA benchmark`
+                : (members.find((m) => m.title)?.title || "Decomposed build")
+                    .replace(/^\[\d+\/\d+\]\s*/, "");
               const open = expandedGroups.has(key);
               return (
                 <div key={key} className="ct-card" style={{ gap: 6, cursor: "default" }}>
@@ -1188,9 +1213,15 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   >
                     <div style={{ fontWeight: 700, fontSize: 16, color: "var(--ink)", flex: 1, minWidth: 0 }}>
                       <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{gi + 1}. {open ? "▾" : "▸"}</span>
-                      {name} <span style={{ color: "var(--muted)", fontWeight: 600 }}>· build ({total} tasks)</span>
+                      {name} <span style={{ color: "var(--muted)", fontWeight: 600 }}>
+                        {benchGroup
+                          ? `· ${total} ${total === 1 ? "attempt" : "attempts"}`
+                          : `· build (${total} tasks)`}
+                      </span>
                     </div>
-                    <span className={`cap-badge tone-${statusTone(groupStatus)}`} style={{ flexShrink: 0 }}>{doneN}/{total} done</span>
+                    <span className={`cap-badge tone-${statusTone(groupStatus)}`} style={{ flexShrink: 0 }}>
+                      {benchGroup ? groupStatus : `${doneN}/${total} done`}
+                    </span>
                   </div>
                   <ContractDetails criteria={members[0].spec?.acceptance_criteria}
                                    verification={members[0].spec?.test_commands} />

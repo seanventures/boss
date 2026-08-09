@@ -164,6 +164,28 @@ describe("BOSS mission-control design system", () => {
     expect(codeTasks).toContain("startedId={launched?.[benchmark.id]?.run_id}");
   });
 
+  it("keeps a benchmark's attempts together, and counts them as attempts", () => {
+    // Pressing Launch ApproveIt three times over a week is three attempts at ONE thing,
+    // scored against the same rubric. Scattered as loose rows among unrelated tasks, the
+    // comparison the benchmark exists to make is lost. Lineage still wins where it applies,
+    // so a decomposed build stays one bucket rather than being regrouped by benchmark.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(codeTasks).toContain("qa:${bench}");
+    expect(codeTasks).toContain("(fc(c).root_run_id as string)");   // lineage first
+    // "N tasks" would describe three attempts as a three-part build.
+    expect(codeTasks).toMatch(/attempt/);
+  });
+
+  it("does not offer to re-run work that is still running", () => {
+    // The API refuses it anyway — the duplicate guard returns the in-flight run — but a
+    // button that looks available and then quietly does something else teaches an operator
+    // that the controls here are decorative.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(codeTasks).toContain('run.status === "running" || run.status === "queued"');
+    expect(codeTasks).toContain("disabled={sent || inFlight}");
+    expect(codeTasks).toContain('inFlight ? "Running…"');
+  });
+
   it("owns the list it claims a new run will appear in", () => {
     // "started — it is at the top of this list" was a promise about a server-rendered list
     // this component could not update: `router.refresh()` re-renders on the server while the
