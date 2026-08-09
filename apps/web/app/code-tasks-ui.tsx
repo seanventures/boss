@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useCallback, useEffect, useState } from "react";
+import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
@@ -404,16 +404,19 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   );
 }
 
-function LaunchTask({ run, projectId, label = "Launch again", onLaunched }: {
+function LaunchTask({ run, projectId, label = "Launch again", onLaunched, startedId, failed }: {
   run: CodeTaskRun; projectId: string; label?: string;
-  onLaunched?: () => void | Promise<void>;
+  // What this card started, and any failure, both held by the PARENT.
+  //
+  // They lived here as local state and vanished on every launch: the reload re-renders the
+  // list, this component is remounted, and "Launched ✓" reverted to the original label with
+  // nothing on screen having changed — which is the exact condition that makes someone press
+  // the button again. State that must outlive a re-render cannot live inside the thing being
+  // re-rendered.
+  startedId?: string | null; failed?: string | null;
+  onLaunched?: (sourceRunId: string, newRunId?: string, error?: string) => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
-  // The id of the run this button started, once it has one. Not a boolean: the button has to
-  // be able to NAME what it did, and "started" with nothing to point at is what sent someone
-  // looking for a row that had not arrived.
-  const [startedId, setStartedId] = useState<string | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
   const router = useRouter();
   const spec = run.spec ?? {};
   const st = run.state ?? {};
@@ -445,17 +448,14 @@ function LaunchTask({ run, projectId, label = "Launch again", onLaunched }: {
     data.set("base_branch", spec.base_branch ?? "");
     if (profile) data.set("profile", profile);
     if (riskTier != null) data.set("risk_tier", String(riskTier));
+    let out: { run_id?: string; error?: string } | undefined;
     try {
-      const out = await relaunchCodeTaskAction(data);
-      if (out?.error || !out?.run_id) {
-        setFailed(out?.error ?? "the API did not return a run");
-        return;
-      }
-      setStartedId(out.run_id);
+      out = await relaunchCodeTaskAction(data);
     } finally {
       setSent(false);
       router.refresh();
-      await onLaunched?.();
+      await onLaunched?.(run.id, out?.run_id,
+                         out?.run_id ? undefined : (out?.error ?? "the API returned no run"));
     }
   };
 
@@ -977,12 +977,24 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   // deployment targets on screen. So a relaunch said "started — it is at the top of this list"
   // and the list did not move, which is exactly the situation that makes someone press the
   // button again.
+  // What each card has launched, keyed by the card's own run id. Held here because the list
+  // re-renders after a launch and any state inside a card is lost with it.
+  const [launched, setLaunched] = useState<Record<string, { run_id?: string; error?: string }>>({});
   const [tasks, setTasks] = useState<CodeTaskRun[]>(codeTasks);
   useEffect(() => { setTasks(codeTasks); }, [codeTasks]);
+  const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string) => {
+    setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error } }));
+    await reloadRef.current?.();
+  }, []);
+
   const reload = useCallback(async () => {
     const fresh = await listCodeTasksAction(projectId);
     if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) setTasks(fresh.code_tasks);
   }, [projectId]);
+  // The callback is created before `reload` exists, so it reaches it through a ref rather
+  // than forcing the two into one declaration order that reads backwards.
+  const reloadRef = useRef<null | (() => Promise<void>)>(null);
+  useEffect(() => { reloadRef.current = reload; }, [reload]);
 
   // Poll while anything is live so phases advance on their own. Reads from the panel's own
   // state, so a run started a moment ago keeps the poller alive rather than needing the
@@ -1073,7 +1085,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       task already carries. Absent on ad-hoc tasks, in which case nothing renders. */}
                   <ContractDetails criteria={c.spec?.acceptance_criteria}
                                    verification={c.spec?.test_commands} />
-                  <LaunchTask run={c} projectId={projectId} onLaunched={reload} />
+                  <LaunchTask run={c} projectId={projectId} onLaunched={noteLaunch}
+                                   startedId={launched[c.id]?.run_id}
+                                   failed={launched[c.id]?.error} />
                   <div className="ct-card-foot">
                     <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
                     {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
@@ -1120,7 +1134,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   </div>
                   <ContractDetails criteria={members[0].spec?.acceptance_criteria}
                                    verification={members[0].spec?.test_commands} />
-                  <LaunchTask run={members[0]} projectId={projectId} onLaunched={reload}
+                  <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
+                                   startedId={launched[members[0].id]?.run_id}
+                                   failed={launched[members[0].id]?.error}
                                    label="Launch this build again" />
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>

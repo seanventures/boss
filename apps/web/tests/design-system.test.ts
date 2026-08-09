@@ -109,6 +109,13 @@ describe("BOSS mission-control design system", () => {
     expect(relaunch).toContain("Launched ✓");
     // And it must NAME what it started rather than promising a place in a list it cannot see.
     expect(relaunch).toContain("startedId.slice");
+    // That memory must live in the PARENT. Held inside the card it was destroyed by the very
+    // reload the launch triggers — the card remounts, "Launched ✓" reverts to the original
+    // label, nothing on screen has changed, and the operator presses it again. State that has
+    // to outlive a re-render cannot live in the thing being re-rendered.
+    expect(relaunch).not.toMatch(/useState[^\n]*startedId/);
+    expect(codeTasks).toContain("const [launched, setLaunched]");
+    expect(codeTasks).toContain("startedId={launched[c.id]?.run_id}");
   });
 
   it("never claims a profile the relaunch will not use", () => {
