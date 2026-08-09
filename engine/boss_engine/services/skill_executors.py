@@ -136,6 +136,50 @@ def _optional_list(inputs: dict[str, Any], key: str) -> list[Any]:
     return value
 
 
+@register_executor("toolchain.source.assess")
+def execute_toolchain_source_assess(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    from .toolchain_registry import ToolchainRegistryService
+
+    return ToolchainRegistryService(context.settings).assess_snapshot(
+        context.connection,
+        project_id=context.project_id,
+        source_key=_required_text(inputs, "source_key"),
+        revision=_required_text(inputs, "revision"),
+        files=_optional_list(inputs, "files"),
+        actor=context.actor,
+    )
+
+
+@register_executor("toolchain.command.guard")
+def execute_toolchain_command_guard(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    from .toolchain_registry import ToolchainRegistryService
+
+    return ToolchainRegistryService.evaluate_command(
+        _required_text(inputs, "command"),
+        str(inputs.get("cwd") or "").strip() or None,
+    )
+
+
+@register_executor("toolchain.context.pack")
+def execute_toolchain_context_pack(
+    context: SkillExecutorContext,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    from .toolchain_registry import ToolchainRegistryService
+
+    return ToolchainRegistryService.pack_context(
+        _optional_list(inputs, "chunks"),
+        int(inputs.get("token_budget") or 0),
+        int(inputs.get("reserved_output_tokens") or 0),
+    )
+
+
 def _github_create_pr(
     context: SkillExecutorContext,
     inputs: dict[str, Any],

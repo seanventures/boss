@@ -118,6 +118,7 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - deterministic RoleSpec validation for pack roles and module-provided roles
   - deterministic SkillSpec validation for typed IO, cost, retry, permissions, data boundary, policy, and real-only mode
   - server-side SkillSpec executor registry with explicit-context GitHub PR and Deployment Registry bindings; GitHub effects are Receipt-backed and duplicate-safe, while real-mode worker dispatch remains a separate gated slice
+  - model-agnostic third-party agent-toolchain intake with pinned provenance and license posture, bounded non-executing text-snapshot assessment, hash-only candidate records, independent review, a native deterministic destructive-command tripwire, and an authority-preserving token-budget context pack; restricted or mixed-license sources cannot be activated
   - model entitlement broker with routing logs, official subscription connection checks, connect/disconnect APIs, capacity-state fail-closed denials, multi-tenant denials for personal/public subscription sources, capacity receipt dedupe, and ModelRouteDecision API surfaces
   - data-boundary-aware routing that blocks restricted/local-only work from unapproved external model sources and records the boundary in routing decisions
   - data-boundary-aware GitHub effect gates that block restricted/local-only PR, merge, and deployment effects before receipts or external calls are opened
@@ -130,6 +131,8 @@ This document summarizes the currently implemented BOSS runtime surfaces in this
   - denied write attempts emit `policy.denied` events when the project can be resolved
   - self-improvement proposal, canary, rollout, and rollback records
   - fail-closed self-improvement evidence gates for tests, canary scope, rollback steps, metrics, and evidence refs
+  - governed Improvement Programs with frozen benchmark baselines, hashed metric contracts, evidence floors, hard gates, and deterministic single-variable control/candidate trials
+  - winning-trial-only proposal promotion plus worker reconciliation that moves a measurement baseline only after the linked proposal reaches governed `rolled_out` state
   - audit export and replay-bundle artifact generation
   - compliance evidence bundle generation for members, roles, policies, break-glass grants, decisions, receipts, reservations, cost receipts, deadletters, and compliance-relevant events
   - data-boundary classification persisted on tasks, jobs, artifacts, and receipts, with task-to-job/artifact inheritance and audit export visibility

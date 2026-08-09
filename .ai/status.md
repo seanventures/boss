@@ -1,5 +1,17 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-08 BOSS-333 toolchain intake status
+
+- `ai/codex/model-agnostic-agent-toolchain` implements sanitized, model-agnostic
+  intake for the seven requested upstreams. Raw source is discarded after
+  hashing/scanning; activation always requires a native BOSS implementation.
+- Restricted licensing, missing per-item licensing, executable imports,
+  destructive commands, path escape, revision drift, and policy bypass fail
+  closed. Authoritative context is never compressed or silently omitted.
+- Focused validation is green: 18 toolchain/executor tests, Ruff, compile, and
+  diff hygiene. PR #141 merged to `main` as `ad6964f`; Plane BOSS-333 can move
+  to Done with that merge evidence.
+
 **Last updated**: 2026-08-08 (GA readiness evidence refresh)
 **Repo root**: /Volumes/DataSSD1/test/boss
 **Git remote**: https://github.com/seanheiney/boss

@@ -14,6 +14,7 @@ from .services.mcp_registry import ensure_mcp_server
 from .services.members import MemberDirectoryService
 from .services.skill_registry import seed_system_skills
 from .services.specpack import SpecPackService
+from .services.toolchain_registry import ToolchainRegistryService
 from .services.workflows import seed_specpack_workflows
 from .services.work_orchestration import WorkOrchestrationService
 
@@ -129,6 +130,7 @@ def seed_project_defaults(
         entitlements.list_skills(),
         actor,
     )
+    ToolchainRegistryService(settings).seed_sources(connection, project_id, actor)
     # seed the meeting role-agent template so a new org's panel isn't empty
     from .services.meeting_service import seed_roles
     seed_roles(connection, project_id)

@@ -11,6 +11,12 @@
 | --- | --- | --- | --- | --- |
 | BOSS-335 / MEB-003 | System-wide subscription/API authentication and governed model capacity shared across jobs/agents | official owner-scoped CLI/OAuth sessions; write-through SecretRef API/service credentials; route-to-lease conversion subordinate to live job lease; source lock/concurrency and fencing; budget reservation; receipted invocation lifecycle; cost/capacity/token telemetry; expiry reaper; operational list APIs | 6 model-gateway E2E/policy tests; 28 widened entitlement/routing/worker tests; 146 web tests; fresh schema twice; repository lint, production build, Ruff, OpenAPI new-route parity, strict docs | Implemented; pending PR merge |
 
+## 2026-08-08 Governed autonomous improvement trace
+
+| Plane | Requirement | Implementation | Verification | Status |
+| --- | --- | --- | --- | --- |
+| BOSS-334 | Manage recurring, analytics-backed agent/workflow improvement without autonomous self-modification | `ImprovementProgram` frozen baseline/metric contract; `ImprovementTrial` single-variable configuration proof, evidence floor, hard gates, dimension/overall deltas, verdict hash; winner-only normal proposal; decision/canary/staged rollout/rollback reuse; rollout-complete baseline reconciliation; OTel/Langfuse/DSPy/Temporal adapter boundaries | focused service tests, real-Postgres end-to-end API/state/event test, bootstrap twice, Ruff, OpenAPI YAML, strict docs | Implemented; merged in PR #142 as `4dd7347` |
+
 ## 2026-07-26 Work Orchestration and Delivery Presence trace
 
 | Plane | Requirement | Implementation | Verification | Status |
@@ -211,3 +217,13 @@ the merge and validation evidence and are Done.
 | BOSS-264 | Expose typed Agent Studio, Panel, and A2A API/client contracts | Agent/version/test/run, Panel/version/run, channel/subscription/publish/poll/ack/replay/cancel/health/audit routes plus typed client methods and OpenAPI | OpenAPI YAML check; API catalog test; 36 API-client tests |
 | BOSS-265 | Build the live operator Agent Studio workbench | Searchable agent/panel library, authority/topology canvas, run/test controls, health metrics, channel/message trace, responsive/reduced-motion styling | TypeScript; optimized Next build; desktop and 760px browser QA |
 | BOSS-266 | Prove runtime integration, observability, and no-silent-drop behavior | Job completion hooks, worker capabilities, artifacts/evidence, panel completion, transport attempts, ACK receipts, filtered-cursor cleanup, crash recovery and deadletter visibility | 121 web tests; 938 Python tests/4 live skips; 39 focused tests; Ruff; real Redis proof |
+
+# BOSS-333 model-agnostic toolchain intake (2026-08-08)
+
+| Requirement | Implementation | Evidence |
+| --- | --- | --- |
+| Pin and classify every upstream before use | `packages/specpack/toolchains/upstreams.yaml`; `toolchain_sources` | Source/license boundary tests in `apps/api/tests/test_toolchain_registry.py` |
+| Never execute or store raw upstream content | `ToolchainRegistryService.assess_snapshot`; hash-only candidate schema | Raw marker persistence test; executable and destructive quarantine tests |
+| Require independent activation review | candidate review state machine and `agent_toolchain_import_policy.yaml` | Allowed, mixed-license, and blocked approval tests |
+| Block dangerous commands deterministically | `toolchain.command.guard` native executor/API | Command allow/review/block parameter matrix |
+| Preserve authoritative context under token limits | `toolchain.context.pack` native executor/API | Required-content, omission, duplicate, and overflow tests |

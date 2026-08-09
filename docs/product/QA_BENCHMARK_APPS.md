@@ -98,12 +98,23 @@ benchmark report → measured-gap recommendation → candidate PR/config diff
   → staged rollout or rollback
 ```
 
-The API endpoint is
-`POST /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal`. It creates a normal
-`ImprovementProposal` with a review decision, an isolation test plan, canary scope, rollback
-plan, and success metrics derived from the report. It does **not** choose a model, modify a
-workflow, alter a baseline, open a PR, or apply a change. A regression may not normalize the
-baseline: baseline version changes require the separate evidence-backed approval workflow.
+For recurring optimization, create an `ImprovementProgram` from one durable baseline
+evaluation. The program pins the benchmark, scorecard dimensions and weights, baselines,
+verification commands, minimum evidence coverage, allowed dimension regression, and hard
+gates. Submit a candidate as an `ImprovementTrial` with the control and candidate
+configuration manifests. BOSS mechanically requires exactly one changed key, the same
+metric-contract hash, no missing control evidence, and the configured score thresholds.
+
+Only a `candidate_wins` trial can use its promotion endpoint. Promotion creates a normal
+`ImprovementProposal` with a review decision, canary scope, rollback plan, and the control/
+candidate verdict references. The program baseline remains frozen until the proposal status
+is `rolled_out`; only then can `adopt-baseline` move it. Rejected and inconclusive trials stay
+visible and cannot silently redefine success.
+
+The older single-run endpoint,
+`POST /v1/qa/benchmark-apps/runs/{run_id}/tuning-proposal`, remains a manual proposal helper.
+It does not certify a candidate or move a baseline; autonomous promotion uses the stricter
+program/trial endpoints.
 
 The runner can submit a known candidate in the same terminal flow with
 `--candidate-change-ref <PR-or-diff-ref> --candidate-diff-summary <summary>`. Those flags are

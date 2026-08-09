@@ -1,5 +1,34 @@
 # Codex Handoff
 
+## 2026-08-08 BOSS-334 governed autonomous improvement
+
+- Branch `ai/codex/autonomous-improvement-loop` implements a BOSS-owned measured feedback
+  loop over the existing QA benchmark and self-improvement services. It does not generate,
+  merge, deploy, or self-apply changes.
+- `ImprovementProgram` pins the baseline/metric contract. `ImprovementTrial` requires one
+  mechanically observable configuration change and comparable evidence; only a deterministic
+  winner can create a hold-default proposal. The idle tuning sweep adopts a new measurement
+  baseline only after the linked proposal is already `rolled_out`.
+- OSS boundary decision: integrate Langfuse through OTel/API for analytics, allow DSPy behind
+  a candidate-generator adapter, and keep Temporal optional behind a future executor adapter.
+  External tools are projections/helpers, never canonical policy or promotion authorities.
+- Focused Python, worker, benchmark, real-Postgres API/state/event, bootstrap, Ruff, OpenAPI,
+  generated docs, and strict MkDocs checks passed. PR #142 merged as `4dd7347`.
+
+## 2026-08-08 BOSS-333 model-agnostic agent toolchain intake
+
+- Branch `ai/codex/model-agnostic-agent-toolchain` adds a pinned upstream-source
+  manifest, license/provenance ledger, bounded non-executing snapshot assessor,
+  hash-only normalized candidate review, an independently authored deterministic
+  command tripwire, and an authority-preserving context budget packer.
+- The intake never fetches, executes, activates, or stores raw upstream source.
+  Destructive Command Guard is explicitly blocked by its license rider;
+  awesome-claude-skills remains per-item/catalog-only. All upstream hooks,
+  scripts, MCP configuration, and packages remain quarantined.
+- Six API surfaces and three SkillRuntime executors are implemented with RBAC,
+  audit metadata, schema/OpenAPI coverage, and focused tests. PR #141 merged
+  as `ad6964f`; Plane BOSS-333 can move to Done with that merge evidence.
+
 ## 2026-08-08 GA security integration and release hold
 
 - Canonical `origin/main` is `8e8dd4e` after PR #136 integrated the critical

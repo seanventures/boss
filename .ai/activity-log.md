@@ -3,6 +3,25 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-08 — Codex — BOSS-334 governed autonomous improvement programs
+
+- Evaluated the attached OSS shortlist against official sources. Selected Langfuse as the
+  preferred optional analytics/evaluation integration, DSPy as an optimizer/candidate
+  generator, Temporal as a future durable-executor adapter/reference, and OpenTelemetry as
+  the vendor-neutral telemetry boundary. BOSS keeps canonical state and all promotion gates.
+- Added durable `ImprovementProgram` and `ImprovementTrial` ledgers. Programs freeze a QA
+  baseline and metric-contract hash; trials mechanically enforce one changed configuration
+  key, comparable control/candidate scorecards, evidence coverage, hard gates, regression
+  tolerance, overall delta, evidence references, and a hashed verdict.
+- Only measured winners can create the existing hold-default self-improvement proposal.
+  Baselines remain frozen through decision, canary, and staged rollout, and the worker's
+  analysis sweep adopts them only after the linked proposal is durably `rolled_out`.
+- Added typed write validation, project RBAC, events, APIs/OpenAPI, SpecPack objects/workflow,
+  architecture/product/technical docs, and Postgres cleanup support. Focused service/worker/
+  benchmark suites and a real-Postgres end-to-end program → trial → proposal → rollout gate →
+  automatic baseline adoption test pass; bootstrap is idempotent and Ruff passes.
+
+---
 ## 2026-08-08 — Codex — QA benchmark evidence and governed tuning loop
 
 - Extended BOSS-327 with a versioned, evidence-aware scorecard and a deterministic
@@ -1450,7 +1469,6 @@ PR: https://github.com/seanheiney/boss/pull/3
 - Validation: 8/8 focused tests pass; web lint/type generation passes; the
   optimized Next build passes; the full web suite is 142/143 with only the
   separately tracked BOSS-311 agent-chat/API-client mismatch remaining.
-
 ## 2026-08-08 — BOSS-335 unified model gateway
 
 - Audited the existing entitlement broker, secret backends, budget governor,
@@ -1467,3 +1485,19 @@ PR: https://github.com/seanheiney/boss/pull/3
   worker tests, all 146 web tests, repository lint, production build, strict
   docs, fresh-schema replay and contract checks pass. Publish as one focused
   draft PR and keep Plane BOSS-335 In Progress until merge.
+
+## 2026-08-08 — BOSS-333 sanitized agent toolchain intake
+
+- Audited and pinned seven requested upstream repositories without executing
+  their code. Classified licenses and blocked the Destructive Command Guard
+  source entirely because its rider excludes the relevant use; treated the
+  mixed-license skills collection as metadata-only.
+- Implemented `toolchain_sources`, `toolchain_import_runs`, and
+  `toolchain_candidates`; source seeding; bounded text assessment; hash-only
+  normalized candidates; independent review; deterministic command guarding;
+  and authority-preserving context packing.
+- Added six RBAC-gated API surfaces, three registered SkillSpec executors,
+  policy/skill/source manifests, OpenAPI, product/technical/implementation docs,
+  and focused test cleanup/seeding.
+- Validation: 18 focused API/executor tests pass; Ruff, compileall, and
+  `git diff --check` pass. Plane BOSS-333 remains In Progress pending PR merge.

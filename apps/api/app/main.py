@@ -452,6 +452,10 @@ from .schemas import (
     SecretRefSummary,
     SecretRefUpdateRequest,
     QABenchmarkTuningProposalRequest,
+    ImprovementProgramCreateRequest,
+    ImprovementProgramStatusRequest,
+    ImprovementTrialActionRequest,
+    ImprovementTrialCreateRequest,
     SelfImprovementCanaryRequest,
     SelfImprovementProposalCreateRequest,
     SelfImprovementProposalDetail,
@@ -537,6 +541,10 @@ from .schemas import (
     WorkItemUpsertRequest,
     WorkTrackerBindingUpsertRequest,
     WorkTrackerSyncExecuteRequest,
+    ToolchainAssessRequest,
+    ToolchainCandidateReviewRequest,
+    ToolchainCommandGuardRequest,
+    ToolchainContextPackRequest,
 )
 from .services.a2a import (
     A2ANotFoundError,
@@ -710,6 +718,10 @@ from .services.skill_runtime import (
     SkillRuntimeService,
 )
 from .services.skill_executors import SkillExecutorContext
+from .services.toolchain_registry import (
+    ToolchainImportError,
+    ToolchainRegistryService,
+)
 from .services import workflows as workflow_runtime
 from .services.skill_registry import (
     disable_skill,
@@ -806,6 +818,7 @@ role_governance = RoleGovernanceService(settings)
 autonomy_engine = AutonomyEngine(settings)
 router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
+toolchain_registry = ToolchainRegistryService(settings)
 slack_comms = SlackCommsService(settings)
 factory_scale_service = FactoryScaleService(settings)
 dashboard_service = DashboardService(settings)
@@ -5521,15 +5534,23 @@ def sweep_qa_benchmark_evaluations(payload: dict | None = None):
     limit = int(payload.get("limit") or 100)
     actor = str(payload.get("actor") or "qa_benchmark_scheduler").strip()
     from boss_engine.services.benchmark_tuning import sweep_terminal_benchmarks
+    from boss_engine.services.improvement_programs import reconcile_program_baselines
 
     try:
         with begin(engine) as connection:
-            return sweep_terminal_benchmarks(
+            result = sweep_terminal_benchmarks(
                 connection,
                 project_id=project_id,
                 actor=actor,
                 limit=limit,
             )
+            result["baseline_reconciliation"] = reconcile_program_baselines(
+                connection,
+                project_id=project_id,
+                actor="improvement_program_scheduler",
+                limit=limit,
+            )
+            return result
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -5602,6 +5623,211 @@ def create_qa_benchmark_tuning_proposal(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
     return self_improvement_detail_from_row(row)
+
+
+@app.get("/v1/improvement-programs")
+def list_improvement_programs(project_id: str, limit: int = 50):
+    """List durable feedback loops and their pinned baselines."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": improvement_programs.list_programs(
+                connection, project_id=project_id, limit=limit
+            ),
+        }
+
+
+@app.post("/v1/improvement-programs", status_code=201)
+def create_improvement_program(payload: ImprovementProgramCreateRequest):
+    """Pin an observed QA baseline and deterministic comparison policy."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            require_project_actor(
+                connection,
+                payload.project_id,
+                payload.actor,
+                "self_improvement_manage",
+            )
+            return improvement_programs.create_program(
+                connection,
+                project_id=payload.project_id,
+                name=payload.name,
+                objective=payload.objective,
+                baseline_evaluation_id=payload.baseline_evaluation_id,
+                actor=payload.actor,
+                minimum_evidence_weight=payload.minimum_evidence_weight,
+                minimum_overall_delta=payload.minimum_overall_delta,
+                maximum_dimension_regression=payload.maximum_dimension_regression,
+                hard_gates=payload.hard_gates,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.patch("/v1/improvement-programs/{program_id}")
+def update_improvement_program(
+    program_id: str, payload: ImprovementProgramStatusRequest
+):
+    """Pause, resume, or retire a feedback loop without losing its ledger."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            program = improvement_programs.get_program(connection, program_id)
+            require_project_actor(
+                connection,
+                program["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            return improvement_programs.update_program_status(
+                connection,
+                program_id=program_id,
+                status=payload.status,
+                actor=payload.actor,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/improvement-programs/{program_id}/trials")
+def list_improvement_trials(program_id: str, limit: int = 50):
+    """List reproducible candidate comparisons for one feedback loop."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be between 1 and 500.")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            program = improvement_programs.get_program(connection, program_id)
+            return {
+                "program": program,
+                "items": improvement_programs.list_trials(
+                    connection, program_id=program_id, limit=limit
+                ),
+            }
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/v1/improvement-programs/{program_id}/trials", status_code=201)
+def create_improvement_trial(
+    program_id: str, payload: ImprovementTrialCreateRequest
+):
+    """Evaluate one candidate against the program's pinned control."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            program = improvement_programs.get_program(connection, program_id)
+            require_project_actor(
+                connection,
+                program["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            return improvement_programs.create_trial(
+                connection,
+                program_id=program_id,
+                candidate_evaluation_id=payload.candidate_evaluation_id,
+                candidate_change_ref=payload.candidate_change_ref,
+                candidate_diff_summary=payload.candidate_diff_summary,
+                changed_variable=payload.changed_variable,
+                control_configuration=payload.control_configuration,
+                candidate_configuration=payload.candidate_configuration,
+                isolation_evidence_refs=payload.isolation_evidence_refs,
+                actor=payload.actor,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/v1/improvement-programs/trials/{trial_id}/promote",
+    status_code=201,
+)
+def promote_improvement_trial(
+    trial_id: str, payload: ImprovementTrialActionRequest
+):
+    """Turn a measured winner into a normal approval-gated proposal."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            trial = improvement_programs.get_trial(connection, trial_id)
+            require_project_actor(
+                connection,
+                trial["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            updated_trial, proposal = improvement_programs.promote_trial(
+                connection,
+                trial_id=trial_id,
+                actor=payload.actor,
+                risk_tier=payload.risk_tier,
+                self_improvement_service=self_improvement,
+            )
+            return {
+                "trial": updated_trial,
+                "proposal": self_improvement_detail_from_row(proposal),
+            }
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/improvement-programs/trials/{trial_id}/adopt-baseline")
+def adopt_improvement_trial_baseline(
+    trial_id: str, payload: ImprovementTrialActionRequest
+):
+    """Move the baseline only after the linked proposal is fully rolled out."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services import improvement_programs
+
+    try:
+        with begin(engine) as connection:
+            trial = improvement_programs.get_trial(connection, trial_id)
+            require_project_actor(
+                connection,
+                trial["project_id"],
+                payload.actor,
+                "self_improvement_manage",
+            )
+            program, updated_trial = improvement_programs.adopt_trial_baseline(
+                connection, trial_id=trial_id, actor=payload.actor
+            )
+            return {"program": program, "trial": updated_trial}
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/pipeline-profiles")
@@ -9506,6 +9732,130 @@ def resolve_agent_runtime(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return AgentRuntimeResolveResponse(**result)
+
+
+@app.get("/v1/toolchain/sources")
+def list_toolchain_sources(project_id: str, actor: str = "ceo") -> dict:
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        return {"items": toolchain_registry.list_sources(connection, project_id)}
+
+
+@app.get("/v1/toolchain/imports")
+def list_toolchain_imports(
+    project_id: str,
+    actor: str = "ceo",
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        return {
+            "items": toolchain_registry.list_import_runs(
+                connection, project_id, limit=limit
+            )
+        }
+
+
+@app.post("/v1/toolchain/imports/assess", status_code=201)
+def assess_toolchain_snapshot(payload: ToolchainAssessRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return toolchain_registry.assess_snapshot(
+                connection,
+                project_id=payload.project_id,
+                source_key=payload.source_key,
+                revision=payload.revision,
+                files=[item.model_dump() for item in payload.files],
+                actor=payload.actor,
+            )
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/toolchain/candidates/{candidate_id}/review")
+def review_toolchain_candidate(
+    candidate_id: str,
+    payload: ToolchainCandidateReviewRequest,
+) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return toolchain_registry.review_candidate(
+                connection,
+                project_id=payload.project_id,
+                candidate_id=candidate_id,
+                decision=payload.decision,
+                note=payload.note,
+                actor=payload.actor,
+            )
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/toolchain/commands/evaluate")
+def evaluate_toolchain_command(payload: ToolchainCommandGuardRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "command_submit"
+            )
+            result = toolchain_registry.evaluate_command(payload.command, payload.cwd)
+            emit_event(
+                connection,
+                payload.project_id,
+                "toolchain.command_evaluated",
+                payload.actor,
+                "project",
+                payload.project_id,
+                {
+                    "decision": result["decision"],
+                    "risk_tier": result["risk_tier"],
+                    "rule_ids": result["rule_ids"],
+                    "command_hash": result["command_hash"],
+                },
+            )
+            return result
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/toolchain/context/pack")
+def pack_toolchain_context(payload: ToolchainContextPackRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "command_submit"
+            )
+            result = toolchain_registry.pack_context(
+                [item.model_dump() for item in payload.chunks],
+                payload.token_budget,
+                payload.reserved_output_tokens,
+            )
+            if result["budget_status"] != "within_budget" or result["duplicate_ids"]:
+                emit_event(
+                    connection,
+                    payload.project_id,
+                    "toolchain.context_packed",
+                    payload.actor,
+                    "project",
+                    payload.project_id,
+                    {
+                        "budget_status": result["budget_status"],
+                        "included_ids": result["included_ids"],
+                        "omitted_ids": result["omitted_ids"],
+                        "duplicate_ids": result["duplicate_ids"],
+                        "estimated_tokens": result["estimated_tokens"],
+                        "available_input_tokens": result["available_input_tokens"],
+                    },
+                )
+            return result
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)

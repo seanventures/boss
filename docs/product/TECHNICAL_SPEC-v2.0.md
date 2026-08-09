@@ -425,6 +425,26 @@ Resolution input is `(tenant, project, actor, RoleSpec, AgentGroupVersion?, Work
 
 Each `SkillInvocation` records the requested and effective SkillSpec versions, executor binding, IntegrationConnection, typed input/output hashes, attempts, evidence/artifacts, cost, BudgetReservation, Receipt/dedupe key, and ChangeSet/ResourceReceipt for provider effects. Raw credentials never enter agent context.
 
+### Agent toolchain supply-chain intake
+
+`ToolchainSource`, `ToolchainImportRun`, and `ToolchainCandidate` form a
+non-executing intake ledger for third-party prompts, skills, agents, hooks,
+commands, MCP configuration, and package metadata. Sources are pinned to full
+Git revisions and a license disposition. Assessments accept only bounded text
+snapshots, store hashes and normalized metadata rather than raw content, and
+fail closed on revision drift, path escape, executable content, destructive or
+policy-bypassing instructions, restricted licenses, and unresolved per-item
+licensing. Approval only authorizes a native implementation; it does not
+activate upstream content.
+
+The deterministic command guard returns allow/review/block plus matched rule
+IDs and a hash; models cannot override blocks. The context packer reserves its
+budget for policy, approval, contract, proof, and required chunks before
+optional context. If authoritative chunks do not fit, it returns
+`blocked_authoritative_overflow` instead of truncating them. Omitted and
+duplicate identifiers are explicit audit evidence. See
+`docs/product/AGENT_TOOLCHAIN_INTAKE.md`.
+
 ## Reusable Workflow Runtime
 
 Canonical records:
@@ -451,6 +471,29 @@ Canonical records include `GroundTruthMetricDefinition`, `GroundTruthObservation
 An Assurance Case references, but does not contain or redefine, AgentGroupRuns, WorkflowRuns, SkillInvocations, and IntegrationConnections. Policy evaluation snapshots the metric/evidence contract, settled conclusions, surface ownership, risk, tenant/project rules, and required verifier. A blocked or conflicting result creates a durable Decision/event; lower-scope policy cannot weaken mandatory higher-scope requirements.
 
 Metric evaluators and verifier runs are leased jobs with dedupe, retry/deadletter, and budgets/receipts where spendy. Fixed/solved claims require reproducible red-to-green evidence. Caused-by claims require an isolation experiment or remain `inconclusive`. Surface ownership is revalidated at the provider/deployment boundary.
+
+## Governed Improvement Programs
+
+`improvement_programs` pins a project, benchmark evaluation, metric contract/hash,
+evidence floor, minimum overall delta, maximum per-dimension regression, and hard
+gates. `improvement_trials` joins that frozen control to one candidate evaluation,
+the traceable PR/config diff, control and candidate configuration manifests,
+isolation evidence, a deterministic verdict/hash, and an optional
+`self_improvement_proposals` link.
+
+Trial creation is a synchronous deterministic policy boundary. It rejects mismatched
+projects or metric contracts and configuration manifests with anything other than the
+single declared changed variable. A lower evidence weight or missing control dimension
+is inconclusive; failed hard gates, dimension regression, or insufficient overall delta
+reject the candidate. Only `candidate_wins` can create a proposal. Proposal creation is
+not application: the existing hold-default decision, canary, staged rollout, and rollback
+state machine retains authority. Baseline adoption requires the linked proposal to have
+status `rolled_out` and emits a separate audited event.
+
+OpenTelemetry is the analytics interchange boundary. Langfuse may consume trace and
+evaluation projections; DSPy or another optimizer may submit versioned candidate
+artifacts. Neither system may update BOSS canonical state except through authenticated,
+policy-checked APIs.
 
 ## BOSS Account Connect
 
@@ -738,6 +781,16 @@ Budget:
 - `POST /v1/budget/release`
 - `POST /v1/budget/consume`
 - `GET /v1/budget/forecast`
+
+Improvement Programs:
+
+- `GET /v1/improvement-programs`
+- `POST /v1/improvement-programs`
+- `PATCH /v1/improvement-programs/{program_id}`
+- `GET /v1/improvement-programs/{program_id}/trials`
+- `POST /v1/improvement-programs/{program_id}/trials`
+- `POST /v1/improvement-programs/trials/{trial_id}/promote`
+- `POST /v1/improvement-programs/trials/{trial_id}/adopt-baseline`
 
 Commercial:
 

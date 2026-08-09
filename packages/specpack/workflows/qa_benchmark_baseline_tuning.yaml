@@ -9,7 +9,7 @@ description: >
   configuration or applies a candidate directly.
 entry_step: collect_terminal_report
 input_schema:
-  required: [project_id, benchmark_run_id, candidate_change_ref, candidate_diff_summary, dedupe_key]
+  required: [project_id, baseline_evaluation_id, candidate_evaluation_id, candidate_change_ref, candidate_diff_summary, changed_variable, control_configuration, candidate_configuration, isolation_evidence_refs, dedupe_key]
 output_schema:
   required: [status, benchmark_report_ref, recommendation, audit_event_ref]
 steps:
@@ -38,11 +38,11 @@ steps:
   - id: candidate_diff_is_present
     kind: condition
     expression: { path: context.candidate_diff_is_traceable, op: eq, value: true }
-    on_true: create_governed_improvement_proposal
+    on_true: create_or_load_improvement_program
     on_false: record_candidate_missing
-  - id: create_governed_improvement_proposal
+  - id: create_or_load_improvement_program
     kind: task
-    input: { operation: self_improvement.create_proposal_from_benchmark_evidence }
+    input: { operation: improvement_program.pin_baseline_and_metric_contract }
     next: [run_isolated_control_and_candidate]
   - id: run_isolated_control_and_candidate
     kind: parallel
@@ -64,8 +64,12 @@ steps:
   - id: isolated_improvement_reproduced
     kind: condition
     expression: { path: context.improvement_reproduced, op: eq, value: true }
-    on_true: request_canary_decision
+    on_true: create_governed_improvement_proposal
     on_false: record_inconclusive
+  - id: create_governed_improvement_proposal
+    kind: task
+    input: { operation: improvement_trial.promote_to_self_improvement_proposal }
+    next: [request_canary_decision]
   - id: request_canary_decision
     kind: decision
     question: Approve a QA-only canary for this evidence-backed tuning candidate?
@@ -87,6 +91,10 @@ steps:
   - id: monitor_rollout
     kind: task
     input: { operation: self_improvement.monitor_and_advance }
+    next: [adopt_verified_baseline]
+  - id: adopt_verified_baseline
+    kind: task
+    input: { operation: improvement_program.adopt_baseline_after_rolled_out }
     next: [record_outcome]
   - id: record_waiting_for_evidence
     kind: task
@@ -118,5 +126,5 @@ rules:
   rollback_plan_required: true
   every_attempt_is_audited: true
 completion:
-  artifacts_required: [EvaluationRun, ImprovementProposal, CanaryRun, Evidence]
+  artifacts_required: [ImprovementProgram, ImprovementTrial, EvaluationRun, ImprovementProposal, CanaryRun, Evidence]
   non_terminal_result: waiting_for_evidence

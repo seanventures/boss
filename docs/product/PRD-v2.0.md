@@ -529,7 +529,7 @@ Evidence bundles must include spec refs, task refs, diffs, test results, build l
 
 Definition of done: software work is complete only when objective evidence demonstrates builds pass, tests pass, runtime behavior satisfies acceptance criteria, required artifacts are attached, and required receipts exist.
 
-Software Factory QA must also maintain a pinned suite of small but cross-layer benchmark applications. Each benchmark enters through the same operator workflow and governed code-task APIs used by customer work, exercises planning, persistence, backend behavior, browser behavior, repair, and evidence reporting, and remains uncertified until its durable verification report contains the required plan and authoritative command result. The initial suite is BugBox (CRUD/persistence), HookWatch (ingestion/replay), and ApproveIt (role-gated state transitions/audit). Benchmark reports include a versioned, evidence-aware scorecard covering functionality, capability coverage, speed, efficiency, cost, tokens, interface quality, innovation, effort, reliability, and overall app quality; missing evidence remains unscored rather than inflating a result. Developers can launch and export the same evidence through the control-plane runner. Measured gaps may become governed self-improvement proposals only with a developer-authored PR/config diff, an isolated comparable evaluation, a decision, canary evidence, and rollback plan; BOSS never self-applies a tuning change.
+Software Factory QA must also maintain a pinned suite of small but cross-layer benchmark applications. Each benchmark enters through the same operator workflow and governed code-task APIs used by customer work, exercises planning, persistence, backend behavior, browser behavior, repair, and evidence reporting, and remains uncertified until its durable verification report contains the required plan and authoritative command result. The initial suite is BugBox (CRUD/persistence), HookWatch (ingestion/replay), and ApproveIt (role-gated state transitions/audit). Benchmark reports include a versioned, evidence-aware scorecard covering functionality, capability coverage, speed, efficiency, cost, tokens, interface quality, innovation, effort, reliability, and overall app quality; missing evidence remains unscored rather than inflating a result. Developers can launch and export the same evidence through the control-plane runner. Measured gaps may become governed self-improvement proposals only with a developer-authored PR/config diff, an isolated comparable evaluation, a decision, canary evidence, and rollback plan; BOSS never self-applies a tuning change. Recurring optimization is represented by an `ImprovementProgram` with a pinned baseline and metric contract. Each `ImprovementTrial` must prove exactly one declared configuration variable changed, retain control/candidate evidence and a deterministic verdict hash, preserve evidence coverage, and satisfy hard gates before it can create a proposal. The program baseline moves only after that proposal completes governed rollout.
 
 ### GitHub Project Sync and Branch Orchestration
 
@@ -651,6 +651,17 @@ A SkillSpec is the typed capability contract an agent, Agent Group, or Workflow 
 Capability resolution must intersect the requesting role/group, Workflow step, org/project policy, risk tier, data boundary, installed connection, granted permissions, and current health. Skills and integrations must never create ambient authority. Every invocation links attempts, artifacts/evidence, cost, receipts, integration/version, and any ChangeSet or ResourceReceipt.
 
 The existing SkillSpec, MCP, capability-bundle, provider-adapter, and project skill registry foundations remain canonical. The Integration Registry generalizes configured connectivity across developer, data, communications, SaaS, model, and provider systems without building a competing skill marketplace.
+
+Third-party agent toolchains enter through a separate supply-chain intake. A
+pinned, license-classified text snapshot may be hashed and assessed, but BOSS
+never executes or stores the raw source, activates upstream hooks/MCP/installers,
+or grants imported instructions authority. Candidates remain normalized
+metadata until independent review and a native BOSS implementation satisfy the
+usual typed capability, policy, test, lease, budget, approval, and Receipt
+gates. The command tripwire is deterministic and model-independent; the
+context packer preserves policy, approval, contract, and proof content in full
+or blocks when the authoritative set cannot fit. The detailed contract is
+`docs/product/AGENT_TOOLCHAIN_INTAKE.md`.
 
 ## Reusable Mapped Workflows
 
