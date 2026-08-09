@@ -4131,6 +4131,41 @@ CREATE TABLE IF NOT EXISTS shepherd_reasoning (
 );
 CREATE INDEX IF NOT EXISTS idx_shepherd_reasoning_task ON shepherd_reasoning(task_ref, step_no);
 
+-- Every judgement the in-flight shepherd makes, whether or not it acted on it.
+--
+-- Exists so a capability held back for safety cannot quietly rot. Shadow mode without a
+-- ledger is a promise to review something later that nobody reviews: the flag stays off, the
+-- evidence never accumulates anywhere visible, and re-enabling it months later reintroduces
+-- exactly the bugs it was switched off for. Recording every verdict makes readiness a
+-- MEASUREMENT — "this class judged 40 runs and was never overruled" — instead of a memory.
+--
+-- `mode` is what the shepherd was allowed to do at the time, not what it wanted to do:
+-- shadow means it recorded and stood back; live means it acted. Keeping both in one table is
+-- what makes "would this have been right?" answerable after the fact.
+CREATE TABLE IF NOT EXISTS shepherd_watch_observations (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id        TEXT NOT NULL,
+  watch_class   INTEGER NOT NULL,
+  class_name    TEXT NOT NULL,
+  action        TEXT NOT NULL,               -- none|cancel|requeue|fail|escalate
+  mode          TEXT NOT NULL,               -- shadow|live
+  acted         BOOLEAN NOT NULL DEFAULT FALSE,
+  reason        TEXT NOT NULL,
+  evidence      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Filled in later by a human or by the run's own outcome: was the shepherd right?
+  -- NULL means nobody has judged it yet, which is different from "it was fine".
+  verdict_correct BOOLEAN,
+  judged_by     TEXT,
+  judged_at     TIMESTAMPTZ,
+  note          TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_shepherd_watch_obs_class
+  ON shepherd_watch_observations(project_id, watch_class, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shepherd_watch_obs_run
+  ON shepherd_watch_observations(run_id, created_at DESC);
+
 -- One decision-shaped question for a human. Never a log dump: options are
 -- concrete and each carries its cost.
 CREATE TABLE IF NOT EXISTS shepherd_escalations (

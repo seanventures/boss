@@ -6635,6 +6635,20 @@ def delivery_health_endpoint(project_id: str):
         return health_view(connection, project_id)
 
 
+@app.get("/v1/shepherd/readiness")
+def shepherd_readiness_endpoint(project_id: Optional[str] = None, days: int = 30):
+    """Per watch class: what it judged, how often it was overruled, and whether to trust it.
+
+    The answer to "how do I know when the shepherd is safe to let loose, if I have not thought
+    about it in a fortnight?". Shadow mode without this is a promise to review something that
+    produces no output — which is how a safety measure becomes a dead feature.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import readiness
+    return readiness(engine, project_id, days=days)
+
+
 @app.post("/v1/shepherd/watch")
 def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = False):
     """Look at everything currently RUNNING and deal with what is obviously wrong.

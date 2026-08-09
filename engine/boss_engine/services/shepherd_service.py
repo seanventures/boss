@@ -699,9 +699,10 @@ def projects_with_running_work(engine) -> list:
 
 
 def watch_all(engine, settings: Settings, *, dry_run: bool = False,
-              actor: str = "shepherd") -> dict[str, Any]:
+              actor: str = "shepherd", class_modes: Optional[dict] = None) -> dict[str, Any]:
     """Watch in-flight work across every project that has any."""
-    results = [watch(engine, settings, p, dry_run=dry_run, actor=actor)
+    results = [watch(engine, settings, p, dry_run=dry_run, actor=actor,
+                     class_modes=class_modes)
                for p in projects_with_running_work(engine)]
     return {
         "projects": len(results),
@@ -713,8 +714,90 @@ def watch_all(engine, settings: Settings, *, dry_run: bool = False,
     }
 
 
+def _record_observation(engine, project_id: str, snap, verdict, mode: str, *,
+                        acted: bool, dry_run: bool) -> None:
+    """Write down what the shepherd concluded, whether or not it did anything.
+
+    The ledger is what makes readiness measurable instead of remembered. Without it, shadow
+    mode is a promise to review something that produces no output — the flag stays off, the
+    evidence lives nowhere, and re-enabling months later reintroduces the bugs it was switched
+    off for.
+
+    Never fails the sweep: a shepherd that stops watching because it could not write a note
+    has its priorities backwards.
+    """
+    if dry_run:
+        return
+    from ..db import begin
+    try:
+        with begin(engine) as c:
+            c.execute(
+                sql("INSERT INTO shepherd_watch_observations "
+                    "(id, project_id, run_id, watch_class, class_name, action, mode, acted, "
+                    " reason, evidence) "
+                    "VALUES (:i, :p, :r, :k, :n, :a, :m, :ac, :why, CAST(:e AS JSONB))"),
+                {"i": make_id("shobs"), "p": project_id, "r": snap.run_id,
+                 "k": verdict.klass, "n": verdict.name, "a": verdict.action, "m": mode,
+                 "ac": acted, "why": verdict.reason[:1000],
+                 "e": json.dumps(verdict.evidence, default=str)})
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def readiness(engine, project_id: Optional[str] = None, *, days: int = 30) -> dict[str, Any]:
+    """Per class: what it has judged, how often it was overruled, and whether to trust it.
+
+    Written to be read by someone who has forgotten this component exists. If shadow mode is
+    going to hold a capability back, something has to say — unprompted — "this class has
+    judged forty runs and was never overruled, promote it or say why not". Otherwise the safe
+    option quietly becomes the permanent one.
+    """
+    from ..db import begin
+    from .shepherd_watch import WATCH_NAMES, mode_for, promotion_status
+
+    where = "created_at > now() - make_interval(days => :d)"
+    params: dict[str, Any] = {"d": days}
+    if project_id:
+        where += " AND project_id = :p"
+        params["p"] = project_id
+    with begin(engine) as c:
+        rows = c.execute(
+            sql(f"SELECT watch_class, class_name, mode, "
+                f"       count(*) AS observed, "
+                f"       count(*) FILTER (WHERE acted) AS acted, "
+                f"       count(*) FILTER (WHERE verdict_correct IS FALSE) AS wrong, "
+                f"       count(*) FILTER (WHERE verdict_correct IS TRUE) AS confirmed, "
+                f"       max(created_at) AS last_seen "
+                f"FROM shepherd_watch_observations WHERE {where} "
+                f"GROUP BY 1, 2, 3 ORDER BY observed DESC"), params).mappings().all()
+
+    classes = []
+    for row in rows:
+        mode = mode_for(row["watch_class"])
+        eligible, sentence = promotion_status(
+            row["watch_class"], int(row["observed"]), int(row["wrong"]), mode)
+        classes.append({
+            "class": row["watch_class"],
+            "name": row["class_name"] or WATCH_NAMES.get(row["watch_class"], "unknown"),
+            "mode": mode, "observed": int(row["observed"]), "acted": int(row["acted"]),
+            "confirmed": int(row["confirmed"]), "overruled": int(row["wrong"]),
+            "eligible_for_promotion": eligible, "assessment": sentence,
+            "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+        })
+    promotable = [c["name"] for c in classes if c["eligible_for_promotion"]]
+    return {
+        "days": days, "classes": classes,
+        "promotable": promotable,
+        # One line for someone who has not thought about the shepherd in a fortnight.
+        "headline": (f"{len(promotable)} class(es) have earned promotion: "
+                     f"{', '.join(promotable)}" if promotable else
+                     f"{len(classes)} class(es) observed; none has enough evidence to promote"),
+    }
+
+
 def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
-          actor: str = "shepherd") -> dict[str, Any]:
+          actor: str = "shepherd",
+          class_modes: Optional[dict] = None) -> dict[str, Any]:
     """Look at everything currently running, and deal with what is obviously wrong.
 
     This is the half of the shepherd that was missing. `sweep()` reasons about runs that have
@@ -727,7 +810,8 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
     away work that would have landed.
     """
     from ..db import begin
-    from .shepherd_watch import MAX_ACTIONS_PER_SWEEP, HEALTHY, act_now, assess
+    from .shepherd_watch import (
+        LIVE, MAX_ACTIONS_PER_SWEEP, HEALTHY, act_now, assess, mode_for)
 
     acted, escalated, ineffective, seen = [], [], [], 0
     with begin(engine) as c:
@@ -761,7 +845,14 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
         record = {"run_id": snap.run_id, "title": snap.title, "class": verdict.klass,
                   "name": verdict.name, "reason": verdict.reason, "action": verdict.action,
                   "evidence": {**verdict.evidence, "observed": observed}}
+        # Shadow classes judge and stand back. Recorded either way: a capability held back
+        # for safety must still produce evidence, or "review it later" becomes "never".
+        klass_mode = mode_for(verdict.klass, class_modes)
         may_act, why = act_now(verdict, snap)
+        if may_act and klass_mode != LIVE:
+            may_act, why = False, f"{verdict.name} is in shadow mode — recorded, not acted on"
+        _record_observation(engine, project_id, snap, verdict, klass_mode,
+                            acted=False, dry_run=dry_run)
         if dry_run:
             (acted if may_act else escalated).append(
                 {**record, "dry_run": True, "gate": why})
@@ -789,6 +880,8 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
             # shepherd announcing a fix every two minutes while the run sits exactly where it
             # was — the precise dishonesty that makes an operator stop believing the console.
             if changed:
+                _record_observation(engine, project_id, snap, verdict, klass_mode,
+                                    acted=True, dry_run=dry_run)
                 acted.append(record)
             else:
                 ineffective.append({**record, "note": "remedy did not apply — nothing changed"})

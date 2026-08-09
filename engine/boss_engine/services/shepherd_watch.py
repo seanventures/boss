@@ -392,3 +392,70 @@ def act_now(verdict: "WatchVerdict", snap: "RunSnapshot") -> tuple[bool, str]:
 # second would have failed seven. A cap turns a systematic misjudgement into a small, visible
 # incident instead of a clean sweep of someone's work.
 MAX_ACTIONS_PER_SWEEP = 3
+
+
+# --------------------------------------------------------------------------- #
+# Shadow and live, per class
+# --------------------------------------------------------------------------- #
+# A class starts in SHADOW: it judges, records, and stands back. It goes LIVE only once its
+# recorded judgements say it has earned it.
+#
+# The alternative — one global off-switch — is how a safety measure becomes a dead feature. It
+# depends on somebody remembering to review something that produces no output, so the flag
+# stays off, no evidence accumulates anywhere visible, and turning it back on months later
+# reintroduces the bugs it was turned off for. Readiness has to be a measurement the system
+# takes itself.
+#
+# Two are live already because they have a real track record rather than my confidence in
+# them: REDUNDANT_DUPLICATE cancelled three staged and four production duplicates correctly
+# and cannot destroy work by construction (the earlier twin continues), and JOB_ENDED closed
+# seven runs whose jobs had been terminal for five weeks. ORPHANED requeues rather than
+# destroys, but has never fired on real data, so it waits.
+SHADOW = "shadow"
+LIVE = "live"
+
+DEFAULT_CLASS_MODES: dict[int, str] = {
+    REDUNDANT_DUPLICATE: LIVE,
+    JOB_ENDED: LIVE,
+    ORPHANED: SHADOW,
+    ABANDONED: SHADOW,
+    # The rest only ever escalate, so the mode is moot — recorded anyway, so the ledger shows
+    # the whole picture rather than the acting subset.
+    STARVED: SHADOW,
+    DEFERRED: SHADOW,
+    STALLED: SHADOW,
+    OVER_LATENCY: SHADOW,
+}
+
+# What a class must show before it is worth promoting. Deliberately modest: this is evidence
+# that a classifier is not obviously wrong, not proof it is right, and the safety floor and
+# per-sweep cap still apply after promotion.
+PROMOTION_MIN_OBSERVATIONS = 20
+PROMOTION_MAX_WRONG = 0
+
+
+def mode_for(klass: int, overrides: Optional[dict[int, str]] = None) -> str:
+    """Shadow or live for this class, with an operator override if one is set."""
+    if overrides and klass in overrides:
+        return overrides[klass]
+    return DEFAULT_CLASS_MODES.get(klass, SHADOW)
+
+
+def promotion_status(klass: int, observed: int, wrong: int,
+                     mode: str) -> tuple[bool, str]:
+    """Has this class earned the right to act unattended?
+
+    Returns (eligible, sentence). The sentence is written to be read by a person deciding,
+    not parsed — the whole point is that someone who has forgotten this component exists can
+    read one line and know whether to trust it.
+    """
+    if mode == LIVE:
+        return False, f"already live — {observed} judged, {wrong} overruled"
+    if wrong > PROMOTION_MAX_WRONG:
+        return False, (f"not eligible: overruled {wrong} time(s) in {observed} judgements; "
+                       f"fix the classifier before promoting it")
+    if observed < PROMOTION_MIN_OBSERVATIONS:
+        return False, (f"needs {PROMOTION_MIN_OBSERVATIONS - observed} more judgements "
+                       f"({observed}/{PROMOTION_MIN_OBSERVATIONS}, none overruled so far)")
+    return True, (f"ELIGIBLE: {observed} judgements, none overruled — promote it or say why "
+                  f"not")
