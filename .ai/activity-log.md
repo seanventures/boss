@@ -1524,3 +1524,19 @@ PR: https://github.com/seanheiney/boss/pull/3
   capability, receipt, and job-terminal enforcement after acceptance review.
 - Re-fetched `origin/main` after validation: it remains `68914b0`, with zero
   branch divergence and no open GitHub pull requests.
+
+## 2026-08-09 — BOSS-336 v0.11.0 release candidate
+
+- Fast-forwarded the already-clean local `main` by 15 contributor commits to
+  current `origin/main` `004b030`; no merge conflict or history rewrite was
+  required, and GitHub had no open pull requests or issues.
+- Aligned repository, web, API client, engine, Helm, Kubernetes, and image
+  metadata to `0.11.0`; added release notes for all work since v0.10.0.
+- Ran `make clean`, applied a fresh Postgres 16 schema twice, and passed 102
+  affected Python tests, all 155 web tests, Ruff, TypeScript, strict docs,
+  production build, wheel build/import, seeded smoke, 17-resource Kubernetes
+  and Helm validation, four infra profiles, and all four container targets.
+- Dependency audit retains the known Vitest/Vite development-server esbuild
+  advisory. The external readiness checker correctly holds hosted identity,
+  support, provider writes, and live-cluster rollout closed while reporting
+  Community/local and self-hosted packaging ready.

@@ -1,5 +1,22 @@
 # Codex Handoff
 
+## 2026-08-09 BOSS-336 v0.11.0 release
+
+- `ai/codex/release-v0.11.0` starts from contributor-current `main` at
+  `004b030`, including the 15 post-PR-144 shepherd/console commits. No open PR
+  or issue conflicted with the release metadata.
+- All version surfaces are aligned on `0.11.0`, with a changelog covering
+  sanitized toolchain intake, governed improvement programs, Model Gateway,
+  Ground Truth/Assurance, Agent Groups/Integration Registry, and shepherd
+  reliability.
+- Release validation is green: 102 affected Python tests, 155 web tests,
+  schema replay, lint/typecheck, strict docs, production build, wheel import,
+  seeded smoke, Kubernetes/Helm, infra profiles, and four container targets.
+- External hosted identity/support/provider/cluster paths remain intentionally
+  fail-closed. Publish the release PR, merge only while current with `main`,
+  then create annotated tag `v0.11.0` and the GitHub release from the exact
+  merge commit before closing Plane BOSS-336.
+
 ## 2026-08-09 BOSS-18/BOSS-123–131 assurance and collaboration runtime
 
 - Branch `ai/codex/boss-18-123-131-runtime` is based on contributor-updated

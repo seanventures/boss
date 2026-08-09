@@ -1,5 +1,43 @@
 # BOSS Release Readiness (Autonomous)
 
+## v0.11.0 source/package release — 2026-08-09
+
+**Plane:** BOSS-336
+
+**Branch:** `ai/codex/release-v0.11.0`
+
+**Candidate base:** contributor-current `main` at `004b030`
+
+**Disposition:** READY for the v0.11.0 source, wheel, local Community, and
+self-hosted package release. Live hosted/enterprise/provider rollout remains
+explicitly blocked by missing external configuration; no live rollout is
+claimed by this release.
+
+Evidence:
+
+- `make clean` completed before validation.
+- Fresh PostgreSQL 16 schema applied successfully twice.
+- 102/102 affected API, worker, engine, console, shepherd, assurance,
+  toolchain, Model Gateway, improvement-loop, and distribution tests passed.
+- 155/155 web tests passed; Ruff and TypeScript passed.
+- Strict MkDocs and the optimized Next.js production build passed.
+- `boss-engine` sdist/wheel built; isolated wheel import reported `0.11.0`.
+- Seeded API smoke passed.
+- Kubernetes validator passed 17 resources and Helm chart `0.11.0`; all four
+  infrastructure profiles passed.
+- Web, API, worker, and Account Connect container targets built successfully.
+- Dependency review reports the existing Vitest/Vite development-server
+  esbuild advisory; the production build does not include that dev-server
+  exposure.
+- `make release-blockers` correctly reports Community/local and self-hosted
+  packages ready while holding hosted Account Connect, marketplace/billing,
+  enterprise identity/SCIM/support, live cluster proof, and ProviderOps writes
+  closed until their credentials, approvals, and rollback evidence exist.
+
+Rollback: move the `latest` release designation back to `v0.10.0` and deploy
+the `0.10.0` image/Helm tags. The v0.11.0 schema changes are additive audit and
+runtime tables; do not delete them during rollback.
+
 **Date**: 2026-06-05 (AUTO-004 closed + full local validations + DevOps release task)
 **Status**: LOCAL READY (post PR #3 + AUTO-004) - .ai/ OS in, traceability complete, P0 local gaps closed+validated+PR'd, AUTO-004 P3 closed (see .ai/gap-backlog), baseline all green (make lint/build/k8s/infra/release-blockers/smoke/deps-audit/full-validate target PASS where DB; web+targeted+smoke+validators green), external 3 P0s Blocked by design. .env.example updated with comments for ALL current BOSS_* (bootstrap, infra real provision, account connect, oidc, saml, scim, budget caps, sandbox, worker/lease/poll, core pack, etc from full code/config scan); release-blockers script improved for bootstrap coverage + re-run; Makefile enhanced (full-validate target + deps-audit follow-up); all per AGENTS (read mandatory first, small, docs, no secrets). PM prd-audit added: full coverage check vs PRD-v2/TECH (no other local gaps uncovered; comms/self-imp/commercial-local/elastic covered; "coverage good, only external left"; noted P3 GAP-PRD-AUDIT-001). Awaiting subagent reviews + any P2 fixes + merge. Full prod readiness requires external config for Blocked items.
 

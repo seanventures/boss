@@ -273,6 +273,19 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
   OpenAPI parse, and production build. The branch is current with `origin/main`;
   commit, PR, and merge evidence remain before the tickets can move to Done.
 
+## 2026-08-09 — BOSS-336 v0.11.0 release status
+
+- Release candidate is based on contributor-current `main` `004b030`; local
+  main was fast-forwarded cleanly by 15 commits before the release branch.
+- Version/changelog metadata is aligned across application, engine, client,
+  Helm, and Kubernetes surfaces.
+- Release gates pass: 102 affected Python tests, 155 web tests, fresh schema
+  replay, lint/typecheck, strict docs, production build, wheel import, smoke,
+  Kubernetes/Helm, infra profiles, and web/API/worker/Account Connect images.
+- Source/local/self-hosted release is ready. Hosted identity/support/provider
+  writes and live-cluster rollout remain blocked by design pending external
+  configuration and approvals. Commit/PR/tag/release evidence remains.
+
 ## Files Changed (session so far)
 - Created: .ai/spec-index.md, .ai/status.md, .ai/...
 - Modified this Security rate task: apps/api/app/config.py, apps/api/app/main.py, apps/api/tests/test_api.py, apps/api/tests/conftest.py, api/openapi.yaml, .ai/gap-backlog.md, .ai/security-review.md, .ai/agents/security.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md (plus prior)

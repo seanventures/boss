@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.11.0 - 2026-08-09
+
+This feature release makes BOSS materially more self-governing: model access,
+agent-tool intake, improvement loops, assurance, collaboration, and work
+shepherding now share durable policy, lease, budget, receipt, and evidence
+boundaries.
+
+### Added
+
+- A sanitized, model-agnostic agent toolchain intake that inventories pinned
+  upstream sources, performs bounded review without executing imported code,
+  and admits only normalized, policy-approved capabilities.
+- Governed autonomous improvement programs and trials with baseline evidence,
+  isolated candidates, deterministic scorecards, proposal-only promotion,
+  approval, canary, rollback, and audit history.
+- A unified Model Gateway for SecretRef-backed API credentials and official
+  local subscription sessions, with job/model leases, capacity fencing,
+  budget reservations, receipted invocation, and project token/cost reporting.
+- The Ground Truth and Assurance runtime: scheduled measurements, regression
+  alarms, settled-conclusion tripwires, evidence-backed claims and Assurance
+  Cases, single-owner production surfaces, and standing adversarial verifiers.
+- Versioned executable Agent Groups and a typed Integration Registry with
+  bounded member jobs, visible dissent, evidence gates, scoped connections,
+  and intersection-only capability resolution.
+- A Mission Control Assurance Center and improved task-launch visibility over
+  the new canonical operator projections.
+
+### Fixed
+
+- Work shepherd decisions now distinguish dead workers, missing heartbeats,
+  stranded jobs, never-claimed queues, and terminal job verdicts from ordinary
+  slow work; every verdict records its supporting facts.
+- Relaunch preserves the original execution profile, duplicate active work is
+  suppressed, and the console immediately names and reorders launched work.
+- Community deployments no longer inherit a paid-edition gate, and the web
+  console uses the current API/origin and visual identity configuration.
+
+### Release notes
+
+- Application, engine, API client, Helm, and Kubernetes versions and image tags
+  are aligned on `v0.11.0`.
+- The release includes contributor-current `main` through `004b030` and the
+  assurance/collaboration delivery from PR #144 without rewriting history.
+- GitHub Actions remain intentionally disabled. Local clean, test, lint, docs,
+  build, package, manifest, infrastructure, and smoke evidence is recorded in
+  Plane BOSS-336.
+- Hosted Account Connect, enterprise identity, live provider writes, and live
+  cluster rollout remain fail-closed until credentials, approvals, and
+  rollback evidence are explicitly configured.
+
 ## v0.10.0 - 2026-08-08
 
 This feature release completes the governed QA benchmark and continuous
