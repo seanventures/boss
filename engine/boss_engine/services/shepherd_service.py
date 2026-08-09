@@ -567,6 +567,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                              and float(row["mins_since_heartbeat"]) < ORPHAN_LEASE_MINUTES),
             minutes_since_heartbeat=(float(row["mins_since_heartbeat"])
                                      if row["mins_since_heartbeat"] is not None else None),
+            has_job=row["job_status"] is not None,
             was_leased=bool(row["ever_leased"]),
             minutes_since_any_lease=since_lease,
             median_minutes=median, sample_size=samples,
@@ -628,6 +629,20 @@ def _cancel_run(connection, run_id: str, reason: str) -> int:
             "WHERE payload->>'run_id' = :i AND status IN ('queued','running')"),
         {"i": run_id})
     return changed
+
+
+def _fail_run(connection, run_id: str, reason: str) -> int:
+    """Stop claiming a run is alive when nothing can advance it.
+
+    Not a cancellation — nobody chose to stop this; it was already over and the row had not
+    noticed. Saying so is the whole value: a console listing ten runs as "Queued — running…"
+    that will never move is worse than one listing ten failures, because the first invites
+    waiting.
+    """
+    return connection.execute(
+        sql("UPDATE code_task_runs SET status='failed', phase='abandoned', error=:e, "
+            "updated_at=now() WHERE id=:i AND status IN ('running','queued')"),
+        {"i": run_id, "e": reason[:500]}).rowcount
 
 
 def _requeue_run(connection, run_id: str) -> int:
@@ -711,6 +726,8 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
             with begin(engine) as c:
                 if verdict.action == "cancel":
                     changed = _cancel_run(c, snap.run_id, f"shepherd: {verdict.reason}")
+                elif verdict.action == "fail":
+                    changed = _fail_run(c, snap.run_id, f"shepherd: {verdict.reason}")
                 else:
                     changed = _requeue_run(c, snap.run_id)
                 if changed:

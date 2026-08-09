@@ -39,6 +39,7 @@ ORPHANED = 2                # no worker holds it and its lease is long gone
 STALLED = 3                 # alive, but the same phase for far too long
 OVER_LATENCY = 4            # running far longer than this kind of work normally takes
 STARVED = 5                 # never claimed by anyone — nothing is consuming the queue
+ABANDONED = 6               # no job exists at all: nothing will ever pick this up
 
 WATCH_NAMES = {
     HEALTHY: "healthy",
@@ -47,6 +48,7 @@ WATCH_NAMES = {
     STALLED: "stalled in one phase",
     OVER_LATENCY: "over expected latency",
     STARVED: "starved — no worker is consuming the queue",
+    ABANDONED: "abandoned — no job exists to carry it",
 }
 
 # --------------------------------------------------------------------------- #
@@ -62,6 +64,9 @@ STALL_MINUTES = 45.0
 # The lease TTL is 300s and the worker heartbeats within it. Six times that is unambiguous:
 # no live worker renews a lease for half an hour and then comes back.
 ORPHAN_LEASE_MINUTES = 30.0
+# A run whose job row has vanished. Given generously: a job is created moments after the run
+# row, so anything older than this with no job never had one or lost it permanently.
+ABANDONED_MINUTES = 15.0
 # A queue nobody is draining. Shorter than the orphan threshold because this is not a lost
 # run, it is a dead platform: if nothing anywhere has been claimed in ten minutes while work
 # is waiting, no amount of patience helps.
@@ -90,6 +95,9 @@ class RunSnapshot:
     # Job/lease facts. `has_live_worker` is False when nothing owns the job at all.
     has_live_worker: bool = True
     minutes_since_heartbeat: Optional[float] = None
+    # Does a job row exist at all? Distinct from "not claimed": a run whose job is gone can
+    # never progress, no matter how long anyone waits.
+    has_job: bool = True
     # Was this job EVER claimed? The distinction decides whether requeueing can help at all:
     # a job whose worker died is recoverable by putting it back; a job nobody ever took is
     # not, because there is nothing to put it back to.
@@ -107,7 +115,7 @@ class WatchVerdict:
 
     klass: int
     reason: str
-    action: str                 # "none" | "cancel" | "requeue" | "escalate"
+    action: str                 # "none" | "cancel" | "requeue" | "fail" | "escalate"
     autonomous: bool            # may the shepherd do it without asking?
     evidence: dict[str, Any]
 
@@ -183,7 +191,26 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
                       "remedy": "start or restart the worker; requeueing cannot help"},
         )
 
-    # 4. Stalled — alive, but nothing has moved.
+    # 4. Abandoned — there is no job, so there is no future.
+    #
+    # The state the console shows as "Queued — running…", auto-refreshing every four seconds,
+    # forever. Ten of these were sitting on the production box, some since July, one wedged
+    # in `coding` for 53,899 minutes. Nothing was ever going to happen to them: the job that
+    # would have carried the work does not exist.
+    #
+    # Marked FAILED rather than requeued, deliberately. Requeueing would start month-old work
+    # nobody asked for again and spend a real budget on it; the truthful action is to stop
+    # claiming it is running. Relaunching it is one click away if anyone still wants it.
+    if not snap.has_job and snap.minutes_running >= ABANDONED_MINUTES:
+        return WatchVerdict(
+            ABANDONED,
+            f"no job exists to carry this run and it has said `{snap.phase}` for "
+            f"{snap.minutes_running:.0f} minutes — it cannot progress and never will",
+            action="fail", autonomous=True,
+            evidence={**ev, "remedy": "marked failed; relaunch it if the work is still wanted"},
+        )
+
+    # 5. Stalled — alive, but nothing has moved.
     #
     # NOT autonomous. A wedged phase and a genuinely slow one look identical from here, and
     # the difference is worth a human glance rather than a cancelled hour of work.
@@ -195,7 +222,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             action="escalate", autonomous=False, evidence=ev,
         )
 
-    # 5. Over latency — measured against this project's own history, never a constant.
+    # 6. Over latency — measured against this project's own history, never a constant.
     if (snap.median_minutes and snap.sample_size >= LATENCY_MIN_SAMPLES
             and snap.minutes_running >= snap.median_minutes * LATENCY_MULTIPLE):
         return WatchVerdict(
@@ -213,7 +240,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
 
 # Actions the shepherd may take on its own, and nothing else. Mirrors AUTONOMOUS_CLASSES in
 # shepherd_service: the blast radius is a list you can read, not a property of the reasoning.
-AUTONOMOUS_ACTIONS = frozenset({"cancel", "requeue"})
+AUTONOMOUS_ACTIONS = frozenset({"cancel", "requeue", "fail"})
 
 
 def permitted(verdict: WatchVerdict) -> bool:

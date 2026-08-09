@@ -20,7 +20,8 @@ sys.path.insert(0, "engine")
 
 from boss_engine.services.shepherd_watch import (  # noqa: E402
     HEALTHY, ORPHANED, ORPHAN_LEASE_MINUTES, OVER_LATENCY, REDUNDANT_DUPLICATE,
-    STALL_MINUTES, STALLED, STARVATION_MINUTES, STARVED, RunSnapshot, assess, permitted,
+    ABANDONED, ABANDONED_MINUTES, STALL_MINUTES, STALLED, STARVATION_MINUTES, STARVED,
+    RunSnapshot, assess, permitted,
 )
 
 _failures: list[str] = []
@@ -96,6 +97,23 @@ def main() -> int:
                     was_leased=False, minutes_since_any_lease=120.0))
     check("a job queued one minute ago is not starved yet", v.klass == HEALTHY)
 
+    print("== abandoned: the 'Queued — running…' that never moves ==")
+    # What the production console actually showed: ten runs auto-refreshing every four
+    # seconds, one wedged in `coding` for 53,899 minutes, with no job row behind any of them.
+    # Nothing would ever pick them up, and nothing said so.
+    v = assess(snap(phase="coding", minutes_running=53899.0, minutes_since_update=53899.0,
+                    has_job=False, has_live_worker=False, was_leased=False))
+    check("a run with no job is abandoned", v.klass == ABANDONED)
+    check("not merely stalled", v.klass != STALLED)
+    check("marked failed, autonomously", v.action == "fail" and permitted(v))
+    # NOT requeued: that would restart month-old work nobody asked for, on a real budget.
+    check("never requeued — relaunching stale work costs money", v.action != "requeue")
+    check("and it says how to get the work back if wanted",
+          "relaunch" in v.evidence.get("remedy", ""))
+    v = assess(snap(has_job=False, minutes_running=ABANDONED_MINUTES - 1,
+                    minutes_since_update=1.0))
+    check("a run whose job is still being created is left alone", v.klass == HEALTHY)
+
     print("== stalled: escalated, never cancelled ==")
     v = assess(snap(minutes_since_update=STALL_MINUTES + 1))
     check("no movement for too long is a stall", v.klass == STALLED)
@@ -124,8 +142,11 @@ def main() -> int:
 
     print("== the blast radius is a list, not a mood ==")
     from boss_engine.services.shepherd_watch import AUTONOMOUS_ACTIONS, WatchVerdict
-    check("only cancel and requeue are autonomous",
-          AUTONOMOUS_ACTIONS == frozenset({"cancel", "requeue"}))
+    # The blast radius is an explicit list so that widening it is a visible diff, never a
+    # side effect of some verdict deciding it feels confident.
+    check("the autonomous actions are exactly these three",
+          AUTONOMOUS_ACTIONS == frozenset({"cancel", "requeue", "fail"}))
+    check("escalate is never autonomous", "escalate" not in AUTONOMOUS_ACTIONS)
     check("an autonomous flag alone is not enough",
           not permitted(WatchVerdict(STALLED, "x", "escalate", True, {})))
     check("nor is a permitted action alone",
