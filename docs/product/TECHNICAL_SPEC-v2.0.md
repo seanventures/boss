@@ -419,6 +419,26 @@ Resolution input is `(tenant, project, actor, RoleSpec, AgentGroupVersion?, Work
 
 Each `SkillInvocation` records the requested and effective SkillSpec versions, executor binding, IntegrationConnection, typed input/output hashes, attempts, evidence/artifacts, cost, BudgetReservation, Receipt/dedupe key, and ChangeSet/ResourceReceipt for provider effects. Raw credentials never enter agent context.
 
+### Agent toolchain supply-chain intake
+
+`ToolchainSource`, `ToolchainImportRun`, and `ToolchainCandidate` form a
+non-executing intake ledger for third-party prompts, skills, agents, hooks,
+commands, MCP configuration, and package metadata. Sources are pinned to full
+Git revisions and a license disposition. Assessments accept only bounded text
+snapshots, store hashes and normalized metadata rather than raw content, and
+fail closed on revision drift, path escape, executable content, destructive or
+policy-bypassing instructions, restricted licenses, and unresolved per-item
+licensing. Approval only authorizes a native implementation; it does not
+activate upstream content.
+
+The deterministic command guard returns allow/review/block plus matched rule
+IDs and a hash; models cannot override blocks. The context packer reserves its
+budget for policy, approval, contract, proof, and required chunks before
+optional context. If authoritative chunks do not fit, it returns
+`blocked_authoritative_overflow` instead of truncating them. Omitted and
+duplicate identifiers are explicit audit evidence. See
+`docs/product/AGENT_TOOLCHAIN_INTAKE.md`.
+
 ## Reusable Workflow Runtime
 
 Canonical records:

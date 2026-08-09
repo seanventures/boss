@@ -1450,3 +1450,18 @@ PR: https://github.com/seanheiney/boss/pull/3
 - Validation: 8/8 focused tests pass; web lint/type generation passes; the
   optimized Next build passes; the full web suite is 142/143 with only the
   separately tracked BOSS-311 agent-chat/API-client mismatch remaining.
+## 2026-08-08 — BOSS-333 sanitized agent toolchain intake
+
+- Audited and pinned seven requested upstream repositories without executing
+  their code. Classified licenses and blocked the Destructive Command Guard
+  source entirely because its rider excludes the relevant use; treated the
+  mixed-license skills collection as metadata-only.
+- Implemented `toolchain_sources`, `toolchain_import_runs`, and
+  `toolchain_candidates`; source seeding; bounded text assessment; hash-only
+  normalized candidates; independent review; deterministic command guarding;
+  and authority-preserving context packing.
+- Added six RBAC-gated API surfaces, three registered SkillSpec executors,
+  policy/skill/source manifests, OpenAPI, product/technical/implementation docs,
+  and focused test cleanup/seeding.
+- Validation: 18 focused API/executor tests pass; Ruff, compileall, and
+  `git diff --check` pass. Plane BOSS-333 remains In Progress pending PR merge.

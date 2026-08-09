@@ -1,0 +1,156 @@
+format: boss.toolchain-sources/v1
+sources:
+  - source_key: claude_mem
+    display_name: claude-mem
+    repository_url: https://github.com/thedotmack/claude-mem
+    pinned_revision: 4702c337d85aa12e8ab7f845264a78885676261f
+    license_id: Apache-2.0
+    license_status: allowed
+    integration_mode: pattern_only
+    status: active
+    capabilities:
+      - session_observation_capture
+      - durable_session_summary
+      - progressive_context_disclosure
+      - hybrid_memory_retrieval
+      - mcp_memory_search
+    adopted_components:
+      - boss_knowledge_plane
+      - toolchain.context.pack
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: BOSS adopts the patterns behind its own tenant-scoped Knowledge Plane.
+
+  - source_key: everything_claude_code
+    display_name: Everything Claude Code
+    repository_url: https://github.com/affaan-m/everything-claude-code
+    pinned_revision: 51a6950bde756fe3ebc8879aa0c8ee49b9c53e78
+    license_id: MIT
+    license_status: allowed
+    integration_mode: selective_import
+    status: quarantined
+    capabilities:
+      - agent_catalog
+      - skill_catalog
+      - verification_loops
+      - session_memory_patterns
+      - multi_harness_adapters
+    adopted_components:
+      - boss_agent_studio
+      - boss_assurance_workflows
+      - toolchain.source.assess
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: Individual candidates require content scanning and explicit review.
+
+  - source_key: awesome_claude_code_toolkit
+    display_name: awesome-claude-code-toolkit
+    repository_url: https://github.com/rohitg00/awesome-claude-code-toolkit
+    pinned_revision: ebdf1d596d2cde5c5cceb32177e8d1cf4829e7d9
+    license_id: Apache-2.0
+    license_status: allowed
+    integration_mode: selective_import
+    status: quarantined
+    capabilities:
+      - agent_catalog
+      - skill_catalog
+      - hook_catalog
+      - mcp_catalog
+      - workflow_templates
+    adopted_components:
+      - boss_agent_studio
+      - boss_skill_marketplace
+      - toolchain.source.assess
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: Catalog entries do not confer licenses for linked repositories.
+
+  - source_key: brownfield_toolkit
+    display_name: claude-code-brownfield-toolkit
+    repository_url: https://github.com/azrlb/claude-code-brownfield-toolkit
+    pinned_revision: 53b24832cfccb7c372779af0d35e567481002dbb
+    license_id: MIT
+    license_status: allowed
+    integration_mode: pattern_only
+    status: active
+    capabilities:
+      - architecture_rule_enforcement
+      - pattern_memory
+      - semantic_code_search
+      - edit_preflight
+    adopted_components:
+      - boss_policy_engine
+      - toolchain.command.guard
+      - boss_knowledge_plane
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: BOSS uses native policy gates instead of harness-specific edit hooks.
+
+  - source_key: destructive_command_guard
+    display_name: Destructive Command Guard
+    repository_url: https://github.com/Dicklesworthstone/destructive_command_guard
+    pinned_revision: 17af4985debfc9729e43cb7d1a285a2b848170c3
+    license_id: MIT-with-OpenAI-Anthropic-Rider
+    license_status: restricted
+    integration_mode: blocked
+    status: blocked
+    capabilities:
+      - destructive_command_preflight
+    adopted_components:
+      - toolchain.command.guard
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: Upstream code is excluded; BOSS provides an independently authored deterministic guard.
+
+  - source_key: caveman
+    display_name: Caveman
+    repository_url: https://github.com/JuliusBrussee/caveman
+    pinned_revision: 11ddc0c9813c8f75365cd5be2f753df08712f154
+    license_id: MIT
+    license_status: allowed
+    integration_mode: pattern_only
+    status: active
+    capabilities:
+      - compact_response_style
+      - output_token_measurement
+      - optional_prompt_compression
+    adopted_components:
+      - toolchain.context.pack
+      - boss_token_telemetry
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: Compact style is opt-in and never applied to policy, proof, or audit artifacts.
+
+  - source_key: awesome_claude_skills
+    display_name: awesome-claude-skills
+    repository_url: https://github.com/ComposioHQ/awesome-claude-skills
+    pinned_revision: be2a406907dbc61b73e6827ded415c96139d13a2
+    license_id: per-item
+    license_status: mixed
+    integration_mode: catalog_only
+    status: quarantined
+    capabilities:
+      - skill_discovery
+      - frontend_design_patterns
+      - webapp_testing_patterns
+      - mcp_builder_patterns
+    adopted_components:
+      - boss_skill_marketplace
+      - toolchain.source.assess
+    provenance:
+      audited_at: "2026-08-08"
+      raw_code_vendored: false
+      executable_hooks_enabled: false
+      note: No repository-wide license; each skill requires its own license and security review.

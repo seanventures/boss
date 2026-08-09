@@ -6617,3 +6617,49 @@ class DeliveryPresenceEventCreateRequest(BaseModel):
     receipt_id: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     actor: str = "delivery_presence"
+
+
+class ToolchainSnapshotFile(BaseModel):
+    path: str = Field(min_length=1, max_length=512)
+    content: str = Field(max_length=262_144)
+
+
+class ToolchainAssessRequest(BaseModel):
+    project_id: str
+    source_key: str
+    revision: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+    files: list[ToolchainSnapshotFile] = Field(min_length=1, max_length=500)
+    actor: str = "security_engineer"
+
+
+class ToolchainCandidateReviewRequest(BaseModel):
+    project_id: str
+    decision: Literal["approve", "reject"]
+    note: str = Field(min_length=1, max_length=4000)
+    actor: str = "security_engineer"
+
+
+class ToolchainCommandGuardRequest(BaseModel):
+    project_id: str
+    command: str = Field(min_length=1, max_length=32_768)
+    cwd: Optional[str] = Field(default=None, max_length=4096)
+    actor: str = "security_engineer"
+
+
+class ToolchainContextChunk(BaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    text: str = Field(min_length=1, max_length=1_000_000)
+    authority: Literal[
+        "policy", "approval", "contract", "proof", "fact", "reference"
+    ] = "reference"
+    required: bool = False
+    priority: int = Field(default=50, ge=0, le=100)
+    source_ref: Optional[str] = Field(default=None, max_length=2048)
+
+
+class ToolchainContextPackRequest(BaseModel):
+    project_id: str
+    chunks: list[ToolchainContextChunk] = Field(max_length=1000)
+    token_budget: int = Field(ge=128, le=2_000_000)
+    reserved_output_tokens: int = Field(default=0, ge=0)
+    actor: str = "agent_loop"

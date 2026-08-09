@@ -521,6 +521,10 @@ from .schemas import (
     WorkItemUpsertRequest,
     WorkTrackerBindingUpsertRequest,
     WorkTrackerSyncExecuteRequest,
+    ToolchainAssessRequest,
+    ToolchainCandidateReviewRequest,
+    ToolchainCommandGuardRequest,
+    ToolchainContextPackRequest,
 )
 from .services.a2a import (
     A2ANotFoundError,
@@ -687,6 +691,10 @@ from .services.skill_runtime import (
     SkillRuntimeService,
 )
 from .services.skill_executors import SkillExecutorContext
+from .services.toolchain_registry import (
+    ToolchainImportError,
+    ToolchainRegistryService,
+)
 from .services import workflows as workflow_runtime
 from .services.skill_registry import (
     disable_skill,
@@ -782,6 +790,7 @@ role_governance = RoleGovernanceService(settings)
 autonomy_engine = AutonomyEngine(settings)
 router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
+toolchain_registry = ToolchainRegistryService(settings)
 slack_comms = SlackCommsService(settings)
 factory_scale_service = FactoryScaleService(settings)
 dashboard_service = DashboardService(settings)
@@ -9481,6 +9490,130 @@ def resolve_agent_runtime(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return AgentRuntimeResolveResponse(**result)
+
+
+@app.get("/v1/toolchain/sources")
+def list_toolchain_sources(project_id: str, actor: str = "ceo") -> dict:
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        return {"items": toolchain_registry.list_sources(connection, project_id)}
+
+
+@app.get("/v1/toolchain/imports")
+def list_toolchain_imports(
+    project_id: str,
+    actor: str = "ceo",
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "pack_manage")
+        return {
+            "items": toolchain_registry.list_import_runs(
+                connection, project_id, limit=limit
+            )
+        }
+
+
+@app.post("/v1/toolchain/imports/assess", status_code=201)
+def assess_toolchain_snapshot(payload: ToolchainAssessRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return toolchain_registry.assess_snapshot(
+                connection,
+                project_id=payload.project_id,
+                source_key=payload.source_key,
+                revision=payload.revision,
+                files=[item.model_dump() for item in payload.files],
+                actor=payload.actor,
+            )
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/toolchain/candidates/{candidate_id}/review")
+def review_toolchain_candidate(
+    candidate_id: str,
+    payload: ToolchainCandidateReviewRequest,
+) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "pack_manage"
+            )
+            return toolchain_registry.review_candidate(
+                connection,
+                project_id=payload.project_id,
+                candidate_id=candidate_id,
+                decision=payload.decision,
+                note=payload.note,
+                actor=payload.actor,
+            )
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/toolchain/commands/evaluate")
+def evaluate_toolchain_command(payload: ToolchainCommandGuardRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "command_submit"
+            )
+            result = toolchain_registry.evaluate_command(payload.command, payload.cwd)
+            emit_event(
+                connection,
+                payload.project_id,
+                "toolchain.command_evaluated",
+                payload.actor,
+                "project",
+                payload.project_id,
+                {
+                    "decision": result["decision"],
+                    "risk_tier": result["risk_tier"],
+                    "rule_ids": result["rule_ids"],
+                    "command_hash": result["command_hash"],
+                },
+            )
+            return result
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/toolchain/context/pack")
+def pack_toolchain_context(payload: ToolchainContextPackRequest) -> dict:
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "command_submit"
+            )
+            result = toolchain_registry.pack_context(
+                [item.model_dump() for item in payload.chunks],
+                payload.token_budget,
+                payload.reserved_output_tokens,
+            )
+            if result["budget_status"] != "within_budget" or result["duplicate_ids"]:
+                emit_event(
+                    connection,
+                    payload.project_id,
+                    "toolchain.context_packed",
+                    payload.actor,
+                    "project",
+                    payload.project_id,
+                    {
+                        "budget_status": result["budget_status"],
+                        "included_ids": result["included_ids"],
+                        "omitted_ids": result["omitted_ids"],
+                        "duplicate_ids": result["duplicate_ids"],
+                        "estimated_tokens": result["estimated_tokens"],
+                        "available_input_tokens": result["available_input_tokens"],
+                    },
+                )
+            return result
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)
