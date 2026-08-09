@@ -588,6 +588,17 @@ def _minutes_since_any_lease(connection, project_id: str):
             "  COALESCE(updated_at, to_timestamp(0))))))/60.0 AS mins "
             "FROM jobs WHERE project_id = :p AND lease_owner IS NOT NULL"),
         {"p": project_id}).mappings().first()
+    if row and row["mins"] is not None:
+        return float(row["mins"])
+
+    # Nothing here was EVER claimed. That is not "unknown" — it is the most starved a queue
+    # can be, and reading the NULL as unknown is why ten runs queued for 37 days came back
+    # "stalled, ask a human" instead of "nobody is consuming this queue". Fall back to the age
+    # of the oldest waiting job: how long the queue has gone undrained.
+    row = connection.execute(
+        sql("SELECT EXTRACT(EPOCH FROM (now() - MIN(created_at)))/60.0 AS mins "
+            "FROM jobs WHERE project_id = :p AND status = 'queued'"),
+        {"p": project_id}).mappings().first()
     return float(row["mins"]) if row and row["mins"] is not None else None
 
 
