@@ -404,8 +404,13 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   );
 }
 
-function LaunchTask({ run, projectId, label = "Launch again", onLaunched, startedId, failed }: {
+function LaunchTask({ run, projectId, label = "Run this task again", onLaunched, onOpen,
+                     startedId, failed }: {
   run: CodeTaskRun; projectId: string; label?: string;
+  // Opens the run this card started. Without it the button ends as a disabled control naming
+  // an id you cannot reach — it tells you something happened and gives you no way to see it,
+  // which is a dead end wearing the costume of a confirmation.
+  onOpen?: (runId: string) => void;
   // What this card started, and any failure, both held by the PARENT.
   //
   // They lived here as local state and vanished on every launch: the reload re-renders the
@@ -462,14 +467,23 @@ function LaunchTask({ run, projectId, label = "Launch again", onLaunched, starte
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      {/* Once it has launched, the button STAYS spent. Resetting it to its original label
-          while the new row had not appeared yet is what made people press it again: nothing
-          on screen had changed, so nothing looked like it had happened. */}
-      <button className="cap-btn primary" disabled={sent || !!startedId}
-              onClick={(e) => { e.stopPropagation(); void launch(); }}
-              title="Start a NEW governed run from this task's spec — the original keeps its history">
-        {sent ? "Starting…" : startedId ? "Launched ✓" : label}
-      </button>
+      {/* Once it has launched, the control becomes a way IN to what it started.
+          It used to stay as a disabled "Launched ✓" — which stops the second press, but
+          leaves you holding a run id and no way to look at it. Pressing the thing you just
+          pressed should now show you the result of pressing it. */}
+      {startedId ? (
+        <button className="cap-btn primary"
+                onClick={(e) => { e.stopPropagation(); onOpen?.(startedId); }}
+                title="Open the run this launched">
+          View run →
+        </button>
+      ) : (
+        <button className="cap-btn primary" disabled={sent}
+                onClick={(e) => { e.stopPropagation(); void launch(); }}
+                title="Start a NEW governed run from this task's spec — the original keeps its history">
+          {sent ? "Starting…" : label}
+        </button>
+      )}
       <span className="detail">
         {/* State the profile this will ACTUALLY use.
             This caption was copied wholesale from the benchmark card, including its claim
@@ -481,7 +495,12 @@ function LaunchTask({ run, projectId, label = "Launch again", onLaunched, starte
               : startedId
                 // Name the run. The previous text promised a position in a list this
                 // component cannot see, and when the list did not move it read as a failure.
-                ? `started ${startedId.slice(0, 13)}… — it appears in the list as it picks up`
+                // "Launched" implied there was something to look at. There is not, yet: this
+                // starts a governed CODING run — plan, tests, implement, review, gated PR —
+                // and only once that produces a build is there an app to preview. Saying so
+                // here is the difference between a confirmation and a riddle.
+                ? `started ${startedId.slice(0, 13)}… — it plans, tests and implements before `
+                  + `there is anything to preview`
                 : profile
                        ? `${profile} profile${riskTier != null ? ` · tier ${riskTier}` : ""}`
                          + " — same as the original · budgeted, review-gated"
@@ -988,6 +1007,14 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
     await reloadRef.current?.();
   }, []);
 
+  // Opening a run the list has not caught up with yet must still work: fetch first, then
+  // select. Selecting an id that is absent silently renders the list again, which reads as
+  // the button doing nothing — the failure this whole sequence keeps producing.
+  const openRun = useCallback(async (runId: string) => {
+    await reloadRef.current?.();
+    setSelected(runId);
+  }, []);
+
   const reload = useCallback(async () => {
     const fresh = await listCodeTasksAction(projectId);
     if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) setTasks(fresh.code_tasks);
@@ -1087,6 +1114,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   <ContractDetails criteria={c.spec?.acceptance_criteria}
                                    verification={c.spec?.test_commands} />
                   <LaunchTask run={c} projectId={projectId} onLaunched={noteLaunch}
+                                   onOpen={(id) => void openRun(id)}
                                    startedId={launched[c.id]?.run_id}
                                    failed={launched[c.id]?.error} />
                   <div className="ct-card-foot">
@@ -1136,9 +1164,10 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   <ContractDetails criteria={members[0].spec?.acceptance_criteria}
                                    verification={members[0].spec?.test_commands} />
                   <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
+                                   onOpen={(id) => void openRun(id)}
                                    startedId={launched[members[0].id]?.run_id}
                                    failed={launched[members[0].id]?.error}
-                                   label="Launch this build again" />
+                                   label="Run this build again" />
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
