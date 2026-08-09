@@ -24,6 +24,9 @@ import urllib.error
 import urllib.request
 
 API = "http://localhost:8000"
+# The identity the console actually uses. Testing as anything else would not have caught
+# the 403 that Sean's membership check produced on every delivery button.
+ACTOR = "executive_console"
 PROJECT = "boss-dogfood"
 _failures: list[str] = []
 
@@ -156,7 +159,7 @@ def main() -> int:
     # preflight, and the run has to say so rather than vanish.
     import time as _time
 
-    code, body = call("POST", "/v1/delivery/deploy", {"target_id": tid, "actor": "operator"})
+    code, body = call("POST", "/v1/delivery/deploy", {"target_id": tid, "actor": ACTOR})
     check("POST deploy returns immediately", code, (200,), body)
     check("it hands back a run to watch",
           200 if body.get("deployment_run_id") else 0, (200,), body)
@@ -179,11 +182,20 @@ def main() -> int:
                              for s in (verdict.get("steps") or [])]})
 
     code, body = call("POST", "/v1/delivery/deploy",
-                      {"target_id": "deptgt_stocks_aws", "plan_only": True, "actor": "operator"})
+                      {"target_id": "deptgt_stocks_aws", "plan_only": True, "actor": ACTOR})
     check("POST deploy plan_only", code, (200,), body)
+    # Same contract as redeploy: say who you are first, then find out the run does not exist.
     code, body = call("POST", "/v1/delivery/deployments/deprun_nope/execute", None)
+    check("execute without an actor -> 422", code, (422,), body)
+    code, body = call("POST", "/v1/delivery/deployments/deprun_nope/execute", {"actor": ACTOR})
     check("execute unknown run -> 404", code, (404,), body)
+    # Redeploy now requires an actor and checks org membership (added upstream). The actor is
+    # validated BEFORE the run is looked up, which is the right order — it does not leak
+    # whether a run id exists to someone who has not said who they are.
     code, body = call("POST", "/v1/delivery/deployments/deprun_nope/redeploy", {})
+    check("redeploy without an actor -> 422", code, (422,), body)
+    code, body = call("POST", "/v1/delivery/deployments/deprun_nope/redeploy",
+                      {"actor": ACTOR})
     check("redeploy unknown run -> 404", code, (404,), body)
 
     print("== What the redesigned console reads ==")

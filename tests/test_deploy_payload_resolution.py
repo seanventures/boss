@@ -192,9 +192,42 @@ def test_second_deploy_can_replace_what_the_first_one_left() -> None:
         remote="/opt/boss-apps/a")
     check("the transfer's replace is root-capable", "docker run --rm" in transfer)
     check("the transfer creates the persistent data dir", "/data" in transfer)
-    check("rollback also uses the root-capable removal",
-          src.count("_rm_rf_cmd(remote") >= 3,
-          "transfer, rollback and staging must all use it")
+    # Assert the PROPERTY, not the mechanism.
+    #
+    # This used to count calls to `_rm_rf_cmd`, and broke the moment someone inlined the same
+    # behaviour for a good reason (keeping the remote program free of `;` so the SSH command
+    # stays auditable). A test that pins HOW a guarantee is implemented turns every safe
+    # refactor into a failure and teaches people to edit the test — which is how a real guard
+    # gets deleted. What must hold is that a destructive step can remove ROOT-OWNED files:
+    # the previous container wrote some, and a plain `rm -rf` as the deploy user leaves them,
+    # so the next deploy cannot replace the tree.
+    def is_root_capable(cmd: str) -> bool:
+        return "docker run --rm" in cmd and "rm -rf" in cmd
+
+    check("the transfer's replace can remove root-owned files", is_root_capable(transfer))
+
+    captured: list[str] = []
+    real_ssh = ds._ssh
+    ds._ssh = lambda key, host, user, port, command, timeout=180: (
+        captured.append(command) or _FakeProc())
+    try:
+        ds._rollback_remote("/tmp/k", "h", "u", 22, remote="/opt/boss-apps/a",
+                            app="a", app_port=3005)
+    finally:
+        ds._ssh = real_ssh
+    check("rollback can remove root-owned files",
+          bool(captured) and is_root_capable(captured[0]),
+          "rollback replaces dist with dist.prev — same root-owned files, same problem")
+    check("staging can remove root-owned files",
+          "_rm_rf_cmd(remote + '/dist.prev')" in src,
+          "staging overwrites the previous release before the new one lands")
+
+
+class _FakeProc:
+    """Enough of a CompletedProcess for a command-shape assertion."""
+    returncode = 0
+    stdout = ""
+    stderr = ""
 
 
 if __name__ == "__main__":

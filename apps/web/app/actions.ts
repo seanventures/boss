@@ -2444,6 +2444,18 @@ export async function getDeliveryPipelineAction(projectId?: string): Promise<any
  * said "ssh key unusable: No SSH key configured" reached the operator as the text "409". The
  * reason existed at every layer and was discarded at the last one.
  */
+/** Who the console acts AS.
+ *
+ * These calls used the literal "operator", which is not a member of any org — it read like a
+ * role and was in fact a made-up name. It went unnoticed while the delivery routes had no
+ * authorization; the moment redeploy started checking membership, every button 403'd with
+ * "Actor 'operator' is not an active member". The console already has an identity for this —
+ * `executive_console`, seeded as an active member and used by every other panel — so the fix
+ * is to stop inventing a second one. Override with BOSS_CONSOLE_ACTOR where the seeded
+ * identity differs.
+ */
+const CONSOLE_ACTOR = process.env.BOSS_CONSOLE_ACTOR || "executive_console";
+
 function failureText(detail: unknown, status: number): string {
   if (typeof detail === "string" && detail.trim()) return detail;
   if (detail && typeof detail === "object") {
@@ -2498,24 +2510,24 @@ export async function listSecretsAction(projectId?: string): Promise<any> {
 export async function putSecretAction(input: {
   name: string; value: string; secret_kind?: string; backend?: string; scope_id?: string;
 }): Promise<any> {
-  return post("/v1/secrets", { project_id: PROJECT_ID, actor: "operator", ...input });
+  return post("/v1/secrets", { project_id: PROJECT_ID, actor: CONSOLE_ACTOR, ...input });
 }
 
 /** Generate a keypair. Only the PUBLIC half comes back — the private half never leaves the backend. */
 export async function generateKeypairAction(input: {
   name: string; algorithm?: string; backend?: string; scope_id?: string; comment?: string;
 }): Promise<any> {
-  return post("/v1/secrets/keypair", { project_id: PROJECT_ID, actor: "operator", ...input });
+  return post("/v1/secrets/keypair", { project_id: PROJECT_ID, actor: CONSOLE_ACTOR, ...input });
 }
 
 export async function verifySecretAction(secretRefId: string): Promise<any> {
-  return post(`/v1/secrets/${encodeURIComponent(secretRefId)}/verify`, { actor: "operator" });
+  return post(`/v1/secrets/${encodeURIComponent(secretRefId)}/verify`, { actor: CONSOLE_ACTOR });
 }
 
 /** Delete a retired target and its history outright, so the name can be reused. */
 export async function purgeTargetAction(targetId: string, confirm: string): Promise<any> {
   return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/purge`,
-              { confirm, actor: "operator" });
+              { confirm, actor: CONSOLE_ACTOR });
 }
 
 /** Bring a retired target back. Its credential, port, domain and health check were kept, so
@@ -2586,13 +2598,13 @@ export async function getDeliveryDefaultsAction(): Promise<any> {
 }
 
 export async function createTargetAction(input: Record<string, unknown>): Promise<any> {
-  return post("/v1/deployment-targets", { project_id: PROJECT_ID, actor: "operator", ...input });
+  return post("/v1/deployment-targets", { project_id: PROJECT_ID, actor: CONSOLE_ACTOR, ...input });
 }
 
 export async function bindSecretAction(targetId: string, name: string,
                                        secretRefId: string): Promise<any> {
   return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/secrets`,
-              { project_id: PROJECT_ID, name, secret_ref_id: secretRefId, actor: "operator" });
+              { project_id: PROJECT_ID, name, secret_ref_id: secretRefId, actor: CONSOLE_ACTOR });
 }
 
 /** Have BOSS prepare the host: deploy directory, docker check, and a free port. */
@@ -2616,7 +2628,7 @@ export async function deployTargetAction(targetId: string, ref?: string,
                                          planOnly = false): Promise<any> {
   return post("/v1/delivery/deploy",
               { target_id: targetId, ref: ref || undefined, plan_only: planOnly,
-                actor: "operator" });
+                actor: CONSOLE_ACTOR });
 }
 
 /** Remove a deployed app. `stop_only` is reversible; destroy needs the app name typed. */
@@ -2624,7 +2636,7 @@ export async function teardownTargetAction(targetId: string, input: {
   stop_only?: boolean; include_data?: boolean; confirm?: string;
 }): Promise<any> {
   return post(`/v1/deployment-targets/${encodeURIComponent(targetId)}/teardown`,
-              { actor: "operator", ...input });
+              { actor: CONSOLE_ACTOR, ...input });
 }
 
 /** What the observability stack monitors, and whether it is up. */
@@ -2637,7 +2649,7 @@ export async function getObservabilityAction(hostTargetId?: string): Promise<any
 /** Render and deploy the collector/Prometheus/Grafana stack from the live target registry. */
 export async function deployObservabilityAction(hostTargetId: string): Promise<any> {
   return post("/v1/observability/stack/deploy",
-              { project_id: PROJECT_ID, host_target_id: hostTargetId, actor: "operator" });
+              { project_id: PROJECT_ID, host_target_id: hostTargetId, actor: CONSOLE_ACTOR });
 }
 
 /** Health of everything BOSS has deployed — distinct from whether the deploy succeeded. */
@@ -2664,7 +2676,7 @@ export async function executeDeploymentAction(deploymentRunId: string): Promise<
         method: "POST",
         headers: { ...authHeaders(), "Content-Type": "application/json" },
         // Same console principal as other mutating actions — required by the API.
-        body: JSON.stringify({ actor: "executive_console" }),
+        body: JSON.stringify({ actor: CONSOLE_ACTOR }),
         cache: "no-store",
       },
     );
@@ -2684,7 +2696,7 @@ export async function redeployAction(deploymentRunId: string): Promise<any> {
       {
         method: "POST",
         headers: { ...authHeaders(), "Content-Type": "application/json" },
-        body: JSON.stringify({ actor: "executive_console" }),
+        body: JSON.stringify({ actor: CONSOLE_ACTOR }),
         cache: "no-store",
       },
     );
@@ -2732,7 +2744,7 @@ export async function shepherdAnswerAction(escalationId: string, answer: string)
       {
         method: "POST",
         headers: { ...authHeaders(), "content-type": "application/json" },
-        body: JSON.stringify({ answer, actor: "operator" }),
+        body: JSON.stringify({ answer, actor: CONSOLE_ACTOR }),
       },
     );
     revalidatePath("/");
