@@ -2394,14 +2394,14 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
  * task: it plans, tests, reviews and opens a gated PR. Nothing is re-run in place; the original
  * run keeps its history, exactly as redeploy does for deployments.
  */
-export async function relaunchCodeTaskAction(formData: FormData): Promise<void> {
+export async function relaunchCodeTaskAction(formData: FormData): Promise<{ run_id?: string; error?: string }> {
   const projectId = getProjectId(formData);
   const title = String(formData.get("title") ?? "").trim();
   const instructions = String(formData.get("instructions") ?? "").trim();
   // Instructions are what the agent actually works from. Without them a "relaunch" would be a
   // differently-named empty task, so refuse rather than start something that cannot succeed.
-  if (!title || !instructions) return;
-  await client.createCodeTask({
+  if (!title || !instructions) return { error: "this task has no instructions to re-run" };
+  const created = await client.createCodeTask({
     project_id: projectId,
     title,
     instructions,
@@ -2418,6 +2418,27 @@ export async function relaunchCodeTaskAction(formData: FormData): Promise<void> 
     risk_tier: formData.get("risk_tier") ? Number(formData.get("risk_tier")) : undefined,
   });
   revalidatePath("/");
+  // The id is returned so the button can name what it started. "Started — it is at the top of
+  // this list" was a guess about a list this action cannot see, and when the list did not
+  // move the operator pressed the button again.
+  return { run_id: created?.run_id };
+}
+
+/** The code-task list, fetched on demand.
+ *
+ * The panel is server-rendered, and `router.refresh()` re-renders on the server while the
+ * client keeps the old rows — the same defect that left deleted deployment targets on screen.
+ * A panel that owns its data can show a run it just started. */
+export async function listCodeTasksAction(projectId?: string): Promise<any> {
+  const pid = projectId || PROJECT_ID;
+  try {
+    const res = await fetch(`${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(pid)}&limit=40`,
+                            { headers: authHeaders(), cache: "no-store" });
+    if (!res.ok) return { error: `code-tasks ${res.status}` };
+    return await res.json();
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export async function getQaBenchmarkReportAction(runId: string) {

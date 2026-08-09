@@ -91,11 +91,24 @@ describe("BOSS mission-control design system", () => {
       .filter((b) => b.slice(0, 400).includes("Starting…"));
     expect(launchButtons.length).toBeGreaterThanOrEqual(2);   // benchmark + relaunch
     for (const button of launchButtons) {
-      expect(button.slice(0, 400)).toContain("disabled={sent}");
+      // A pattern, not a literal. `disabled={sent}` became `disabled={sent || !!startedId}`
+      // — strictly stronger — and the exact-string version went red on the improvement. That
+      // is the third time one of these has pinned an implementation instead of a guarantee.
+      // What must hold: the busy state disables the button.
+      expect(button.slice(0, 400)).toMatch(/disabled=\{sent\b/);
     }
     // And the busy state must be able to CLEAR, or the button lies in the other direction:
     // it sat on "Starting…" forever while the run had in fact been created.
     expect(codeTasks).toContain("setSent(false)");
+    // But it must NOT return to its original label afterwards. Resetting to "Launch again"
+    // while the new row had not appeared yet is what made people press it a second time:
+    // nothing on screen had changed, so nothing looked like it had happened.
+    const relaunch = codeTasks.slice(codeTasks.indexOf("function LaunchTask"),
+                                     codeTasks.indexOf("function ContractDetails"));
+    expect(relaunch).toContain("disabled={sent || !!startedId}");
+    expect(relaunch).toContain("Launched ✓");
+    // And it must NAME what it started rather than promising a place in a list it cannot see.
+    expect(relaunch).toContain("startedId.slice");
   });
 
   it("never claims a profile the relaunch will not use", () => {
@@ -116,6 +129,18 @@ describe("BOSS mission-control design system", () => {
     const benchmark = codeTasks.slice(codeTasks.indexOf("function BenchmarkLaunch"),
                                       codeTasks.indexOf("function LaunchTask"));
     expect(benchmark).toContain("Strict profile");
+  });
+
+  it("owns the list it claims a new run will appear in", () => {
+    // "started — it is at the top of this list" was a promise about a server-rendered list
+    // this component could not update: `router.refresh()` re-renders on the server while the
+    // client keeps the old rows. The list did not move, so the launch read as a failure.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(codeTasks).toContain("listCodeTasksAction");
+    expect(codeTasks).toContain("const [tasks, setTasks]");
+    // The poller must read the panel's OWN state, or a run started a second ago cannot keep
+    // it alive while the server prop catches up.
+    expect(codeTasks).toContain("const anyLive = tasks.some(");
   });
 
   it("gives the browser tab a real icon", () => {

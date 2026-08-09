@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useActionState } from "react";
+import { useActionState, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
+  listCodeTasksAction,
   relaunchCodeTaskAction,
   confirmCodeTaskFeedbackAction,
   createCodeTaskAction,
@@ -229,13 +230,19 @@ const PHASE_LABEL: Record<string, string> = {
 
 // Poll the server (router.refresh re-runs the server fetch) while any task is mid-flight,
 // so the phase/activity updates live instead of needing a manual refresh.
-function useLiveRefresh(active: boolean, intervalMs = 4000) {
+function useLiveRefresh(active: boolean, intervalMs = 4000, reload?: () => void | Promise<void>) {
   const router = useRouter();
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => router.refresh(), intervalMs);
+    const t = setInterval(() => {
+      // Both: the router refresh updates every other server-rendered panel, and `reload`
+      // re-reads the one list this component owns. The refresh alone was demonstrably not
+      // enough — the server re-rendered and the client kept the old rows.
+      router.refresh();
+      void reload?.();
+    }, intervalMs);
     return () => clearInterval(t);
-  }, [active, intervalMs, router]);
+  }, [active, intervalMs, router, reload]);
 }
 
 function statusTone(status: string): string {
@@ -397,11 +404,16 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   );
 }
 
-function LaunchTask({ run, projectId, label = "Launch again" }: {
+function LaunchTask({ run, projectId, label = "Launch again", onLaunched }: {
   run: CodeTaskRun; projectId: string; label?: string;
+  onLaunched?: () => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
-  const [done, setDone] = useState(false);
+  // The id of the run this button started, once it has one. Not a boolean: the button has to
+  // be able to NAME what it did, and "started" with nothing to point at is what sent someone
+  // looking for a row that had not arrived.
+  const [startedId, setStartedId] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const router = useRouter();
   const spec = run.spec ?? {};
   const st = run.state ?? {};
@@ -434,20 +446,28 @@ function LaunchTask({ run, projectId, label = "Launch again" }: {
     if (profile) data.set("profile", profile);
     if (riskTier != null) data.set("risk_tier", String(riskTier));
     try {
-      await relaunchCodeTaskAction(data);
-      setDone(true);
+      const out = await relaunchCodeTaskAction(data);
+      if (out?.error || !out?.run_id) {
+        setFailed(out?.error ?? "the API did not return a run");
+        return;
+      }
+      setStartedId(out.run_id);
     } finally {
       setSent(false);
       router.refresh();
+      await onLaunched?.();
     }
   };
 
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <button className="cap-btn primary" disabled={sent}
+      {/* Once it has launched, the button STAYS spent. Resetting it to its original label
+          while the new row had not appeared yet is what made people press it again: nothing
+          on screen had changed, so nothing looked like it had happened. */}
+      <button className="cap-btn primary" disabled={sent || !!startedId}
               onClick={(e) => { e.stopPropagation(); void launch(); }}
               title="Start a NEW governed run from this task's spec — the original keeps its history">
-        {sent ? "Starting…" : label}
+        {sent ? "Starting…" : startedId ? "Launched ✓" : label}
       </button>
       <span className="detail">
         {/* State the profile this will ACTUALLY use.
@@ -456,8 +476,12 @@ function LaunchTask({ run, projectId, label = "Launch again" }: {
             statement about someone else's button here. The currency build ran `lean`, the
             relaunch was adopting the project default, and the label agreed with neither. */}
         {sent ? "starting…"
-              : done ? "started — it is at the top of this list"
-                     : profile
+              : failed ? failed
+              : startedId
+                // Name the run. The previous text promised a position in a list this
+                // component cannot see, and when the list did not move it read as a failure.
+                ? `started ${startedId.slice(0, 13)}… — it appears in the list as it picks up`
+                : profile
                        ? `${profile} profile${riskTier != null ? ` · tier ${riskTier}` : ""}`
                          + " — same as the original · budgeted, review-gated"
                        : "project default profile · budgeted, review-gated"}
@@ -945,25 +969,42 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  // Live-refresh while any task is queued/running so phases update without a manual reload.
-  const anyLive = codeTasks.some((c) => c.status === "running" || c.status === "queued");
-  useLiveRefresh(anyLive);
+
+  // The panel owns its list.
+  //
+  // It was rendered from a server prop and refreshed with `router.refresh()`, which re-renders
+  // on the server while the client keeps the old rows — the same defect that left deleted
+  // deployment targets on screen. So a relaunch said "started — it is at the top of this list"
+  // and the list did not move, which is exactly the situation that makes someone press the
+  // button again.
+  const [tasks, setTasks] = useState<CodeTaskRun[]>(codeTasks);
+  useEffect(() => { setTasks(codeTasks); }, [codeTasks]);
+  const reload = useCallback(async () => {
+    const fresh = await listCodeTasksAction(projectId);
+    if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) setTasks(fresh.code_tasks);
+  }, [projectId]);
+
+  // Poll while anything is live so phases advance on their own. Reads from the panel's own
+  // state, so a run started a moment ago keeps the poller alive rather than needing the
+  // server prop to catch up first.
+  const anyLive = tasks.some((c) => c.status === "running" || c.status === "queued");
+  useLiveRefresh(anyLive, 4000, reload);
 
   if (!apiReachable) {
     return <p className="detail">Code tasks unavailable — API unreachable.</p>;
   }
 
-  const active = selected ? codeTasks.find((c) => c.id === selected) : null;
+  const active = selected ? tasks.find((c) => c.id === selected) : null;
   if (active) {
     return <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />;
   }
 
-  const lastRepo = codeTasks[0]?.spec;
+  const lastRepo = tasks[0]?.spec;
 
   return (
     <div className="ct">
       <div className="ct-home-bar">
-        <span className="ct-home-count">{codeTasks.length} code task{codeTasks.length === 1 ? "" : "s"}</span>
+        <span className="ct-home-count">{tasks.length} code task{tasks.length === 1 ? "" : "s"}</span>
         <div className="ct-home-actions">
           <button className="cap-btn primary" onClick={() => setShowNew((v) => !v)}>
             {showNew ? "Close" : "＋ New code task"}
@@ -983,7 +1024,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
         defaultRepo={lastRepo?.repo}
       />
 
-      {codeTasks.length === 0 ? (
+      {tasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
@@ -1032,7 +1073,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       task already carries. Absent on ad-hoc tasks, in which case nothing renders. */}
                   <ContractDetails criteria={c.spec?.acceptance_criteria}
                                    verification={c.spec?.test_commands} />
-                  <LaunchTask run={c} projectId={projectId} />
+                  <LaunchTask run={c} projectId={projectId} onLaunched={reload} />
                   <div className="ct-card-foot">
                     <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
                     {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
@@ -1047,7 +1088,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
             const fc = (c: CodeTaskRun) => (c.finalize_ctx ?? {}) as Record<string, unknown>;
             const order: string[] = [];
             const groups = new Map<string, CodeTaskRun[]>();
-            for (const c of codeTasks) {
+            for (const c of tasks) {
               const key = (fc(c).root_run_id as string) || c.id;
               if (!groups.has(key)) { groups.set(key, []); order.push(key); }
               groups.get(key)!.push(c);
@@ -1079,7 +1120,8 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   </div>
                   <ContractDetails criteria={members[0].spec?.acceptance_criteria}
                                    verification={members[0].spec?.test_commands} />
-                  <LaunchTask run={members[0]} projectId={projectId} label="Launch this build again" />
+                  <LaunchTask run={members[0]} projectId={projectId} onLaunched={reload}
+                                   label="Launch this build again" />
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
