@@ -568,6 +568,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             minutes_since_heartbeat=(float(row["mins_since_heartbeat"])
                                      if row["mins_since_heartbeat"] is not None else None),
             has_job=row["job_status"] is not None,
+            job_status=row["job_status"],
             was_leased=bool(row["ever_leased"]),
             minutes_since_any_lease=since_lease,
             median_minutes=median, sample_size=samples,

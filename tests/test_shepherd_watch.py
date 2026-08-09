@@ -58,16 +58,32 @@ def main() -> int:
     check("a run is never its own duplicate", v.klass != REDUNDANT_DUPLICATE)
 
     print("== orphaned: the failure that never reports itself ==")
-    dead = dict(has_live_worker=False, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 1)
+    dead = dict(has_live_worker=False, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 1,
+                job_status="running")
     v = assess(snap(**dead))
     check("a dead lease with no worker is orphaned", v.klass == ORPHANED)
     check("and requeued, not failed", v.action == "requeue" and permitted(v))
     # Queued-but-unclaimed is NOT orphaned. Every run looks workerless for its first seconds,
     # and requeueing those would be an infinite loop of the shepherd fighting the queue.
-    v = assess(snap(has_live_worker=False, minutes_since_heartbeat=2.0))
+    v = assess(snap(has_live_worker=False, minutes_since_heartbeat=2.0, job_status="queued",
+                    was_leased=False))
     check("a freshly queued run is not orphaned", v.klass == HEALTHY)
     v = assess(snap(has_live_worker=True, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 99))
     check("a live worker is never orphaned, however old the job", v.klass == HEALTHY)
+
+    print("== stranded: the job says running and nobody is running it ==")
+    # The exact shape goldeneye reported about itself: job present, status 'running', no
+    # owner, no heartbeat, 37 days. Keying the remedy off "was it ever leased" answered no
+    # and dropped these into "stalled — ask a human" for five weeks. What decides the remedy
+    # is whether requeueing can bite, and it bites on status='running'.
+    v = assess(snap(phase="coding", minutes_running=53925.0, minutes_since_update=53925.0,
+                    has_job=True, job_status="running", was_leased=False,
+                    has_live_worker=False, minutes_since_heartbeat=53925.2,
+                    minutes_since_any_lease=None))
+    check("a job stuck at running with no owner is orphaned", v.klass == ORPHANED)
+    check("and requeued, which is an UPDATE that will match",
+          v.action == "requeue" and permitted(v))
+    check("not left to a human as a stall", v.klass != STALLED)
 
     print("== starved: a dead worker is not eight unlucky tasks ==")
     # The goldeneye shape: eight runs at status=running / phase=queued, none ever claimed.
@@ -76,6 +92,7 @@ def main() -> int:
     # difference between a shepherd and a liar.
     starving = dict(phase="queued", minutes_running=120.0, minutes_since_update=120.0,
                     has_live_worker=False, minutes_since_heartbeat=120.0,
+                    has_job=True, job_status="queued",
                     was_leased=False, minutes_since_any_lease=120.0)
     v = assess(snap(**starving))
     check("a never-claimed run with a dead queue is starved", v.klass == STARVED)
@@ -85,21 +102,21 @@ def main() -> int:
     check("the remedy names the real fix", "worker" in v.evidence.get("remedy", ""))
     # A lease that DID exist and went silent is still recoverable by requeueing.
     v = assess(snap(has_live_worker=False, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 1,
-                    was_leased=True, minutes_since_any_lease=1.0))
+                    job_status="running", was_leased=True, minutes_since_any_lease=1.0))
     check("a lost lease is still orphaned and requeued",
           v.klass == ORPHANED and v.action == "requeue")
     # A healthy queue that simply has not reached this job yet must be left alone.
     v = assess(snap(minutes_running=STARVATION_MINUTES + 5, has_live_worker=False,
-                    minutes_since_heartbeat=1.0, was_leased=False,
+                    minutes_since_heartbeat=1.0, job_status="queued", was_leased=False,
                     minutes_since_any_lease=0.5))
     check("a busy queue that has not got to it yet is healthy", v.klass == HEALTHY)
     v = assess(snap(minutes_running=1.0, has_live_worker=False, minutes_since_heartbeat=1.0,
-                    was_leased=False, minutes_since_any_lease=120.0))
+                    job_status="queued", was_leased=False, minutes_since_any_lease=120.0))
     check("a job queued one minute ago is not starved yet", v.klass == HEALTHY)
     # No lease activity at all comes back as None. Read charitably as "unknown", that turned
     # the loudest possible signal into none at all — twice, on the same production backlog.
     v = assess(snap(minutes_running=120.0, minutes_since_update=120.0, has_live_worker=False,
-                    minutes_since_heartbeat=120.0, was_leased=False,
+                    minutes_since_heartbeat=120.0, job_status="queued", was_leased=False,
                     minutes_since_any_lease=None))
     check("never any lease anywhere is starvation, not ignorance", v.klass == STARVED)
 

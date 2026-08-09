@@ -363,22 +363,37 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   defaultOwner?: string; defaultRepo?: string;
 }) {
   const [sent, setSent] = useState(false);
+  const [done, setDone] = useState(false);
+  const router = useRouter();
+
+  const launch = async () => {
+    setSent(true);
+    const data = new FormData();
+    data.set("project_id", projectId);
+    data.set("actor", actor);
+    data.set("benchmark_id", benchmark.id);
+    data.set("owner", defaultOwner ?? "");
+    data.set("repo", defaultRepo ?? "");
+    try {
+      await startQaBenchmarkAppAction(data);
+      setDone(true);
+    } finally {
+      setSent(false);
+      router.refresh();
+    }
+  };
+
   return (
-    <form action={startQaBenchmarkAppAction} onSubmit={() => setSent(true)}
-          style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-      <input type="hidden" name="project_id" value={projectId} />
-      <input type="hidden" name="actor" value={actor} />
-      <input type="hidden" name="benchmark_id" value={benchmark.id} />
-      <input type="hidden" name="owner" value={defaultOwner ?? ""} />
-      <input type="hidden" name="repo" value={defaultRepo ?? ""} />
-      <button className="cap-btn primary" disabled={sent}>
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <button className="cap-btn primary" disabled={sent} onClick={() => void launch()}>
         {sent ? "Starting…" : `Launch ${benchmark.name}`}
       </button>
       <span className="detail">
-        {sent ? "queued — it will appear in the task list below"
-              : "Strict profile · starts a budgeted, review-gated task"}
+        {sent ? "starting…"
+              : done ? "started — it is in the task list below"
+                     : "Strict profile · starts a budgeted, review-gated task"}
       </span>
-    </form>
+    </div>
   );
 }
 
@@ -386,31 +401,49 @@ function LaunchTask({ run, projectId, label = "Launch again" }: {
   run: CodeTaskRun; projectId: string; label?: string;
 }) {
   const [sent, setSent] = useState(false);
+  const [done, setDone] = useState(false);
+  const router = useRouter();
   const spec = run.spec ?? {};
   // No instructions means nothing to run: an empty relaunch would be a differently-named
   // no-op that still costs a governed run.
   if (!spec.instructions) return null;
+  // A plain <form action={serverAction}> submits and never comes back: the button sat on
+  // "Starting…" indefinitely and the new run did not appear, because nothing re-read the
+  // list. The run WAS created each time — the only broken part was saying so. Awaiting the
+  // action and refreshing means the button resolves and the row shows up.
+  const launch = async () => {
+    setSent(true);
+    const data = new FormData();
+    data.set("project_id", projectId);
+    data.set("title", run.title ?? "Relaunched task");
+    data.set("instructions", spec.instructions ?? "");
+    data.set("acceptance_criteria", (spec.acceptance_criteria ?? []).join("\n"));
+    data.set("test_commands", (spec.test_commands ?? []).join("\n"));
+    data.set("owner", spec.owner ?? "");
+    data.set("repo", spec.repo ?? "");
+    data.set("base_branch", spec.base_branch ?? "");
+    try {
+      await relaunchCodeTaskAction(data);
+      setDone(true);
+    } finally {
+      setSent(false);
+      router.refresh();
+    }
+  };
+
   return (
-    <form action={relaunchCodeTaskAction} onSubmit={() => setSent(true)}
-          style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <input type="hidden" name="project_id" value={projectId} />
-      <input type="hidden" name="title" value={run.title ?? "Relaunched task"} />
-      <input type="hidden" name="instructions" value={spec.instructions} />
-      <input type="hidden" name="acceptance_criteria" value={(spec.acceptance_criteria ?? []).join("\n")} />
-      <input type="hidden" name="test_commands" value={(spec.test_commands ?? []).join("\n")} />
-      <input type="hidden" name="owner" value={spec.owner ?? ""} />
-      <input type="hidden" name="repo" value={spec.repo ?? ""} />
-      <input type="hidden" name="base_branch" value={spec.base_branch ?? ""} />
+    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <button className="cap-btn primary" disabled={sent}
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); void launch(); }}
               title="Start a NEW governed run from this task's spec — the original keeps its history">
         {sent ? "Starting…" : label}
       </button>
       <span className="detail">
-        {sent ? "queued — it will appear at the top of this list"
-              : "Strict profile · starts a budgeted, review-gated task"}
+        {sent ? "starting…"
+              : done ? "started — it is at the top of this list"
+                     : "Strict profile · starts a budgeted, review-gated task"}
       </span>
-    </form>
+    </div>
   );
 }
 

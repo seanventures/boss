@@ -95,6 +95,10 @@ class RunSnapshot:
     # Job/lease facts. `has_live_worker` is False when nothing owns the job at all.
     has_live_worker: bool = True
     minutes_since_heartbeat: Optional[float] = None
+    # The job's OWN status. Decides whether requeueing can work: a job sitting at 'running'
+    # with nobody on it is stranded and the UPDATE will free it; a job at 'queued' is already
+    # claimable and requeueing changes nothing.
+    job_status: Optional[str] = None
     # Does a job row exist at all? Distinct from "not claimed": a run whose job is gone can
     # never progress, no matter how long anyone waits.
     has_job: bool = True
@@ -158,13 +162,19 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
     # This is the failure that never reports itself: the worker died holding the lease, so no
     # error was ever written, and the run sits at `running` until a human notices. Requeue
     # rather than fail: the work was never done, and the platform lost it, not the task.
+    # Stranded means the JOB says running and nothing is running it — whether or not a lease
+    # was ever recorded. Keying this off `was_leased` was wrong: the goldeneye jobs sit at
+    # 'running' with no owner and no heartbeat, so "was it ever leased" answered no and the
+    # runs fell through to "stalled, ask a human" for 37 days. What decides the remedy is
+    # whether the requeue can bite, and it bites on status='running'.
     stale_lease = (snap.minutes_since_heartbeat is not None
                    and snap.minutes_since_heartbeat >= ORPHAN_LEASE_MINUTES)
-    if not snap.has_live_worker and stale_lease and snap.was_leased:
+    stranded = snap.job_status == "running" or snap.was_leased
+    if not snap.has_live_worker and stale_lease and stranded:
         return WatchVerdict(
             ORPHANED,
-            f"no worker holds this run and its lease has been silent for "
-            f"{snap.minutes_since_heartbeat:.0f} minutes — the executor died, the task did not",
+            f"the job says `running` and no worker holds it; silent for "
+            f"{snap.minutes_since_heartbeat:.0f} minutes — the executor is gone, the work is not",
             action="requeue", autonomous=True,
             evidence={**ev, "minutes_since_heartbeat": snap.minutes_since_heartbeat},
         )
