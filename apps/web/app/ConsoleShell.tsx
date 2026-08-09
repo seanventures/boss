@@ -21,6 +21,7 @@ import {
   Gauge,
   GitBranch,
   Graph,
+  ShieldCheck,
   House,
   List,
   MagnifyingGlass,
@@ -66,6 +67,7 @@ type AreaId =
   | "foundations"
   | "components"
   | "ops"
+  | "assurance"
   | "org"
   | "enterprise";
 
@@ -90,6 +92,7 @@ const ICONS = {
   github: GitBranch,
   infra: Database,
   ops: Pulse,
+  assurance: ShieldCheck,
   org: Users,
   enterprise: Buildings,
   reports: ChartBar,
@@ -128,6 +131,7 @@ const AREAS: AreaDef[] = [
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Govern", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },
   { id: "ops", label: "Operations", sub: "Health, audit, replay, and self-improvement", group: "Govern", icon: ICONS.ops },
+  { id: "assurance", label: "Assurance", sub: "Ground truth, proof gates, ownership, and adversarial verification", group: "Govern", icon: ICONS.assurance },
   { id: "org", label: "Agent Roster", sub: "Actors, access, packs, and agent modules", group: "Govern", icon: ICONS.org },
   { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
   { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, health, and FinOps", group: "Platform", icon: ICONS.infra },

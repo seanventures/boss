@@ -168,10 +168,10 @@ to `main`; the Plane issues intentionally remain In Progress until merged.
 
 | Requirement | Plane | Product boundary | Runtime status |
 | --- | --- | --- | --- |
-| AGP-001 | BOSS-129 | Agent Group defines who collaborates and the reusable protocol | Planned |
-| INT-001 | BOSS-130; extends BOSS-44–56 | Skill defines the typed capability; IntegrationConnection defines the configured implementation | Partial foundation |
+| AGP-001 | BOSS-129 | Agent Group defines who collaborates and the reusable protocol | Implemented runtime: versioned specs, leased members, deadline/budget/capability bounds, deterministic consolidation, dissent, receipts, and evidence gate |
+| INT-001 | BOSS-130; extends BOSS-44–56 | Skill defines the typed capability; IntegrationConnection defines the configured implementation | Implemented runtime: typed registry, SecretRef connections, lifecycle, and intersection-only resolution |
 | WFL-001 | BOSS-132, BOSS-134–143 | Workflow defines the predetermined sequence, mappings, gates, and durable run state | Implemented: immutable registry/specpack seed, scoped resolver, pinned durable runs/steps, leases/retry/deadletter, control flow, Decisions/timers, capability bindings, compensation/migration, API/client/UI, and acceptance tests |
-| AST-001 | BOSS-123–128, BOSS-131 | Assurance measures and gates claims/outcomes; it references but does not own groups, workflows, skills, or integrations | Partial VAG foundation |
+| AST-001 | BOSS-123–128, BOSS-131 | Assurance measures and gates claims/outcomes; it references but does not own groups, workflows, skills, or integrations | Implemented runtime/API/client/UI with cadence/SLA metric jobs, automatic verifier sampling, evidence gates, policy snapshots, tripwire, and provider-boundary ownership fences |
 
 Documentation implementation is tracked by BOSS-133 on
 `ai/codex/boss-133-product-capability-taxonomy`. Validation: generated feature

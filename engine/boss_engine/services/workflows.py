@@ -843,7 +843,8 @@ def _validate_bindings(
             ).mappings().first()
             if not row or row["status"] not in {"active", "healthy"}:
                 raise WorkflowBindingBlockedError(
-                    f"step '{step['id']}' integration is missing, revoked, or unhealthy."
+                    f"step '{step['id']}' integration is missing, revoked, or unhealthy; "
+                    "the integration binding fails closed."
                 )
         if step["kind"] == "agent_group":
             if not _table_exists(connection, "agent_group_versions"):

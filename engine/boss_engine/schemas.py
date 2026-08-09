@@ -4374,6 +4374,27 @@ class ModelGatewayLeaseReapResponse(BaseModel):
     reaped: int
 
 
+class ModelGatewayUsageItem(BaseModel):
+    engine: str
+    model: Optional[str] = None
+    calls: int
+    successful_calls: int
+    failed_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_usd_micros: int
+    first_call_at: Optional[str] = None
+    last_call_at: Optional[str] = None
+
+
+class ModelGatewayUsageResponse(BaseModel):
+    project_id: str
+    window_days: int
+    totals: dict[str, int]
+    items: list[ModelGatewayUsageItem]
+
+
 class GitHubConnectionSummary(BaseModel):
     id: str
     project_id: str

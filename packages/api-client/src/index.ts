@@ -5,6 +5,36 @@ export type HealthResponse = {
   openai_configured: boolean;
 };
 
+export type AssuranceOverviewResponse = {
+  project_id: string;
+  metrics: Array<Record<string, unknown>>;
+  cases: Array<Record<string, unknown>>;
+  surfaces: Array<Record<string, unknown>>;
+  verification_runs: Array<Record<string, unknown>>;
+  settled_conclusions: Array<Record<string, unknown>>;
+};
+
+export type ModelGatewayUsageItem = {
+  engine: string;
+  model?: string;
+  calls: number;
+  successful_calls: number;
+  failed_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd_micros: number;
+  first_call_at?: string;
+  last_call_at?: string;
+};
+
+export type ModelGatewayUsageResponse = {
+  project_id: string;
+  window_days: number;
+  totals: Record<string, number>;
+  items: ModelGatewayUsageItem[];
+};
+
 export type DataBoundary =
   | "public"
   | "internal"
@@ -5245,6 +5275,16 @@ export function createBossApiClient(config: BossApiClientConfig) {
   }
 
   return {
+    getAssuranceOverview(projectId: string) {
+      return request<AssuranceOverviewResponse>("GET", "/v1/assurance/overview", {
+        query: { project_id: projectId },
+      });
+    },
+    getModelGatewayUsage(projectId: string, days = 30) {
+      return request<ModelGatewayUsageResponse>("GET", "/v1/model-gateway/usage", {
+        query: { project_id: projectId, days },
+      });
+    },
     getAgentStudioCatalog(projectId: string) {
       return request<AgentStudioCatalogResponse>(
         "GET",

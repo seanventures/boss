@@ -2010,6 +2010,59 @@ class ResourcePlaneService:
                     ),
                     event_reason=policy_block_reason,
                 )
+        from .assurance import AssuranceService
+
+        surface_key = f"deployment_target:{target['id']}"
+        ownership_result = AssuranceService(self.settings).acquire_surface(
+            connection,
+            project_id=project_id,
+            surface_key=surface_key,
+            environment=target["environment"],
+            owner_ref=actor,
+            coordination_route=f"deployment-target:{target['id']}",
+            reason="Deployment planning requires one fenced surface owner.",
+            dedupe_key=f"deployment-surface:{target['id']}:{actor}",
+            actor=actor,
+        )
+        if not ownership_result["allowed"]:
+            return self._record_blocked_deployment_run(
+                connection,
+                project_id=project_id,
+                target=target,
+                commit_ref=commit_ref,
+                release_packet=release_packet or {},
+                rollback_plan=rollback_plan,
+                actor=actor,
+                title="Deployment run blocked by surface ownership",
+                recommendation={
+                    "action": "coordinate_with_surface_owner",
+                    "deployment_target_id": deployment_target_id,
+                    "owner_ref": ownership_result["ownership"]["owner_ref"],
+                    "coordination_route": ownership_result["ownership"][
+                        "coordination_route"
+                    ],
+                },
+                evidence={
+                    "surface_key": surface_key,
+                    "environment": target["environment"],
+                    "ownership_id": ownership_result["ownership"]["id"],
+                },
+                reason_code="deployment_surface_ownership_blocked",
+                failure_reason="Deployment surface is owned by another deployer.",
+                event_reason="surface_ownership_conflict",
+            )
+        ownership = ownership_result["ownership"]
+        ownership_guard = {
+            "ownership_id": ownership["id"],
+            "surface_key": surface_key,
+            "environment": target["environment"],
+            "owner_ref": ownership["owner_ref"],
+            "version": int(ownership["version"]),
+        }
+        release_packet = {
+            **(release_packet or {}),
+            "surface_ownership": ownership_guard,
+        }
         release_content = {
             "deployment_target_id": target["id"],
             "app_name": target["app_name"],
@@ -2042,6 +2095,10 @@ class ResourcePlaneService:
             commit_ref,
         )
         if operation:
+            operation["desired_state"] = {
+                **(operation.get("desired_state") or {}),
+                "surface_ownership": ownership_guard,
+            }
             risk_tier = 3 if target["environment"] == "production" else 2
             changeset = self.create_changeset(
                 connection,
@@ -2772,6 +2829,45 @@ class ResourcePlaneService:
                 "resource_receipts": [],
                 "expected_receipts": changeset["expected_receipts"],
             }
+        from .assurance import AssuranceService
+
+        assurance = AssuranceService(self.settings)
+        for operation in operations:
+            guard = (operation.get("desired_state") or {}).get("surface_ownership")
+            if not guard:
+                continue
+            preflight = assurance.preflight_surface(
+                connection,
+                project_id=project_id,
+                surface_key=guard["surface_key"],
+                environment=guard["environment"],
+                actor_ref=actor,
+                expected_version=int(guard["version"]),
+                effect_ref=f"changeset:{changeset_id}:operation:{operation['id']}",
+                dedupe_key=f"changeset-ownership:{changeset_id}:{operation['id']}",
+            )
+            if not preflight["allowed"]:
+                emit_event(
+                    connection,
+                    project_id,
+                    "changeset.apply_blocked",
+                    actor,
+                    "decision",
+                    preflight["decision_id"],
+                    {
+                        "reason": "surface_ownership_preflight_failed",
+                        "changeset_id": changeset_id,
+                        "operation_id": operation["id"],
+                    },
+                )
+                return {
+                    "status": "blocked",
+                    "changeset": self.get_changeset(
+                        connection, project_id, changeset_id
+                    ),
+                    "resource_receipts": [],
+                    "decision_id": preflight["decision_id"],
+                }
         connection.execute(
             text(
                 """

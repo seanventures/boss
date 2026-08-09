@@ -1501,3 +1501,26 @@ PR: https://github.com/seanheiney/boss/pull/3
   and focused test cleanup/seeding.
 - Validation: 18 focused API/executor tests pass; Ruff, compileall, and
   `git diff --check` pass. Plane BOSS-333 remains In Progress pending PR merge.
+
+## 2026-08-09 — BOSS-18/BOSS-123–131 assurance batch
+
+- Fast-forwarded to Paramg's latest `main` (`68914b0`), checked active branches
+  and open GitHub work, and selected ten non-overlapping Plane tickets.
+- Added 22 canonical assurance/collaboration tables and idempotently applied
+  the schema twice to a fresh Postgres 16 database.
+- Implemented leased ground-truth monitoring, tripwire, evidence/case gates,
+  ownership fencing, standing verifier scheduling, Agent Groups, typed
+  Integration Registry resolution, and project-fenced model usage totals.
+- Added authenticated API routes, typed client access, Mission Control
+  Assurance Center, traceability updates, and focused acceptance coverage.
+- Final affected-path validation: 21 focused API/runtime tests, 10 assurance
+  specpack/workflow contract tests, and all 153 web tests pass. Ruff,
+  TypeScript, `git diff --check`, strict MkDocs, OpenAPI parsing, production web
+  build, and two consecutive schema applications pass. An additional broad
+  repository sweep reached 179 passing tests with no failures before it was
+  stopped because the per-test full-schema reseed made the run disproportionate.
+- Added automatic metric cadence/SLA scheduling, automatic verifier sampling,
+  provider-boundary ownership revalidation, and Agent Group deadline, budget,
+  capability, receipt, and job-terminal enforcement after acceptance review.
+- Re-fetched `origin/main` after validation: it remains `68914b0`, with zero
+  branch divergence and no open GitHub pull requests.

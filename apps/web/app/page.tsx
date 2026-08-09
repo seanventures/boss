@@ -139,6 +139,8 @@ import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
 import { AgentOrb } from "./agent-orb";
 import { buildAgentRoster } from "../lib/roster";
 import { ReliabilityHome } from "./reliability-ui";
+import { AssuranceCenter } from "./assurance-ui";
+import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
@@ -566,6 +568,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const activeOrgId = selectedOrg.org_id;
   const activeOrgName = selectedOrg.org_name;
   const activeProjectId = selectedOrg.project_id;
+  const assuranceFeed = await fetchAssuranceFeed(activeProjectId);
   const projects = await fetchProjectFeed(activeProjectId);
   const activeProject = projects.items.find(
     (project) => project.id === activeProjectId,
@@ -788,6 +791,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <DashboardPanel snapshot={dashboardSnapshot} />
+        </section>
+
+        <section className="panel-stack" data-area="assurance" aria-label="Assurance Center">
+          <AssuranceCenter feed={assuranceFeed} />
         </section>
 
         <RepoActivityPanel repos={repoActivity} />

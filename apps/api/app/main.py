@@ -23,6 +23,7 @@ from .bootstrap_ports import build_ports
 from .config import get_settings
 from .db import begin, database_is_reachable, ensure_schema, get_engine
 from .routers import mount_edition_routers
+from .routers.governance import build_governance_router
 from .schemas import (
     AgentModuleDetail,
     AgentModuleInstallRecordListResponse,
@@ -210,6 +211,7 @@ from .schemas import (
     ModelGatewayLeaseReapResponse,
     ModelGatewayLeaseReleaseRequest,
     ModelGatewayLeaseSummary,
+    ModelGatewayUsageResponse,
     EnterpriseClusterListResponse,
     EnterpriseClusterSummary,
     EnterpriseClusterValidationRunCreateRequest,
@@ -666,6 +668,7 @@ from .services.jobs import JobLeaseService, LeaseNotFoundError
 from .services.model_gateway import (
     ModelCapacityDeniedError,
     ModelCredentialPolicyError,
+    ModelGatewayError,
     ModelGatewayInvocationError,
     ModelGatewayLeaseError,
     ModelGatewayService,
@@ -10355,6 +10358,28 @@ def list_model_gateway_invocations(
         )
 
 
+@app.get(
+    "/v1/model-gateway/usage",
+    response_model=ModelGatewayUsageResponse,
+)
+def get_model_gateway_usage(
+    project_id: str,
+    days: int = 30,
+) -> ModelGatewayUsageResponse:
+    with begin(engine) as connection:
+        try:
+            result = model_gateway.usage_summary(
+                connection,
+                project_id,
+                days=days,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except ModelGatewayError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return ModelGatewayUsageResponse(**result)
+
+
 @app.post(
     "/v1/model-gateway/leases/reap",
     response_model=ModelGatewayLeaseReapResponse,
@@ -16873,4 +16898,11 @@ def get_a2a_audit(
         return a2a.audit_feed(connection, project_id, limit)
 
 
+app.include_router(
+    build_governance_router(
+        engine=engine,
+        settings=settings,
+        require_actor=require_project_actor,
+    )
+)
 mount_edition_routers(app, settings.boss_edition)

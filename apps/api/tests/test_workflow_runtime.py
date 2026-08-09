@@ -89,7 +89,7 @@ def test_shipped_specpack_workflows_are_registered_idempotently(engine):
             actor="test",
         )
 
-    assert len(first) == 32
+    assert len(first) == 33
     assert {item["workflow_key"] for item in first} >= {
         "ceo_command_to_pr",
         "governed_coding_pipeline",

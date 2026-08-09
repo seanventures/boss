@@ -633,21 +633,21 @@ A2A coordination:
 - `GET /v1/a2a/audit`
 - `GET /v1/a2a/health`
 
-Agent Groups (planned):
+Agent Groups:
 
 - `GET/POST /v1/agent-groups`
-- `GET/POST /v1/agent-groups/{id}/versions`
-- `GET/POST /v1/agent-group-runs`
-- `GET /v1/agent-group-runs/{id}/findings`
+- `GET/POST /v1/agent-groups/runs`
+- `POST /v1/agent-groups/runs/{id}/members/{member_key}/complete`
+- `POST /v1/agent-groups/runs/{id}/finalize`
 
 Skills and Integrations:
 
 - `GET /v1/skills`
-- `GET/POST /v1/integration-definitions`
-- `GET/POST /v1/integration-connections`
-- `POST /v1/integration-connections/{id}/test`
-- `POST /v1/integration-connections/{id}/revoke`
-- `GET /v1/skill-invocations`
+- `GET/POST /v1/integration-registry/definitions`
+- `GET/POST /v1/integration-registry/connections`
+- `PATCH /v1/integration-registry/connections/{id}`
+- `POST /v1/integration-registry/resolve`
+- `GET /v1/integration-registry/resolutions`
 
 GitHub project integration:
 
@@ -688,16 +688,30 @@ Reusable Workflows:
 - `POST /v1/workflow-runs/{id}/compensations/claim`
 - `POST /v1/workflow-compensation-runs/{id}/complete|fail`
 
-Ground-truth and Assurance (planned):
+Ground-truth and Assurance:
 
-- `GET/POST /v1/ground-truth-metrics`
-- `GET /v1/ground-truth-observations`
-- `GET/POST /v1/settled-conclusions`
-- `GET/POST /v1/assurance-cases`
-- `GET/POST /v1/claims`
-- `GET/POST /v1/evidence`
-- `GET/POST /v1/surface-ownership`
-- `GET/POST /v1/verification-runs`
+- `GET /v1/assurance/overview`
+- `GET/POST /v1/assurance/metrics`
+- `POST /v1/assurance/metrics/schedule`
+- `POST /v1/assurance/metrics/{id}/observations`
+- `POST /v1/assurance/metrics/{id}/baseline`
+- `GET/POST /v1/assurance/conclusions`
+- `POST /v1/assurance/publication-guard`
+- `POST /v1/assurance/conclusions/{id}/reopen`
+- `GET/POST /v1/assurance/cases`
+- `POST /v1/assurance/claims`
+- `POST /v1/assurance/evidence`
+- `POST /v1/assurance/evidence/{id}/invalidate`
+- `POST /v1/assurance/claims/{id}/evaluate`
+- `POST /v1/assurance/cases/{id}/evaluate`
+- `GET /v1/assurance/surfaces`
+- `POST /v1/assurance/surfaces/acquire`
+- `POST /v1/assurance/surfaces/{id}/transfer`
+- `POST /v1/assurance/surfaces/preflight`
+- `POST /v1/assurance/verification-policies`
+- `GET/POST /v1/assurance/verification-runs`
+- `POST /v1/assurance/verification-runs/schedule-due`
+- `POST /v1/assurance/verification-runs/{id}/complete`
 
 ProviderOps:
 

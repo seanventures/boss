@@ -7,11 +7,11 @@ This catalog is generated from the canonical product traceability ledger. It is 
 <div class="feature-summary">
   <div>
     <span class="boss-status boss-status--implemented">Implemented</span>
-    <strong>93</strong>
+    <strong>96</strong>
   </div>
   <div>
     <span class="boss-status boss-status--partial">Partial</span>
-    <strong>6</strong>
+    <strong>3</strong>
   </div>
   <div>
     <span class="boss-status boss-status--planned">Planned</span>
@@ -89,7 +89,7 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [SWF-005 — Staged rollout evidence](implemented.md#swf-005-staged-rollout-evidence) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Software Factory; PRD Self-improvement rollout discipline |
 | [SKL-001 — SkillSpec registry](implemented.md#skl-001-skillspec-registry) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Skills Registry |
 | [SKL-002 — Skill executor registry](implemented.md#skl-002-skill-executor-registry) | <span class="boss-status boss-status--implemented">Implemented</span> | OSS readiness spec 03 A1; BOSS-45 |
-| [MEB-001 — Entitlement pools](implemented.md#meb-001-entitlement-pools) | <span class="boss-status boss-status--implemented">Implemented</span> | Model Entitlement Broker requirement |
+| [MEB-001 — Entitlement pools and governed model gateway](implemented.md#meb-001-entitlement-pools-and-governed-model-gateway) | <span class="boss-status boss-status--implemented">Implemented</span> | Model Entitlement Broker requirement; Plane BOSS-18/BOSS-335 |
 | [MEB-002 — No scraping/rate bypass](implemented.md#meb-002-no-scraping-rate-bypass) | <span class="boss-status boss-status--implemented">Implemented</span> | Model Entitlement Broker guardrail; policy spec |
 | [RPL-001 — ProviderOps as core plane](implemented.md#rpl-001-providerops-as-core-plane) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v1.1 Elastic Resource Plane; Technical Spec v1.1 |
 | [RPL-002 — Provider connection center](implemented.md#rpl-002-provider-connection-center) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v1.1 Provider Connection Center |
@@ -116,10 +116,10 @@ This catalog is generated from the canonical product traceability ledger. It is 
 | [SEC-005 — Data-boundary routing and effect enforcement](implemented.md#sec-005-data-boundary-routing-and-effect-enforcement) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD 9.1 Data boundaries; Model Entitlement Broker guardrail |
 | [NFR-001 — Local portability](implemented.md#nfr-001-local-portability) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Non-functional |
 | [NFR-002 — Accessibility baseline](implemented.md#nfr-002-accessibility-baseline) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD Non-functional |
-| [AGP-001 — Versioned Agent Groups and collaboration protocols](partial.md#agp-001-versioned-agent-groups-and-collaboration-protocols) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190/BOSS-209–212 |
-| [INT-001 — Integration registry and typed skill contracts](partial.md#int-001-integration-registry-and-typed-skill-contracts) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194/BOSS-213–214; extends BOSS-44–56 |
+| [AGP-001 — Versioned Agent Groups and collaboration protocols](implemented.md#agp-001-versioned-agent-groups-and-collaboration-protocols) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190/BOSS-209–212 |
+| [INT-001 — Integration registry and typed skill contracts](implemented.md#int-001-integration-registry-and-typed-skill-contracts) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194/BOSS-213–214; extends BOSS-44–56 |
 | [WFL-001 — Reusable mapped workflow registry and runtime](implemented.md#wfl-001-reusable-mapped-workflow-registry-and-runtime) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v2.0 Reusable Mapped Workflows; Plane BOSS-132/BOSS-134–143 |
-| [AST-001 — Ground-truth and Assurance runtime](partial.md#ast-001-ground-truth-and-assurance-runtime) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188/BOSS-195–208 |
+| [AST-001 — Ground-truth and Assurance runtime](implemented.md#ast-001-ground-truth-and-assurance-runtime) | <span class="boss-status boss-status--implemented">Implemented</span> | PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188/BOSS-195–208 |
 | [COM-PKG-001 — Open-core editions](partial.md#com-pkg-001-open-core-editions) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Commercial Strategy |
 | [ACC-001 — BOSS Account Connect](partial.md#acc-001-boss-account-connect) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 BOSS Account Connect |
 | [ENT-CLUST-001 — Enterprise clustering and HA](partial.md#ent-clust-001-enterprise-clustering-and-ha) | <span class="boss-status boss-status--partial">Partial</span> | PRD v2.0 Enterprise |

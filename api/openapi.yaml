@@ -2674,6 +2674,16 @@ paths:
       responses:
         '200': { description: Filtered invocation evidence without prompt or credential material }
         '400': { description: Invalid limit }
+  /v1/model-gateway/usage:
+    get:
+      summary: Report project-fenced model calls, tokens, success, and cost
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 366, default: 30 } }
+      responses:
+        '200': { description: Aggregate and per-engine/model usage from the canonical llm_calls ledger }
+        '400': { description: Invalid reporting window }
+        '404': { description: Project not found }
   /v1/model-gateway/leases/reap:
     post:
       summary: Mark expired model capacity leases terminal and release unused reservations
@@ -2784,6 +2794,199 @@ paths:
       responses:
         '200': { description: Released capacity lease and reservation }
         '409': { description: Lease invalid or invocation already started }
+  /v1/assurance/overview:
+    get:
+      summary: Read the Ground Truth and Assurance operator projection
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Metrics, cases, conclusions, ownership, and verifier runs } }
+  /v1/assurance/metrics:
+    get:
+      summary: List ground-truth metric contracts
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Project metric contracts and health } }
+    post:
+      summary: Create a versioned ground-truth metric contract
+      responses: { '201': { description: Metric contract created } }
+  /v1/assurance/metrics/schedule:
+    post:
+      summary: Queue due leased metric evaluations and escalate missed evaluator SLAs
+      responses: { '200': { description: Queued evaluations and overdue decisions } }
+  /v1/assurance/metrics/{metric_id}/observations:
+    post:
+      summary: Record a leased, deduplicated metric observation
+      parameters:
+        - { name: metric_id, in: path, required: true, schema: { type: string } }
+      responses: { '201': { description: Observation plus regression or recovery signal } }
+  /v1/assurance/metrics/{metric_id}/baseline:
+    post:
+      summary: Change a metric baseline under regression and approval policy
+      parameters:
+        - { name: metric_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: New current metric contract version } }
+  /v1/assurance/conclusions:
+    get:
+      summary: List versioned settled conclusions
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Settled conclusion ledger } }
+    post:
+      summary: Create a settled conclusion and its closed-question tells
+      responses: { '201': { description: Current settled conclusion version } }
+  /v1/assurance/publication-guard:
+    post:
+      summary: Scan proposed output for actionable closed-question regressions
+      responses: { '200': { description: Allow result or mechanical STOP response } }
+  /v1/assurance/conclusions/{conclusion_id}/reopen:
+    post:
+      summary: Reopen a settled conclusion with approved new evidence
+      parameters:
+        - { name: conclusion_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Reopened conclusion version } }
+  /v1/assurance/cases:
+    get:
+      summary: List Assurance Cases and evidence counts
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Project Assurance Cases } }
+    post:
+      summary: Create a deduplicated Assurance Case
+      responses: { '201': { description: Assurance Case created } }
+  /v1/assurance/claims:
+    post:
+      summary: Create a typed claim in an Assurance Case
+      responses: { '201': { description: Claim created } }
+  /v1/assurance/evidence:
+    post:
+      summary: Attach immutable, reproducible evidence to a case or claim
+      responses: { '201': { description: Evidence record created } }
+  /v1/assurance/evidence/{evidence_id}/invalidate:
+    post:
+      summary: Invalidate evidence without deleting audit history
+      parameters:
+        - { name: evidence_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Evidence marked invalid } }
+  /v1/assurance/claims/{claim_id}/evaluate:
+    post:
+      summary: Apply deterministic evidence requirements to a claim
+      parameters:
+        - { name: claim_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Authoritative, inconclusive, blocked, or refuted result } }
+  /v1/assurance/cases/{case_id}/evaluate:
+    post:
+      summary: Snapshot effective policy and evaluate an Assurance Case
+      parameters:
+        - { name: case_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Case, policy snapshot, claims, and decision } }
+  /v1/assurance/surfaces:
+    get:
+      summary: List production-surface ownership and fence versions
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Surface ownership registry } }
+  /v1/assurance/surfaces/acquire:
+    post:
+      summary: Atomically acquire single-owner authority for a surface
+      responses: { '200': { description: Ownership and transition evidence } }
+  /v1/assurance/surfaces/{ownership_id}/transfer:
+    post:
+      summary: Compare-and-swap surface ownership to a new deployer
+      parameters:
+        - { name: ownership_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Updated ownership and transition } }
+  /v1/assurance/surfaces/preflight:
+    post:
+      summary: Revalidate owner and fence immediately before an effect
+      responses: { '200': { description: Allowed ownership preflight } }
+  /v1/assurance/verification-policies:
+    post:
+      summary: Create a versioned standing verifier policy
+      responses: { '201': { description: Verifier policy created } }
+  /v1/assurance/verification-runs:
+    get:
+      summary: List standing verifier runs
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Project verifier run history } }
+    post:
+      summary: Schedule a budgeted, leased adversarial verification job
+      responses: { '201': { description: Verifier run and queued job } }
+  /v1/assurance/verification-runs/schedule-due:
+    post:
+      summary: Sample authoritative claims and queue due independent verification runs
+      responses: { '200': { description: Scheduled verifier runs and explicit budget or policy blocks } }
+  /v1/assurance/verification-runs/{run_id}/complete:
+    post:
+      summary: Complete a leased verifier with evidence and receipts
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Passed, refuted, or inconclusive verifier result } }
+  /v1/integration-registry/definitions:
+    get:
+      summary: List versioned integration definitions and typed skill contracts
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Integration definitions } }
+    post:
+      summary: Create a trusted versioned integration definition
+      responses: { '201': { description: Definition created } }
+  /v1/integration-registry/connections:
+    get:
+      summary: List scoped integration connections without raw credentials
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Integration connections } }
+    post:
+      summary: Install a scoped SecretRef-backed integration connection
+      responses: { '201': { description: Connection created } }
+  /v1/integration-registry/connections/{connection_id}:
+    patch:
+      summary: Update connection health, lifecycle, grants, or revocation
+      parameters:
+        - { name: connection_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Updated connection } }
+  /v1/integration-registry/resolve:
+    post:
+      summary: Resolve effective capability by deterministic authority intersection
+      responses: { '200': { description: Durable allow or deny with explanation } }
+  /v1/integration-registry/resolutions:
+    get:
+      summary: List capability resolution audit evidence
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Capability resolution history } }
+  /v1/agent-groups:
+    get:
+      summary: List versioned Agent Group definitions
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Agent Group definitions and current versions } }
+    post:
+      summary: Create an immutable Agent Group version
+      responses: { '201': { description: Agent Group and version created } }
+  /v1/agent-groups/runs:
+    get:
+      summary: List durable Agent Group runs
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string } }
+      responses: { '200': { description: Agent Group runs } }
+    post:
+      summary: Start an Agent Group and queue one leased job per member
+      responses: { '201': { description: Group run with member jobs } }
+  /v1/agent-groups/runs/{run_id}/members/{member_key}/complete:
+    post:
+      summary: Complete a leased Agent Group member with attributed evidence
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+        - { name: member_key, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Member result persisted } }
+  /v1/agent-groups/runs/{run_id}/finalize:
+    post:
+      summary: Deterministically consolidate a bounded group protocol
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses: { '200': { description: Final result, dissent, partial failures, evidence, and receipts } }
   /v1/entitlements/sources:
     get:
       summary: List configured entitlement sources for a project

@@ -1,5 +1,32 @@
 # Codex Handoff
 
+## 2026-08-09 BOSS-18/BOSS-123–131 assurance and collaboration runtime
+
+- Branch `ai/codex/boss-18-123-131-runtime` is based on contributor-updated
+  `main` at `68914b0`; it deliberately avoids the active
+  `ai/grok/ux-commercial-surfaces` branch.
+- BOSS-123–128 and BOSS-131 now have a canonical Ground Truth and Assurance
+  runtime: cadence-scheduled leased measurements, missed-SLA escalation,
+  regression/recovery signals, governed baseline changes, settled conclusions
+  and publication tripwire, immutable evidence, deterministic claim/case
+  gates, provider-boundary version-fenced surface ownership, and automatically
+  sampled budgeted/receipted standing verifier jobs.
+- BOSS-129 now has versioned executable Agent Groups with one leased member job
+  per participant, deadline and budget enforcement, capability-scope checks,
+  attributed outputs, receipts, visible partial failure/dissent, and a hard
+  rule that quorum is not proof. BOSS-130 now has a typed Integration Registry
+  with SecretRef-scoped connections and intersection-only capability
+  resolution.
+- BOSS-18 is completed by the merged model-gateway credential/runtime work plus
+  a new project-fenced 30-day usage/token/cost projection. Mission Control now
+  includes an Assurance Center over these read models.
+- Validation passes: 21 focused API/runtime tests, 10 assurance contract tests,
+  all 153 web tests, Ruff, TypeScript, strict docs, OpenAPI parsing, idempotent
+  schema replay, and production build. A broader sweep also reached 179 passing
+  tests with no failures before being stopped due to its per-test reseed cost.
+  Keep all ten Plane issues In Progress until this branch is merged, then
+  attach the merge commit and move them to Done.
+
 ## 2026-08-08 BOSS-334 governed autonomous improvement
 
 - Branch `ai/codex/autonomous-improvement-loop` implements a BOSS-owned measured feedback

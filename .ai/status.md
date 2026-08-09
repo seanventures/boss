@@ -258,6 +258,21 @@ See .ai/requirements-traceability.md for full matrix + status "Yes" for local.
 10. Print 15-min terminal updates + append to activity-log.
 11. Continue until all feasible work complete per world-class DoD or truly blocked; produce final report + .ai/release-readiness.md only at end.
 
+## 2026-08-09 — BOSS-18/BOSS-123–131 implementation status
+
+- Ten Plane tickets are In Progress on
+  `ai/codex/boss-18-123-131-runtime`, based on contributor-current `main`.
+- Canonical persistence, service/runtime behavior, authenticated APIs, typed
+  client projections, and an Assurance Center UI are implementation-complete
+  for Ground Truth/Assurance, Agent Groups, Integration Registry, and
+  project-level model usage reporting.
+- No provider credential enters the public API or UI. Spendy verifier/model
+  actions retain Job leases, BudgetReservations, Receipts, dedupe, and audit.
+- Affected-path validation is green: 21 focused API/runtime tests, 10 assurance
+  contracts, 153 web tests, Ruff, TypeScript, strict docs, schema replay,
+  OpenAPI parse, and production build. The branch is current with `origin/main`;
+  commit, PR, and merge evidence remain before the tickets can move to Done.
+
 ## Files Changed (session so far)
 - Created: .ai/spec-index.md, .ai/status.md, .ai/...
 - Modified this Security rate task: apps/api/app/config.py, apps/api/app/main.py, apps/api/tests/test_api.py, apps/api/tests/conftest.py, api/openapi.yaml, .ai/gap-backlog.md, .ai/security-review.md, .ai/agents/security.md, .ai/status.md, .ai/codex-handoff.md, .ai/activity-log.md (plus prior)

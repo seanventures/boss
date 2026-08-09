@@ -192,6 +192,24 @@ def test_paid_model_gateway_lease_invocation_and_settlement_are_auditable(
     assert invocations.json()["items"][0]["receipt_id"] == invocation["receipt_id"]
     assert "prompt remains outside" not in invocations.text
 
+    usage = client.get(
+        "/v1/model-gateway/usage",
+        params={"project_id": PROJECT_ID, "days": 30},
+    )
+    assert usage.status_code == 200, usage.text
+    usage_payload = usage.json()
+    assert usage_payload["project_id"] == PROJECT_ID
+    assert usage_payload["totals"]["calls"] >= 1
+    assert usage_payload["totals"]["total_tokens"] >= 140
+    assert usage_payload["totals"]["cost_usd_micros"] >= 1_500
+    assert any(item["engine"] == "openai_api" for item in usage_payload["items"])
+
+    invalid_window = client.get(
+        "/v1/model-gateway/usage",
+        params={"project_id": PROJECT_ID, "days": 0},
+    )
+    assert invalid_window.status_code == 400
+
 
 def test_subscription_tokens_cannot_be_uploaded_or_pooled(client):
     rejected_upload = client.post(

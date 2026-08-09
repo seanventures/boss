@@ -4159,3 +4159,488 @@ CREATE TABLE IF NOT EXISTS coordinator_rulings (
   rationale   TEXT NOT NULL,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ===========================================================================
+-- GROUND-TRUTH AND ASSURANCE RUNTIME (BOSS-123..128, BOSS-131)
+-- These records move measured truth, settled conclusions, evidence, claims,
+-- and enforcement decisions out of model memory and into the durable plane.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS ground_truth_metric_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  metric_key TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('draft', 'active', 'superseded', 'retired')),
+  metric_kind TEXT NOT NULL
+    CHECK (metric_kind IN ('coverage', 'freshness', 'correctness', 'completeness', 'custom')),
+  unit TEXT NOT NULL DEFAULT 'count',
+  comparator TEXT NOT NULL DEFAULT 'gte'
+    CHECK (comparator IN ('gte', 'lte', 'eq', 'between')),
+  baseline DOUBLE PRECISION NOT NULL,
+  threshold DOUBLE PRECISION NOT NULL,
+  threshold_upper DOUBLE PRECISION,
+  cadence_seconds INTEGER NOT NULL CHECK (cadence_seconds > 0),
+  alert_sla_seconds INTEGER NOT NULL CHECK (alert_sla_seconds > 0),
+  owner_ref TEXT NOT NULL,
+  evidence_query JSONB NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, metric_key, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ground_truth_metric_current
+  ON ground_truth_metric_definitions(project_id, metric_key)
+  WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_ground_truth_metrics_project
+  ON ground_truth_metric_definitions(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ground_truth_observations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  metric_definition_id TEXT NOT NULL REFERENCES ground_truth_metric_definitions(id),
+  metric_definition_version INTEGER NOT NULL CHECK (metric_definition_version > 0),
+  value DOUBLE PRECISION NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('healthy', 'breached', 'inconclusive')),
+  evaluator_job_id TEXT NOT NULL REFERENCES jobs(id),
+  evaluator_worker_id TEXT NOT NULL,
+  lease_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence JSONB NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ground_truth_observations_metric
+  ON ground_truth_observations(project_id, metric_definition_id, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS regression_signals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  metric_definition_id TEXT NOT NULL REFERENCES ground_truth_metric_definitions(id),
+  first_observation_id TEXT NOT NULL REFERENCES ground_truth_observations(id),
+  latest_observation_id TEXT NOT NULL REFERENCES ground_truth_observations(id),
+  decision_id TEXT REFERENCES decisions(id),
+  status TEXT NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'acknowledged', 'recovered', 'dismissed')),
+  dedupe_key TEXT NOT NULL,
+  breach_started_at TIMESTAMPTZ NOT NULL,
+  recovered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_regression_signals_open
+  ON regression_signals(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS settled_conclusions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  conclusion_key TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'current'
+    CHECK (status IN ('draft', 'current', 'superseded', 'reopened', 'expired', 'retired')),
+  conclusion TEXT NOT NULL,
+  scope JSONB NOT NULL DEFAULT '{}'::jsonb,
+  owner_ref TEXT NOT NULL,
+  tell_patterns JSONB NOT NULL,
+  cause_menu JSONB NOT NULL,
+  evidence_refs JSONB NOT NULL,
+  reopen_conditions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  effective_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  review_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, conclusion_key, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_settled_conclusion_current
+  ON settled_conclusions(project_id, conclusion_key)
+  WHERE status = 'current';
+CREATE INDEX IF NOT EXISTS idx_settled_conclusions_scope
+  ON settled_conclusions(project_id, status, effective_at DESC);
+
+CREATE TABLE IF NOT EXISTS closed_question_matches (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  settled_conclusion_id TEXT NOT NULL REFERENCES settled_conclusions(id),
+  settled_conclusion_version INTEGER NOT NULL CHECK (settled_conclusion_version > 0),
+  publication_boundary TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  matched_patterns JSONB NOT NULL,
+  context_classification TEXT NOT NULL
+    CHECK (context_classification IN ('actionable', 'quoted', 'historical', 'negated')),
+  status TEXT NOT NULL CHECK (status IN ('blocked', 'allowed_context', 'overridden')),
+  stop_response JSONB NOT NULL DEFAULT '{}'::jsonb,
+  decision_id TEXT REFERENCES decisions(id),
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_closed_question_matches_project
+  ON closed_question_matches(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS assurance_cases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  subject_type TEXT NOT NULL,
+  subject_ref TEXT NOT NULL,
+  title TEXT NOT NULL,
+  risk_tier INTEGER NOT NULL DEFAULT 1 CHECK (risk_tier BETWEEN 0 AND 3),
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'evaluating', 'accepted', 'blocked', 'refuted', 'inconclusive', 'reopened')),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  policy_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metric_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  settled_conclusion_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  surface_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  agent_group_run_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  workflow_run_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  skill_invocation_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  integration_connection_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  decision_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  final_reason JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_assurance_cases_project
+  ON assurance_cases(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS assurance_policy_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  assurance_case_id TEXT NOT NULL REFERENCES assurance_cases(id) ON DELETE CASCADE,
+  assurance_case_version INTEGER NOT NULL,
+  org_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+  project_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
+  effective_rules JSONB NOT NULL,
+  conflicts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  content_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(assurance_case_id, assurance_case_version, content_hash)
+);
+
+CREATE TABLE IF NOT EXISTS assurance_claims (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  assurance_case_id TEXT NOT NULL REFERENCES assurance_cases(id) ON DELETE CASCADE,
+  claim_type TEXT NOT NULL
+    CHECK (claim_type IN ('solved', 'fixed', 'regressed', 'caused_by', 'healthy', 'status')),
+  statement TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('draft', 'pending', 'authoritative', 'blocked', 'inconclusive', 'refuted', 'invalidated')),
+  evidence_contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+  producer_ref TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_assurance_claims_case
+  ON assurance_claims(assurance_case_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS assurance_evidence (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  assurance_case_id TEXT NOT NULL REFERENCES assurance_cases(id) ON DELETE CASCADE,
+  claim_id TEXT REFERENCES assurance_claims(id) ON DELETE CASCADE,
+  evidence_type TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  uri TEXT,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL,
+  reproduction JSONB NOT NULL,
+  produced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  valid_until TIMESTAMPTZ,
+  invalidated_at TIMESTAMPTZ,
+  invalidation_reason TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, claim_id, content_hash, evidence_type)
+);
+CREATE INDEX IF NOT EXISTS idx_assurance_evidence_claim
+  ON assurance_evidence(project_id, claim_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS claim_verifications (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  assurance_case_id TEXT NOT NULL REFERENCES assurance_cases(id) ON DELETE CASCADE,
+  claim_id TEXT NOT NULL REFERENCES assurance_claims(id) ON DELETE CASCADE,
+  claim_version INTEGER NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('passed', 'refuted', 'inconclusive')),
+  reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  policy_snapshot_id TEXT REFERENCES assurance_policy_snapshots(id),
+  dedupe_key TEXT NOT NULL,
+  verified_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_claim_verifications_claim
+  ON claim_verifications(claim_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS surface_ownerships (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  surface_key TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  owner_ref TEXT NOT NULL,
+  coordination_route TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'transferring', 'relinquished', 'expired')),
+  expires_at TIMESTAMPTZ,
+  acquired_by TEXT NOT NULL,
+  acquired_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, surface_key, environment)
+);
+CREATE INDEX IF NOT EXISTS idx_surface_ownerships_project
+  ON surface_ownerships(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ownership_transitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  surface_ownership_id TEXT NOT NULL REFERENCES surface_ownerships(id) ON DELETE CASCADE,
+  transition_kind TEXT NOT NULL
+    CHECK (transition_kind IN ('acquire', 'transfer', 'relinquish', 'expire', 'emergency_takeover', 'preflight')),
+  from_owner_ref TEXT,
+  to_owner_ref TEXT,
+  from_version INTEGER,
+  to_version INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  decision_id TEXT REFERENCES decisions(id),
+  actor TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_ownership_transitions_surface
+  ON ownership_transitions(surface_ownership_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS verification_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  policy_key TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('draft', 'active', 'superseded', 'retired')),
+  surface_patterns JSONB NOT NULL DEFAULT '[]'::jsonb,
+  claim_types JSONB NOT NULL DEFAULT '[]'::jsonb,
+  risk_tiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cadence_seconds INTEGER NOT NULL CHECK (cadence_seconds > 0),
+  sample_rate DOUBLE PRECISION NOT NULL DEFAULT 1 CHECK (sample_rate >= 0 AND sample_rate <= 1),
+  verification_method JSONB NOT NULL,
+  independence_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  escalation_target TEXT NOT NULL,
+  estimated_cost_usd_micros BIGINT NOT NULL DEFAULT 0 CHECK (estimated_cost_usd_micros >= 0),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, policy_key, version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_verification_policy_current
+  ON verification_policies(project_id, policy_key) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS verification_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  assurance_case_id TEXT NOT NULL REFERENCES assurance_cases(id) ON DELETE CASCADE,
+  claim_id TEXT NOT NULL REFERENCES assurance_claims(id) ON DELETE CASCADE,
+  verification_policy_id TEXT NOT NULL REFERENCES verification_policies(id),
+  job_id TEXT REFERENCES jobs(id),
+  budget_reservation_id TEXT REFERENCES budget_reservations(id),
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'leased', 'running', 'passed', 'refuted', 'inconclusive', 'failed', 'deadlettered', 'cancelled')),
+  producer_path JSONB NOT NULL DEFAULT '{}'::jsonb,
+  verifier_path JSONB NOT NULL DEFAULT '{}'::jsonb,
+  evidence_bundle JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  scheduled_for TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_verification_runs_queue
+  ON verification_runs(project_id, status, scheduled_for);
+
+-- BOSS-130: typed integration definitions, tenant-scoped connections, and the
+-- durable explanation of every capability resolution decision.
+CREATE TABLE IF NOT EXISTS integration_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  integration_key TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('draft', 'active', 'superseded', 'retired')),
+  skill_contracts JSONB NOT NULL,
+  executor_bindings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provenance JSONB NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, integration_key, version),
+  UNIQUE(project_id, content_hash)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_integration_definition_current
+  ON integration_definitions(project_id, integration_key) WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS integration_connections (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  integration_definition_id TEXT NOT NULL REFERENCES integration_definitions(id),
+  connection_key TEXT NOT NULL,
+  scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'workspace', 'project')),
+  scope_id TEXT NOT NULL,
+  owner_ref TEXT NOT NULL,
+  secret_ref_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  granted_capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  data_boundaries JSONB NOT NULL DEFAULT '[]'::jsonb,
+  max_risk_tier INTEGER NOT NULL DEFAULT 1 CHECK (max_risk_tier BETWEEN 0 AND 3),
+  health_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (health_status IN ('pending', 'healthy', 'degraded', 'stale', 'failed', 'revoked')),
+  health_checked_at TIMESTAMPTZ,
+  freshness_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (freshness_seconds > 0),
+  rate_limit_state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'active', 'disabled', 'revoked')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, connection_key)
+);
+CREATE INDEX IF NOT EXISTS idx_integration_connections_project
+  ON integration_connections(project_id, status, health_status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS capability_resolutions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  integration_connection_id TEXT REFERENCES integration_connections(id),
+  skill_id TEXT NOT NULL,
+  actor_ref TEXT NOT NULL,
+  workflow_step_ref TEXT,
+  agent_group_version_ref TEXT,
+  requested_data_boundary TEXT NOT NULL,
+  risk_tier INTEGER NOT NULL CHECK (risk_tier BETWEEN 0 AND 3),
+  authority_inputs JSONB NOT NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('allowed', 'denied')),
+  denial_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+  resolved_contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_capability_resolutions_project
+  ON capability_resolutions(project_id, created_at DESC);
+
+-- BOSS-129: reusable collaboration protocols. Panels may reference this
+-- runtime, but consensus remains advisory unless evidence/policy gates pass.
+CREATE TABLE IF NOT EXISTS agent_group_specs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  group_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  owner_ref TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'active', 'retired')),
+  active_version_id TEXT,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, group_key)
+);
+
+CREATE TABLE IF NOT EXISTS agent_group_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_group_spec_id TEXT NOT NULL REFERENCES agent_group_specs(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL CHECK (version > 0),
+  status TEXT NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'published', 'retired')),
+  topology TEXT NOT NULL
+    CHECK (topology IN ('panel', 'producer_reviewer', 'bounded_debate', 'swarm', 'fan_out', 'sequential_handoff')),
+  members JSONB NOT NULL,
+  collaboration_protocol JSONB NOT NULL,
+  allowed_capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  context_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  independence_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  bounds JSONB NOT NULL,
+  completion_rule JSONB NOT NULL,
+  escalation_target TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ,
+  UNIQUE(agent_group_spec_id, version),
+  UNIQUE(agent_group_spec_id, content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_group_versions_project
+  ON agent_group_versions(project_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_group_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_group_version_id TEXT NOT NULL REFERENCES agent_group_versions(id),
+  assurance_case_id TEXT REFERENCES assurance_cases(id),
+  workflow_run_id TEXT REFERENCES workflow_runs(id),
+  task_id TEXT REFERENCES tasks(id),
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'running', 'waiting', 'blocked', 'completed', 'failed', 'deadlettered', 'cancelled')),
+  input JSONB NOT NULL,
+  context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  policy_snapshot JSONB NOT NULL,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dissent JSONB NOT NULL DEFAULT '[]'::jsonb,
+  total_cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  budget_reservation_id TEXT REFERENCES budget_reservations(id),
+  receipt_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  dedupe_key TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deadline_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  UNIQUE(project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_group_runs_project
+  ON agent_group_runs(project_id, status, updated_at DESC);
+ALTER TABLE agent_group_runs ADD COLUMN IF NOT EXISTS budget_reservation_id TEXT REFERENCES budget_reservations(id);
+ALTER TABLE agent_group_runs ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS agent_group_member_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_group_run_id TEXT NOT NULL REFERENCES agent_group_runs(id) ON DELETE CASCADE,
+  member_key TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  job_id TEXT REFERENCES jobs(id),
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'leased', 'running', 'completed', 'failed', 'blocked', 'timed_out', 'deadlettered', 'cancelled')),
+  independent BOOLEAN NOT NULL DEFAULT true,
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  artifacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  cost_usd_micros BIGINT NOT NULL DEFAULT 0,
+  error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(agent_group_run_id, member_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_group_member_runs_group
+  ON agent_group_member_runs(agent_group_run_id, status, created_at);

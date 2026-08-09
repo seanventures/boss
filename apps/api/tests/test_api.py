@@ -7123,6 +7123,22 @@ def test_deployment_run_plans_changeset_and_release_packet(client):
         "release_artifact_id"
     ]
     assert changeset["operations"][0]["desired_state"]["commit_ref"] == "abc123"
+    ownership_guard = changeset["operations"][0]["desired_state"][
+        "surface_ownership"
+    ]
+    assert ownership_guard["surface_key"] == f"deployment_target:{target['id']}"
+    assert ownership_guard["owner_ref"] == "ceo"
+    assert ownership_guard["version"] == 1
+
+    surfaces = client.get(
+        "/v1/assurance/surfaces",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert surfaces.status_code == 200
+    assert any(
+        item["id"] == ownership_guard["ownership_id"]
+        for item in surfaces.json()["items"]
+    )
 
     artifact = client.get(f"/v1/artifacts/{payload['release_artifact_id']}")
     assert artifact.status_code == 200

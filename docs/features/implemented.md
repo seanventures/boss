@@ -2,7 +2,7 @@
 
 # Implemented features
 
-<span class="boss-status boss-status--implemented">Implemented</span> **93 features**
+<span class="boss-status boss-status--implemented">Implemented</span> **96 features**
 
 ## MET-001 — CEO command intake {#met-001-ceo-command-intake}
 
@@ -772,17 +772,17 @@
 
 **Ledger detail:** Implemented: explicit server-context registry, GitHub/Deployment bindings, Receipt-backed external effects, target validation, and duplicate-effect suppression; worker real-mode bridge remains BOSS-46
 
-## MEB-001 — Entitlement pools {#meb-001-entitlement-pools}
+## MEB-001 — Entitlement pools and governed model gateway {#meb-001-entitlement-pools-and-governed-model-gateway}
 
 <span class="boss-status boss-status--implemented">Implemented</span>
 
-**Source:** Model Entitlement Broker requirement
+**Source:** Model Entitlement Broker requirement; Plane BOSS-18/BOSS-335
 
-**Implementation:** `db/schema.sql`, `packages/specpack/models/providers.yaml`, `packages/specpack/objects/entitlement_source.yaml`, `packages/specpack/objects/entitlement_pool.yaml`, `packages/specpack/objects/model_route_decision.yaml`, `packages/specpack/objects/capacity_receipt.yaml`, `apps/api/app/services/entitlements.py`, `apps/api/app/main.py`, `apps/api/app/schemas.py`, `packages/api-client/src/index.ts`, `apps/web/lib/entitlements.ts`, `apps/web/lib/routing.ts`, `apps/web/app/actions.ts`, `apps/web/app/page.tsx`, `api/openapi.yaml`
+**Implementation:** `db/schema.sql`, `packages/specpack/models/providers.yaml`, `packages/specpack/objects/entitlement_source.yaml`, `packages/specpack/objects/entitlement_pool.yaml`, `packages/specpack/objects/model_route_decision.yaml`, `packages/specpack/objects/capacity_receipt.yaml`, `apps/api/app/services/entitlements.py`, `apps/api/app/services/model_gateway.py`, `apps/api/app/main.py`, `apps/api/app/schemas.py`, `packages/api-client/src/index.ts`, `apps/web/lib/entitlements.ts`, `apps/web/lib/routing.ts`, `apps/web/lib/assurance.ts`, `apps/web/app/assurance-ui.tsx`, `api/openapi.yaml`
 
-**Automated evidence:** `apps/api/tests/test_api.py`, `apps/web/tests/api-client.test.ts`
+**Automated evidence:** `apps/api/tests/test_api.py`, `apps/api/tests/test_model_gateway.py`, `apps/web/tests/api-client.test.ts`, `apps/web/tests/assurance.test.tsx`
 
-**Ledger detail:** Implemented, including official OAuth/CLI session connection lifecycle, capacity-state fail-closed routing, route explanations, v2 model adapter inventory, entitlement pools, capacity receipts, and ModelRouteDecision simulate/list APIs
+**Ledger detail:** Implemented: official OAuth/CLI session lifecycle; SecretRef-backed BYO API credentials; owner/project-scoped capacity; job-leased, budgeted and receipted invocation; fail-closed routing; capacity receipts; canonical token/cost settlement; and project-level usage reporting without exposing raw credentials or prompts
 
 ## MEB-002 — No scraping/rate bypass {#meb-002-no-scraping-rate-bypass}
 
@@ -1096,6 +1096,30 @@
 
 **Ledger detail:** Implemented
 
+## AGP-001 — Versioned Agent Groups and collaboration protocols {#agp-001-versioned-agent-groups-and-collaboration-protocols}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD v2.0 Agent Groups; Plane BOSS-129/BOSS-189–190/BOSS-209–212
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/governed_collaboration.py`, `apps/api/app/routers/governance.py`, `packages/api-client/src/index.ts`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/agent_group_spec.yaml`, `packages/specpack/objects/agent_group_run.yaml`, `packages/specpack/workflows/agent_group_{panel,producer_reviewer,bounded_debate,fan_out_join}.yaml`
+
+**Automated evidence:** `apps/api/tests/test_governance_runtime.py`, `apps/api/tests/test_assurance_specpack_contracts.py`, `apps/api/tests/test_assurance_workflow_contracts.py`, `apps/api/tests/test_workflow_runtime.py`
+
+**Ledger detail:** Implemented: immutable versioned definitions, durable runs, one leased job per member, bounded time/budget/capability authority, attributed outputs, receipts/cost, partial failure and dissent preservation, deterministic completion, and a fail-closed evidence gate that prevents consensus from becoming proof
+
+## INT-001 — Integration registry and typed skill contracts {#int-001-integration-registry-and-typed-skill-contracts}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD v2.0 Skills and Integrations; Plane BOSS-130/BOSS-191–194/BOSS-213–214; extends BOSS-44–56
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/governed_collaboration.py`, `apps/api/app/routers/governance.py`, `packages/api-client/src/index.ts`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/skills`, `packages/specpack/objects/integration_definition.yaml`, `packages/specpack/objects/integration_connection.yaml`, `packages/specpack/objects/executor_binding.yaml`, `packages/specpack/objects/capability_resolution.yaml`, `packages/specpack/workflows/integration_connection_lifecycle.yaml`, `packages/specpack/workflows/capability_resolution_gate.yaml`
+
+**Automated evidence:** `apps/api/tests/test_governance_runtime.py`, `apps/api/tests/test_assurance_specpack_contracts.py`, `apps/api/tests/test_assurance_workflow_contracts.py`, `apps/api/tests/test_workflow_runtime.py`
+
+**Ledger detail:** Implemented: versioned trusted definitions, typed effect contracts, SecretRef-only scoped connections, health/freshness/revoke lifecycle, and durable allow/deny resolution from the deterministic intersection of actor/group/workflow/project authority, installed grants, risk, boundary, provenance, and connection health
+
 ## WFL-001 — Reusable mapped workflow registry and runtime {#wfl-001-reusable-mapped-workflow-registry-and-runtime}
 
 <span class="boss-status boss-status--implemented">Implemented</span>
@@ -1107,6 +1131,18 @@
 **Automated evidence:** `apps/api/tests/test_workflow_runtime.py`, `apps/web/tests/workflows.test.tsx`, `apps/web/tests/api-client.test.ts`
 
 **Ledger detail:** Implemented: immutable registry and specpack seed, deterministic mapping precedence, version-pinned replay-safe runs, leased steps with retry/deadletter, conditions, fan-out/join, bounded loops, timers, Decisions, fail-closed group/skill/integration/subworkflow bindings, pause/resume/cancel, reverse compensation, explicit migration/rollback, typed client, and Mission Control timeline
+
+## AST-001 — Ground-truth and Assurance runtime {#ast-001-ground-truth-and-assurance-runtime}
+
+<span class="boss-status boss-status--implemented">Implemented</span>
+
+**Source:** PRD v2.0 Ground-truth and Assurance; Plane BOSS-123–128/BOSS-131/BOSS-175–188/BOSS-195–208
+
+**Implementation:** `db/schema.sql`, `engine/boss_engine/services/assurance.py`, `apps/api/app/routers/governance.py`, `packages/api-client/src/index.ts`, `apps/web/lib/assurance.ts`, `apps/web/app/assurance-ui.tsx`, `docs/product/ASSURANCE_CONTRACTS.md`, `packages/specpack/objects/{ground_truth_metric_definition,ground_truth_observation,regression_signal,settled_conclusion,closed_question_match,claim,evidence,claim_verification,surface_ownership,ownership_transition,verification_policy,verification_run,assurance_case,assurance_policy_snapshot}.yaml`, `packages/specpack/workflows/{ground_truth_metric_evaluation,ground_truth_baseline_change,regression_signal_lifecycle,closed_question_publication_guard,settled_conclusion_reopen,claim_authority_gate,red_to_green_verification,causal_isolation_verification,surface_ownership_acquire,surface_ownership_transfer,ownership_effect_preflight,verification_schedule,adversarial_verification_execute,assurance_case_evaluate}.yaml`
+
+**Automated evidence:** `apps/api/tests/test_governance_runtime.py`, `apps/web/tests/assurance.test.tsx`, `apps/api/tests/test_assurance_specpack_contracts.py`, `apps/api/tests/test_assurance_workflow_contracts.py`, `apps/api/tests/test_workflow_runtime.py`
+
+**Ledger detail:** Implemented: scheduled leased measurements with missed-SLA escalation and deduplicated regression/recovery; governed baseline changes; versioned settled conclusions and context-aware publication tripwire; immutable reproducible evidence and deterministic fixed/causal/regressed claim gates; policy snapshots; single-owner version fencing at provider preflight; automatically sampled, budgeted, leased verifier runs with receipts and refutation escalation; and an operator Assurance Center
 
 ## MEB-V2-001 — Entitlement pools and capacity receipts {#meb-v2-001-entitlement-pools-and-capacity-receipts}
 

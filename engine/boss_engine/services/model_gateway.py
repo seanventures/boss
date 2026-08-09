@@ -908,3 +908,66 @@ class ModelGatewayService:
             "fencing_token": int(lease["fencing_token"]),
             "expires_at": self._iso(lease["expires_at"]),
         }
+
+    def usage_summary(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        days: int = 30,
+    ) -> dict[str, Any]:
+        """Return project-fenced model usage from the canonical spend ledger."""
+        if days < 1 or days > 366:
+            raise ValueError("days must be between 1 and 366.")
+        self._project_scope(connection, project_id)
+        rows = connection.execute(
+            text(
+                """
+                SELECT engine, model,
+                       count(*) AS calls,
+                       count(*) FILTER (WHERE ok) AS successful_calls,
+                       COALESCE(sum(prompt_tokens), 0) AS prompt_tokens,
+                       COALESCE(sum(completion_tokens), 0) AS completion_tokens,
+                       COALESCE(sum(total_tokens), 0) AS total_tokens,
+                       COALESCE(sum(cost_usd_micros), 0) AS cost_usd_micros,
+                       min(created_at) AS first_call_at,
+                       max(created_at) AS last_call_at
+                FROM llm_calls
+                WHERE project_id = :project_id
+                  AND created_at >= now() - (:days * interval '1 day')
+                GROUP BY engine, model
+                ORDER BY cost_usd_micros DESC, calls DESC, engine, model
+                """
+            ),
+            {"project_id": project_id, "days": days},
+        ).mappings().all()
+        items = []
+        for row in rows:
+            item = dict(row)
+            for key in (
+                "calls",
+                "successful_calls",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "cost_usd_micros",
+            ):
+                item[key] = int(item[key] or 0)
+            item["failed_calls"] = item["calls"] - item["successful_calls"]
+            item["first_call_at"] = self._iso(item["first_call_at"])
+            item["last_call_at"] = self._iso(item["last_call_at"])
+            items.append(item)
+        return {
+            "project_id": project_id,
+            "window_days": days,
+            "totals": {
+                "calls": sum(item["calls"] for item in items),
+                "successful_calls": sum(item["successful_calls"] for item in items),
+                "failed_calls": sum(item["failed_calls"] for item in items),
+                "prompt_tokens": sum(item["prompt_tokens"] for item in items),
+                "completion_tokens": sum(item["completion_tokens"] for item in items),
+                "total_tokens": sum(item["total_tokens"] for item in items),
+                "cost_usd_micros": sum(item["cost_usd_micros"] for item in items),
+            },
+            "items": items,
+        }

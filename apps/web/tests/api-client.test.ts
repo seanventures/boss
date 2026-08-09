@@ -3,6 +3,34 @@ import { describe, expect, it } from "vitest";
 import { createBossApiClient, BossApiError } from "@boss/api-client";
 
 describe("createBossApiClient", () => {
+  it("reads assurance and project-fenced model usage projections", async () => {
+    const urls: string[] = [];
+    const responses = [
+      { project_id: "boss-dogfood", metrics: [], cases: [], surfaces: [], verification_runs: [], settled_conclusions: [] },
+      { project_id: "boss-dogfood", window_days: 14, totals: { calls: 3 }, items: [] },
+    ];
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl: async (input: RequestInfo | URL) => {
+        urls.push(String(input));
+        return new Response(JSON.stringify(responses.shift()), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      },
+    });
+
+    const assurance = await client.getAssuranceOverview("boss-dogfood");
+    const usage = await client.getModelGatewayUsage("boss-dogfood", 14);
+
+    expect(assurance.project_id).toBe("boss-dogfood");
+    expect(usage.totals.calls).toBe(3);
+    expect(urls).toEqual([
+      "http://127.0.0.1:8000/v1/assurance/overview?project_id=boss-dogfood",
+      "http://127.0.0.1:8000/v1/model-gateway/usage?project_id=boss-dogfood&days=14",
+    ]);
+  });
+
   it("lists and launches QA benchmark apps through the governed API contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const responses = [
