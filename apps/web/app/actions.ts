@@ -2385,6 +2385,35 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+/**
+ * Run an existing task again, as a NEW governed run.
+ *
+ * The QA benchmark cards have a Launch button; task cards had none, so re-running work meant
+ * retyping its title, instructions, acceptance criteria and test commands into the New Code
+ * Task form — copying, by hand, data BOSS already holds. Same governed path as any other code
+ * task: it plans, tests, reviews and opens a gated PR. Nothing is re-run in place; the original
+ * run keeps its history, exactly as redeploy does for deployments.
+ */
+export async function relaunchCodeTaskAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const title = String(formData.get("title") ?? "").trim();
+  const instructions = String(formData.get("instructions") ?? "").trim();
+  // Instructions are what the agent actually works from. Without them a "relaunch" would be a
+  // differently-named empty task, so refuse rather than start something that cannot succeed.
+  if (!title || !instructions) return;
+  await client.createCodeTask({
+    project_id: projectId,
+    title,
+    instructions,
+    acceptance_criteria: splitLines(String(formData.get("acceptance_criteria") ?? "")),
+    test_commands: splitLines(String(formData.get("test_commands") ?? "")),
+    owner: String(formData.get("owner") ?? "").trim() || undefined,
+    repo: String(formData.get("repo") ?? "").trim() || undefined,
+    base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+  });
+  revalidatePath("/");
+}
+
 export async function getQaBenchmarkReportAction(runId: string) {
   try {
     return await client.getQaBenchmarkReport(runId);

@@ -6,6 +6,7 @@ import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkRe
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
+  relaunchCodeTaskAction,
   confirmCodeTaskFeedbackAction,
   createCodeTaskAction,
   getQaBenchmarkReportAction,
@@ -337,6 +338,82 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
  * Renders nothing when there is nothing to show — an empty disclosure is a promise of detail
  * that is not there.
  */
+/**
+ * Launch — on a task card, not only on a benchmark.
+ *
+ * The benchmark catalogue could start work; the task list could not, so running something
+ * again meant retyping its instructions and acceptance criteria into the New Code Task form,
+ * copying data BOSS already had. Same governed pipeline either way; the only difference is
+ * where the spec comes from.
+ *
+ * Disabled while submitting, and it says so. The benchmark buttons are plain form submits with
+ * no feedback, and goldeneye currently holds four HookWatch runs and two BugBox runs queued —
+ * a button that looks inert gets pressed again, and here every press costs budget.
+ */
+/** Launch a benchmark, once.
+ *
+ * The button was a bare form submit: pressing it navigated nowhere, changed nothing on screen,
+ * and the new run only appeared after the page happened to refresh. So it got pressed again —
+ * goldeneye is holding four HookWatch runs and two BugBox runs, queued and identical. Every
+ * one of those is a budgeted governed pipeline. Disabling on submit and saying "Starting…" is
+ * the whole fix, and it is the same fix the delivery buttons needed.
+ */
+function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRepo }: {
+  benchmark: QaBenchmarkApp; projectId: string; actor: string;
+  defaultOwner?: string; defaultRepo?: string;
+}) {
+  const [sent, setSent] = useState(false);
+  return (
+    <form action={startQaBenchmarkAppAction} onSubmit={() => setSent(true)}
+          style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="actor" value={actor} />
+      <input type="hidden" name="benchmark_id" value={benchmark.id} />
+      <input type="hidden" name="owner" value={defaultOwner ?? ""} />
+      <input type="hidden" name="repo" value={defaultRepo ?? ""} />
+      <button className="cap-btn primary" disabled={sent}>
+        {sent ? "Starting…" : `Launch ${benchmark.name}`}
+      </button>
+      <span className="detail">
+        {sent ? "queued — it will appear in the task list below"
+              : "Strict profile · starts a budgeted, review-gated task"}
+      </span>
+    </form>
+  );
+}
+
+function LaunchTask({ run, projectId, label = "Launch again" }: {
+  run: CodeTaskRun; projectId: string; label?: string;
+}) {
+  const [sent, setSent] = useState(false);
+  const spec = run.spec ?? {};
+  // No instructions means nothing to run: an empty relaunch would be a differently-named
+  // no-op that still costs a governed run.
+  if (!spec.instructions) return null;
+  return (
+    <form action={relaunchCodeTaskAction} onSubmit={() => setSent(true)}
+          style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="title" value={run.title ?? "Relaunched task"} />
+      <input type="hidden" name="instructions" value={spec.instructions} />
+      <input type="hidden" name="acceptance_criteria" value={(spec.acceptance_criteria ?? []).join("\n")} />
+      <input type="hidden" name="test_commands" value={(spec.test_commands ?? []).join("\n")} />
+      <input type="hidden" name="owner" value={spec.owner ?? ""} />
+      <input type="hidden" name="repo" value={spec.repo ?? ""} />
+      <input type="hidden" name="base_branch" value={spec.base_branch ?? ""} />
+      <button className="cap-btn primary" disabled={sent}
+              onClick={(e) => e.stopPropagation()}
+              title="Start a NEW governed run from this task's spec — the original keeps its history">
+        {sent ? "Starting…" : label}
+      </button>
+      <span className="detail">
+        {sent ? "queued — it will appear at the top of this list"
+              : "Strict profile · starts a budgeted, review-gated task"}
+      </span>
+    </form>
+  );
+}
+
 function ContractDetails({ criteria, verification, label = "Acceptance criteria & verification" }: {
   criteria?: string[] | null; verification?: string[] | null; label?: string;
 }) {
@@ -384,15 +461,8 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
             <ContractDetails criteria={benchmark.acceptance_scenarios}
                              verification={benchmark.verification_commands}
                              label="Acceptance scenarios & required evidence" />
-            <form action={startQaBenchmarkAppAction} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <input type="hidden" name="project_id" value={projectId} />
-              <input type="hidden" name="actor" value={actor} />
-              <input type="hidden" name="benchmark_id" value={benchmark.id} />
-              <input type="hidden" name="owner" value={defaultOwner ?? ""} />
-              <input type="hidden" name="repo" value={defaultRepo ?? ""} />
-              <button className="cap-btn primary">Launch {benchmark.name}</button>
-              <span className="detail">Strict profile · starts a budgeted, review-gated task</span>
-            </form>
+            <BenchmarkLaunch benchmark={benchmark} projectId={projectId} actor={actor}
+                             defaultOwner={defaultOwner} defaultRepo={defaultRepo} />
           </article>
         ))}
       </div>
@@ -910,6 +980,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       task already carries. Absent on ad-hoc tasks, in which case nothing renders. */}
                   <ContractDetails criteria={c.spec?.acceptance_criteria}
                                    verification={c.spec?.test_commands} />
+                  <LaunchTask run={c} projectId={projectId} />
                   <div className="ct-card-foot">
                     <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
                     {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
@@ -956,6 +1027,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   </div>
                   <ContractDetails criteria={members[0].spec?.acceptance_criteria}
                                    verification={members[0].spec?.test_commands} />
+                  <LaunchTask run={members[0]} projectId={projectId} label="Launch this build again" />
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>

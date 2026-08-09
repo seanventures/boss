@@ -62,6 +62,32 @@ describe("BOSS mission-control design system", () => {
     expect(codeTasks).not.toContain('<button key={c.id} className="ct-card"');
   });
 
+  it("lets you launch an existing task, not only a benchmark", () => {
+    // The benchmark cards could start work; the task list could not, so re-running something
+    // meant retyping its instructions and acceptance criteria into the New Code Task form —
+    // copying data BOSS already held.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(codeTasks).toContain("function LaunchTask");
+    expect(codeTasks).toContain("<LaunchTask run={c}");            // every task card
+    expect(codeTasks).toContain("<LaunchTask run={members[0]}");   // and grouped builds
+    expect(codeTasks).toContain("relaunchCodeTaskAction");
+  });
+
+  it("cannot launch the same work twice by impatience", () => {
+    // Four identical HookWatch runs and two BugBox runs are queued on the production box,
+    // because a plain form submit changes nothing on screen and an inert-looking button gets
+    // pressed again. Each press is a budgeted governed pipeline.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    for (const marker of ["function BenchmarkLaunch", "disabled={sent}", "Starting…"]) {
+      expect(codeTasks).toContain(marker);
+    }
+    // No launch form may submit without arming that guard.
+    const forms = codeTasks.split("<form action=").slice(1)
+      .filter((f) => f.startsWith("{startQaBenchmarkAppAction") || f.startsWith("{relaunchCodeTaskAction"));
+    expect(forms.length).toBeGreaterThan(0);
+    for (const form of forms) expect(form).toContain("onSubmit={() => setSent(true)}");
+  });
+
   it("gives the browser tab a real icon", () => {
     // Next's App Router serves app/icon.png as the favicon. Without it the tab shows a
     // generic globe, which is what "the icon is still the old one" looks like from a bookmark.
