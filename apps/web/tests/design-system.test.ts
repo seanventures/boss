@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -32,6 +32,24 @@ describe("BOSS mission-control design system", () => {
     expect(shell).not.toContain('src="/BOSS-logo.png"');
     expect(shell).toContain('from "@phosphor-icons/react"');
     expect(shell).not.toContain("<svg");
+  });
+
+  it("shows the current mark EVERYWHERE, not just in the shell", () => {
+    // This assertion used to cover the shell alone, so the org gate — the very first screen
+    // anyone sees, and the one the reconnect banner renders on — kept the retired "Business
+    // Operating System Sentinel" icon for weeks after the rebrand. Checking one file proves
+    // one file. The rule is about the product, so the test reads the whole app.
+    const appDir = resolve(__dirname, "../app");
+    const offenders = readdirSync(appDir, { recursive: true } as never)
+      .filter((f) => typeof f === "string" && /\.(tsx|ts|css)$/.test(f as string))
+      .filter((f) => readFileSync(join(appDir, f as string), "utf8").includes("BOSS-logo.png"));
+    expect(offenders).toEqual([]);
+  });
+
+  it("gives the browser tab a real icon", () => {
+    // Next's App Router serves app/icon.png as the favicon. Without it the tab shows a
+    // generic globe, which is what "the icon is still the old one" looks like from a bookmark.
+    expect(existsSync(resolve(__dirname, "../app/icon.png"))).toBe(true);
   });
 
   it("implements the operational design-system views", () => {

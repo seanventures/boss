@@ -67,7 +67,11 @@ services:
     env_file:
       - ./.env
     environment:
+      # NEXT_PUBLIC_* is baked in at build time; setting it here changes nothing in the
+      # bundle. Kept because it is still read by anything running server-side, but
+      # BOSS_API_URL is the one that actually works at runtime — see apps/web/lib/client.ts.
       NEXT_PUBLIC_BOSS_API_URL: ${NEXT_PUBLIC_BOSS_API_URL:-https://boss-api.local.sean.network}
+      BOSS_API_URL: ${BOSS_API_URL:-https://boss-api.local.sean.network}
       NEXT_PUBLIC_BOSS_PROJECT_ID: ${NEXT_PUBLIC_BOSS_PROJECT_ID:-boss-dogfood}
       BOSS_API_KEY: ${BOSS_API_KEY:-}
     expose:

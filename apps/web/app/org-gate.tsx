@@ -22,7 +22,7 @@ export function OrgReconnect({ orgId, reason }: { orgId: string; reason?: string
       <div className="org-gate-inner">
         <div className="org-gate-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/BOSS-logo.png" alt="BOSS" className="org-gate-logo" />
+          <img src="/boss-mark.png" alt="BOSS" className="org-gate-logo" />
           <span className="org-gate-tag">Autonomous System</span>
         </div>
         <h1 className="org-gate-title">Reconnecting to the control plane…</h1>
@@ -62,7 +62,7 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
       <div className="org-gate-inner">
         <div className="org-gate-brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/BOSS-logo.png" alt="BOSS" className="org-gate-logo" />
+          <img src="/boss-mark.png" alt="BOSS" className="org-gate-logo" />
           <span className="org-gate-tag">Autonomous System</span>
         </div>
         <h1 className="org-gate-title">Select your organization</h1>
