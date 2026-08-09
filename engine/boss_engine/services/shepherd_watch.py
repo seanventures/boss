@@ -41,6 +41,7 @@ OVER_LATENCY = 4            # running far longer than this kind of work normally
 STARVED = 5                 # never claimed by anyone — nothing is consuming the queue
 ABANDONED = 6               # no job exists at all: nothing will ever pick this up
 DEFERRED = 7                # the platform is holding it back on purpose, and said why
+JOB_ENDED = 8               # the job reached a terminal state; the run never noticed
 
 WATCH_NAMES = {
     HEALTHY: "healthy",
@@ -51,6 +52,7 @@ WATCH_NAMES = {
     STARVED: "starved — no worker is consuming the queue",
     ABANDONED: "abandoned — no job exists to carry it",
     DEFERRED: "deferred by policy",
+    JOB_ENDED: "the job ended; the run never noticed",
 }
 
 # --------------------------------------------------------------------------- #
@@ -66,6 +68,9 @@ STALL_MINUTES = 45.0
 # The lease TTL is 300s and the worker heartbeats within it. Six times that is unambiguous:
 # no live worker renews a lease for half an hour and then comes back.
 ORPHAN_LEASE_MINUTES = 30.0
+# Job statuses that mean "this will never run again". A run pointing at one of these is not
+# waiting for anything, however long it has been sitting there.
+TERMINAL_JOB_STATUSES = frozenset({"deadlettered", "succeeded", "failed", "cancelled"})
 # A run whose job row has vanished. Given generously: a job is created moments after the run
 # row, so anything older than this with no job never had one or lost it permanently.
 ABANDONED_MINUTES = 15.0
@@ -165,7 +170,33 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
                       "work_fingerprint": snap.work_fingerprint},
         )
 
-    # 2. Orphaned — the row says running and nothing is running it.
+    # 2. The job is over and the run never found out.
+    #
+    # Checked second, right after duplicates, because a terminal job status is a FACT and
+    # outranks every timing heuristic below it. Seven runs on the production box had been
+    # showing "Queued — running…" for 37 days; their jobs were `deadlettered` — they died
+    # with a 500 from the API in July — and one had actually `succeeded`. Nothing was waiting
+    # for a worker. Nothing was stalled. The work ended over a month ago and the run row was
+    # never told, so the console kept promising it was about to happen.
+    #
+    # I diagnosed this queue as orphaned, then starved, then starved again, over four deploys.
+    # Every one of those was a guess about workers and leases while `job_status` sat in the
+    # same row saying `deadlettered`. That is why this check reads the job's own verdict
+    # first and infers nothing.
+    if snap.job_status in TERMINAL_JOB_STATUSES:
+        detail = snap.job_last_error or f"the job finished as `{snap.job_status}`"
+        return WatchVerdict(
+            JOB_ENDED,
+            f"the job carrying this run ended as `{snap.job_status}` "
+            f"{snap.minutes_running:.0f} minutes ago and the run still says `{snap.phase}`: "
+            f"{detail}",
+            action="fail", autonomous=True,
+            evidence={**ev, "job_status": snap.job_status, "job_error": detail,
+                      "remedy": "the run is marked failed to match its job; relaunch it if "
+                                "the work is still wanted"},
+        )
+
+    # 3. Orphaned — the row says running and nothing is running it.
     #
     # This is the failure that never reports itself: the worker died holding the lease, so no
     # error was ever written, and the run sits at `running` until a human notices. Requeue
@@ -187,7 +218,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             evidence={**ev, "minutes_since_heartbeat": snap.minutes_since_heartbeat},
         )
 
-    # 3. Abandoned — there is no job, so there is no future.
+    # 4. Abandoned — there is no job, so there is no future.
     #
     # Checked BEFORE starvation, because "waiting for a worker" presupposes something in the
     # queue to be picked up. A run with no job is not waiting; there is nothing to wait for,
@@ -211,7 +242,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             evidence={**ev, "remedy": "marked failed; relaunch it if the work is still wanted"},
         )
 
-    # 4. Deferred — held back on purpose, with a reason already on the row.
+    # 5. Deferred — held back on purpose, with a reason already on the row.
     #
     # Checked before starvation because the two look identical from the worker's side: in both
     # cases it polls, is told "idle", and nothing moves. But one means "start a worker" and the
@@ -232,7 +263,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
                                 "budget or allocation it names"},
         )
 
-    # 5. Starved — waiting for a worker that is not coming.
+    # 6. Starved — waiting for a worker that is not coming.
     #
     # The distinction from ORPHANED is the whole point, and getting it wrong is worse than
     # not checking. A job nobody ever claimed cannot be fixed by requeueing it: there is
@@ -265,7 +296,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
                       "remedy": "start or restart the worker; requeueing cannot help"},
         )
 
-    # 6. Stalled — alive, but nothing has moved.
+    # 7. Stalled — alive, but nothing has moved.
     #
     # NOT autonomous. A wedged phase and a genuinely slow one look identical from here, and
     # the difference is worth a human glance rather than a cancelled hour of work.
@@ -277,7 +308,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             action="escalate", autonomous=False, evidence=ev,
         )
 
-    # 7. Over latency — measured against this project's own history, never a constant.
+    # 8. Over latency — measured against this project's own history, never a constant.
     if (snap.median_minutes and snap.sample_size >= LATENCY_MIN_SAMPLES
             and snap.minutes_running >= snap.median_minutes * LATENCY_MULTIPLE):
         return WatchVerdict(

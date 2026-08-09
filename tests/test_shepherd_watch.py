@@ -71,6 +71,30 @@ def main() -> int:
     v = assess(snap(has_live_worker=True, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 99))
     check("a live worker is never orphaned, however old the job", v.klass == HEALTHY)
 
+    print("== the job already ended and the run never found out ==")
+    # What the production queue ACTUALLY was, after four wrong diagnoses: the jobs were
+    # `deadlettered` — they died with a 500 in July — and one had succeeded. Nothing was
+    # waiting for a worker; the work ended 37 days ago and the run row was never told, so the
+    # console kept showing "Queued — running…" and auto-refreshing every four seconds.
+    from boss_engine.services.shepherd_watch import JOB_ENDED, TERMINAL_JOB_STATUSES
+    for status in sorted(TERMINAL_JOB_STATUSES):
+        v = assess(snap(phase="queued", minutes_running=53941.0, minutes_since_update=53941.0,
+                        has_job=True, job_status=status, was_leased=False,
+                        has_live_worker=False, minutes_since_heartbeat=53941.0,
+                        minutes_since_any_lease=None))
+        check(f"a run whose job is `{status}` is closed out", v.klass == JOB_ENDED)
+        check(f"  and never blamed on the worker ({status})", v.klass != STARVED)
+    v = assess(snap(phase="queued", minutes_running=53941.0, minutes_since_update=53941.0,
+                    has_job=True, job_status="deadlettered", was_leased=False,
+                    job_last_error="Server error '500 Internal Server Error'",
+                    has_live_worker=False, minutes_since_heartbeat=53941.0))
+    check("the run quotes why the job died", "500" in v.reason)
+    check("marked failed, autonomously", v.action == "fail" and permitted(v))
+    # A terminal job outranks the timing heuristics: it is a fact, they are judgements.
+    v = assess(snap(job_status="deadlettered", minutes_since_update=1.0,
+                    minutes_running=53941.0))
+    check("a fresh update does not hide a dead job", v.klass == JOB_ENDED)
+
     print("== stranded: the job says running and nobody is running it ==")
     # The exact shape goldeneye reported about itself: job present, status 'running', no
     # owner, no heartbeat, 37 days. Keying the remedy off "was it ever leased" answered no
