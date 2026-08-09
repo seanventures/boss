@@ -491,12 +491,13 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
     the box, and the duplicate check needs the whole set anyway — "is there an older run like
     this one" is not answerable a row at a time.
     """
-    from .shepherd_watch import RunSnapshot
+    from .code_task_service import work_fingerprint
+    from .shepherd_watch import ORPHAN_LEASE_MINUTES, RunSnapshot
 
     rows = connection.execute(
         sql("""
             SELECT r.id, r.project_id, r.status, r.phase, r.title,
-                   r.spec->>'work_fingerprint' AS fp,
+                   r.spec->>'work_fingerprint' AS fp, r.spec AS spec,
                    EXTRACT(EPOCH FROM (now() - r.created_at))/60.0 AS mins_running,
                    EXTRACT(EPOCH FROM (now() - r.updated_at))/60.0 AS mins_since_update,
                    r.created_at,
@@ -517,9 +518,29 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
 
     # The earliest in-flight run for each fingerprint is the keeper; every later one with the
     # same fingerprint is redundant. Rows arrive oldest-first, so first-seen wins.
-    first_by_fp: dict[str, str] = {}
+    # Runs created before the fingerprint was introduced have none stored. Computing it here
+    # from the same fields, with the same function, means the shepherd can still recognise the
+    # backlog it was built for — otherwise the seven duplicates that prompted all of this
+    # would be exactly the ones it could not see.
+    fps: dict[str, Optional[str]] = {}
     for row in rows:
         fp = row["fp"]
+        if not fp:
+            spec = row["spec"] or {}
+            if spec.get("instructions"):
+                fp = work_fingerprint(
+                    project_id=row["project_id"], owner=spec.get("owner") or "",
+                    repo=spec.get("repo") or "", base_branch=spec.get("base_branch") or "",
+                    title=row["title"] or "",
+                    # Stored instructions carry the engine's appended deployability note;
+                    # the note is identical for every task, so it cannot make two different
+                    # specs collide, and stripping it is not worth a second code path.
+                    instructions=spec.get("instructions") or "")
+        fps[row["id"]] = fp
+
+    first_by_fp: dict[str, str] = {}
+    for row in rows:
+        fp = fps.get(row["id"])
         if fp and fp not in first_by_fp:
             first_by_fp[fp] = row["id"]
 
@@ -527,7 +548,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
     since_lease = _minutes_since_any_lease(connection, project_id)
     snaps = []
     for row in rows:
-        fp = row["fp"]
+        fp = fps.get(row["id"])
         keeper = first_by_fp.get(fp) if fp else None
         snaps.append(RunSnapshot(
             run_id=row["id"], project_id=row["project_id"], status=row["status"],
@@ -536,9 +557,14 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             minutes_since_update=float(row["mins_since_update"] or 0.0),
             work_fingerprint=fp,
             duplicate_of=keeper if (keeper and keeper != row["id"]) else None,
-            # A job that is queued has no worker YET, which is not the same as abandoned;
-            # only a leased-then-silent job is orphaned, and the lease age decides that.
-            has_live_worker=bool(row["lease_owner"]) and row["job_status"] == "running",
+            # "Has a worker" means one that is STILL THERE. The first version asked only
+            # whether `lease_owner` was set, so a worker that died 37 days ago holding the
+            # lease still counted as live — and ten runs wedged in `coding` since July fell
+            # through to "stalled, ask a human" instead of "orphaned, take it back". A lease
+            # is a claim with a heartbeat; without the heartbeat it is just a name.
+            has_live_worker=(bool(row["lease_owner"]) and row["job_status"] == "running"
+                             and row["mins_since_heartbeat"] is not None
+                             and float(row["mins_since_heartbeat"]) < ORPHAN_LEASE_MINUTES),
             minutes_since_heartbeat=(float(row["mins_since_heartbeat"])
                                      if row["mins_since_heartbeat"] is not None else None),
             was_leased=bool(row["ever_leased"]),
