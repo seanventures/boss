@@ -20,7 +20,7 @@ sys.path.insert(0, "engine")
 
 from boss_engine.services.shepherd_watch import (  # noqa: E402
     HEALTHY, ORPHANED, ORPHAN_LEASE_MINUTES, OVER_LATENCY, REDUNDANT_DUPLICATE,
-    STALL_MINUTES, STALLED, RunSnapshot, assess, permitted,
+    STALL_MINUTES, STALLED, STARVATION_MINUTES, STARVED, RunSnapshot, assess, permitted,
 )
 
 _failures: list[str] = []
@@ -67,6 +67,34 @@ def main() -> int:
     check("a freshly queued run is not orphaned", v.klass == HEALTHY)
     v = assess(snap(has_live_worker=True, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 99))
     check("a live worker is never orphaned, however old the job", v.klass == HEALTHY)
+
+    print("== starved: a dead worker is not eight unlucky tasks ==")
+    # The goldeneye shape: eight runs at status=running / phase=queued, none ever claimed.
+    # Classing these ORPHANED would "requeue" them — an UPDATE matching no rows, reported as
+    # a fix, every two minutes, forever. Distinguishing never-claimed from lease-lost is the
+    # difference between a shepherd and a liar.
+    starving = dict(phase="queued", minutes_running=120.0, minutes_since_update=120.0,
+                    has_live_worker=False, minutes_since_heartbeat=120.0,
+                    was_leased=False, minutes_since_any_lease=120.0)
+    v = assess(snap(**starving))
+    check("a never-claimed run with a dead queue is starved", v.klass == STARVED)
+    check("it is NOT called orphaned", v.klass != ORPHANED)
+    check("and never auto-requeued, because that cannot help",
+          v.action == "escalate" and not permitted(v))
+    check("the remedy names the real fix", "worker" in v.evidence.get("remedy", ""))
+    # A lease that DID exist and went silent is still recoverable by requeueing.
+    v = assess(snap(has_live_worker=False, minutes_since_heartbeat=ORPHAN_LEASE_MINUTES + 1,
+                    was_leased=True, minutes_since_any_lease=1.0))
+    check("a lost lease is still orphaned and requeued",
+          v.klass == ORPHANED and v.action == "requeue")
+    # A healthy queue that simply has not reached this job yet must be left alone.
+    v = assess(snap(minutes_running=STARVATION_MINUTES + 5, has_live_worker=False,
+                    minutes_since_heartbeat=1.0, was_leased=False,
+                    minutes_since_any_lease=0.5))
+    check("a busy queue that has not got to it yet is healthy", v.klass == HEALTHY)
+    v = assess(snap(minutes_running=1.0, has_live_worker=False, minutes_since_heartbeat=1.0,
+                    was_leased=False, minutes_since_any_lease=120.0))
+    check("a job queued one minute ago is not starved yet", v.klass == HEALTHY)
 
     print("== stalled: escalated, never cancelled ==")
     v = assess(snap(minutes_since_update=STALL_MINUTES + 1))

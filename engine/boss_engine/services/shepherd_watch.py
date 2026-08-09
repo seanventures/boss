@@ -38,6 +38,7 @@ REDUNDANT_DUPLICATE = 1     # identical work already in flight, started earlier
 ORPHANED = 2                # no worker holds it and its lease is long gone
 STALLED = 3                 # alive, but the same phase for far too long
 OVER_LATENCY = 4            # running far longer than this kind of work normally takes
+STARVED = 5                 # never claimed by anyone — nothing is consuming the queue
 
 WATCH_NAMES = {
     HEALTHY: "healthy",
@@ -45,6 +46,7 @@ WATCH_NAMES = {
     ORPHANED: "orphaned — no worker, lease expired",
     STALLED: "stalled in one phase",
     OVER_LATENCY: "over expected latency",
+    STARVED: "starved — no worker is consuming the queue",
 }
 
 # --------------------------------------------------------------------------- #
@@ -60,6 +62,10 @@ STALL_MINUTES = 45.0
 # The lease TTL is 300s and the worker heartbeats within it. Six times that is unambiguous:
 # no live worker renews a lease for half an hour and then comes back.
 ORPHAN_LEASE_MINUTES = 30.0
+# A queue nobody is draining. Shorter than the orphan threshold because this is not a lost
+# run, it is a dead platform: if nothing anywhere has been claimed in ten minutes while work
+# is waiting, no amount of patience helps.
+STARVATION_MINUTES = 10.0
 # Latency is judged against measured history, never a constant — a project whose tasks take
 # an hour is not sick. Only flagged with enough samples to mean something.
 LATENCY_MULTIPLE = 3.0
@@ -84,6 +90,12 @@ class RunSnapshot:
     # Job/lease facts. `has_live_worker` is False when nothing owns the job at all.
     has_live_worker: bool = True
     minutes_since_heartbeat: Optional[float] = None
+    # Was this job EVER claimed? The distinction decides whether requeueing can help at all:
+    # a job whose worker died is recoverable by putting it back; a job nobody ever took is
+    # not, because there is nothing to put it back to.
+    was_leased: bool = True
+    # Minutes since ANY job in this project was claimed. The queue's pulse, not this run's.
+    minutes_since_any_lease: Optional[float] = None
     # Measured baseline for comparable finished runs in this project.
     median_minutes: Optional[float] = None
     sample_size: int = 0
@@ -140,7 +152,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
     # rather than fail: the work was never done, and the platform lost it, not the task.
     stale_lease = (snap.minutes_since_heartbeat is not None
                    and snap.minutes_since_heartbeat >= ORPHAN_LEASE_MINUTES)
-    if not snap.has_live_worker and stale_lease:
+    if not snap.has_live_worker and stale_lease and snap.was_leased:
         return WatchVerdict(
             ORPHANED,
             f"no worker holds this run and its lease has been silent for "
@@ -149,7 +161,29 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             evidence={**ev, "minutes_since_heartbeat": snap.minutes_since_heartbeat},
         )
 
-    # 3. Stalled — alive, but nothing has moved.
+    # 3. Starved — waiting for a worker that is not coming.
+    #
+    # The distinction from ORPHANED is the whole point, and getting it wrong is worse than
+    # not checking. A job nobody ever claimed cannot be fixed by requeueing it: there is
+    # nothing to put back, and the UPDATE matches no rows. Reported as "acted", that is a
+    # shepherd claiming to fix something every two minutes while nothing changes — the exact
+    # dishonesty this component exists to prevent.
+    #
+    # Never autonomous, because the remedy is not to this task. Someone has to start a worker.
+    starved = (snap.minutes_since_any_lease is not None
+               and snap.minutes_since_any_lease >= STARVATION_MINUTES)
+    if not snap.was_leased and starved and snap.minutes_running >= STARVATION_MINUTES:
+        return WatchVerdict(
+            STARVED,
+            f"queued {snap.minutes_running:.0f} minutes and never claimed; nothing in this "
+            f"project has been claimed for {snap.minutes_since_any_lease:.0f} minutes — the "
+            f"worker is not consuming the queue",
+            action="escalate", autonomous=False,
+            evidence={**ev, "minutes_since_any_lease": snap.minutes_since_any_lease,
+                      "remedy": "start or restart the worker; requeueing cannot help"},
+        )
+
+    # 4. Stalled — alive, but nothing has moved.
     #
     # NOT autonomous. A wedged phase and a genuinely slow one look identical from here, and
     # the difference is worth a human glance rather than a cancelled hour of work.
@@ -161,7 +195,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
             action="escalate", autonomous=False, evidence=ev,
         )
 
-    # 4. Over latency — measured against this project's own history, never a constant.
+    # 5. Over latency — measured against this project's own history, never a constant.
     if (snap.median_minutes and snap.sample_size >= LATENCY_MIN_SAMPLES
             and snap.minutes_running >= snap.median_minutes * LATENCY_MULTIPLE):
         return WatchVerdict(

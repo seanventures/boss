@@ -500,13 +500,15 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                    EXTRACT(EPOCH FROM (now() - r.created_at))/60.0 AS mins_running,
                    EXTRACT(EPOCH FROM (now() - r.updated_at))/60.0 AS mins_since_update,
                    r.created_at,
-                   j.lease_owner,
+                   j.lease_owner, j.ever_leased,
                    EXTRACT(EPOCH FROM (now() - COALESCE(j.heartbeat_at, j.created_at)))/60.0
                      AS mins_since_heartbeat,
                    j.status AS job_status
             FROM code_task_runs r
             LEFT JOIN LATERAL (
-                SELECT lease_owner, heartbeat_at, created_at, status FROM jobs
+                SELECT lease_owner, heartbeat_at, created_at, status,
+                       (lease_owner IS NOT NULL OR heartbeat_at IS NOT NULL) AS ever_leased
+                FROM jobs
                 WHERE payload->>'run_id' = r.id ORDER BY created_at DESC LIMIT 1
             ) j ON TRUE
             WHERE r.project_id = :p AND r.status IN ('running', 'queued')
@@ -522,6 +524,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             first_by_fp[fp] = row["id"]
 
     median, samples = _latency_baseline(connection, project_id)
+    since_lease = _minutes_since_any_lease(connection, project_id)
     snaps = []
     for row in rows:
         fp = row["fp"]
@@ -538,9 +541,27 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             has_live_worker=bool(row["lease_owner"]) and row["job_status"] == "running",
             minutes_since_heartbeat=(float(row["mins_since_heartbeat"])
                                      if row["mins_since_heartbeat"] is not None else None),
+            was_leased=bool(row["ever_leased"]),
+            minutes_since_any_lease=since_lease,
             median_minutes=median, sample_size=samples,
         ))
     return snaps
+
+
+def _minutes_since_any_lease(connection, project_id: str):
+    """How long since ANY job here was claimed — the queue's pulse, not one run's.
+
+    Distinguishes "this run is unlucky" from "nothing is consuming the queue". Without it a
+    dead worker looks like eight independently unlucky tasks, and the shepherd proposes eight
+    task-level remedies for one platform problem.
+    """
+    row = connection.execute(
+        sql("SELECT EXTRACT(EPOCH FROM (now() - MAX(GREATEST("
+            "  COALESCE(heartbeat_at, to_timestamp(0)), "
+            "  COALESCE(updated_at, to_timestamp(0))))))/60.0 AS mins "
+            "FROM jobs WHERE project_id = :p AND lease_owner IS NOT NULL"),
+        {"p": project_id}).mappings().first()
+    return float(row["mins"]) if row and row["mins"] is not None else None
 
 
 def _latency_baseline(connection, project_id: str) -> tuple:
@@ -566,32 +587,39 @@ def _latency_baseline(connection, project_id: str) -> tuple:
     return (float(row["median_minutes"]) if row["median_minutes"] else None), int(row["n"])
 
 
-def _cancel_run(connection, run_id: str, reason: str) -> None:
+def _cancel_run(connection, run_id: str, reason: str) -> int:
     """Stop a run and the job carrying it.
 
     Both, or neither matters: leaving the job queued means a worker picks up a cancelled run
     and does the work anyway, which is the whole cost we were trying not to pay.
     """
-    connection.execute(
+    changed = connection.execute(
         sql("UPDATE code_task_runs SET status='cancelled', phase='cancelled', "
             "error=:e, updated_at=now() WHERE id=:i AND status IN ('running','queued')"),
-        {"i": run_id, "e": reason[:500]})
+        {"i": run_id, "e": reason[:500]}).rowcount
     connection.execute(
         sql("UPDATE jobs SET status='cancelled', updated_at=now() "
             "WHERE payload->>'run_id' = :i AND status IN ('queued','running')"),
         {"i": run_id})
+    return changed
 
 
-def _requeue_run(connection, run_id: str) -> None:
-    """Hand an orphaned run back to the queue: clear the dead lease, make it claimable."""
-    connection.execute(
+def _requeue_run(connection, run_id: str) -> int:
+    """Hand an orphaned run back to the queue: clear the dead lease, make it claimable.
+
+    Returns the number of jobs actually freed. Zero means the remedy did not apply — a job
+    nobody ever leased has nothing to put back — and the caller must NOT report that as a fix.
+    """
+    changed = connection.execute(
         sql("UPDATE jobs SET status='queued', lease_owner=NULL, lease_token_hash=NULL, "
             "lease_expires_at=NULL, run_after=now(), updated_at=now() "
             "WHERE payload->>'run_id' = :i AND status='running'"),
-        {"i": run_id})
-    connection.execute(
-        sql("UPDATE code_task_runs SET phase='queued', updated_at=now() WHERE id=:i"),
-        {"i": run_id})
+        {"i": run_id}).rowcount
+    if changed:
+        connection.execute(
+            sql("UPDATE code_task_runs SET phase='queued', updated_at=now() WHERE id=:i"),
+            {"i": run_id})
+    return changed
 
 
 def projects_with_running_work(engine) -> list:
@@ -618,6 +646,7 @@ def watch_all(engine, settings: Settings, *, dry_run: bool = False,
         "in_flight": sum(r["in_flight"] for r in results),
         "acted": [a for r in results for a in r["acted"]],
         "escalated": [e for r in results for e in r["escalated"]],
+        "ineffective": [i for r in results for i in r.get("ineffective", [])],
         "dry_run": dry_run,
     }
 
@@ -638,7 +667,7 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
     from ..db import begin
     from .shepherd_watch import HEALTHY, assess, permitted
 
-    acted, escalated, seen = [], [], 0
+    acted, escalated, ineffective, seen = [], [], [], 0
     with begin(engine) as c:
         snaps = _inflight_snapshots(c, project_id)
     for snap in snaps:
@@ -655,14 +684,21 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
         if permitted(verdict):
             with begin(engine) as c:
                 if verdict.action == "cancel":
-                    _cancel_run(c, snap.run_id, f"shepherd: {verdict.reason}")
-                elif verdict.action == "requeue":
-                    _requeue_run(c, snap.run_id)
-                emit_event(c, project_id, f"shepherd.{verdict.action}", actor,
-                           "code_task_run", snap.run_id,
-                           {"class": verdict.name, "reason": verdict.reason,
-                            **verdict.evidence})
-            acted.append(record)
+                    changed = _cancel_run(c, snap.run_id, f"shepherd: {verdict.reason}")
+                else:
+                    changed = _requeue_run(c, snap.run_id)
+                if changed:
+                    emit_event(c, project_id, f"shepherd.{verdict.action}", actor,
+                               "code_task_run", snap.run_id,
+                               {"class": verdict.name, "reason": verdict.reason,
+                                **verdict.evidence})
+            # An action that changed nothing is not an action. Reporting it as one is a
+            # shepherd announcing a fix every two minutes while the run sits exactly where it
+            # was — the precise dishonesty that makes an operator stop believing the console.
+            if changed:
+                acted.append(record)
+            else:
+                ineffective.append({**record, "note": "remedy did not apply — nothing changed"})
         else:
             # One open question per run. A shepherd that re-asks is noise, and an operator who
             # learns to ignore it is worse than no shepherd — the same rule sweep() follows.
@@ -681,5 +717,5 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                          "o": json.dumps(["continue", "cancel"]),
                          "e": json.dumps(verdict.evidence, default=str)})
                     escalated.append(record)
-    return {"project_id": project_id, "in_flight": seen,
-            "acted": acted, "escalated": escalated, "dry_run": dry_run}
+    return {"project_id": project_id, "in_flight": seen, "acted": acted,
+            "escalated": escalated, "ineffective": ineffective, "dry_run": dry_run}
