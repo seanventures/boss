@@ -71,6 +71,15 @@ ORPHAN_LEASE_MINUTES = 30.0
 # Job statuses that mean "this will never run again". A run pointing at one of these is not
 # waiting for anything, however long it has been sitting there.
 TERMINAL_JOB_STATUSES = frozenset({"deadlettered", "succeeded", "failed", "cancelled"})
+# How long a terminal job must have been terminal before its run is closed out.
+#
+# Without this the shepherd killed a run TWO MINUTES after someone pressed Launch: the job
+# that carries the work reports terminal the moment its own step completes, while the run is
+# still moving to its next phase. Closing that is far worse than the stale rows this check
+# exists to clean up — it destroys work someone just asked for, and makes the Launch button
+# look like it fails instantly. Thirty minutes is long past any legitimate handover and still
+# clears a five-week-old corpse on the first sweep.
+JOB_ENDED_GRACE_MINUTES = 30.0
 # A run whose job row has vanished. Given generously: a job is created moments after the run
 # row, so anything older than this with no job never had one or lost it permanently.
 ABANDONED_MINUTES = 15.0
@@ -107,6 +116,8 @@ class RunSnapshot:
     # reservation — and `last_error` records which. Both are written by the claim path and
     # were being ignored, so a governance hold looked identical to a dead worker.
     job_deferred_minutes: Optional[float] = None
+    # How long ago the job reached its terminal status. None when it has not.
+    job_ended_minutes: Optional[float] = None
     job_last_error: Optional[str] = None
     # The job's OWN status. Decides whether requeueing can work: a job sitting at 'running'
     # with nobody on it is stranded and the UPDATE will free it; a job at 'queued' is already
@@ -183,12 +194,14 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
     # Every one of those was a guess about workers and leases while `job_status` sat in the
     # same row saying `deadlettered`. That is why this check reads the job's own verdict
     # first and infers nothing.
-    if snap.job_status in TERMINAL_JOB_STATUSES:
+    if (snap.job_status in TERMINAL_JOB_STATUSES
+            and snap.job_ended_minutes is not None
+            and snap.job_ended_minutes >= JOB_ENDED_GRACE_MINUTES):
         detail = snap.job_last_error or f"the job finished as `{snap.job_status}`"
         return WatchVerdict(
             JOB_ENDED,
             f"the job carrying this run ended as `{snap.job_status}` "
-            f"{snap.minutes_running:.0f} minutes ago and the run still says `{snap.phase}`: "
+            f"{snap.job_ended_minutes:.0f} minutes ago and the run still says `{snap.phase}`: "
             f"{detail}",
             action="fail", autonomous=True,
             evidence={**ev, "job_status": snap.job_status, "job_error": detail,

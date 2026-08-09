@@ -501,7 +501,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                    EXTRACT(EPOCH FROM (now() - r.created_at))/60.0 AS mins_running,
                    EXTRACT(EPOCH FROM (now() - r.updated_at))/60.0 AS mins_since_update,
                    r.created_at,
-                   j.lease_owner, j.ever_leased, j.deferred_mins, j.last_error_msg,
+                   j.lease_owner, j.ever_leased, j.deferred_mins, j.ended_mins, j.last_error_msg,
                    EXTRACT(EPOCH FROM (now() - COALESCE(j.heartbeat_at, j.created_at)))/60.0
                      AS mins_since_heartbeat,
                    j.status AS job_status
@@ -509,6 +509,7 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             LEFT JOIN LATERAL (
                 SELECT lease_owner, heartbeat_at, created_at, status,
                        EXTRACT(EPOCH FROM (run_after - now()))/60.0 AS deferred_mins,
+                       EXTRACT(EPOCH FROM (now() - updated_at))/60.0 AS ended_mins,
                        last_error->>'message' AS last_error_msg,
                        (lease_owner IS NOT NULL OR heartbeat_at IS NOT NULL) AS ever_leased
                 FROM jobs
@@ -573,6 +574,8 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             job_status=row["job_status"],
             job_deferred_minutes=(float(row["deferred_mins"])
                                   if row["deferred_mins"] is not None else None),
+            job_ended_minutes=(float(row["ended_mins"])
+                               if row["ended_mins"] is not None else None),
             job_last_error=row["last_error_msg"],
             was_leased=bool(row["ever_leased"]),
             minutes_since_any_lease=since_lease,

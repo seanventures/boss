@@ -76,24 +76,41 @@ def main() -> int:
     # `deadlettered` — they died with a 500 in July — and one had succeeded. Nothing was
     # waiting for a worker; the work ended 37 days ago and the run row was never told, so the
     # console kept showing "Queued — running…" and auto-refreshing every four seconds.
-    from boss_engine.services.shepherd_watch import JOB_ENDED, TERMINAL_JOB_STATUSES
+    from boss_engine.services.shepherd_watch import (
+        JOB_ENDED, JOB_ENDED_GRACE_MINUTES, TERMINAL_JOB_STATUSES)
     for status in sorted(TERMINAL_JOB_STATUSES):
         v = assess(snap(phase="queued", minutes_running=53941.0, minutes_since_update=53941.0,
-                        has_job=True, job_status=status, was_leased=False,
+                        has_job=True, job_status=status, job_ended_minutes=53941.0,
+                        was_leased=False,
                         has_live_worker=False, minutes_since_heartbeat=53941.0,
                         minutes_since_any_lease=None))
         check(f"a run whose job is `{status}` is closed out", v.klass == JOB_ENDED)
         check(f"  and never blamed on the worker ({status})", v.klass != STARVED)
     v = assess(snap(phase="queued", minutes_running=53941.0, minutes_since_update=53941.0,
-                    has_job=True, job_status="deadlettered", was_leased=False,
+                    has_job=True, job_status="deadlettered", job_ended_minutes=53941.0,
+                    was_leased=False,
                     job_last_error="Server error '500 Internal Server Error'",
                     has_live_worker=False, minutes_since_heartbeat=53941.0))
     check("the run quotes why the job died", "500" in v.reason)
     check("marked failed, autonomously", v.action == "fail" and permitted(v))
     # A terminal job outranks the timing heuristics: it is a fact, they are judgements.
     v = assess(snap(job_status="deadlettered", minutes_since_update=1.0,
-                    minutes_running=53941.0))
+                    minutes_running=53941.0, job_ended_minutes=53941.0))
     check("a fresh update does not hide a dead job", v.klass == JOB_ENDED)
+
+    # THE REGRESSION THIS GRACE PERIOD EXISTS FOR. Without it the shepherd closed a run two
+    # minutes after someone pressed Launch: the carrying job reports terminal the moment its
+    # own step finishes, while the run is still moving to its next phase. Killing work
+    # somebody just asked for is far worse than leaving a stale row one sweep longer.
+    v = assess(snap(phase="design", minutes_running=2.0, minutes_since_update=1.0,
+                    has_job=True, job_status="succeeded", job_ended_minutes=1.0))
+    check("a freshly launched run is NOT closed out", v.klass == HEALTHY)
+    v = assess(snap(phase="design", minutes_running=JOB_ENDED_GRACE_MINUTES - 1,
+                    minutes_since_update=1.0, has_job=True, job_status="succeeded",
+                    job_ended_minutes=JOB_ENDED_GRACE_MINUTES - 1))
+    check("nor one just under the grace period", v.klass == HEALTHY)
+    check("and a job that never ended has no end time to judge",
+          assess(snap(job_status="running", job_ended_minutes=None)).klass != JOB_ENDED)
 
     print("== stranded: the job says running and nobody is running it ==")
     # The exact shape goldeneye reported about itself: job present, status 'running', no
