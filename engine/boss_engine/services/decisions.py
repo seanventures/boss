@@ -29,6 +29,11 @@ class InvalidDecisionTransitionError(Exception):
     pass
 
 
+#: The actor recorded when a policy, not a person, resolves a gate. Deliberately not a member
+#: of any org: it must be impossible to sign in as, and obvious in an audit trail.
+SYSTEM_ACTOR = "auto_approval"
+
+
 class DecisionService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -264,6 +269,7 @@ class DecisionService:
         delegate_to: Optional[str] = None,
         external_ref: Optional[str] = None,
         force: bool = False,
+        system_policy: bool = False,
     ) -> dict:
         if action not in {"approve", "reject", "revise", "delegate", "execute"}:
             raise ValueError(f"Unsupported action: {action}")
@@ -277,15 +283,26 @@ class DecisionService:
         row = self.get_row(connection, decision_id, for_update=True)
         current_status = row["status"]
         timestamp = now_utc()
-        self.members.require_decision_actor(
-            connection,
-            row["project_id"],
-            actor,
-            action=action,
-            risk_tier=row["risk_tier"],
-            delegate_to=delegate_to,
-            delegated_to=row.get("delegated_to"),
-        )
+        # A policy resolving a gate is not a person acting, and member validation asks the
+        # wrong question of it: SYSTEM_ACTOR is deliberately not an org member, so requiring
+        # membership would have silently disabled every policy-driven approval.
+        #
+        # Narrow on purpose. Only an approval, only under the reserved actor name, only when
+        # the caller states it is policy — anything else still needs a member with
+        # decision_resolve. The row records SYSTEM_ACTOR either way, so an auditor can always
+        # separate the approvals a person made from the ones a setting made.
+        if system_policy and action == "approve" and actor == SYSTEM_ACTOR:
+            pass
+        else:
+            self.members.require_decision_actor(
+                connection,
+                row["project_id"],
+                actor,
+                action=action,
+                risk_tier=row["risk_tier"],
+                delegate_to=delegate_to,
+                delegated_to=row.get("delegated_to"),
+            )
 
         if action in {"approve", "reject", "revise", "delegate"}:
             if current_status not in {"pending", "delegated"}:

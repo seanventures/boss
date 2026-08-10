@@ -636,11 +636,12 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     # reader can always tell which approvals a human made. The follow-on (start the governed
     # build) is the same code path a human approval runs.
     if getattr(settings, "meeting_prd_auto_approve", False):
-        from .decisions import DecisionService
+        from .decisions import SYSTEM_ACTOR, DecisionService
 
         try:
             DecisionService(settings).transition(
-                connection, decision_id, action="approve", actor="auto_approval",
+                connection, decision_id, action="approve", actor=SYSTEM_ACTOR,
+                system_policy=True,
                 note="Approved automatically: the agent panel reviewed and drafted this PRD. "
                      "Set BOSS_MEETING_PRD_AUTO_APPROVE=false to require a human approval.")
         except Exception as error:  # noqa: BLE001
