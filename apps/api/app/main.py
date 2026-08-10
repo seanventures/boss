@@ -5437,7 +5437,9 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
     Telling them beforehand is the difference between a guard and an interface.
     """
     from boss_engine.services.benchmark_apps import benchmark_task_input, list_benchmark_apps
-    from boss_engine.services.meeting_service import completed_work_for, meeting_fingerprint
+    from boss_engine.services.meeting_service import (
+        completed_benchmark_build, meeting_fingerprint,
+    )
 
     apps = list_benchmark_apps()
     if not project_id or not database_is_reachable(engine):
@@ -5446,15 +5448,20 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
         for app_entry in apps:
             try:
                 directive = benchmark_task_input(app_entry["id"])["instructions"]
-                done = completed_work_for(
-                    c, project_id, meeting_fingerprint(project_id, directive, ""))
+                done = completed_benchmark_build(
+                    c, project_id, app_entry["id"],
+                    meeting_fingerprint(project_id, directive, ""),
+                    name=app_entry.get("name"))
             except Exception:  # noqa: BLE001 - a catalog read must never fail on one entry
                 done = None
-            if done and done.get("run_id"):
+            if done:
                 app_entry["built"] = {
                     "run_id": done["run_id"],
                     "run_status": done["run_status"],
                     "pull_request_url": done["pull_request_url"],
+                    "preview_id": done["preview_id"],
+                    "preview_url": done["preview_url"],
+                    "matched_on": done["matched_on"],
                 }
     return {"benchmark_apps": apps}
 
@@ -5488,7 +5495,7 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     # comparing the two paths.
     if str((payload or {}).get("route") or "meeting").lower() == "meeting":
         from boss_engine.services.meeting_service import (
-            completed_work_for, convene_prd_meeting_core, meeting_fingerprint,
+            completed_benchmark_build, convene_prd_meeting_core, meeting_fingerprint,
         )
 
         # Refuse to silently rebuild something that already exists.
@@ -5502,10 +5509,11 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
         # available and now has to be asked for: `force`.
         if not (payload or {}).get("force"):
             with begin(engine) as c:
-                done = completed_work_for(
-                    c, project_id,
-                    meeting_fingerprint(project_id, task["instructions"], ""))
-            if done and done.get("run_id"):
+                done = completed_benchmark_build(
+                    c, project_id, benchmark_id,
+                    meeting_fingerprint(project_id, task["instructions"], ""),
+                    name=task["benchmark"].get("name"))
+            if done:
                 return {
                     "status": "already_built",
                     **done,

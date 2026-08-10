@@ -383,38 +383,94 @@ def active_duplicate_meeting(connection, project_id: str, fingerprint: str):
     return (row["id"], row["task_id"]) if row else (None, None)
 
 
-def completed_work_for(connection, project_id: str, fingerprint: str):
-    """Work on this exact subject that has ALREADY been done, if any.
+def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
+                              fingerprint: Optional[str] = None,
+                              name: Optional[str] = None):
+    """The finished build of THIS benchmark in this project, however it was started.
 
-    Distinct from active_duplicate_meeting, which asks "is this happening right now" and only
-    protects against a double-click. Nothing asked "has this already been built", so pressing
-    Launch on a finished benchmark quietly convened a fresh panel, published another PRD and
-    started another build: twenty minutes and several dollars to produce a second copy of
-    something the operator already had, with no indication that was what the click meant.
+    Keyed on what the work IS, not on how it was launched. The first version of this asked
+    "is there a completed meeting whose directive fingerprint matches", which recognised only
+    benchmarks convened through the panel with the exact canonical wording. BugBox matched;
+    ApproveIt did not, because it had been built through the older direct route and through
+    meetings carrying an operator's own phrasing. The mechanism was general and its key was
+    not, which is the same thing as not being general.
 
-    Returns the finished meeting and, when there is one, the code run it produced -- so the
-    caller can offer what exists rather than making it again.
+    Both routes already record the benchmark's identity, so both are asked:
+      direct   code_task_runs.finalize_ctx -> qa_benchmark -> id
+      panel    meeting_runs.constraints -> benchmark_id, joined by task
+      subject  the meeting's directive fingerprint, for work convened on the same subject
+               without the benchmark label
+      name     the app's name in the run title, for work built from a hand-written PRD
+
+    Four keys because each recognises a route the others miss. ApproveIt was built through a
+    PRD meeting typed in the Meeting Room, so it carries no benchmark id, no launch-endpoint
+    constraint and no canonical fingerprint -- nothing in that work records "this is
+    ApproveIt" except its name. Keying only on the labels BOSS happens to stamp meant the card
+    said "Launch ApproveIt" over an ApproveIt that plainly existed.
+
+    The name key is deliberately last and deliberately weaker. Being wrong costs an operator a
+    "View" button pointing at a similarly-named app, with "Build it again" beside it -- unlike
+    the identity questions elsewhere in this codebase, where guessing once deployed the wrong
+    application to a real host. `matched_on` records which key fired so the answer can be
+    doubted where it should be.
+
+    Three keys rather than one because each recognises a route the others miss, and a card
+    that says "Launch" over an app that already exists is the failure being fixed.
+
+    Returns the newest COMPLETED run and its live preview, or None. A failed run is not work
+    that exists: reporting one made a card offer to show a build that had died.
     """
     row = connection.execute(
-        text("SELECT id, task_id FROM meeting_runs "
-             "WHERE project_id = :p AND status IN ('completed', 'done') "
-             "  AND finalize_ctx->>'meeting_fingerprint' = :fp "
-             "ORDER BY created_at DESC LIMIT 1"),
-        {"p": project_id, "fp": fingerprint}).mappings().first()
+        text("""
+            SELECT r.id, r.status, r.pull_request_url, r.title, r.task_id,
+                   CASE
+                     WHEN r.finalize_ctx->'qa_benchmark'->>'id' = :b THEN 'benchmark_id'
+                     WHEN m.constraints->>'benchmark_id' = :b THEN 'launched_as_benchmark'
+                     WHEN CAST(:fp AS TEXT) IS NOT NULL
+                          AND m.finalize_ctx->>'meeting_fingerprint' = CAST(:fp AS TEXT)
+                       THEN 'same_subject'
+                     ELSE 'name'
+                   END AS matched_on
+            FROM code_task_runs r
+            LEFT JOIN meeting_runs m ON m.task_id = r.task_id
+            WHERE r.project_id = :p
+              AND r.status = 'completed'
+              AND (r.finalize_ctx->'qa_benchmark'->>'id' = :b
+                   OR m.constraints->>'benchmark_id' = :b
+                   OR (CAST(:fp AS TEXT) IS NOT NULL
+                       AND m.finalize_ctx->>'meeting_fingerprint' = CAST(:fp AS TEXT))
+                   OR (CAST(:nm AS TEXT) IS NOT NULL
+                       AND r.title ILIKE CAST(:nm_like AS TEXT)))
+            -- Strong signals first: a name match must never shadow a labelled one.
+            ORDER BY (CASE
+                        WHEN r.finalize_ctx->'qa_benchmark'->>'id' = :b THEN 0
+                        WHEN m.constraints->>'benchmark_id' = :b THEN 1
+                        WHEN CAST(:fp AS TEXT) IS NOT NULL
+                             AND m.finalize_ctx->>'meeting_fingerprint' = CAST(:fp AS TEXT)
+                          THEN 2
+                        ELSE 3
+                      END) ASC,
+                     r.created_at DESC
+            LIMIT 1"""),
+        {"p": project_id, "b": benchmark_id, "fp": fingerprint,
+         "nm": name, "nm_like": f"%{name}%" if name else None}).mappings().first()
     if row is None:
         return None
-    built = connection.execute(
-        text("SELECT id, status, pull_request_url, title FROM code_task_runs "
-             "WHERE project_id = :p AND task_id = :t "
-             "ORDER BY (status = 'completed') DESC, created_at DESC LIMIT 1"),
-        {"p": project_id, "t": row["task_id"]}).mappings().first()
+    preview = connection.execute(
+        text("SELECT id, url, status FROM app_previews "
+             "WHERE project_id = :p AND run_id = :r AND status IN ('running', 'starting') "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "r": row["id"]}).mappings().first()
     return {
-        "meeting_run_id": row["id"],
+        "run_id": row["id"],
+        "run_status": row["status"],
+        "matched_on": row["matched_on"],
+        "pull_request_url": row["pull_request_url"],
+        "title": row["title"],
         "task_id": row["task_id"],
-        "run_id": built["id"] if built else None,
-        "run_status": built["status"] if built else None,
-        "pull_request_url": built["pull_request_url"] if built else None,
-        "title": built["title"] if built else None,
+        "preview_id": preview["id"] if preview else None,
+        "preview_url": preview["url"] if preview else None,
+        "preview_status": preview["status"] if preview else None,
     }
 
 

@@ -24,7 +24,7 @@ CODE = "\n".join(ln for ln in SOURCE.splitlines() if not ln.lstrip().startswith(
 
 
 def test_launch_checks_whether_the_work_already_exists():
-    assert "completed_work_for" in CODE
+    assert "completed_benchmark_build" in CODE
 
 
 def test_it_answers_with_the_existing_build_instead_of_starting_one():
@@ -47,11 +47,35 @@ def test_the_lookup_finds_finished_work_not_running_work():
     """The distinction the original guard missed entirely."""
     from boss_engine.services import meeting_service
 
-    source = inspect.getsource(meeting_service.completed_work_for)
-    assert "'completed'" in source
-    # and it reports the build, so the caller can offer it
-    assert "code_task_runs" in source
+    source = inspect.getsource(meeting_service.completed_benchmark_build)
+    assert "r.status = 'completed'" in source
     assert "pull_request_url" in source
+
+
+def test_a_failed_build_is_not_reported_as_built():
+    """It ordered completed-first and still took the newest row when there was none, so a
+    benchmark whose build was KILLED reported itself built -- and "View BugBox" landed the
+    operator on the failure."""
+    from boss_engine.services import meeting_service
+
+    source = inspect.getsource(meeting_service.completed_benchmark_build)
+    assert "AND r.status = 'completed'" in source
+    assert "if row is None:" in source
+
+
+def test_the_lookup_is_keyed_on_the_app_not_on_how_it_was_launched():
+    """The first version keyed on the meeting's directive fingerprint, so it recognised only
+    benchmarks convened through the panel with the canonical wording. ApproveIt -- built from
+    a PRD meeting typed by hand -- carried none of that and showed "Launch" over an app that
+    plainly existed."""
+    from boss_engine.services import meeting_service
+
+    source = inspect.getsource(meeting_service.completed_benchmark_build)
+    for key in ("qa_benchmark", "benchmark_id", "meeting_fingerprint", "ILIKE"):
+        assert key in source, key
+    # And the weak key must never outrank a labelled one.
+    assert "ORDER BY (CASE" in source
+    assert "matched_on" in source
 
 
 def test_the_in_flight_guard_is_still_there_for_double_clicks():
@@ -83,7 +107,7 @@ def test_the_catalog_reports_which_benchmarks_are_already_built():
     confusion one step later. The catalog now carries `built`, so the card can say so at rest.
     """
     catalog = inspect.getsource(api_main.list_qa_benchmark_apps_endpoint)
-    assert "completed_work_for" in catalog
+    assert "completed_benchmark_build" in catalog
     assert "project_id" in catalog
     # A catalog read must not fail because one entry could not be resolved.
     assert "except Exception" in catalog

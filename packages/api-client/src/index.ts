@@ -1104,6 +1104,12 @@ export type QaBenchmarkApp = {
     run_id: string;
     run_status?: string;
     pull_request_url?: string | null;
+    /** A live preview of the built app, when one is running. "View" should go HERE: a run
+     *  page shows a pipeline, and someone asking to see the app means the app. */
+    preview_id?: string | null;
+    preview_url?: string | null;
+    /** Which signal identified this as the benchmark's build; `name` is the weakest. */
+    matched_on?: string;
   };
 };
 

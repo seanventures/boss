@@ -382,6 +382,10 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   // render, so the card never invites a press whose only effect would be a second copy. The
   // guard behind the button covers an API caller; this covers the person looking at it.
   const alreadyBuilt = benchmark.built?.run_id ?? null;
+  // Prefer the running app over its pipeline page. "View BugBox" that opens a run -- and, when
+  // the lookup was reporting failures as builds, a FAILED run -- answers a question nobody
+  // asked. The run stays reachable from the card; the app is what "view" means.
+  const builtPreviewUrl = benchmark.built?.preview_url ?? null;
 
   // `force` is the difference between "build this" and "build it AGAIN". It is only ever set
   // by the second, explicit control -- so a plain press can never spend a second build.
@@ -416,11 +420,19 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
         // The work already exists. Offering it is the useful answer; building a second copy
         // is still possible and now has to be asked for by name.
         <>
-          <button className="cap-btn primary"
-                  onClick={() => onOpen?.((startedId || alreadyBuilt) as string)}
-                  title="Open the build that already exists">
-            View {benchmark.name} →
-          </button>
+          {builtPreviewUrl ? (
+            <a className="cap-btn primary" href={builtPreviewUrl}
+               target="_blank" rel="noreferrer"
+               title="Open the running app">
+              View {benchmark.name} →
+            </a>
+          ) : (
+            <button className="cap-btn primary"
+                    onClick={() => onOpen?.((startedId || alreadyBuilt) as string)}
+                    title="No preview is running; open the completed build instead">
+              View {benchmark.name} →
+            </button>
+          )}
           <button className="cap-btn" disabled={sent} onClick={() => void launch(true)}
                   title="Convene a new panel and build a second copy — this costs a full run">
             {sent ? "Starting…" : "Build it again"}
@@ -449,8 +461,11 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
         {sent ? "starting…"
               : failed ? failed
               : (startedId && startedKind === "existing") || (!startedId && alreadyBuilt)
-                ? "already built in this project — opening it costs nothing; building again "
-                  + "runs the whole panel and pipeline"
+                ? (builtPreviewUrl
+                    ? "already built — this opens the running app; building again runs the "
+                      + "whole panel and pipeline"
+                    : "already built — no preview is running, so this opens the completed "
+                      + "build; start a preview from there to see the app")
               : startedId
                 ? (startedKind === "meeting"
                     ? `panel convened ${startedId.slice(0, 13)}… — it drafts a PRD, approves it `
