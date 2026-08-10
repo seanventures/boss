@@ -195,16 +195,27 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
     root = make_id("crun")
     seeded = seed_web_scaffold(settings, work_branch=f"boss/code/{root}", name=(repo or "app"))
     instructions = (
-        "A buildable Vite + React + TypeScript + Tailwind + shadcn-style scaffold ALREADY EXISTS on "
-        "this branch: package.json (scripts: dev='vite --host', build='tsc -b && vite build', "
-        "typecheck, lint, test:e2e), vite.config.ts, tailwind.config.ts, tsconfig.json, index.html, "
-        "src/main.tsx, src/App.tsx (placeholder), src/index.css (design tokens), src/lib/utils.ts "
-        "(cn), src/components/ui/button.tsx + card.tsx. Do NOT re-init the project or edit the "
-        "config/build files.\n\n"
-        "Build the WHOLE feature ON this scaffold in a FEW focused files (aim for < 8 new files): "
-        "put types/logic under src/lib/, presentational pieces under src/components/, and WIRE the "
-        "finished feature into src/App.tsx so `npm run dev` shows the working app. `npm run build` "
-        "MUST pass.\n\n"
+        "A buildable FULL-STACK scaffold ALREADY EXISTS on this branch. Do NOT re-init the "
+        "project, change the stack, or edit the config/build files.\n\n"
+        "FRONTEND: Vite + React + TypeScript + Tailwind + shadcn-style — index.html, "
+        "src/main.tsx, src/App.tsx (a working example, replace it), src/index.css (design "
+        "tokens), src/lib/utils.ts (cn), src/components/ui/button.tsx + card.tsx.\n"
+        "BACKEND: server/index.js (Express: serves the built frontend AND /api from ONE "
+        "process), server/db.js (better-sqlite3, migrate() + idempotent seed()), "
+        "server/migrations/001_init.sql. `npm start` runs the whole app; `npm run dev` runs "
+        "both halves; `npm run verify` = typecheck + build + end-to-end tests.\n\n"
+        "THE BACKEND IS NOT OPTIONAL. If the app stores ANYTHING — records, requests, "
+        "submissions, state a user expects to still be there tomorrow — it goes in the "
+        "database through the server. Extend the worked example: rename the `items` table to "
+        "your domain in a NEW migration, add the routes it needs, and have the React code call "
+        "them with fetch. Do NOT keep application data in useState and do NOT use "
+        "localStorage as the store.\n\n"
+        "Why this is stated so plainly: an expense-approval app was built here whose approvals "
+        "vanished when the tab closed. It looked complete and was not. Data that does not "
+        "survive a page reload is the single most common way these builds fail.\n\n"
+        "Build the feature in a FEW focused files: types/logic under src/lib/, presentational "
+        "pieces under src/components/, API routes in server/, and WIRE it into src/App.tsx. "
+        "`npm run verify` MUST pass.\n\n"
         "VISUAL DESIGN — match the brand's PERSONALITY, do not default to plain corporate:\n"
         "• You MAY (and for a creative/portfolio/design/events/food/kids brand you SHOULD) RETHEME "
         "the palette by editing the design tokens in src/index.css — change --accent and add extra "
@@ -225,16 +236,15 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
         "the URL in a clearly-marked config const (e.g. STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/"
         "test_XXXX') for the owner to replace. NO backend needed. (Only if a real cart/dynamic price "
         "is required, note that a serverless checkout endpoint would be a follow-up.)\n"
-        "• DATABASE / PERSISTENCE (Supabase): if the app must SAVE data (leads, quote/booking "
-        "requests, form submissions, results) use Supabase (`@supabase/supabase-js`, add it to "
-        "package.json) — a hosted Postgres the frontend talks to DIRECTLY, NO backend server. Put "
-        "the keys in clearly-marked consts for the owner to replace:\n"
-        "    const SUPABASE_URL = 'https://YOUR_PROJECT.supabase.co'; // TODO owner replaces\n"
-        "    const SUPABASE_ANON_KEY = 'YOUR_ANON_KEY'; // TODO owner replaces\n"
-        "  Create the client and `insert` submissions into a table (e.g. 'leads'). CRITICAL: if the "
-        "keys are still the YOUR_… placeholders, DO NOT call Supabase — keep the mock success state "
-        "so the app still builds and works out of the box; only hit the DB once real keys are set. "
-        "Leave a code comment noting the SQL for the table the owner should create.\n\n"
+        # This bullet used to send the agent to a hosted Postgres addressed directly from the
+        # browser with placeholder keys, and told it to fall back to a "mock success state"
+        # while those keys were unset -- an instruction to build an app that only pretends to
+        # save, which is precisely what shipped. The history belongs here and NOT in the text
+        # below: quoting the old anti-pattern into the prompt puts the idea back in front of
+        # the model we are trying to steer away from it.
+        "• DATABASE / PERSISTENCE: use the SQLite database already on this branch, through the "
+        "server. It needs no keys, no signup and no configuration, and it works the moment the "
+        "app starts. Add a migration for your tables, and routes that read and write them.\n\n"
         "THE APP TO BUILD:\n" + directive)
     with begin(engine) as c:
         run_id = start_code_task(
@@ -242,13 +252,18 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
             title=("Web app — " + directive[:70]).strip(),
             instructions=instructions,
             acceptance_criteria=[
-                "npm run build passes (tsc clean + vite production build).",
+                "npm run verify passes (typecheck, production build, and end-to-end tests).",
                 "The app renders a working, professional UI wired into src/App.tsx; the core "
                 "interaction produces a correct, sensible result on screen.",
+                # The criterion the previous set was missing entirely, which is how an app that
+                # forgot everything on reload satisfied all three of them.
+                "Data the user creates is stored server-side and is still there after a full "
+                "page reload; application state is NOT held only in React state.",
+                "An end-to-end test covers create -> reload -> the data is still present.",
                 "Only a handful of new files were added on top of the scaffold; config/build files "
                 "were not rewritten.",
             ],
-            test_commands=["npm run build"], owner=owner, repo=repo,
+            test_commands=["npm run verify"], owner=owner, repo=repo,
             base_branch=f"boss/code/{root}",
             finalize_ctx={"root_run_id": root, "web_app_build": True},
             # tier 0 (review=False): implement ONLY — no design, no separate write_tests stage
