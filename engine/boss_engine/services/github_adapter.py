@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import base64
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 from urllib.parse import quote
 
 import httpx
@@ -492,14 +495,41 @@ class GitHubAdapter:
         except httpx.HTTPStatusError:
             return False
 
-    def ensure_branch(self, branch_name: str) -> str:
+    def ensure_branch(self, branch_name: str, base_branch: Optional[str] = None) -> str:
+        """Return the branch's sha, creating it from `base_branch` if it does not exist.
+
+        This always cut new branches from the DEFAULT branch, whatever the task said its base
+        was. Continuing work on an app therefore silently restarted it: the sandbox checked out
+        the app's branch, but the branch the commits landed on began at main, so the existing
+        application was not there and the agent wrote it again from nothing. The run reported
+        success and the PR looked plausible -- it was simply a different app.
+
+        It went unnoticed because the common case hides it. A follow-up that carries its
+        lineage targets a branch that ALREADY exists, so this returns early and never reaches
+        the creation path. Only a task with a fresh root and an explicit base_branch fell
+        through to it, which is exactly the "change this existing app" case.
+        """
         try:
             ref = self._request(
                 "GET", f"/repos/{self.repository_full_name}/git/ref/heads/{branch_name}"
             )
             return ref["object"]["sha"]
         except httpx.HTTPStatusError:
-            _, base_sha = self.default_branch_sha()
+            base_sha = None
+            if base_branch and base_branch != branch_name:
+                try:
+                    base_ref = self._request(
+                        "GET",
+                        f"/repos/{self.repository_full_name}/git/ref/heads/{base_branch}")
+                    base_sha = base_ref["object"]["sha"]
+                except httpx.HTTPStatusError:
+                    # A base that does not exist is a caller error, but failing the run over it
+                    # is worse than starting from the default branch and saying so.
+                    logger.warning(
+                        "github: base branch %s not found in %s; creating %s from the default "
+                        "branch instead", base_branch, self.repository_full_name, branch_name)
+            if base_sha is None:
+                _, base_sha = self.default_branch_sha()
             ref = self._request(
                 "POST",
                 f"/repos/{self.repository_full_name}/git/refs",

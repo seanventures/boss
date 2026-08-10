@@ -1421,7 +1421,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         nonlocal guest_base
         if not files:
             return
-        sf.github.ensure_branch(work_branch)
+        sf.github.ensure_branch(work_branch, base_branch)
         for fc in files:
             sf.github.upsert_file(work_branch, fc.path, fc.content, message)
             accumulated[fc.path] = fc.content
@@ -1605,7 +1605,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if not files:
             return 0
         try:
-            sf.github.ensure_branch(work_branch)
+            sf.github.ensure_branch(work_branch, base_branch)
             for fc in files:
                 sf.github.upsert_file(work_branch, fc.path, fc.content,
                                       f"governed: checkpoint after {label} — {title[:50]}")
@@ -3019,7 +3019,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     _files = (list(accumulated.items()) if use_microvm
                               else [(fc.path, fc.content) for fc in sandbox.diff()])
                     if _files:
-                        sf.github.ensure_branch(work_branch)
+                        sf.github.ensure_branch(work_branch, base_branch)
                         for _path, _content in _files:
                             sf.github.upsert_file(
                                 work_branch, _path, _content,
