@@ -134,6 +134,25 @@ ENV NEXT_PUBLIC_BOSS_API_URL=$NEXT_PUBLIC_BOSS_API_URL \
 
 COPY apps/web ./apps/web
 COPY packages/api-client ./packages/api-client
+
+# Refuse to build a console that cannot reach a control plane.
+#
+# NEXT_PUBLIC_* values are compiled into the bundle, so omitting this arg produces an image
+# that builds, pushes and deploys without a single complaint, then greets every operator with
+# "Reconnecting to the control plane…". The failure is a twenty-minute round trip away from
+# its cause. Omitting one build flag should not be that expensive.
+#
+# Deployments that intentionally supply the address at runtime instead (Kubernetes sets
+# BOSS_API_URL on the server, which the client honours) say so explicitly rather than by
+# leaving the value blank.
+ARG ALLOW_UNSET_API_URL=
+RUN if [ -z "$NEXT_PUBLIC_BOSS_API_URL" ] && [ -z "$ALLOW_UNSET_API_URL" ]; then \
+      echo "ERROR: NEXT_PUBLIC_BOSS_API_URL is empty." >&2; \
+      echo "  Pass --build-arg NEXT_PUBLIC_BOSS_API_URL=https://boss-api.local.sean.network" >&2; \
+      echo "  or --build-arg ALLOW_UNSET_API_URL=1 if BOSS_API_URL is set at runtime." >&2; \
+      exit 1; \
+    fi
+
 RUN pnpm --filter boss-web build
 
 FROM node:20-bookworm-slim AS web
