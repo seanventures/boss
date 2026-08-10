@@ -367,12 +367,14 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
  * the whole fix, and it is the same fix the delivery buttons needed.
  */
 function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRepo,
-                          onLaunched, onOpen, startedId, failed }: {
+                          onLaunched, onOpen, startedId, startedKind, failed }: {
   benchmark: QaBenchmarkApp; projectId: string; actor: string;
   defaultOwner?: string; defaultRepo?: string;
   startedId?: string | null; failed?: string | null;
+  startedKind?: "meeting" | "code" | null;
   onOpen?: (runId: string) => void;
-  onLaunched?: (key: string, runId?: string, error?: string) => void | Promise<void>;
+  onLaunched?: (key: string, runId?: string, error?: string,
+                kind?: "meeting" | "code") => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
 
@@ -384,13 +386,14 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
     data.set("benchmark_id", benchmark.id);
     data.set("owner", defaultOwner ?? "");
     data.set("repo", defaultRepo ?? "");
-    let out: { run_id?: string; error?: string } | undefined;
+    let out: { run_id?: string; kind?: "meeting" | "code"; error?: string } | undefined;
     try {
       out = await startQaBenchmarkAppAction(data);
     } finally {
       setSent(false);
       await onLaunched?.(benchmark.id, out?.run_id,
-                         out?.run_id ? undefined : (out?.error ?? "the API returned no run"));
+                         out?.run_id ? undefined : (out?.error ?? "the API returned no run"),
+                         out?.kind);
     }
   };
 
@@ -400,10 +403,19 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
           state lives in the PARENT: held here it was destroyed by the reload the launch
           triggers, so the button reverted and the operator saw nothing happen. */}
       {startedId ? (
-        <button className="cap-btn primary" onClick={() => onOpen?.(startedId)}
-                title="Open the run this launched">
-          View run →
-        </button>
+        startedKind === "meeting" ? (
+          // A meeting run id means nothing to the code-task viewer. Send people to the panel
+          // that is actually running, rather than to a viewer that renders nothing.
+          <a className="cap-btn primary" href="?area=meetings"
+             title="Open the panel this launched">
+            View meeting →
+          </a>
+        ) : (
+          <button className="cap-btn primary" onClick={() => onOpen?.(startedId)}
+                  title="Open the run this launched">
+            View run →
+          </button>
+        )
       ) : (
         <button className="cap-btn primary" disabled={sent} onClick={() => void launch()}>
           {sent ? "Starting…" : `Launch ${benchmark.name}`}
@@ -413,12 +425,15 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
         {sent ? "starting…"
               : failed ? failed
               : startedId
-                ? `started ${startedId.slice(0, 13)}… — it builds the app before there is `
-                  + `anything to preview`
+                ? (startedKind === "meeting"
+                    ? `panel convened ${startedId.slice(0, 13)}… — it drafts a PRD, approves it `
+                      + `automatically, then builds`
+                    : `started ${startedId.slice(0, 13)}… — it builds the app before there is `
+                      + `anything to preview`)
                 // The profile the endpoint actually asks for. It said "Strict" while the
                 // endpoint had been changed to balanced — a caption describing a decision
                 // made somewhere else, which is how it was wrong in the first place.
-                : "Balanced profile · full review, findings attached to the PR"}
+                : "Convenes the PRD panel first, then builds · balanced profile"}
       </span>
     </div>
   );
@@ -568,8 +583,9 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
   defaultRepo?: string;
   // Held by CodeTasksHome, keyed by benchmark id, because a launch reloads the list and any
   // state inside these cards goes with it.
-  launched?: Record<string, { run_id?: string; error?: string }>;
-  onLaunched?: (key: string, runId?: string, error?: string) => void | Promise<void>;
+  launched?: Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" }>;
+  onLaunched?: (key: string, runId?: string, error?: string,
+                kind?: "meeting" | "code") => void | Promise<void>;
   onOpen?: (runId: string) => void;
 }) {
   if (!benchmarks.length) return null;
@@ -595,6 +611,7 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
                              defaultOwner={defaultOwner} defaultRepo={defaultRepo}
                              onLaunched={onLaunched} onOpen={onOpen}
                              startedId={launched?.[benchmark.id]?.run_id}
+                             startedKind={launched?.[benchmark.id]?.kind}
                              failed={launched?.[benchmark.id]?.error} />
           </article>
         ))}
@@ -1036,11 +1053,14 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   // button again.
   // What each card has launched, keyed by the card's own run id. Held here because the list
   // re-renders after a launch and any state inside a card is lost with it.
-  const [launched, setLaunched] = useState<Record<string, { run_id?: string; error?: string }>>({});
+  const [launched, setLaunched] = useState<
+    Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" }>
+  >({});
   const [tasks, setTasks] = useState<CodeTaskRun[]>(codeTasks);
   useEffect(() => { setTasks(codeTasks); }, [codeTasks]);
-  const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string) => {
-    setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error } }));
+  const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string,
+                                        kind?: "meeting" | "code") => {
+    setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error, kind } }));
     await reloadRef.current?.();
   }, []);
 

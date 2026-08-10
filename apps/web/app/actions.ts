@@ -2457,7 +2457,7 @@ export async function getQaBenchmarkReportAction(runId: string) {
 
 export async function startQaBenchmarkAppAction(
   formData: FormData,
-): Promise<{ run_id?: string; error?: string }> {
+): Promise<{ run_id?: string; kind?: "meeting" | "code"; error?: string }> {
   const projectId = getProjectId(formData);
   const benchmarkId = String(formData.get("benchmark_id") ?? "").trim();
   if (!benchmarkId) return { error: "no benchmark named" };
@@ -2477,7 +2477,14 @@ export async function startQaBenchmarkAppAction(
     // to "Launch ApproveIt" with nothing on screen having changed. That is the same defect
     // fixed for the relaunch button — and left in its sibling, which is how it reached an
     // operator who had been waiting hours to press it.
-    return { run_id: (started as { run_id?: string })?.run_id };
+    // Launch now convenes a PRD panel first, so the id can be a MEETING run. Saying which
+    // kind matters: handing an mrun_ id to the code-task viewer opens nothing, and "View run
+    // ->" that opens nothing is the failure mode this button has already had twice.
+    const out = started as { run_id?: string; status?: string };
+    return {
+      run_id: out?.run_id,
+      kind: out?.status === "meeting_convened" ? "meeting" : "code",
+    };
   } catch (e) {
     // A silent throw here is indistinguishable from a dead button. Say what happened.
     return { error: e instanceof Error ? e.message : String(e) };

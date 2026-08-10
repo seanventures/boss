@@ -141,8 +141,11 @@ describe("BOSS mission-control design system", () => {
     // which is exactly how it came to be wrong. It must name what the endpoint requests.
     const benchmark = codeTasks.slice(codeTasks.indexOf("function BenchmarkLaunch"),
                                       codeTasks.indexOf("function LaunchTask"));
-    expect(benchmark).not.toContain("Strict profile");
-    expect(benchmark).toContain("Balanced profile");
+    expect(benchmark).not.toMatch(/strict profile/i);
+    // Names the profile the endpoint actually requests, in whatever wording the caption uses
+    // -- pinning the exact sentence made this fail when the caption gained the PRD-panel step,
+    // which is a change to the copy, not a return of the defect.
+    expect(benchmark).toMatch(/balanced profile/i);
     const api = readFileSync(resolve(__dirname, "../../../apps/api/app/main.py"), "utf8");
     expect(api).toContain('(payload or {}).get("profile") or "balanced"');
   });
