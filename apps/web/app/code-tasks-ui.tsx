@@ -385,7 +385,14 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   // Prefer the running app over its pipeline page. "View BugBox" that opens a run -- and, when
   // the lookup was reporting failures as builds, a FAILED run -- answers a question nobody
   // asked. The run stays reachable from the card; the app is what "view" means.
-  const builtPreviewUrl = benchmark.built?.preview_url ?? null;
+  //
+  // Built from the preview ID through the gateway, NEVER from app_previews.url: that column
+  // holds the sandbox-internal address (http://127.0.0.1:43053), which is unreachable from a
+  // browser. Handing it out is where the agent's advice to "open http://127.0.0.1:46181" came
+  // from -- it read the column and repeated it faithfully.
+  const builtPreviewUrl = benchmark.built?.preview_id
+    ? `${PREVIEW_API}/v1/previews/${encodeURIComponent(benchmark.built.preview_id)}/web/`
+    : null;
 
   // `force` is the difference between "build this" and "build it AGAIN". It is only ever set
   // by the second, explicit control -- so a plain press can never spend a second build.

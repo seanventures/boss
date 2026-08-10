@@ -80,3 +80,17 @@ def test_the_preview_tool_reports_a_missing_preview_rather_than_inventing_one():
 def test_the_preview_tool_requires_an_id():
     out = tool("diagnose_preview")["fn"](None, "p", None, {})
     assert "required" in out["error"]
+
+
+def test_the_preview_tool_reports_an_address_a_person_can_open():
+    """app_previews.url is the sandbox-internal address. Repeating it is how an operator was
+    told to open http://127.0.0.1:46181 -- true of the machine, useless to them."""
+    import inspect
+
+    from boss_engine.services import agent_loop
+
+    source = inspect.getsource(agent_loop._tool_diagnose_preview)
+    assert '"open_url"' in source
+    assert "/v1/previews/" in source
+    # The internal address is still reported, but named as such.
+    assert '"internal_url"' in source

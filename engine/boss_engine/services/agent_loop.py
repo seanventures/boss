@@ -528,10 +528,18 @@ def _tool_diagnose_preview(connection, project_id, settings, args) -> dict:
 
     report: dict = {
         "preview_id": row["id"], "run_id": row["run_id"], "status": row["status"],
-        "mode": row["mode"], "url": row["url"],
+        "mode": row["mode"],
+        # The address a PERSON can open. app_previews.url holds the sandbox-internal one
+        # (http://127.0.0.1:43053), reachable from this process and from nowhere a browser
+        # runs. Reporting that column verbatim is exactly how an operator was told to open
+        # http://127.0.0.1:46181 -- true of the machine, useless to them.
+        "open_url": f"/v1/previews/{row['id']}/web/  (on the BOSS API host)",
+        "internal_url": row["url"],
         "failure_kind": row["failure_kind"], "error": (row["error"] or "")[:300],
     }
 
+    # Probed internally because that is what this process can reach; what gets REPORTED is
+    # open_url above.
     base = (row["url"] or "").rstrip("/")
     if not base:
         report["verdict"] = "the preview has no URL yet; it has not started serving."
