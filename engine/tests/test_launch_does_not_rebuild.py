@@ -73,8 +73,9 @@ def test_the_lookup_is_keyed_on_the_app_not_on_how_it_was_launched():
     source = inspect.getsource(meeting_service.completed_benchmark_build)
     for key in ("qa_benchmark", "benchmark_id", "meeting_fingerprint", "ILIKE"):
         assert key in source, key
-    # And the weak key must never outrank a labelled one.
-    assert "ORDER BY (CASE" in source
+    # The keys decide WHETHER a run is this app. They must not decide WHICH build to open:
+    # ranking by key strength made a well-labelled old build outrank the newer one the
+    # operator was actually using. Provenance is still reported so a weak match can be doubted.
     assert "matched_on" in source
 
 
@@ -120,3 +121,21 @@ def test_the_card_reads_that_state_before_any_click():
     text = ui.read_text()
     assert "benchmark.built?.run_id" in text
     assert "!startedId && alreadyBuilt" in text
+
+
+def test_view_opens_the_newest_build_not_the_best_labelled_one():
+    """"View ApproveIt" opened a superseded build.
+
+    The lookup ranked by how well-labelled a run was, which sounds principled and picked the
+    wrong app: the old `QA benchmark: ApproveIt` carries a benchmark id, so it outranked the
+    newer PRD-driven ApproveIt the operator wanted -- the one with a live preview and the pull
+    request they had open.
+
+    Key strength answers "is this the same app". It says nothing about WHICH build to open.
+    """
+    from boss_engine.services import meeting_service
+
+    source = inspect.getsource(meeting_service.completed_benchmark_build)
+    assert "ORDER BY (p.id IS NOT NULL) DESC, r.created_at DESC" in source
+    # The old ranking must be gone, not merely reordered around.
+    assert "WHEN r.finalize_ctx->'qa_benchmark'->>'id' = :b THEN 0" not in source

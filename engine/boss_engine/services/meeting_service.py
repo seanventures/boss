@@ -430,9 +430,15 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
                           AND m.finalize_ctx->>'meeting_fingerprint' = CAST(:fp AS TEXT)
                        THEN 'same_subject'
                      ELSE 'name'
-                   END AS matched_on
+                   END AS matched_on,
+                   p.id AS preview_id, p.url AS preview_url, p.status AS preview_status
             FROM code_task_runs r
             LEFT JOIN meeting_runs m ON m.task_id = r.task_id
+            LEFT JOIN LATERAL (
+                SELECT id, url, status FROM app_previews
+                WHERE run_id = r.id AND status IN ('running', 'starting')
+                ORDER BY created_at DESC LIMIT 1
+            ) p ON TRUE
             WHERE r.project_id = :p
               AND r.status = 'completed'
               AND (r.finalize_ctx->'qa_benchmark'->>'id' = :b
@@ -441,26 +447,20 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
                        AND m.finalize_ctx->>'meeting_fingerprint' = CAST(:fp AS TEXT))
                    OR (CAST(:nm AS TEXT) IS NOT NULL
                        AND r.title ILIKE CAST(:nm_like AS TEXT)))
-            -- Strong signals first: a name match must never shadow a labelled one.
-            ORDER BY (CASE
-                        WHEN r.finalize_ctx->'qa_benchmark'->>'id' = :b THEN 0
-                        WHEN m.constraints->>'benchmark_id' = :b THEN 1
-                        WHEN CAST(:fp AS TEXT) IS NOT NULL
-                             AND m.finalize_ctx->>'meeting_fingerprint' = CAST(:fp AS TEXT)
-                          THEN 2
-                        ELSE 3
-                      END) ASC,
-                     r.created_at DESC
+            -- A RUNNING PREVIEW first, then the most recent build.
+            --
+            -- This ranked by how well-labelled a run was, which sounds principled and picked
+            -- the wrong app: the old `QA benchmark: ApproveIt` carries a benchmark id, so it
+            -- outranked the newer PRD-driven ApproveIt that the operator actually wanted and
+            -- that had a live preview. Key strength answers "is this the same app"; it says
+            -- nothing about WHICH build to open, and using it for both meant "View" opened a
+            -- superseded one.
+            ORDER BY (p.id IS NOT NULL) DESC, r.created_at DESC
             LIMIT 1"""),
         {"p": project_id, "b": benchmark_id, "fp": fingerprint,
          "nm": name, "nm_like": f"%{name}%" if name else None}).mappings().first()
     if row is None:
         return None
-    preview = connection.execute(
-        text("SELECT id, url, status FROM app_previews "
-             "WHERE project_id = :p AND run_id = :r AND status IN ('running', 'starting') "
-             "ORDER BY created_at DESC LIMIT 1"),
-        {"p": project_id, "r": row["id"]}).mappings().first()
     return {
         "run_id": row["id"],
         "run_status": row["status"],
@@ -468,9 +468,9 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
         "pull_request_url": row["pull_request_url"],
         "title": row["title"],
         "task_id": row["task_id"],
-        "preview_id": preview["id"] if preview else None,
-        "preview_url": preview["url"] if preview else None,
-        "preview_status": preview["status"] if preview else None,
+        "preview_id": row["preview_id"],
+        "preview_url": row["preview_url"],
+        "preview_status": row["preview_status"],
     }
 
 
