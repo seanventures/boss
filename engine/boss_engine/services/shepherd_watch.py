@@ -42,6 +42,8 @@ STARVED = 5                 # never claimed by anyone — nothing is consuming t
 ABANDONED = 6               # no job exists at all: nothing will ever pick this up
 DEFERRED = 7                # the platform is holding it back on purpose, and said why
 JOB_ENDED = 8               # the job reached a terminal state; the run never noticed
+KILLED_BY_PLATFORM = 9      # the run died on infrastructure, not on a code verdict
+REPAIRABLE_VERDICT = 10     # the pipeline judged the code and the judgement can be worked on
 
 WATCH_NAMES = {
     HEALTHY: "healthy",
@@ -53,6 +55,8 @@ WATCH_NAMES = {
     ABANDONED: "abandoned — no job exists to carry it",
     DEFERRED: "deferred by policy",
     JOB_ENDED: "the job ended; the run never noticed",
+    KILLED_BY_PLATFORM: "killed by the platform, no verdict reached",
+    REPAIRABLE_VERDICT: "the pipeline judged the code; repairable",
 }
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +127,11 @@ class RunSnapshot:
     # with nobody on it is stranded and the UPDATE will free it; a job at 'queued' is already
     # claimable and requeueing changes nothing.
     job_status: Optional[str] = None
+    # Why the RUN itself failed, and how many times the platform has already killed this work.
+    # Absent for in-flight runs; the shepherd could not see failures at all until it was asked
+    # why it had not noticed one.
+    run_error: Optional[str] = None
+    platform_retries: int = 0
     # Does a job row exist at all? Distinct from "not claimed": a run whose job is gone can
     # never progress, no matter how long anyone waits.
     has_job: bool = True
@@ -164,6 +173,64 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
         "minutes_running": round(snap.minutes_running, 1),
         "minutes_since_update": round(snap.minutes_since_update, 1),
     }
+
+    # 0. It already failed, and the platform is why.
+    #
+    # Checked before everything else because it is not an inference: the run is terminal and
+    # its own error text says what happened. `exited 143` with empty output is a SIGTERM --
+    # the agent was killed mid-build, no gate ran, no verdict was reached. The work is simply
+    # unfinished, and the response is to run it again.
+    #
+    # The shepherd had no way to reach this conclusion. It queried `status IN (running,
+    # queued)`, so a failed run was outside its field of view entirely, and its vocabulary was
+    # cancel/requeue/fail/escalate -- no retry. It was built to unstick live work and was
+    # therefore structurally unable to respond to work that had already died.
+    if snap.status == "failed":
+        if is_code_verdict(snap.run_error):
+            # A verdict is repairable, so it is fixed rather than filed.
+            #
+            # This first returned "none" here, reasoning that a retry reruns the same thinking
+            # over the same code. That was wrong about what a retry IS: retry_code_task carries
+            # the failing gates forward and resumes on the branch the attempt already wrote, so
+            # the next agent starts FROM the failure. Declining to retry threw that away and
+            # left a fixable run sitting for a person.
+            if snap.platform_retries >= MAX_VERDICT_REPAIRS:
+                return WatchVerdict(
+                    REPAIRABLE_VERDICT,
+                    f"repaired {snap.platform_retries} times and still failing the same way; "
+                    f"another attempt is unlikely to differ and this needs a person",
+                    action="escalate", autonomous=False,
+                    evidence={**ev, "run_error": (snap.run_error or "")[:200],
+                              "attempts": snap.platform_retries},
+                )
+            return WatchVerdict(
+                REPAIRABLE_VERDICT,
+                f"the pipeline judged the code ({(snap.run_error or '').strip()[:110]}); "
+                f"repairing with that verdict carried forward",
+                action="retry", autonomous=True,
+                evidence={**ev, "run_error": (snap.run_error or "")[:200],
+                          "attempts": snap.platform_retries, "repair": True},
+            )
+        cause = named_platform_cause(snap.run_error)
+        if snap.platform_retries >= MAX_PLATFORM_RETRIES:
+            return WatchVerdict(
+                KILLED_BY_PLATFORM,
+                f"the platform has killed this work {snap.platform_retries} times; something "
+                f"is wrong with the environment, not the task",
+                action="escalate", autonomous=False,
+                evidence={**ev, "run_error": (snap.run_error or "")[:200],
+                          "platform_retries": snap.platform_retries},
+            )
+        return WatchVerdict(
+            KILLED_BY_PLATFORM,
+            (f"died on `{cause}`" if cause else "died without the pipeline reaching any verdict")
+            + f" ({(snap.run_error or '').strip()[:110]}); no gate ran, so the work is "
+              f"unfinished rather than wrong",
+            action="retry", autonomous=True,
+            evidence={**ev, "run_error": (snap.run_error or "")[:200],
+                      "platform_cause": cause or "unclassified",
+                      "platform_retries": snap.platform_retries},
+        )
 
     # 1. Redundant duplicate — certain, and the only one worth cancelling on sight.
     #
@@ -339,7 +406,90 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
 
 # Actions the shepherd may take on its own, and nothing else. Mirrors AUTONOMOUS_CLASSES in
 # shepherd_service: the blast radius is a list you can read, not a property of the reasoning.
-AUTONOMOUS_ACTIONS = frozenset({"cancel", "requeue", "fail"})
+#: Failure text that means the PIPELINE REACHED A VERDICT about the code.
+#:
+#: These are the operator's to judge: tests that ran and failed, a review that refused, an
+#: agent that ran out of turns. Retrying reruns the same reasoning over the same code and
+#: arrives at the same answer, at the same cost.
+#:
+#: Everything NOT on this list is treated as unexpected -- infrastructure, a crash, an error
+#: nobody has classified yet -- and is retried. That default is deliberate and was originally
+#: written the other way round, as an allowlist of known infrastructure strings. An allowlist
+#: only ever recognises failures someone has already seen, which is precisely the wrong shape
+#: for a watchdog whose job is the UNEXPECTED: the first occurrence of any new failure mode
+#: would be misfiled as a code verdict and left sitting until a person noticed.
+CODE_VERDICT_MARKERS = (
+    "error_max_turns",
+    "test failed",
+    "tests failed",
+    "gate failed",
+    "failing gate",
+    "acceptance criteria",
+    "review refused",
+    "review rejected",
+    "blocked by review",
+    "merge conflict",
+    "compilation failed",
+    "typecheck failed",
+    "lint failed",
+)
+
+#: Retained as EVIDENCE, not as the decision. When one of these appears the reason can name the
+#: cause specifically, which is worth more in a report than "unexpected failure".
+PLATFORM_KILL_MARKERS = (
+    "exited 143",         # SIGTERM -- container recreated, supervisor stop
+    "exited 137",         # SIGKILL -- OOM or forced stop
+    "sigterm",
+    "sigkill",
+    "killed",
+    "timed out after",
+    "lease expired",
+    "connection refused",
+    "connection reset",
+    "infrastructure error",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway timeout",
+    "internal server error",
+)
+
+#: How many repair attempts a code verdict gets before a person is asked.
+#:
+#: Tighter than the platform cap because the failure is about the CODE: each attempt spends a
+#: full pipeline, and a verdict that survives repeated repair is telling us something a third
+#: attempt will not change.
+#:
+#: A retry here is not a rerun. retry_code_task carries the prior failing gates into the next
+#: attempt and resumes on the branch the last one wrote, so the agent works from the failure
+#: rather than meeting it again -- which is why leaving these alone was the wrong call.
+MAX_VERDICT_REPAIRS = 2
+
+#: How many times the platform gets to kill the same work before a person is asked.
+#: Infrastructure failures repeat: a box that OOMs once OOMs again, and an unbounded retry
+#: turns one bad node into an unbounded bill.
+MAX_PLATFORM_RETRIES = 2
+
+
+def is_code_verdict(error: Optional[str]) -> bool:
+    """Did the pipeline decide something ABOUT THE CODE, or did the run just die?
+
+    A verdict is the operator's to act on. Anything else -- including a failure nobody has a
+    name for yet -- is the shepherd's.
+    """
+    low = (error or "").lower()
+    return any(marker in low for marker in CODE_VERDICT_MARKERS)
+
+
+def named_platform_cause(error: Optional[str]) -> Optional[str]:
+    """The specific infrastructure cause, when it is one we can name. Evidence only."""
+    low = (error or "").lower()
+    for marker in PLATFORM_KILL_MARKERS:
+        if marker in low:
+            return marker
+    return None
+
+
+AUTONOMOUS_ACTIONS = frozenset({"cancel", "requeue", "fail", "retry"})
 
 
 def permitted(verdict: WatchVerdict) -> bool:
@@ -417,6 +567,11 @@ LIVE = "live"
 DEFAULT_CLASS_MODES: dict[int, str] = {
     REDUNDANT_DUPLICATE: LIVE,
     JOB_ENDED: LIVE,
+    # Live from the start: a retry creates work, it never destroys any. The worst case is a
+    # wasted pipeline, bounded by MAX_PLATFORM_RETRIES -- against a build that stays dead until
+    # a person happens to look at it.
+    KILLED_BY_PLATFORM: LIVE,
+    REPAIRABLE_VERDICT: LIVE,
     ORPHANED: SHADOW,
     ABANDONED: SHADOW,
     # The rest only ever escalate, so the mode is moot — recorded anyway, so the ledger shows

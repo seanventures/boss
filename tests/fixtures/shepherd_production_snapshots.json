@@ -17,60 +17,98 @@
       "name": "goldeneye: job dead-lettered on a 500 in July, run still says queued",
       "captured": "2026-08-09 from boss-api.local.sean.network",
       "snapshot": {
-        "run_id": "crun_f0b563f8f1b9489fb818", "project_id": "boss-dogfood",
-        "status": "running", "phase": "coding", "title": "QA benchmark: HookWatch",
-        "minutes_running": 53941.0, "minutes_since_update": 53941.0,
-        "has_job": true, "job_status": "deadlettered", "job_ended_minutes": 53941.0,
+        "run_id": "crun_f0b563f8f1b9489fb818",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "coding",
+        "title": "QA benchmark: HookWatch",
+        "minutes_running": 53941.0,
+        "minutes_since_update": 53941.0,
+        "has_job": true,
+        "job_status": "deadlettered",
+        "job_ended_minutes": 53941.0,
         "job_last_error": "Server error '500 Internal Server Error' for url 'http://api...'",
-        "was_leased": false, "has_live_worker": false,
-        "minutes_since_heartbeat": 53941.0, "minutes_since_any_lease": null
+        "was_leased": false,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 53941.0,
+        "minutes_since_any_lease": null
       },
       "expect_class": "the job ended; the run never noticed",
       "expect_action": "fail",
       "expect_acts_now": true,
-      "previously_misclassified_as": ["orphaned", "starved", "stalled"]
+      "previously_misclassified_as": [
+        "orphaned",
+        "starved",
+        "stalled"
+      ]
     },
     {
       "name": "THE REGRESSION: run launched 2 minutes ago, carrying job already terminal",
       "captured": "2026-08-09, immediately after an operator pressed Launch",
       "snapshot": {
-        "run_id": "crun_cdcf77db47c54e20a5bc", "project_id": "boss-dogfood",
-        "status": "running", "phase": "design", "title": "Per-transaction currency",
-        "minutes_running": 2.0, "minutes_since_update": 1.0,
-        "has_job": true, "job_status": "succeeded", "job_ended_minutes": 1.0,
-        "was_leased": false, "has_live_worker": false, "minutes_since_heartbeat": 2.0
+        "run_id": "crun_cdcf77db47c54e20a5bc",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "design",
+        "title": "Per-transaction currency",
+        "minutes_running": 2.0,
+        "minutes_since_update": 1.0,
+        "has_job": true,
+        "job_status": "succeeded",
+        "job_ended_minutes": 1.0,
+        "was_leased": false,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 2.0
       },
       "expect_class": "healthy",
       "expect_action": "none",
       "expect_acts_now": false,
-      "previously_misclassified_as": ["job ended — and the run was KILLED two minutes after launch"]
+      "previously_misclassified_as": [
+        "job ended \u2014 and the run was KILLED two minutes after launch"
+      ]
     },
     {
       "name": "seven identical benchmark launches, none carrying a stored fingerprint",
       "captured": "2026-08-09; the incident this whole feature came from",
       "snapshot": {
-        "run_id": "crun_08edd63875b64d1694b9", "project_id": "boss-dogfood",
-        "status": "running", "phase": "queued", "title": "QA benchmark: HookWatch",
-        "minutes_running": 540.0, "minutes_since_update": 540.0,
+        "run_id": "crun_08edd63875b64d1694b9",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "queued",
+        "title": "QA benchmark: HookWatch",
+        "minutes_running": 540.0,
+        "minutes_since_update": 540.0,
         "duplicate_of": "crun_437689e8fdcc45adb395",
-        "has_job": true, "job_status": "queued", "was_leased": false,
-        "has_live_worker": false, "minutes_since_heartbeat": 540.0
+        "has_job": true,
+        "job_status": "queued",
+        "was_leased": false,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 540.0
       },
       "expect_class": "redundant duplicate",
       "expect_action": "cancel",
       "expect_acts_now": true,
-      "previously_misclassified_as": ["invisible — the runs predate work_fingerprint"]
+      "previously_misclassified_as": [
+        "invisible \u2014 the runs predate work_fingerprint"
+      ]
     },
     {
       "name": "a duplicate caught seconds after it starts is still cancelled",
       "captured": "the double-click case; acting fast IS the value here",
       "snapshot": {
-        "run_id": "crun_dup_fresh", "project_id": "boss-dogfood",
-        "status": "running", "phase": "queued", "title": "QA benchmark: BugBox",
-        "minutes_running": 0.4, "minutes_since_update": 0.2,
+        "run_id": "crun_dup_fresh",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "queued",
+        "title": "QA benchmark: BugBox",
+        "minutes_running": 0.4,
+        "minutes_since_update": 0.2,
         "duplicate_of": "crun_dup_first",
-        "has_job": true, "job_status": "queued", "was_leased": false,
-        "has_live_worker": false, "minutes_since_heartbeat": 0.4
+        "has_job": true,
+        "job_status": "queued",
+        "was_leased": false,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 0.4
       },
       "expect_class": "redundant duplicate",
       "expect_action": "cancel",
@@ -81,28 +119,47 @@
       "name": "a worker died holding the lease",
       "captured": "synthesised from the jobs schema: lease_owner set, heartbeat long stale",
       "snapshot": {
-        "run_id": "crun_orphan", "project_id": "boss-dogfood",
-        "status": "running", "phase": "implement", "title": "some real work",
-        "minutes_running": 120.0, "minutes_since_update": 120.0,
-        "has_job": true, "job_status": "running", "job_ended_minutes": null,
-        "was_leased": true, "has_live_worker": false,
-        "minutes_since_heartbeat": 90.0, "minutes_since_any_lease": 1.0
+        "run_id": "crun_orphan",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "implement",
+        "title": "some real work",
+        "minutes_running": 120.0,
+        "minutes_since_update": 120.0,
+        "has_job": true,
+        "job_status": "running",
+        "job_ended_minutes": null,
+        "was_leased": true,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 90.0,
+        "minutes_since_any_lease": 1.0
       },
-      "expect_class": "orphaned — no worker, lease expired",
+      "expect_class": "orphaned \u2014 no worker, lease expired",
       "expect_action": "requeue",
       "expect_acts_now": true,
-      "previously_misclassified_as": ["stalled — asked a human instead of taking the work back"]
+      "previously_misclassified_as": [
+        "stalled \u2014 asked a human instead of taking the work back"
+      ]
     },
     {
       "name": "a healthy run mid-pipeline must never be touched",
       "captured": "the case that matters most and produces no incident when it works",
       "snapshot": {
-        "run_id": "crun_healthy", "project_id": "boss-dogfood",
-        "status": "running", "phase": "implement", "title": "real work in progress",
-        "minutes_running": 12.0, "minutes_since_update": 2.0,
-        "has_job": true, "job_status": "running", "was_leased": true,
-        "has_live_worker": true, "minutes_since_heartbeat": 0.4,
-        "minutes_since_any_lease": 0.4, "median_minutes": 15.0, "sample_size": 30
+        "run_id": "crun_healthy",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "implement",
+        "title": "real work in progress",
+        "minutes_running": 12.0,
+        "minutes_since_update": 2.0,
+        "has_job": true,
+        "job_status": "running",
+        "was_leased": true,
+        "has_live_worker": true,
+        "minutes_since_heartbeat": 0.4,
+        "minutes_since_any_lease": 0.4,
+        "median_minutes": 15.0,
+        "sample_size": 30
       },
       "expect_class": "healthy",
       "expect_action": "none",
@@ -112,12 +169,20 @@
       "name": "a slow but live run at 4x median is escalated, never cancelled",
       "captured": "guards the boundary between noticing and interfering",
       "snapshot": {
-        "run_id": "crun_slow", "project_id": "boss-dogfood",
-        "status": "running", "phase": "implement", "title": "a big task",
-        "minutes_running": 60.0, "minutes_since_update": 3.0,
-        "has_job": true, "job_status": "running", "was_leased": true,
-        "has_live_worker": true, "minutes_since_heartbeat": 0.5,
-        "median_minutes": 15.0, "sample_size": 30
+        "run_id": "crun_slow",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "implement",
+        "title": "a big task",
+        "minutes_running": 60.0,
+        "minutes_since_update": 3.0,
+        "has_job": true,
+        "job_status": "running",
+        "was_leased": true,
+        "has_live_worker": true,
+        "minutes_since_heartbeat": 0.5,
+        "median_minutes": 15.0,
+        "sample_size": 30
       },
       "expect_class": "over expected latency",
       "expect_action": "escalate",
@@ -127,17 +192,78 @@
       "name": "a governance hold is not a dead worker",
       "captured": "the claim path defers on budget state and writes the reason to jobs.last_error",
       "snapshot": {
-        "run_id": "crun_deferred", "project_id": "boss-dogfood",
-        "status": "running", "phase": "queued", "title": "held by policy",
-        "minutes_running": 200.0, "minutes_since_update": 200.0,
-        "has_job": true, "job_status": "queued", "job_deferred_minutes": 42.0,
+        "run_id": "crun_deferred",
+        "project_id": "boss-dogfood",
+        "status": "running",
+        "phase": "queued",
+        "title": "held by policy",
+        "minutes_running": 200.0,
+        "minutes_since_update": 200.0,
+        "has_job": true,
+        "job_status": "queued",
+        "job_deferred_minutes": 42.0,
         "job_last_error": "Budget state exhausted deferred job code.task",
-        "was_leased": false, "has_live_worker": false, "minutes_since_heartbeat": 200.0
+        "was_leased": false,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 200.0
       },
       "expect_class": "deferred by policy",
       "expect_action": "escalate",
       "expect_acts_now": false,
-      "previously_misclassified_as": ["starved — would have sent someone to restart a healthy worker"]
+      "previously_misclassified_as": [
+        "starved \u2014 would have sent someone to restart a healthy worker"
+      ]
+    },
+    {
+      "name": "BugBox build killed by SIGTERM at 17 minutes, no verdict reached",
+      "captured": "2026-08-10 from the goldeneye console, the run an operator asked about",
+      "snapshot": {
+        "run_id": "crun_89282b05d52a4559a15b",
+        "project_id": "boss-dogfood",
+        "status": "failed",
+        "phase": "implement",
+        "title": "Web app \u2014 # BugBox \u2013 Product Requirements Document (PRD)",
+        "minutes_running": 17.0,
+        "minutes_since_update": 1.0,
+        "run_error": "claude code agent exited 143: [substrate=local_subprocess]",
+        "platform_retries": 0,
+        "has_job": true,
+        "job_status": "running",
+        "was_leased": true,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 1.0
+      },
+      "expect_class": "killed by the platform",
+      "expect_action": "retry",
+      "expect_acts_now": true,
+      "previously_misclassified_as": [
+        "invisible \u2014 the sweep queried status IN (running, queued), so a failed run was outside",
+        "its field of view entirely; it stayed failed until a person asked why nothing noticed"
+      ]
+    },
+    {
+      "name": "a run that failed its own tests is REPAIRED, carrying the verdict forward",
+      "captured": "the boundary that keeps an automatic remedy from becoming an automatic bill",
+      "snapshot": {
+        "run_id": "crun_verdict",
+        "project_id": "boss-dogfood",
+        "status": "failed",
+        "phase": "run_tests",
+        "title": "some real work",
+        "minutes_running": 22.0,
+        "minutes_since_update": 2.0,
+        "run_error": "npm run verify: tests failed (3 failing)",
+        "platform_retries": 0,
+        "has_job": true,
+        "job_status": "succeeded",
+        "was_leased": true,
+        "has_live_worker": false,
+        "minutes_since_heartbeat": 2.0
+      },
+      "expect_class": "the pipeline judged the code; repairable",
+      "expect_action": "retry",
+      "expect_acts_now": true,
+      "note": "retry_code_task resumes on the branch with the failing gates carried forward, so this is a repair and not a rerun; bounded by MAX_VERDICT_REPAIRS, after which it escalates"
     }
   ]
 }

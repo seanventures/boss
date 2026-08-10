@@ -20,11 +20,18 @@ its output is narrative attached to a decision the code already made. That is wh
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 from ..config import Settings
 from ..ports import sql
 from .core import emit_event, make_id
+
+logger = logging.getLogger(__name__)
+
+#: Who the audit trail credits for an automatic remedy. "shepherd" everywhere else in this
+#: module, kept as one constant so a reader grepping the events can find every automatic act.
+SHEPHERD_ACTOR = "shepherd"
 from .task_shepherd import (
     CLASS_NAMES, NOT_A_FAILURE, ShepherdState, Verdict, classify, escalation,
     estimate_cost, needs_operator_confirmation, next_step, task_budget,
@@ -498,6 +505,8 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
         sql("""
             SELECT r.id, r.project_id, r.status, r.phase, r.title,
                    r.spec->>'work_fingerprint' AS fp, r.spec AS spec,
+                   r.error AS run_error,
+                   COALESCE(r.finalize_ctx->>'root_run_id', r.id) AS root_run,
                    EXTRACT(EPOCH FROM (now() - r.created_at))/60.0 AS mins_running,
                    EXTRACT(EPOCH FROM (now() - r.updated_at))/60.0 AS mins_since_update,
                    r.created_at,
@@ -515,7 +524,18 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
                 FROM jobs
                 WHERE payload->>'run_id' = r.id ORDER BY created_at DESC LIMIT 1
             ) j ON TRUE
-            WHERE r.project_id = :p AND r.status IN ('running', 'queued')
+            WHERE r.project_id = :p
+              AND (r.status IN ('running', 'queued')
+                   -- Failures are in scope now. This clause read `status IN (running, queued)`,
+                   -- so a run that DIED was outside the shepherd's field of view entirely: a
+                   -- build killed by a SIGTERM at seventeen minutes stayed failed until a
+                   -- person happened to look and ask why nothing had noticed. A watchdog that
+                   -- cannot see failures is not watching for the thing most worth watching.
+                   --
+                   -- Bounded by age so a sweep does not re-litigate months of history every
+                   -- two minutes; anything older than this is a person's to judge.
+                   OR (r.status = 'failed'
+                       AND r.updated_at > now() - interval '6 hours'))
             ORDER BY r.created_at ASC LIMIT :l
         """), {"p": project_id, "l": limit}).mappings().all()
 
@@ -549,6 +569,16 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
 
     median, samples = _latency_baseline(connection, project_id)
     since_lease = _minutes_since_any_lease(connection, project_id)
+    # How often the platform has already killed each piece of work, counted over the whole
+    # lineage. A per-run count is always zero -- every retry is a new row -- so the cap that
+    # stops an unbounded retry loop would never bind.
+    platform_retries = {
+        r[0]: int(r[1]) for r in connection.execute(sql("""
+            SELECT COALESCE(finalize_ctx->>'root_run_id', id) AS root, count(*) - 1
+            FROM code_task_runs
+            WHERE project_id = :p AND status = 'failed'
+            GROUP BY 1"""), {"p": project_id}).all()
+    }
     snaps = []
     for row in rows:
         fp = fps.get(row["id"])
@@ -577,6 +607,11 @@ def _inflight_snapshots(connection, project_id: str, limit: int = 50) -> list:
             job_ended_minutes=(float(row["ended_mins"])
                                if row["ended_mins"] is not None else None),
             job_last_error=row["last_error_msg"],
+            run_error=row["run_error"],
+            # How many times this same work has already died on the platform. Counted across
+            # the LINEAGE, not the row: each retry is a new run, so counting per-run would
+            # always read zero and the cap would never bind.
+            platform_retries=platform_retries.get(row["root_run"], 0),
             was_leased=bool(row["ever_leased"]),
             minutes_since_any_lease=since_lease,
             median_minutes=median, sample_size=samples,
@@ -664,6 +699,35 @@ def _fail_run(connection, run_id: str, reason: str) -> int:
         sql("UPDATE code_task_runs SET status='failed', phase='abandoned', error=:e, "
             "updated_at=now() WHERE id=:i AND status IN ('running','queued')"),
         {"i": run_id, "e": reason[:500]}).rowcount
+
+
+def _retry_run(engine, settings, jobs, run_id: str, reason: str) -> int:
+    """Run the work again, as a new attempt in the same lineage.
+
+    A retry is the one remedy the shepherd lacked, and the only correct response to work that
+    died without a verdict: the run is terminal, so requeueing its job does nothing, and
+    cancelling something already failed is meaningless.
+
+    Reuses retry_code_task rather than reimplementing it, so an automatic attempt is the same
+    object as an operator-pressed one -- same lineage, same branch, same resume logic that
+    keeps whatever the killed attempt had already written.
+
+    Returns 1 when a new attempt exists, 0 when it does not, so the caller can tell a real
+    remedy from an announcement.
+    """
+    from .code_task_service import retry_code_task
+
+    try:
+        # No actor parameter: retry_code_task records lineage, not authorship. The
+        # shepherd.retry event below is what attributes this to the shepherd.
+        result = retry_code_task(
+            engine, settings, jobs, run_id,
+            fix_note=f"Automatic retry by the task shepherd: {reason}",
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning("shepherd: retry of %s failed: %s", run_id, error)
+        return 0
+    return 1 if (result or {}).get("run_id") else 0
 
 
 def _requeue_run(connection, run_id: str) -> int:
@@ -869,6 +933,10 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                     changed = _cancel_run(c, snap.run_id, f"shepherd: {verdict.reason}")
                 elif verdict.action == "fail":
                     changed = _fail_run(c, snap.run_id, f"shepherd: {verdict.reason}")
+                elif verdict.action == "retry":
+                    # Outside this transaction on purpose: retry_code_task opens its own, and
+                    # nesting them deadlocks the sweep against itself.
+                    changed = None
                 else:
                     changed = _requeue_run(c, snap.run_id)
                 if changed:
@@ -876,6 +944,15 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                                "code_task_run", snap.run_id,
                                {"class": verdict.name, "reason": verdict.reason,
                                 **verdict.evidence})
+            if verdict.action == "retry":
+                changed = _retry_run(engine, self.settings, self.jobs, snap.run_id,
+                                     verdict.reason)
+                if changed:
+                    with begin(engine) as c:
+                        emit_event(c, project_id, "shepherd.retry", actor,
+                                   "code_task_run", snap.run_id,
+                                   {"class": verdict.name, "reason": verdict.reason,
+                                    **verdict.evidence})
             # An action that changed nothing is not an action. Reporting it as one is a
             # shepherd announcing a fix every two minutes while the run sits exactly where it
             # was — the precise dishonesty that makes an operator stop believing the console.
