@@ -44,6 +44,8 @@ class SoftwareFactoryService:
         self,
         settings: Settings,
         *,
+        owner: Optional[str] = None,
+        repo: Optional[str] = None,
         ports: Optional[EnginePorts] = None,
         budget_port: Optional[BudgetPort] = None,
         entitlement_port: Optional[EntitlementPort] = None,
@@ -55,7 +57,18 @@ class SoftwareFactoryService:
         self.ports = resolved_ports
         self.budget = budget_port or resolved_ports.budget
         self.receipts = ReceiptService()
-        self.github = GitHubAdapter(settings)
+        # WHICH REPO is the run's decision, not a global default.
+        #
+        # This said `GitHubAdapter(settings)`, so every run cloned, branched and opened its PR
+        # against BOSS_TARGET_GITHUB_* no matter what the task asked for. The caller had already
+        # resolved `spec["owner"]/spec["repo"]` and minted a token for THAT repo, so the two
+        # disagreed silently: a task targeting seanheiney/boss authenticated for seanheiney/boss
+        # and then pushed to the default sandbox, where its edits landed as 17k lines of "new"
+        # files because none of the originals were there. The run reported success.
+        #
+        # A run that names a repo gets that repo; the setting remains the default for runs that
+        # do not.
+        self.github = GitHubAdapter(settings, owner=owner, repo=repo)
         self.pipeline = make_pipeline_adapter(settings, github=self.github)
         self.openai = make_chat_adapter(settings)
         self.entitlements = entitlement_port or resolved_ports.entitlement

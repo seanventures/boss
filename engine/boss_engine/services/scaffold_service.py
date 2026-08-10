@@ -267,15 +267,38 @@ _COMPONENTS_JSON = """{
 _GITIGNORE = "node_modules\ndist\n.env\n*.log\n"
 
 
-def _package_json(name: str) -> str:
+def _scripts_in(package_json: str) -> list:
+    """The scripts the emitted manifest really declares (fullstack adds start/migrate/seed)."""
     import json
+
+    return sorted(json.loads(package_json).get("scripts", {}))
+
+
+def _package_json(name: str, *, fullstack: bool = False) -> str:
+    import json
+    scripts = dict(_SCRIPTS)
+    dependencies = {
+        "react": "^18.3.1", "react-dom": "^18.3.1",
+        "clsx": "^2.1.1", "tailwind-merge": "^2.5.2",
+    }
+    if fullstack:
+        # `start` runs the real server, so "how do I run this in production" has one answer
+        # that preview, deploy and the e2e suite all use.
+        scripts.update({
+            "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
+            "dev:web": "vite",
+            "dev:api": "PORT=${API_PORT:-3001} node server/index.js",
+            "start": "node server/index.js",
+            "migrate": "node -e \"import('./server/db.js').then(m=>m.migrate())\"",
+            "seed": "node -e \"import('./server/db.js').then(m=>{m.migrate();m.seed()})\"",
+            "verify": "npm run typecheck && npm run build && npm run test:e2e",
+        })
+        dependencies.update({"express": "^4.19.2", "better-sqlite3": "^11.3.0"})
     pkg = {
         "name": name, "private": True, "version": "0.1.0", "type": "module",
-        "scripts": _SCRIPTS,
-        "dependencies": {
-            "react": "^18.3.1", "react-dom": "^18.3.1",
-            "clsx": "^2.1.1", "tailwind-merge": "^2.5.2",
-        },
+        "engines": {"node": ">=20"},
+        "scripts": scripts,
+        "dependencies": dependencies,
         "devDependencies": {
             "@types/react": "^18.3.3", "@types/react-dom": "^18.3.0",
             "@typescript-eslint/eslint-plugin": "^7.13.1", "@typescript-eslint/parser": "^7.13.1",
@@ -283,12 +306,363 @@ def _package_json(name: str) -> str:
             "eslint-plugin-react-hooks": "^4.6.2", "eslint-plugin-react-refresh": "^0.4.7",
             "postcss": "^8.4.38", "tailwindcss": "^3.4.4", "typescript": "^5.4.5",
             "vite": "^5.3.1", "@playwright/test": "^1.45.0",
+            "concurrently": "^9.0.1",
         },
     }
     return json.dumps(pkg, indent=2) + "\n"
 
 
-_ALIASES = {"vite": "vite", "spa": "vite", "react": "vite"}
+_ALIASES = {"vite": "vite", "spa": "vite", "react": "vite",
+            "fullstack": "fullstack", "app": "fullstack", "webapp": "fullstack"}
+
+
+# =============================================================================
+# Full-stack scaffold: a frontend WITH a server behind it.
+#
+# The vite scaffold below is frontend-only, and it was the seed for every PRD-driven web app
+# build. So the pipeline produced, deterministically, apps that could not persist anything: an
+# expense-approval tool whose approvals vanished on reload, dashboards with no data source.
+# This was read as the coding agent building "naive" apps. It was not -- nothing in the seed
+# gave it a backend, and the acceptance gate (a 200 from `/`) could not tell the difference.
+#
+# So the default seed for an app that stores anything is this one: an Express server with real
+# SQLite persistence, schema migrations, seed data, and one worked CRUD slice end to end --
+# frontend calling /api, server reading and writing the database. The agent extends a working
+# vertical slice instead of inventing an architecture.
+#
+# Plain JavaScript on the server on purpose: no build step, so `node server/index.js` is the
+# whole start command and there is one less stage between a working repo and a running app.
+# =============================================================================
+
+_SERVER_INDEX = r"""import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { db, migrate, seed } from "./db.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// HOST/PORT from the environment: this runs in a container behind a proxy, where binding
+// 127.0.0.1 or a fixed port makes the app unreachable while looking perfectly healthy.
+const PORT = Number(process.env.PORT || 3000);
+const HOST = process.env.HOST || "0.0.0.0";
+
+migrate();
+if (process.env.SEED !== "false") seed();
+
+const app = express();
+app.use(express.json());
+
+// A health endpoint that actually proves the app works: it reads the database. A handler that
+// returns a hard-coded 200 reports healthy while every real request fails.
+app.get("/api/health", (_req, res) => {
+  try {
+    const row = db.prepare("SELECT count(*) AS n FROM items").get();
+    res.json({ ok: true, items: row.n });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error) });
+  }
+});
+
+// --- One complete CRUD slice. Rename `items` to the domain and extend; keep the shape. ---
+app.get("/api/items", (_req, res) => {
+  res.json(db.prepare("SELECT * FROM items ORDER BY created_at DESC").all());
+});
+
+app.post("/api/items", (req, res) => {
+  const title = String(req.body?.title || "").trim();
+  if (!title) return res.status(400).json({ error: "title is required" });
+  const status = String(req.body?.status || "pending");
+  const info = db
+    .prepare("INSERT INTO items (title, status, created_at) VALUES (?, ?, datetime('now'))")
+    .run(title, status);
+  res.status(201).json(db.prepare("SELECT * FROM items WHERE id = ?").get(info.lastInsertRowid));
+});
+
+app.patch("/api/items/:id", (req, res) => {
+  const existing = db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "not found" });
+  const status = String(req.body?.status || existing.status);
+  db.prepare("UPDATE items SET status = ? WHERE id = ?").run(status, req.params.id);
+  res.json(db.prepare("SELECT * FROM items WHERE id = ?").get(req.params.id));
+});
+
+app.delete("/api/items/:id", (req, res) => {
+  db.prepare("DELETE FROM items WHERE id = ?").run(req.params.id);
+  res.status(204).end();
+});
+
+// The built frontend, served by the same process, so one container is the whole app.
+const dist = path.join(__dirname, "..", "dist");
+app.use(express.static(dist));
+// SPA fallback -- but never for /api, or a missing route would return HTML with status 200
+// and the client would report a JSON parse error instead of a 404.
+app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(dist, "index.html")));
+
+app.listen(PORT, HOST, () => console.log(`listening on http://${HOST}:${PORT}`));
+"""
+
+_SERVER_DB = """import Database from "better-sqlite3";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// DATA_DIR is a mount that deployments do not replace, so data survives a release. Anything
+// written beside the source is destroyed by the next deploy -- correct for code, fatal for data.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "..", "data");
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+export const db = new Database(path.join(DATA_DIR, "app.db"));
+db.pragma("journal_mode = WAL");
+
+/** Apply every migration not yet applied, in order, recording each. */
+export function migrate() {
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+  );
+  const dir = path.join(__dirname, "migrations");
+  const applied = new Set(db.prepare("SELECT name FROM _migrations").all().map((r) => r.name));
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+    if (applied.has(name)) continue;
+    db.exec(fs.readFileSync(path.join(dir, name), "utf8"));
+    db.prepare("INSERT INTO _migrations (name, applied_at) VALUES (?, datetime('now'))").run(name);
+    console.log(`migrated ${name}`);
+  }
+}
+
+/** Deterministic seed data. Idempotent: seeding twice must not duplicate rows. */
+export function seed() {
+  const { n } = db.prepare("SELECT count(*) AS n FROM items").get();
+  if (n > 0) return;
+  const insert = db.prepare(
+    "INSERT INTO items (title, status, created_at) VALUES (?, ?, datetime('now'))"
+  );
+  insert.run("First example item", "pending");
+  insert.run("Second example item", "approved");
+}
+"""
+
+_MIGRATION_001 = """-- Initial schema. Rename `items` to the domain object and add columns as needed;
+-- add further migrations as NEW files (002_*.sql) rather than editing this one, so an
+-- already-deployed database can move forward.
+CREATE TABLE IF NOT EXISTS items (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT    NOT NULL,
+  status     TEXT    NOT NULL DEFAULT 'pending',
+  created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_items_status ON items (status);
+"""
+
+_VITE_CONFIG_FULLSTACK = """import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+// In dev the API runs as a separate process; proxy /api to it so the frontend uses the SAME
+// relative paths it will use in production, where one server serves both.
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    proxy: { "/api": { target: `http://localhost:${process.env.API_PORT || 3001}`, changeOrigin: true } },
+  },
+});
+"""
+
+# The frontend talks to the server. This is the part that was always missing: a component that
+# loads from an API, writes to it, and shows the result -- so "wire the UI to the backend" is a
+# pattern to extend rather than a task to invent.
+_APP_TSX_FULLSTACK = """import { useEffect, useState } from "react";
+import { Button } from "./components/ui/button";
+import { Card } from "./components/ui/card";
+
+type Item = { id: number; title: string; status: string; created_at: string };
+
+export default function App() {
+  const [items, setItems] = useState<Item[]>([]);
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    try {
+      const res = await fetch("/api/items");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setItems(await res.json());
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add() {
+    if (!title.trim()) return;
+    await fetch("/api/items", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    setTitle("");
+    load();
+  }
+
+  async function setStatus(id: number, status: string) {
+    await fetch(`/api/items/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    load();
+  }
+
+  return (
+    <main className="mx-auto max-w-2xl p-8">
+      <h1 className="text-3xl font-semibold tracking-tight">Items</h1>
+      <p className="mt-2 text-muted-foreground">
+        Stored server-side in SQLite — reload the page and it is still here.
+      </p>
+
+      {error && <p role="alert" className="mt-4 text-red-600">Could not reach the API: {error}</p>}
+
+      <div className="mt-6 flex gap-2">
+        <input
+          aria-label="New item title"
+          className="flex-1 rounded-md border px-3 py-2"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Add an item…"
+        />
+        <Button onClick={add}>Get started</Button>
+      </div>
+
+      <ul className="mt-6 space-y-2">
+        {loading && <li className="text-muted-foreground">Loading…</li>}
+        {!loading && items.length === 0 && <li className="text-muted-foreground">Nothing yet.</li>}
+        {items.map((item) => (
+          <li key={item.id}>
+            <Card className="flex items-center justify-between p-4">
+              <span data-testid="item-title">{item.title}</span>
+              <span className="flex items-center gap-3">
+                <span className="text-sm text-muted-foreground">{item.status}</span>
+                <Button
+                  onClick={() => setStatus(item.id, item.status === "approved" ? "pending" : "approved")}
+                >
+                  {item.status === "approved" ? "Unapprove" : "Approve"}
+                </Button>
+              </span>
+            </Card>
+          </li>
+        ))}
+      </ul>
+    </main>
+  );
+}
+"""
+
+# The gate that would have caught both failed builds: it asserts the data SURVIVES a reload,
+# which a static mockup and an in-memory SPA both fail.
+_E2E_SPEC_FULLSTACK = """import { test, expect } from "@playwright/test";
+
+test("the API is actually running", async ({ request }) => {
+  const res = await request.get("/api/health");
+  expect(res.ok()).toBeTruthy();
+  expect((await res.json()).ok).toBe(true);
+});
+
+test("data written through the UI survives a reload", async ({ page }) => {
+  const title = `e2e item ${Date.now()}`;
+
+  await page.goto("/");
+  await page.getByLabel("New item title").fill(title);
+  await page.getByRole("button", { name: /get started/i }).click();
+  await expect(page.getByText(title)).toBeVisible();
+
+  // The point of the test. An in-memory app passes everything above and fails here.
+  await page.reload();
+  await expect(page.getByText(title)).toBeVisible();
+});
+
+test("the frontend reads its list from the server, not from itself", async ({ page }) => {
+  const seen: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/")) seen.push(r.url());
+  });
+  await page.goto("/");
+  await expect(page.locator("h1")).toBeVisible();
+  expect(seen.length).toBeGreaterThan(0);
+});
+"""
+
+_PLAYWRIGHT_CONFIG_FULLSTACK = """import { defineConfig } from "@playwright/test";
+
+// Build, then run the REAL server -- the same command production uses. Testing `vite preview`
+// would exercise a static file server and prove nothing about the backend.
+export default defineConfig({
+  testDir: "./e2e",
+  timeout: 30_000,
+  use: { baseURL: "http://127.0.0.1:4173" },
+  webServer: {
+    command: "npm run build && PORT=4173 DATA_DIR=./.e2e-data npm start",
+    url: "http://127.0.0.1:4173/api/health",
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
+});
+"""
+
+_README_FULLSTACK = """# __APP_NAME__
+
+Full-stack: React + Vite frontend, Express + SQLite backend, one process in production.
+
+## One-command startup
+
+    npm install
+    npm run dev          # frontend on :5173, API on :3001
+
+## Production
+
+    npm run build        # builds the frontend into dist/
+    npm start            # serves dist/ AND /api from one process on $PORT (default 3000)
+
+`HOST` and `PORT` come from the environment so this runs behind a proxy or in a container.
+`DATA_DIR` (default `./data`) holds the SQLite file and is intended to be a mount that
+deployments do not replace, so data survives a release.
+
+## Database
+
+Migrations are `.sql` files in `server/migrations/`, applied in filename order at startup and
+recorded in `_migrations`. Add a new numbered file rather than editing an applied one. Seed data
+is idempotent (`server/db.js`).
+
+## Verification
+
+    npm run verify       # typecheck + build + end-to-end tests
+
+The e2e suite asserts the API responds AND that data written through the UI survives a page
+reload — the check that distinguishes a working app from a convincing mockup.
+"""
+
+
+def _fullstack_files(safe: str, files: dict) -> dict:
+    """Layer the server, database and wired frontend on top of the frontend scaffold."""
+    files = dict(files)
+    files.update({
+        "server/index.js": _SERVER_INDEX,
+        "server/db.js": _SERVER_DB,
+        "server/migrations/001_init.sql": _MIGRATION_001,
+        "vite.config.ts": _VITE_CONFIG_FULLSTACK,
+        "src/App.tsx": _APP_TSX_FULLSTACK,
+        "e2e/home.spec.ts": _E2E_SPEC_FULLSTACK,
+        "playwright.config.ts": _PLAYWRIGHT_CONFIG_FULLSTACK,
+        "README.md": _README_FULLSTACK.replace("__APP_NAME__", safe),
+        "package.json": _package_json(safe, fullstack=True),
+    })
+    return files
 
 
 def scaffold_project(name: str = "app", kind: str = "vite") -> dict[str, Any]:
@@ -317,10 +691,13 @@ def scaffold_project(name: str = "app", kind: str = "vite") -> dict[str, Any]:
         "src/components/ui/card.tsx": _CARD_TSX,
         "e2e/home.spec.ts": _E2E_SPEC,
     }
+    if resolved == "fullstack":
+        files = _fullstack_files(safe, files)
     manifest = {
-        "name": safe, "kind": resolved, "framework": "vite+react+ts",
+        "name": safe, "kind": resolved,
+        "framework": "vite+react+ts+express+sqlite" if resolved == "fullstack" else "vite+react+ts",
         "design_system": "tailwind+shadcn-style tokens (type scale, spacing, accent, radius, shadow)",
-        "scripts": list(_SCRIPTS.keys()),
+        "scripts": _scripts_in(files["package.json"]),
         "verification": {"build": _SCRIPTS["build"], "typecheck": _SCRIPTS["typecheck"],
                          "lint": _SCRIPTS["lint"], "test:e2e": _SCRIPTS["test:e2e"]},
         "file_count": len(files),

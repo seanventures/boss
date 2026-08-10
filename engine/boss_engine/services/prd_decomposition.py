@@ -38,9 +38,15 @@ def _looks_like_web_app(text_v: str) -> bool:
 
 
 def seed_web_scaffold(settings: Settings, *, work_branch: str, name: str = "app",
-                      kind: str = "vite") -> int:
-    """Commit a DETERMINISTIC Vite+React+TS+Tailwind+shadcn scaffold to work_branch — no agent, no
-    turns, can't hit error_max_turns. Feature tasks then build on it. Returns the file count."""
+                      kind: str = "fullstack") -> int:
+    """Commit a DETERMINISTIC full-stack scaffold to work_branch — no agent, no turns, can't hit
+    error_max_turns. Feature tasks then build on it. Returns the file count.
+
+    Defaults to `fullstack` (React + Express + SQLite) rather than the frontend-only `vite`.
+    Every PRD-driven web app was seeded frontend-only, so the pipeline could not produce an app
+    that stored anything: an expense-approval tool whose approvals vanished on reload was the
+    predictable result, and it was read as the agent building badly. Pass kind="vite"
+    explicitly for something that genuinely has no backend."""
     from .scaffold_service import scaffold_project
     from .software_factory import SoftwareFactoryService
     files = scaffold_project(name=name, kind=kind)["files"]

@@ -215,7 +215,7 @@ def assess(snap: RunSnapshot) -> WatchVerdict:
     # error was ever written, and the run sits at `running` until a human notices. Requeue
     # rather than fail: the work was never done, and the platform lost it, not the task.
     # Stranded means the JOB says running and nothing is running it — whether or not a lease
-    # was ever recorded. Keying this off `was_leased` was wrong: the goldeneye jobs sit at
+    # was ever recorded. Keying this off `was_leased` was wrong: the observed production jobs sit at
     # 'running' with no owner and no heartbeat, so "was it ever leased" answered no and the
     # runs fell through to "stalled, ask a human" for 37 days. What decides the remedy is
     # whether the requeue can bite, and it bites on status='running'.

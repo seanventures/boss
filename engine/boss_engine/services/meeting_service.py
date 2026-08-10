@@ -623,6 +623,31 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
          "args": {"title": "PRD: " + run["directive"][:80].rstrip(), "markdown": state.get("prd_markdown") or "",
                   "subtitle": f"Drafted by a BOSS agent panel · source {run['url']}", "repo_subdir": "docs/prd"},
          "task_id": task_id}, {}, "meeting_prd_ready_to_publish", risk_tier=2)
+
+    # Resolve the gate the panel has already satisfied.
+    #
+    # The meeting IS the review: product, engineering and QA personas argue the spec out and
+    # only then draft it. Asking a person to re-approve that produced a queue rather than a
+    # check -- every one was approved, and the only effect was the wait between "PRD ready"
+    # and "build started".
+    #
+    # This approves the decision rather than skipping it: the row exists, the PRD stays
+    # readable on the card, and the audit trail records `auto_approval` as the actor, so a
+    # reader can always tell which approvals a human made. The follow-on (start the governed
+    # build) is the same code path a human approval runs.
+    if getattr(settings, "meeting_prd_auto_approve", False):
+        from .decisions import DecisionService
+
+        try:
+            DecisionService(settings).transition(
+                connection, decision_id, action="approve", actor="auto_approval",
+                note="Approved automatically: the agent panel reviewed and drafted this PRD. "
+                     "Set BOSS_MEETING_PRD_AUTO_APPROVE=false to require a human approval.")
+        except Exception as error:  # noqa: BLE001
+            # A failed auto-approval must not lose the meeting's work. The decision stays
+            # pending and a human can approve it in the console exactly as before.
+            emit_event(connection, project_id, "meeting.prd_auto_approve_failed", "boss",
+                       "decision", decision_id, {"error": str(error)[:400]})
     if fctx.get("reservation_id") and fctx.get("receipt_id"):
         from .budget import BudgetGovernor
         from .receipts import ReceiptService

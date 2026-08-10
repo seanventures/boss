@@ -5452,6 +5452,40 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     actor = str((payload or {}).get("actor") or "executive_console").strip()
+
+    # Launch convenes the panel first, and the panel's PRD becomes the build.
+    #
+    # Pressing Launch used to hand the raw benchmark prompt straight to the coding pipeline.
+    # The same prompt run through a PRD meeting produced a markedly better app, because the
+    # panel turns "build an expense approval workflow" into explicit roles, states and flows,
+    # and the coding agent's output is bounded by the specification it is given.
+    #
+    # The PRD gate auto-approves (BOSS_MEETING_PRD_AUTO_APPROVE), so this is one press, not a
+    # press and a later approval. `route=direct` still goes straight to a code task for
+    # comparing the two paths.
+    if str((payload or {}).get("route") or "meeting").lower() == "meeting":
+        from boss_engine.services.meeting_service import convene_prd_meeting_core
+
+        try:
+            with begin(engine) as c:
+                require_project_actor(c, project_id, actor, "task_create")
+                meeting = convene_prd_meeting_core(
+                    c, settings=settings, budget=budget, intake=intake, jobs=jobs,
+                    project_id=project_id,
+                    directive=task["instructions"],
+                    constraints={"source": "qa_benchmark", "benchmark_id": benchmark_id},
+                )
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {
+            "status": "meeting_convened",
+            "run_id": meeting.get("run_id"),
+            "task_id": meeting.get("task_id"),
+            "duplicate_of": meeting.get("duplicate_of"),
+            "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
+        }
     try:
         with begin(engine) as c:
             require_project_actor(c, project_id, actor, "task_create")

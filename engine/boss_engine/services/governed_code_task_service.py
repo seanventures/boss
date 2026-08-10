@@ -1160,7 +1160,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
     ports = _engine_ports()
     budget = ports.budget
-    sf = SoftwareFactoryService(settings, ports=ports)
+    # Resolved here, before the factory is built, so the clone/branch/PR target and the token
+    # below are the SAME decision rather than two that can drift apart.
+    _owner = spec.get("owner") or settings.target_github_owner
+    _repo = spec.get("repo") or settings.target_github_repo
+    sf = SoftwareFactoryService(settings, owner=_owner, repo=_repo, ports=ports)
     title = run["title"]
     # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
     # web/TS gets build/typecheck/lint/e2e (the scaffold's scripts) so the repair loop optimizes a
@@ -1240,8 +1244,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         c.execute(sql("UPDATE code_task_runs SET reservation_id=:r WHERE id=:id"),
                   {"r": reservation_id, "id": run_id})
 
-    owner = spec.get("owner") or settings.target_github_owner
-    repo = spec.get("repo") or settings.target_github_repo
+    owner, repo = _owner, _repo
     base_branch = spec.get("base_branch") or "main"
     # Feedback-iteration: attempts after the first share ONE branch derived from the root
     # run and clone the prior attempt's code, so the model builds ON prior work instead of

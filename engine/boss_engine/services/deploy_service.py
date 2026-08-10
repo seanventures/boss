@@ -324,7 +324,25 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
     """
     app_q = shlex.quote(app)
     remote_q = shlex.quote(remote)
-    if mode == "py":
+    if mode == "node":
+        # A Node server, run the way its own package.json says to.
+        #
+        # There was no such mode. `_docker_run_cmd` offered exactly two: a Python entrypoint, or
+        # nginx serving files. Everything else -- including a complete Express + SQLite app --
+        # took the nginx branch, so the backend never started, every /api call 404'd, and the
+        # health gate passed because a static shell still answers 200 on `/`. That is a dead app,
+        # publicly served, reported green.
+        #
+        # Same contract as the py mode: writable mount for code, a SEPARATE /data mount that
+        # deploys never replace, HOST/PORT from the environment.
+        run = (f"docker run -d --name {app_q} --restart unless-stopped -p {int(app_port)}:80 "
+               f"{_OWNERSHIP_LABELS.format(app=app_q)} "
+               f"-v {remote_q}/dist:/app -v {remote_q}/data:/data -w /app "
+               f"-e PORT=80 -e HOST=0.0.0.0 -e DATA_DIR=/data -e NODE_ENV=production "
+               f"-e NPM_CONFIG_UPDATE_NOTIFIER=false "
+               f"node:22-bookworm-slim sh -lc "
+               f"{shlex.quote('npm ci --omit=dev --no-audit --no-fund 2>/dev/null || npm install --omit=dev --no-audit --no-fund; npm start')}")
+    elif mode == "py":
         # Mounted read-WRITE: the app keeps a SQLite file beside its source, and a read-only
         # mount turns every write into a 500 that a "/" health check would never see.
         #
@@ -502,12 +520,23 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
         # commit-ref fix removed, reintroduced by copying the payload out of the clone.
         return (payload, "py", value, sha)
 
+    if kind == "node":
+        # Ship the app's own directory (its package.json is the run contract), built if it has
+        # a build step, so `npm start` finds `dist/` where the server expects it.
+        app_root = work if value in (".", "") else work / value
+        if (app_root / "package.json").is_file():
+            subprocess.run(["sh", "-lc",
+                            "npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund"],
+                           cwd=app_root, check=False, timeout=900)
+            subprocess.run(["sh", "-lc", "npm run build --if-present"],
+                           cwd=app_root, check=False, timeout=900)
+        payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
+        shutil.copytree(app_root, payload / "dist",
+                        ignore=shutil.ignore_patterns(".git", "__pycache__", "data", ".e2e-data"))
+        shutil.rmtree(work, ignore_errors=True)
+        return (payload, "node", "", sha)
     if kind == "static":
         static_dir = work / value
-    elif kind == "node":
-        raise RuntimeError(
-            f"the app resolved to node:{value} but declares no build script; "
-            "add one producing ./dist, or deploy it to a runtime target.")
     elif (work / "dist").is_dir():
         static_dir = work / "dist"
 

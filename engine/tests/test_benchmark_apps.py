@@ -194,8 +194,12 @@ def test_launch_endpoint_routes_a_benchmark_into_the_governed_code_task(monkeypa
     monkeypatch.setattr(api_main, "require_project_actor", lambda *_args: None)
     monkeypatch.setattr(code_task_service, "start_code_task", fake_start)
 
+    # route="direct" is the comparison path: straight to a code task, no panel. The DEFAULT
+    # now convenes a PRD meeting first (see the test below), so this asks for the old route
+    # explicitly rather than relying on a default that changed.
     result = api_main.start_qa_benchmark_app_endpoint(
-        "bugbox", {"project_id": "boss-dogfood", "actor": "executive_console"}
+        "bugbox",
+        {"project_id": "boss-dogfood", "actor": "executive_console", "route": "direct"},
     )
 
     assert result == {
@@ -203,8 +207,10 @@ def test_launch_endpoint_routes_a_benchmark_into_the_governed_code_task(monkeypa
         "run_id": "crun_benchmark",
         "benchmark": {"id": "bugbox", "name": "BugBox"},
     }
-    assert recorded["profile"] == "strict"
-    assert recorded["risk_tier"] == 2
+    # `balanced`, not `strict`: strict is withdrawn while it is being fixed, and balanced
+    # still runs the full review panel -- it just always ships a PR to look at.
+    assert recorded["profile"] == "balanced"
+    assert recorded["risk_tier"] == 1
     assert recorded["finalize_ctx"]["qa_benchmark"]["id"] == "bugbox"
 
 

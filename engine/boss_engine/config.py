@@ -578,6 +578,18 @@ class Settings(BaseSettings):
     auto_code_task_after_prd: bool = Field(
         default=True, alias="BOSS_AUTO_CODE_TASK_AFTER_PRD"
     )
+    # The PRD gate: does a drafted PRD wait for a human before it becomes a build?
+    #
+    # The panel already contains the review — product, engineering and QA personas argue the
+    # spec out before it is written down. Making a person re-affirm that in the console added
+    # a queue, not a check: the operator approved every one, and the wait was the only effect.
+    #
+    # Auto-approval still WRITES the decision and resolves it as `auto_approval`, so the audit
+    # trail is identical to a human approval and the PRD is still readable on the card. Set
+    # BOSS_MEETING_PRD_AUTO_APPROVE=false to put the human gate back.
+    meeting_prd_auto_approve: bool = Field(
+        default=True, alias="BOSS_MEETING_PRD_AUTO_APPROVE"
+    )
     # Cost/rigor dial for the governed pipeline: lean | balanced | strict (or a custom profile
     # name once the profiles API lands). Scales which steps run and which models run them.
     pipeline_profile: str = Field(default="balanced", alias="BOSS_PIPELINE_PROFILE")

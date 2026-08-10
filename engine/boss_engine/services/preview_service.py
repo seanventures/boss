@@ -10,6 +10,7 @@ macOS where container host-networking is awkward. Containerized isolation is the
 from __future__ import annotations
 
 import json
+import shlex
 import os
 import re
 import shutil
@@ -150,6 +151,50 @@ def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
     return out
 
 
+def _node_server_dir(workdir: Path, changed: Optional[list[str]] = None) -> Optional[str]:
+    """The directory of a package.json that declares a real `start` server, or None.
+
+    A `start` script is the signal that something must be RUN, not served. Without this the
+    resolver reached its static branch first -- and a Vite app has an `index.html` at its root,
+    so an app with a working Express backend was classified `static:.` and published as raw
+    source files. In the ApproveIt build the frontend loaded and every /api call 404'd, and the
+    operator reasonably concluded the agent had built a shell.
+
+    Subdirectories are checked before the root, and directories the task actually touched
+    before those it did not, so a repo holding several apps runs the one this task built.
+
+    `dev`/`build` alone are deliberately NOT enough: a frontend-only Vite app has those and is
+    correctly deployed as static output. Only `start` means "there is a server here".
+    """
+    def has_start(directory: Path) -> bool:
+        manifest = directory / "package.json"
+        if not manifest.is_file():
+            return False
+        try:
+            scripts = json.loads(manifest.read_text()).get("scripts") or {}
+        except (json.JSONDecodeError, OSError):
+            return False
+        return bool(str(scripts.get("start") or "").strip())
+
+    seen: list[str] = []
+    for touched in _changed_dirs(changed):
+        candidate = workdir / touched if touched not in (".", "") else workdir
+        if candidate.is_dir() and has_start(candidate):
+            rel = "." if candidate == workdir else str(candidate.relative_to(workdir))
+            if rel not in seen:
+                seen.append(rel)
+    for manifest in sorted(workdir.glob("*/package.json")):
+        if has_start(manifest.parent):
+            rel = manifest.parent.name
+            if rel not in seen:
+                seen.append(rel)
+    if has_start(workdir) and "." not in seen:
+        seen.append(".")
+    # One unambiguous server wins. Several means the same ambiguity the static path refuses,
+    # and guessing is what once previewed another tenant's application.
+    return seen[0] if seen else None
+
+
 def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tuple[str, str]:
     """THE single decision about which app a preview launches: ("py"|"static"|"node"|"", value).
 
@@ -196,6 +241,11 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
         if cand.name.startswith(("serve", "server", "app", "main", "wsgi")):
             if ("py", cand.name) not in candidates:
                 candidates.append(("py", cand.name))
+    # A runnable server outranks its own static assets: serving an app's index.html without
+    # its API is a page that loads and does nothing.
+    server_dir = _node_server_dir(workdir, changed)
+    if server_dir is not None:
+        return ("node", server_dir)
     for rel in _STATIC_DIRS:
         if (workdir / rel / "index.html").is_file():
             candidates.append(("static", rel))
@@ -274,6 +324,17 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
     # list at all. The preview faithfully launched the wrong application (PR #62).
     # ONE decision, shared with the container path (see resolve_app_entry).
     kind, value = resolve_app_entry(workdir, changed)
+    if kind == "node":
+        # Run the app's OWN server, from its OWN directory, so `npm install` and the start
+        # script resolve that app's manifest rather than the repository root's. The root check
+        # above only ever looked at `workdir/package.json`, so an app built in a subdirectory
+        # fell through to the static branch and was published without its backend.
+        app_dir = "" if value in (".", "") else f"cd {shlex.quote(value)} && "
+        return [
+            "sh", "-lc",
+            f"{app_dir}npm install --no-audit --no-fund --loglevel=error && "
+            "npm run build --if-present && npm start",
+        ]
     if kind == "py":
         return ["python3", value]
     if kind == "static":
