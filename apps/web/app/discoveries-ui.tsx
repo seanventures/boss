@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome } from "@boss/api-client";
 
 import { startDiscoveryAction, promoteOutcomeAction, deepenDiscoveryAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 const PHASE_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -39,7 +40,7 @@ function PromoteOutcome({ runId, idx, orgId, promotedTaskId }: { runId: string; 
     <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center", marginTop: 6 }}>
       <input type="hidden" name="run_id" value={runId} />
       <input type="hidden" name="outcome_index" value={idx} />
-      <button className="cap-btn primary" disabled={pending}>{pending ? "Convening…" : "→ Send to PRD meeting"}</button>
+      <SubmitButton className="cap-btn primary" disabled={pending}>{pending ? "Convening…" : "→ Send to PRD meeting"}</SubmitButton>
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
     </form>
   );
@@ -51,9 +52,9 @@ function DeepenButton({ runId }: { runId: string }) {
   return (
     <form action={action} style={{ display: "inline-flex" }}>
       <input type="hidden" name="run_id" value={runId} />
-      <button className="cap-btn" disabled={pending} title="Run a multi-source parallel scout sweep for a richer, more-cited dossier">
+      <SubmitButton className="cap-btn" disabled={pending} title="Run a multi-source parallel scout sweep for a richer, more-cited dossier">
         {pending ? "Deepening…" : "⏬ Deepen research"}
-      </button>
+      </SubmitButton>
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
     </form>
   );
@@ -117,9 +118,9 @@ function StartDiscovery({ projectId }: { projectId: string }) {
       <input name="context" placeholder="Operator context (optional) — ICP, market, constraints"
         style={{ width: "100%", padding: 8 }} />
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button className="cap-btn primary" disabled={pending}>
+        <SubmitButton className="cap-btn primary" disabled={pending}>
           {pending ? "Starting research…" : "🔎 Run discovery"}
-        </button>
+        </SubmitButton>
         {state?.runId ? <span className="detail" style={{ color: "#3fb950" }}>Started {state.runId} — researching…</span> : null}
         {state?.error ? <span className="detail" style={{ color: "#f85149" }}>⚠ {state.error}</span> : null}
       </div>

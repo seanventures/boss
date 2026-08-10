@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { type PolicyEval, type RunTrace } from "../lib/safety";
 import { scanAnomaliesAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function decisionTone(d: string): string {
   if (d === "allow") return "#3fb950";
@@ -55,7 +56,7 @@ export function AnomalyScanCard({ projectId, actor }: { projectId: string; actor
       <form action={scanAnomaliesAction}>
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
-        <button className="button secondary" type="submit">Scan for anomalies</button>
+        <SubmitButton className="button secondary" type="submit">Scan for anomalies</SubmitButton>
       </form>
     </article>
   );

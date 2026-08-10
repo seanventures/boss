@@ -26,6 +26,7 @@ import {
   upsertResourceQuotaAction,
   upsertStatusChannelAction,
 } from "./work-orchestration-actions";
+import { SubmitButton } from "./submit-button";
 
 type Props = {
   feed: WorkOrchestrationFeed;
@@ -175,7 +176,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                 <label>Units<input name="estimated_units" type="number" min={1} defaultValue={1} /></label>
               </div>
               <label>Workload class<input name="workload_class" defaultValue="general" /></label>
-              <button className="button" type="submit">Score and track</button>
+              <SubmitButton className="button" type="submit">Score and track</SubmitButton>
             </form>
           </details>
         </section>
@@ -187,7 +188,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <input type="hidden" name="project_id" value={feed.projectId} />
               <input type="hidden" name="actor" value={actor} />
               <input type="hidden" name="resource_kind" value="job_concurrency" />
-              <button type="submit">Rebalance</button>
+              <SubmitButton type="submit">Rebalance</SubmitButton>
             </form>
           </div>
           <div className="wo-quota-list">
@@ -256,7 +257,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
                 <label>Reserved<input name="reserved_min" type="number" min={0} defaultValue={0} /></label>
                 <label>Burst<input name="burst_limit" type="number" min={0} defaultValue={0} /></label>
               </div>
-              <button className="button" type="submit">Save envelope</button>
+              <SubmitButton className="button" type="submit">Save envelope</SubmitButton>
             </form>
           </details>
         </section>
@@ -318,7 +319,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               </div>
               <label>Bot display name<input name="display_name" defaultValue="BOSS Product Manager" required /></label>
               <label>External identity<input name="external_identity" placeholder="boss-product-manager" /></label>
-              <button className="button secondary" type="submit">Register bot identity</button>
+              <SubmitButton className="button secondary" type="submit">Register bot identity</SubmitButton>
             </form>
             <form action={upsertStatusChannelAction}>
               <input type="hidden" name="project_id" value={feed.projectId} />
@@ -330,7 +331,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <label>Name<input name="display_name" defaultValue="Delivery status" required /></label>
               <label>Purpose<input name="purpose" defaultValue="Ticket, PR, and deployment status" required /></label>
               <label>Events<textarea name="event_kinds" rows={2} defaultValue={"ticket.updated\ndeployment.status\npull_request.status"} /></label>
-              <button className="button secondary" type="submit">Save status channel</button>
+              <SubmitButton className="button secondary" type="submit">Save status channel</SubmitButton>
             </form>
           </details>
         </section>
@@ -362,7 +363,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <input type="hidden" name="provider_key" value={selectedBinding.provider_key} />
               <input name="external_key" placeholder="BOSS-270" aria-label="External ticket key" />
               <input name="external_issue_id" placeholder="Plane issue UUID" aria-label="External issue ID" />
-              <button className="button" type="submit">Confirm ticket link</button>
+              <SubmitButton className="button" type="submit">Confirm ticket link</SubmitButton>
             </form>
           ) : null}
         </aside>

@@ -4,6 +4,7 @@ import {
   registerMcpServerAction,
   setMcpServerEnabledAction,
 } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function riskLabel(tier: number): { label: string; tone: string } {
   if (tier <= 0) return { label: "read-only", tone: "muted" };
@@ -170,12 +171,12 @@ export function CapabilitiesView({
                     <input type="hidden" name="project_id" value={projectId} />
                     <input type="hidden" name="server_id" value={s.id} />
                     <input type="hidden" name="enabled" value={s.enabled ? "false" : "true"} />
-                    <button type="submit" className="cap-btn">{s.enabled ? "Disable" : "Enable"}</button>
+                    <SubmitButton type="submit" className="cap-btn">{s.enabled ? "Disable" : "Enable"}</SubmitButton>
                   </form>
                   <form action={deleteMcpServerAction}>
                     <input type="hidden" name="project_id" value={projectId} />
                     <input type="hidden" name="server_id" value={s.id} />
-                    <button type="submit" className="cap-btn danger">Remove</button>
+                    <SubmitButton type="submit" className="cap-btn danger">Remove</SubmitButton>
                   </form>
                 </div>
               </div>
@@ -229,7 +230,7 @@ export function CapabilitiesView({
           </label>
           <label>Description<input name="description" placeholder="What this server provides" /></label>
         </div>
-        <button type="submit" className="cap-btn primary">Register server</button>
+        <SubmitButton type="submit" className="cap-btn primary">Register server</SubmitButton>
       </form>
     </div>
   );

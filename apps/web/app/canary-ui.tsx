@@ -2,6 +2,7 @@
 
 import { type CanaryRun } from "../lib/canaries";
 import { runCanariesAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function tone(s: string): string {
   return s === "pass" ? "#3fb950" : s === "fail" ? "#f85149" : "#8b949e";
@@ -14,7 +15,7 @@ export function CanaryCard({ projectId, run }: { projectId: string; run: CanaryR
         <h3 style={{ margin: 0 }}>Canary suite</h3>
         <form action={runCanariesAction}>
           <input type="hidden" name="project_id" value={projectId} />
-          <button
+          <SubmitButton
             type="submit"
             style={{
               background: "var(--accent)", color: "var(--accent-ink)", border: "none",
@@ -22,7 +23,7 @@ export function CanaryCard({ projectId, run }: { projectId: string; run: CanaryR
             }}
           >
             Run canaries
-          </button>
+          </SubmitButton>
         </form>
       </div>
       <p className="detail">

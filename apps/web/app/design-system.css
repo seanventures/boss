@@ -3453,3 +3453,67 @@ select.input:focus,
 .ra-dot[data-tone="live"] { background: rgb( 90,150,255); }
 .ra-dot[data-tone="idle"] { background: rgba(255,255,255,.35); }
 @media (max-width: 640px) { .ra-run-title { max-width: 180px; } }
+
+/* ---------------------------------------------------------------------------
+   Submit feedback (SubmitButton)
+
+   Console actions are server actions: the click starts work that takes seconds
+   and produces no visual change until the page swaps. Without this, "did that
+   register?" has no answer and people press Approve repeatedly.
+
+   Applies to every submit in the console at once, by construction — the button
+   reads its own form's pending state, so there is nothing to remember to wire.
+--------------------------------------------------------------------------- */
+.btn-submit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45em;
+}
+
+.btn-submit:disabled {
+  cursor: not-allowed;
+}
+
+/* Pressed: hold full opacity so the pressed button stays the most prominent
+   thing in the row, while its idle siblings visibly recede. */
+.btn-submit.is-pending {
+  opacity: 1;
+  cursor: progress;
+}
+
+.btn-submit:disabled:not(.is-pending) {
+  opacity: 0.45;
+}
+
+.btn-spinner {
+  width: 0.85em;
+  height: 0.85em;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  opacity: 0.9;
+  animation: bpSpin 0.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner { animation-duration: 2.4s; }
+}
+
+/* The document under review. A PRD runs to thousands of characters; it needs to be
+   readable and scrollable in place, not truncated into a one-line summary. */
+.decision-doc {
+  max-height: 26rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 0.86rem;
+}
+
+.dq-doc-size {
+  opacity: 0.6;
+  font-weight: 400;
+}

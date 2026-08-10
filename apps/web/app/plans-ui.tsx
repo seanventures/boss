@@ -2,6 +2,7 @@
 
 import { type PlanItem } from "../lib/plans";
 import { dispatchPlanAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 export function PlansCard({ projectId, plans }: { projectId: string; plans: PlanItem[] }) {
   return (
@@ -29,7 +30,7 @@ export function PlansCard({ projectId, plans }: { projectId: string; plans: Plan
                 <form action={dispatchPlanAction}>
                   <input type="hidden" name="project_id" value={projectId} />
                   <input type="hidden" name="plan_id" value={p.id} />
-                  <button
+                  <SubmitButton
                     type="submit"
                     style={{
                       background: "var(--accent)", color: "var(--accent-ink)", border: "none",
@@ -37,7 +38,7 @@ export function PlansCard({ projectId, plans }: { projectId: string; plans: Plan
                     }}
                   >
                     Dispatch
-                  </button>
+                  </SubmitButton>
                 </form>
               )}
             </div>

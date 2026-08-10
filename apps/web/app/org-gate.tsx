@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { OrgSummary } from "../lib/orgs";
 import { onboardOrgAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 const ORG_KEY = "boss.org";
 
@@ -100,7 +101,7 @@ export function OrgGate({ orgs }: { orgs: OrgSummary[] }) {
               Organization name
               <input name="name" placeholder="e.g. Northwind Robotics" required autoFocus={orgs.length > 0} />
             </label>
-            <button type="submit" className="cap-btn primary">Onboard organization</button>
+            <SubmitButton type="submit" className="cap-btn primary">Onboard organization</SubmitButton>
             <span className="org-onboard-note">
               Creates the org → workspace → project and seeds the common defaults (budget policy, agent
               modules, packs, MCP servers). It then appears above to enter.

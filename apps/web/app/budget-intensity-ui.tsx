@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { setBudgetIntensityAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 // Mirrors the backend mapping in budget.set_intensity so the preview matches what will apply.
 function envelope(v: number) {
@@ -51,7 +52,7 @@ export function BudgetIntensitySlider({
           {e.workers} workers · {e.tiers}
         </p>
         <div>
-          <button
+          <SubmitButton
             type="submit"
             style={{
               background: "var(--accent)", color: "var(--accent-ink)", border: "none",
@@ -59,7 +60,7 @@ export function BudgetIntensitySlider({
             }}
           >
             Apply intensity
-          </button>
+          </SubmitButton>
         </div>
         {current != null && (
           <p className="detail" style={{ margin: 0, color: "var(--muted)" }}>

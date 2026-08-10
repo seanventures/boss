@@ -13,6 +13,7 @@ import {
   recordRouterRationaleAction,
   invokeSkillAction,
 } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function tone(s: string): string {
   const x = (s || "").toLowerCase();
@@ -41,7 +42,7 @@ export function SelfImprovementRuntime({
       <form action={runSelfImprovementCanaryAction} className="composer compact">
         <input type="hidden" name="proposal_id" value={proposal.id} />
         <input type="hidden" name="actor" value={actor} />
-        <button className="button" type="submit">⚡ Run canary suite (auto)</button>
+        <SubmitButton className="button" type="submit">⚡ Run canary suite (auto)</SubmitButton>
         <p className="detail">Runs the canary + eval-harness suites and records the outcome automatically.</p>
       </form>
     );
@@ -51,7 +52,7 @@ export function SelfImprovementRuntime({
       <form action={startSelfImprovementRolloutAction} className="composer compact">
         <input type="hidden" name="proposal_id" value={proposal.id} />
         <input type="hidden" name="actor" value={actor} />
-        <button className="button" type="submit">▶ Start staged rollout</button>
+        <SubmitButton className="button" type="submit">▶ Start staged rollout</SubmitButton>
         <p className="detail">Ship narrow → widen, each stage gated by a health observation.</p>
       </form>
     );
@@ -74,15 +75,15 @@ export function SelfImprovementRuntime({
             <input type="hidden" name="proposal_id" value={proposal.id} />
             <input type="hidden" name="actor" value={actor} />
             <input type="hidden" name="health" value="healthy" />
-            <button className="button secondary" type="submit">✓ Advance (healthy)</button>
+            <SubmitButton className="button secondary" type="submit">✓ Advance (healthy)</SubmitButton>
           </form>
           <form action={advanceSelfImprovementRolloutAction}>
             <input type="hidden" name="proposal_id" value={proposal.id} />
             <input type="hidden" name="actor" value={actor} />
             <input type="hidden" name="health" value="degraded" />
-            <button className="button secondary" type="submit" style={{ color: "#f85149" }}>
+            <SubmitButton className="button secondary" type="submit" style={{ color: "#f85149" }}>
               ⚠ Report degraded (auto-rollback)
-            </button>
+            </SubmitButton>
           </form>
         </div>
       </div>
@@ -103,7 +104,7 @@ export function EvalHarnessCard({ projectId, actor, run }: { projectId: string; 
         <form action={runEvalsAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
-          <button className="button secondary" type="submit">Run evals</button>
+          <SubmitButton className="button secondary" type="submit">Run evals</SubmitButton>
         </form>
       </div>
       <p className="detail">
@@ -148,7 +149,7 @@ export function AutonomyEvaluateCard({ projectId, actor }: { projectId: string; 
           <span>Role key</span>
           <input name="role_key" className="input" placeholder="metatron" required />
         </label>
-        <button className="button secondary" type="submit">Evaluate autonomy</button>
+        <SubmitButton className="button secondary" type="submit">Evaluate autonomy</SubmitButton>
       </form>
     </article>
   );
@@ -183,12 +184,12 @@ export function RouterHealthCard({
         <form action={pollProviderHealthAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
-          <button className="button secondary" type="submit">Poll provider health</button>
+          <SubmitButton className="button secondary" type="submit">Poll provider health</SubmitButton>
         </form>
         <form action={recordRouterRationaleAction}>
           <input type="hidden" name="project_id" value={projectId} />
           <input type="hidden" name="actor" value={actor} />
-          <button className="button secondary" type="submit">Record rationale</button>
+          <SubmitButton className="button secondary" type="submit">Record rationale</SubmitButton>
         </form>
       </div>
     </article>
@@ -220,7 +221,7 @@ export function SkillInvokeCard({
           <span>Caller</span>
           <input name="caller" className="input" placeholder="resource_plane_kernel" required />
         </label>
-        <button className="button secondary" type="submit">Invoke (mock)</button>
+        <SubmitButton className="button secondary" type="submit">Invoke (mock)</SubmitButton>
       </form>
       {invocations.length > 0 ? (
         <div className="feed-list" style={{ marginTop: 8 }}>

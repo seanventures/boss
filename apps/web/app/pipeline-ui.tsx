@@ -8,6 +8,7 @@ import {
 } from "../lib/pipeline-profiles";
 import type { CSSProperties, ReactNode } from "react";
 import { createPipelineProfileAction, setPipelineDefaultAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 const inputStyle: CSSProperties = {
   background: "var(--surface-3)", border: "1px solid var(--border)", color: "var(--ink)",
@@ -68,7 +69,7 @@ function CustomProfileForm({ projectId, edition }: { projectId: string; edition:
           <label style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--ink-soft)", fontSize: 12.5 }}>
             <input type="checkbox" name="strong_hard" defaultChecked /> Use the strong model for the hard steps (implement, review, security)
           </label>
-          <div><button type="submit" style={primaryBtn}>Create profile</button></div>
+          <div><SubmitButton type="submit" style={primaryBtn}>Create profile</SubmitButton></div>
           <p style={{ color: "var(--muted)", fontSize: 11.5, margin: 0 }}>
             Tier floor/cap clamp how much rigor runs (e.g. floor 2 = always at least standard; cap 1 = never
             beyond low). After creating, use “Set default” on its card to make it the project default.
@@ -154,7 +155,7 @@ function ProfileCard({
           <form action={setPipelineDefaultAction}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="name" value={p.name} />
-            <button
+            <SubmitButton
               type="submit"
               style={{
                 fontSize: 11.5, fontWeight: 600, padding: "4px 12px", borderRadius: 999,
@@ -163,7 +164,7 @@ function ProfileCard({
               }}
             >
               Set default
-            </button>
+            </SubmitButton>
           </form>
         )}
       </div>

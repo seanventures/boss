@@ -12,6 +12,7 @@ import {
   slackRenderAction,
   slackDigestAction,
 } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function tone(s: string): string {
   const x = (s || "").toLowerCase();
@@ -100,16 +101,16 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
           <span>Body</span>
           <textarea name="body" className="textarea" rows={2} placeholder="All systems green." required />
         </label>
-        <button className="button secondary" type="submit" disabled={renderPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={renderPending}>
           {renderPending ? "Rendering…" : "Render Slack message"}
-        </button>
+        </SubmitButton>
       </form>
       <Result state={renderState} />
       <form action={digestAction} style={{ marginTop: 10 }}>
         <input type="hidden" name="project_id" value={projectId} />
-        <button className="button secondary" type="submit" disabled={digestPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={digestPending}>
           {digestPending ? "Batching…" : "Batch draft Slack messages into digests"}
-        </button>
+        </SubmitButton>
       </form>
       <Result state={digestState} />
     </article>
@@ -132,16 +133,16 @@ export function MeetingConsensusCard({ projectId, actor }: { projectId: string; 
           <label className="field" style={{ flex: 1 }}><span>Eligible</span><input name="eligible" className="input" type="number" min={0} placeholder="auto" /></label>
           <label className="field" style={{ flex: 1 }}><span>Quorum</span><input name="quorum" className="input" type="number" min={1} placeholder="auto" /></label>
         </div>
-        <button className="button secondary" type="submit" disabled={tallyPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={tallyPending}>
           {tallyPending ? "Tallying…" : "Tally vote"}
-        </button>
+        </SubmitButton>
       </form>
       <Result state={tallyState} />
       <form action={sweepAction} style={{ marginTop: 10 }}>
         <input type="hidden" name="actor" value={actor} />
-        <button className="button secondary" type="submit" disabled={sweepPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={sweepPending}>
           {sweepPending ? "Sweeping…" : "Sweep stalled meeting runs"}
-        </button>
+        </SubmitButton>
       </form>
       <Result state={sweepState} />
     </article>
@@ -173,9 +174,9 @@ export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
           <label><input type="checkbox" name="adversarial" /> adversarial</label>
         </div>
         <label className="field"><span>Min confidence</span><input name="min_confidence" className="input" type="number" step="0.05" min={0} max={1} defaultValue={0.8} /></label>
-        <button className="button secondary" type="submit" disabled={mergePending}>
+        <SubmitButton className="button secondary" type="submit" disabled={mergePending}>
           {mergePending ? "Checking…" : "Run merge check"}
-        </button>
+        </SubmitButton>
       </form>
       <Result state={mergeState} />
 
@@ -186,9 +187,9 @@ export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
           <span>Files (one per line)</span>
           <textarea name="files" className="textarea" rows={3} placeholder={"a.py\nb.py\nc.py\nd.py\ne.py"} />
         </label>
-        <button className="button secondary" type="submit" disabled={chunkPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={chunkPending}>
           {chunkPending ? "Planning…" : "Plan chunks"}
-        </button>
+        </SubmitButton>
       </form>
       <Result state={chunkState} />
     </article>

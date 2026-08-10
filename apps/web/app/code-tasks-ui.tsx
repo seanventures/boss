@@ -19,6 +19,7 @@ import {
   overrideCodeTaskAction,
 } from "./actions";
 import { Markdown } from "./markdown";
+import { SubmitButton } from "./submit-button";
 
 function RetryControls({ runId, failingGates = [] }: { runId: string; failingGates?: string[] }) {
   const [state, action, pending] = useActionState(retryCodeTaskWithStateAction, null);
@@ -31,9 +32,9 @@ function RetryControls({ runId, failingGates = [] }: { runId: string; failingGat
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
         <input type="hidden" name="run_id" value={runId} />
-        <button className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
+        <SubmitButton className="cap-btn" disabled={pending} title="Run this task again, resuming from where it failed">
           {pending ? "Starting retry…" : "↻ Retry"}
-        </button>
+        </SubmitButton>
       </form>
       <span className="detail">
         Resumes on the same branch and reuses the approved plan
@@ -56,9 +57,9 @@ function OverrideControls({ runId }: { runId: string }) {
       <input type="hidden" name="run_id" value={runId} />
       <input name="reason" placeholder="Reason for override (recorded)" className="cap-input"
              style={{ minWidth: 220 }} />
-      <button className="cap-btn" disabled={pending}>
+      <SubmitButton className="cap-btn" disabled={pending}>
         {pending ? "Overriding…" : "⚖ Waive failing gates & open PR"}
-      </button>
+      </SubmitButton>
       {state?.url ? (
         <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">PR opened →</a>
       ) : null}
@@ -110,7 +111,7 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
       {!hasLive ? (
         <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <button className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</button>
+          <SubmitButton className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</SubmitButton>
         </form>
       ) : null}
       {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
@@ -127,9 +128,9 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
       {hasLive ? (
         <form action={action} style={{ display: "inline-flex" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <button className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
+          <SubmitButton className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
             {pending ? "Rebuilding…" : "↻ Rebuild preview"}
-          </button>
+          </SubmitButton>
         </form>
       ) : null}
       {/* Freshly-started link (shows instantly, before the record is re-fetched) */}
@@ -158,9 +159,9 @@ function ConfirmFeedback({ threadId }: { threadId: string }) {
   return (
     <form action={action} style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <input type="hidden" name="thread_id" value={threadId} />
-      <button className="cap-btn primary" disabled={pending}>
+      <SubmitButton className="cap-btn primary" disabled={pending}>
         {pending ? "Dispatching…" : "Confirm & dispatch governed iteration"}
-      </button>
+      </SubmitButton>
       {state?.run_id ? <span className="detail" style={{ color: "#3fb950" }}>Queued {state.run_id}</span> : null}
       {state?.error ? <span className="detail" style={{ color: "#f85149" }}>{state.error}</span> : null}
     </form>
@@ -186,9 +187,9 @@ function FeedbackControls({ runId, status, anchor = "" }: { runId: string; statu
             : "Describe what failed or should change. Prior findings are carried forward automatically."}
           style={{ minWidth: 320, resize: "vertical" }} />
         <input name="expected" className="cap-input" placeholder="Expected behavior (helps avoid a clarification round)" />
-        <button className="cap-btn" disabled={pending} style={{ justifySelf: "start" }}>
+        <SubmitButton className="cap-btn" disabled={pending} style={{ justifySelf: "start" }}>
           {pending ? "Reviewing feedback…" : completed ? "Propose extension" : "Propose retry"}
-        </button>
+        </SubmitButton>
       </form>
       {state?.question ? (
         <div className="detail" style={{ color: "#d29922" }}>Agent question: {state.question}</div>
@@ -324,7 +325,7 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
         </label>
       </div>
       <div className="ct-form-actions">
-        <button className="cap-btn primary" type="submit">Start coding task</button>
+        <SubmitButton className="cap-btn primary" type="submit">Start coding task</SubmitButton>
         <span className="detail">The agent edits files in an isolated sandbox; BOSS re-runs the tests and opens a gated PR.</span>
       </div>
     </form>

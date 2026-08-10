@@ -10,6 +10,7 @@ import {
   requestInitiativeBudgetAction,
   collectSoc2EvidenceAction,
 } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function usd(micros: number): string {
   return `$${(micros / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
@@ -34,7 +35,7 @@ export function ChaosCard({ projectId, runs }: { projectId: string; runs: ChaosR
           <form action={runChaosAction} key={scenario}>
             <input type="hidden" name="project_id" value={projectId} />
             <input type="hidden" name="scenario" value={scenario} />
-            <button className="button secondary" type="submit">Inject {scenario}</button>
+            <SubmitButton className="button secondary" type="submit">Inject {scenario}</SubmitButton>
           </form>
         ))}
       </div>
@@ -72,7 +73,7 @@ export function FinopsCard({
         <h3 style={{ margin: 0 }}>FinOps — commitments &amp; initiatives</h3>
         <form action={reconcileCommitmentsAction}>
           <input type="hidden" name="project_id" value={projectId} />
-          <button className="button secondary" type="submit">Reconcile commitments</button>
+          <SubmitButton className="button secondary" type="submit">Reconcile commitments</SubmitButton>
         </form>
       </div>
       <p className="detail">
@@ -114,9 +115,9 @@ export function FinopsCard({
             <input name="amount_usd" className="input" type="number" min={0} defaultValue={100} />
           </label>
         </div>
-        <button className="button secondary" type="submit" disabled={initPending}>
+        <SubmitButton className="button secondary" type="submit" disabled={initPending}>
           {initPending ? "Requesting…" : "Request initiative budget"}
-        </button>
+        </SubmitButton>
       </form>
       {initState && !initState.ok ? (
         <p className="detail" style={{ color: "#f85149" }}>{initState.error}</p>
@@ -147,9 +148,9 @@ export function Soc2Card({ projectId }: { projectId: string }) {
       </p>
       <form action={action}>
         <input type="hidden" name="project_id" value={projectId} />
-        <button className="button secondary" type="submit" disabled={pending}>
+        <SubmitButton className="button secondary" type="submit" disabled={pending}>
           {pending ? "Collecting…" : "Collect SOC2 evidence"}
-        </button>
+        </SubmitButton>
       </form>
       {state && !state.ok ? <p className="detail" style={{ color: "#f85149" }}>{state.error}</p> : null}
       {summary ? (

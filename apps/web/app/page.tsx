@@ -175,6 +175,7 @@ import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
+import { SubmitButton } from "./submit-button";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -850,9 +851,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               required
             />
             <span className="cc-kbd" aria-hidden>⌘K</span>
-            <button className="cc-assign" disabled={disableCommandEntry} type="submit">
+            <SubmitButton className="cc-assign" disabled={disableCommandEntry} type="submit">
               Assign →
-            </button>
+            </SubmitButton>
           </form>
 
           <div className="cc-kpis">
@@ -1341,9 +1342,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     required
                   />
                 </label>
-                <button className="button secondary" type="submit">
+                <SubmitButton className="button secondary" type="submit">
                   Save org delegate
-                </button>
+                </SubmitButton>
               </form>
             </article>
 
@@ -1459,9 +1460,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     />
                   </label>
                 </div>
-                <button className="button secondary" type="submit">
+                <SubmitButton className="button secondary" type="submit">
                   Grant break-glass access
-                </button>
+                </SubmitButton>
               </form>
             </article>
 
@@ -1517,9 +1518,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               required
                             />
                           </label>
-                          <button className="button secondary" type="submit">
+                          <SubmitButton className="button secondary" type="submit">
                             Revoke
-                          </button>
+                          </SubmitButton>
                         </form>
                       ) : (
                         <code className="mono">{grant.id}</code>
@@ -1779,9 +1780,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <form action={syncProviderResourcesAction}>
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
-                      <button className="button secondary" type="submit">
+                      <SubmitButton className="button secondary" type="submit">
                         Sync all providers
-                      </button>
+                      </SubmitButton>
                     </form>
                     <form action={runResourceJanitorAction} className="composer compact">
                       <input type="hidden" name="project_id" value={activeProjectId} />
@@ -1808,9 +1809,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           defaultValue={10}
                         />
                       </label>
-                      <button className="button secondary" type="submit">
+                      <SubmitButton className="button secondary" type="submit">
                         Run Resource Janitor
-                      </button>
+                      </SubmitButton>
                       <p className="detail">
                         Creates a report artifact and approval-required cleanup
                         ChangeSets. It never deletes production resources or calls
@@ -1957,9 +1958,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         placeholder={"One capability per line\nsoftware_factory.propose_pr"}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Register worker pool
-                    </button>
+                    </SubmitButton>
                   </form>
 
                   <form action={runAutoscalerPlanAction} className="composer compact">
@@ -1985,9 +1986,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         value="true"
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Run autoscaler review
-                    </button>
+                    </SubmitButton>
                     <p className="detail">
                       Local pool desired capacity may change immediately. Cloud
                       scale-up is held as a BudgetReservation-backed ChangeSet for
@@ -2129,9 +2130,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         required
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create ChangeSet
-                    </button>
+                    </SubmitButton>
                   </form>
 
                   {providerOps.changeSets.length === 0 ? (
@@ -2175,9 +2176,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   name="actor"
                                   value={activeActorId}
                                 />
-                                <button className="button secondary" type="submit">
+                                <SubmitButton className="button secondary" type="submit">
                                   Approve
-                                </button>
+                                </SubmitButton>
                               </form>
                             ) : null}
                             {changeSet.status === "approved" ? (
@@ -2197,9 +2198,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   name="actor"
                                   value={activeActorId}
                                 />
-                                <button className="button secondary" type="submit">
+                                <SubmitButton className="button secondary" type="submit">
                                   Apply
-                                </button>
+                                </SubmitButton>
                               </form>
                             ) : (
                               <code className="mono">{changeSet.id}</code>
@@ -2301,9 +2302,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         placeholder="Why this environment is allowed to perform provider-backed rollouts."
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Save environment policy
-                    </button>
+                    </SubmitButton>
                     <p className="detail">
                       Provider-backed staging and production runs stay blocked
                       until an active environment policy allows the runtime mode
@@ -2436,9 +2437,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         placeholder={"One secret ref per line\nsec_database_url"}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Register deployment target
-                    </button>
+                    </SubmitButton>
                   </form>
 
                   <form action={createDeploymentRunAction} className="composer compact">
@@ -2493,9 +2494,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         placeholder='{"review_packet_id":"art_...","ci_status":"passed"}'
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Plan deployment run
-                    </button>
+                    </SubmitButton>
                     <p className="detail">
                       Provider deployments are modeled as ChangeSets. Health checks
                       run only after the ChangeSet is applied, or immediately for
@@ -2568,9 +2569,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 name="actor"
                                 value={activeActorId}
                               />
-                              <button className="button secondary" type="submit">
+                              <SubmitButton className="button secondary" type="submit">
                                 Run health checks
-                              </button>
+                              </SubmitButton>
                             </form>
                             <code className="mono">
                               {run.rollbackArtifactId ?? run.releaseArtifactId ?? run.id}
@@ -2854,9 +2855,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <form action={refreshHealthSnapshotAction}>
                 <input type="hidden" name="project_id" value={activeProjectId} />
                 <input type="hidden" name="actor" value={activeActorId} />
-                <button className="button secondary" type="submit">
+                <SubmitButton className="button secondary" type="submit">
                   Refresh snapshot
-                </button>
+                </SubmitButton>
               </form>
               <div className="feed-list">
                 {status.topRisks.length === 0 ? (
@@ -2901,9 +2902,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
                     <input type="hidden" name="limit" value={25} />
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create ops digest
-                    </button>
+                    </SubmitButton>
                   </form>
                   <div className="feed-list">
                     {opsQueue.recommendedActions.length === 0 ? (
@@ -3080,16 +3081,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   <form action={createReplayBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create replay bundle
-                    </button>
+                    </SubmitButton>
                   </form>
                   <form action={createComplianceEvidenceBundleAction}>
                     <input type="hidden" name="project_id" value={activeProjectId} />
                     <input type="hidden" name="actor" value={activeActorId} />
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create compliance evidence
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -3288,9 +3289,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     placeholder={"One item per line\nNo unsafe expirations"}
                   />
                 </label>
-                <button className="button secondary" type="submit">
+                <SubmitButton className="button secondary" type="submit">
                   Submit improvement proposal
-                </button>
+                </SubmitButton>
               </form>
             </article>
 
@@ -3354,9 +3355,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               placeholder={"One evidence ref per line\nartifact:test-report-123"}
                               required
                             />
-                            <button className="button secondary" type="submit">
+                            <SubmitButton className="button secondary" type="submit">
                               Record canary success
-                            </button>
+                            </SubmitButton>
                           </form>
                           <form action={recordSelfImprovementCanaryAction} className="composer compact">
                             <input type="hidden" name="proposal_id" value={proposal.id} />
@@ -3387,9 +3388,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               placeholder={"One evidence ref per line\nartifact:canary-log-456"}
                               required
                             />
-                            <button className="button secondary" type="submit">
+                            <SubmitButton className="button secondary" type="submit">
                               Record canary failure
-                            </button>
+                            </SubmitButton>
                           </form>
                         </div>
                       ) : proposal.status === "rollout_approved" ? (
@@ -3427,9 +3428,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             placeholder={"One evidence ref per line\nartifact:rollout-report-789"}
                             required
                           />
-                          <button className="button secondary" type="submit">
+                          <SubmitButton className="button secondary" type="submit">
                             Record rollout
-                          </button>
+                          </SubmitButton>
                         </form>
                       ) : proposal.status === "rolled_out" ? (
                         <form action={rollbackSelfImprovementProposalAction} className="composer compact">
@@ -3466,9 +3467,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             placeholder={"One evidence ref per line\nartifact:rollback-report-101"}
                             required
                           />
-                          <button className="button secondary" type="submit">
+                          <SubmitButton className="button secondary" type="submit">
                             Record rollback
-                          </button>
+                          </SubmitButton>
                         </form>
                       ) : (
                         <code className="mono">{proposal.id}</code>
@@ -3527,9 +3528,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     required
                   />
                 </label>
-                <button className="button secondary" type="submit">
+                <SubmitButton className="button secondary" type="submit">
                   Create outbox draft
-                </button>
+                </SubmitButton>
               </form>
             </article>
 
@@ -3627,9 +3628,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Save channel policy
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -3674,9 +3675,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               <option value="urgent">Urgent</option>
                             </select>
                           </label>
-                          <button className="button secondary" type="submit">
+                          <SubmitButton className="button secondary" type="submit">
                             Queue send
-                          </button>
+                          </SubmitButton>
                         </form>
                       ) : (
                         <code className="mono">{message.id}</code>
@@ -3759,9 +3760,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <input type="hidden" name="pack_id" value={pack.packId} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
-                          <button className="button secondary" type="submit">
+                          <SubmitButton className="button secondary" type="submit">
                             Install
-                          </button>
+                          </SubmitButton>
                         </form>
                       )}
                     </div>
@@ -3935,9 +3936,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               name="hosted_org_id"
                               value={commercial.edition.accountConnectOrg.hostedOrgId}
                             />
-                            <button className="button secondary" type="submit">
+                            <SubmitButton className="button secondary" type="submit">
                               Sync entitlements
-                            </button>
+                            </SubmitButton>
                           </form>
                           <form action={unlinkAccountConnectAction}>
                             <input
@@ -3956,9 +3957,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               name="reason"
                               value="Operator unlinked Account Connect from Mission Control."
                             />
-                            <button className="button secondary" type="submit">
+                            <SubmitButton className="button secondary" type="submit">
                               Unlink
-                            </button>
+                            </SubmitButton>
                           </form>
                         </div>
                       </div>
@@ -4031,9 +4032,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         />
                         <span>Enable optional hosted telemetry</span>
                       </label>
-                      <button className="button secondary" type="submit">
+                      <SubmitButton className="button secondary" type="submit">
                         Link Account Connect
-                      </button>
+                      </SubmitButton>
                     </form>
                   )}
                 </div>
@@ -4126,9 +4127,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Run hosted readiness check
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -4209,9 +4210,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   aria-label="Hosted callback code"
                                   placeholder="Hosted callback code"
                                 />
-                                <button className="button secondary" type="submit">
+                                <SubmitButton className="button secondary" type="submit">
                                   Complete hosted login
-                                </button>
+                                </SubmitButton>
                               </form>
                             ) : null}
                           </div>
@@ -4260,9 +4261,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Start hosted Account Connect login
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -4368,9 +4369,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   aria-label="Revoke invite reason"
                                   placeholder="Reason for revoke"
                                 />
-                                <button className="button secondary" type="submit">
+                                <SubmitButton className="button secondary" type="submit">
                                   Revoke invite
-                                </button>
+                                </SubmitButton>
                               </form>
                             ) : null}
                           </div>
@@ -4430,9 +4431,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create team invite
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -4513,9 +4514,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create billing portal session
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -4682,9 +4683,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"response_hours":4,"uptime_target":"99.9"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Save enterprise record
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -4816,9 +4817,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Record validation run
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -4919,9 +4920,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   defaultValue={`{"updated_from":"mission_control"}`}
                                 />
                               </label>
-                              <button className="button ghost" type="submit">
+                              <SubmitButton className="button ghost" type="submit">
                                 Update support case
-                              </button>
+                              </SubmitButton>
                             </form>
                           </div>
                           <span
@@ -5003,9 +5004,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         Escalate to hosted Account Connect support when configured
                       </span>
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Create support case
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -5123,9 +5124,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <option value="disabled">Disabled</option>
                       </select>
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Save identity provider
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -5224,9 +5225,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         defaultValue={`{"source":"mission_control"}`}
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Save rollout policy
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -5307,9 +5308,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         placeholder="command_submit&#10;enterprise_manage"
                       />
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Upsert SCIM group
-                    </button>
+                    </SubmitButton>
                   </form>
 
                   <form action={upsertEnterpriseScimUserAction} className="composer">
@@ -5348,9 +5349,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       <input type="checkbox" name="active" value="true" defaultChecked />
                       <span>Active user grants org-member access</span>
                     </label>
-                    <button className="button secondary" type="submit">
+                    <SubmitButton className="button secondary" type="submit">
                       Upsert SCIM user
-                    </button>
+                    </SubmitButton>
                   </form>
                 </>
               )}
@@ -5400,9 +5401,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       defaultValue={`{"source":"mission_control"}`}
                     />
                   </label>
-                  <button className="button secondary" type="submit">
+                  <SubmitButton className="button secondary" type="submit">
                     Sync hosted catalog
-                  </button>
+                  </SubmitButton>
                 </form>
 
                 {agentModules.marketplaceSyncRuns.length === 0 ? (
@@ -5543,9 +5544,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             name="reason"
                             value="Disabled from Mission Control marketplace."
                           />
-                          <button className="button ghost" type="submit">
+                          <SubmitButton className="button ghost" type="submit">
                             Uninstall
-                          </button>
+                          </SubmitButton>
                         </form>
                         <form action={rollbackAgentModuleAction}>
                           <input type="hidden" name="module_id" value={module.moduleId} />
@@ -5556,9 +5557,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             name="reason"
                             value="Rollback requested from Mission Control marketplace."
                           />
-                          <button className="button secondary" type="submit">
+                          <SubmitButton className="button secondary" type="submit">
                             Roll back
-                          </button>
+                          </SubmitButton>
                         </form>
                       </div>
                     ) : (
@@ -5566,9 +5567,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <input type="hidden" name="module_id" value={module.moduleId} />
                         <input type="hidden" name="project_id" value={activeProjectId} />
                         <input type="hidden" name="actor" value={activeActorId} />
-                        <button className="button secondary" type="submit">
+                        <SubmitButton className="button secondary" type="submit">
                           Install module
-                        </button>
+                        </SubmitButton>
                       </form>
                     )}
                   </div>
@@ -5748,11 +5749,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 ? "Governed project capacity; jobs receive leases, never this value."
                                 : "Owner/single-tenant capacity; this value is never pooled."}
                             </p>
-                            <button className="button secondary" type="submit">
+                            <SubmitButton className="button secondary" type="submit">
                               {source.credentialPresent
                                 ? "Rotate credential"
                                 : "Store credential"}
-                            </button>
+                            </SubmitButton>
                           </form>
                         ) : null}
                         {source.authMethod.includes("oauth") ? (
@@ -5777,9 +5778,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 name="reason"
                                 value="Operator disconnected official session reference from ProviderOps."
                               />
-                              <button className="button secondary" type="submit">
+                              <SubmitButton className="button secondary" type="submit">
                                 Disconnect session
-                              </button>
+                              </SubmitButton>
                             </form>
                           ) : (
                             <div className="feed-list">
@@ -5827,9 +5828,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   defaultValue={source.oauthScopes.join("\n")}
                                   placeholder="One OAuth scope per line"
                                 />
-                                <button className="button secondary" type="submit">
+                                <SubmitButton className="button secondary" type="submit">
                                   Start official session
-                                </button>
+                                </SubmitButton>
                               </form>
 
                               {sourceConnectionSessions.length === 0 ? (
@@ -5905,12 +5906,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                             defaultValue={`{"capacity_state":"available"}`}
                                             placeholder="Observed capacity JSON"
                                           />
-                                          <button
+                                          <SubmitButton
                                             className="button secondary"
                                             type="submit"
                                           >
                                             Complete session
-                                          </button>
+                                          </SubmitButton>
                                         </form>
                                       ) : null}
                                     </div>
@@ -6706,9 +6707,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               value={activeActorId}
                             />
                             <input type="hidden" name="severity" value="high" />
-                            <button className="button secondary" type="submit">
+                            <SubmitButton className="button secondary" type="submit">
                               Incident packet
-                            </button>
+                            </SubmitButton>
                           </form>
                           {deadletter.sourceKind === "job" &&
                           !deadletter.requeuedJobId ? (
@@ -6733,9 +6734,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 name="reason"
                                 value="operator_requested_requeue"
                               />
-                              <button className="button secondary" type="submit">
+                              <SubmitButton className="button secondary" type="submit">
                                 Requeue job
-                              </button>
+                              </SubmitButton>
                             </form>
                           ) : null}
                         </div>
@@ -6807,6 +6808,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 const why = typeof rec.why === "string" ? rec.why : "";
                 const plan = typeof rec.plan === "string" ? rec.plan : "";
                 const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
+                // The thing being approved. For a PRD publish the entire drafted document
+                // travels in the payload (recommendation.args.markdown) and was never shown:
+                // the card asked "approve publishing the PRD" while withholding the PRD.
+                const recArgs =
+                  rec.args && typeof rec.args === "object"
+                    ? (rec.args as Record<string, unknown>)
+                    : {};
+                const subject =
+                  typeof recArgs.markdown === "string"
+                    ? recArgs.markdown
+                    : typeof recArgs.content === "string"
+                      ? recArgs.content
+                      : "";
+                const subjectTitle =
+                  typeof recArgs.title === "string" ? recArgs.title : "Document to publish";
 
                 return (
                   <article className="dq-row" key={decision.id}>
@@ -6821,6 +6837,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         <p className="dq-rationale">
                           {why || formatRecommendation(decision)}
                         </p>
+                        {subject ? (
+                          <details className="decision-plan-details">
+                            <summary>
+                              Read the full document before approving
+                              <span className="dq-doc-size">
+                                {" · "}
+                                {subject.length.toLocaleString()} characters
+                              </span>
+                            </summary>
+                            <div className="decision-plan-sec">
+                              <h4>{subjectTitle}</h4>
+                              <pre className="decision-doc">{subject}</pre>
+                            </div>
+                          </details>
+                        ) : null}
                         {plan || review ? (
                           <details className="decision-plan-details">
                             <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
@@ -6864,15 +6895,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           <input type="hidden" name="decision_id" value={decision.id} />
                           <input type="hidden" name="project_id" value={activeProjectId} />
                           <input type="hidden" name="actor" value={activeActorId} />
-                          <button className="dq-btn approve" name="action" value="approve">
+                          <SubmitButton className="dq-btn approve" name="action" value="approve">
                             Approve
-                          </button>
-                          <button className="dq-btn neutral" name="action" value="revise">
+                          </SubmitButton>
+                          <SubmitButton className="dq-btn neutral" name="action" value="revise">
                             Request changes
-                          </button>
-                          <button className="dq-btn reject" name="action" value="reject">
+                          </SubmitButton>
+                          <SubmitButton className="dq-btn reject" name="action" value="reject">
                             Reject
-                          </button>
+                          </SubmitButton>
                           <details className="dq-more">
                             <summary>Note · delegate</summary>
                             <div className="dq-more-body">
@@ -6889,9 +6920,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                 name="delegate_to"
                                 placeholder="Delegate to role or approver"
                               />
-                              <button className="dq-btn neutral" name="action" value="delegate">
+                              <SubmitButton className="dq-btn neutral" name="action" value="delegate">
                                 Delegate
-                              </button>
+                              </SubmitButton>
                             </div>
                           </details>
                           <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
@@ -6930,9 +6961,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                                   name="external_ref"
                                   placeholder="External reference (PR URL, commit SHA, ticket)"
                                 />
-                                <button className="dq-btn approve" name="action" value="execute">
+                                <SubmitButton className="dq-btn approve" name="action" value="execute">
                                   Mark executed
-                                </button>
+                                </SubmitButton>
                               </form>
                             </details>
                           ) : null}
@@ -6976,9 +7007,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       placeholder="email:founder@example.com or slack:#ops"
                     />
                   </label>
-                  <button className="button secondary" type="submit">
+                  <SubmitButton className="button secondary" type="submit">
                     Create digest
-                  </button>
+                  </SubmitButton>
                 </form>
               </div>
             </details>

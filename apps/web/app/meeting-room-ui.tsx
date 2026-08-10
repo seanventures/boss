@@ -11,6 +11,7 @@ import {
   setMeetingRoleEnabledAction,
   deleteMeetingRoleAction,
 } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 const ROLE_META: Record<string, { initials: string; tone: string }> = {
   "Product Manager": { initials: "PM", tone: "accent" },
@@ -167,9 +168,9 @@ function NewMeetingForm({
         PRD — then it goes to your approval gate before publishing. Runs ~3–5 min.
       </span>
       <div className="mr-form-actions">
-        <button type="submit" className="cap-btn primary" disabled={convening}>
+        <SubmitButton type="submit" className="cap-btn primary" disabled={convening}>
           {convening ? "Convening the panel…" : "Convene the panel"}
-        </button>
+        </SubmitButton>
         <button type="button" className="cap-btn" onClick={onCancel} disabled={convening}>
           Cancel
         </button>
@@ -335,12 +336,12 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
                 <input type="hidden" name="enabled" value={r.enabled === false ? "true" : "false"} />
-                <button type="submit" className="cap-btn">{r.enabled === false ? "Enable" : "Disable"}</button>
+                <SubmitButton type="submit" className="cap-btn">{r.enabled === false ? "Enable" : "Disable"}</SubmitButton>
               </form>
               <form action={deleteMeetingRoleAction}>
                 <input type="hidden" name="project_id" value={projectId} />
                 <input type="hidden" name="role_key" value={r.key} />
-                <button type="submit" className="cap-btn danger">Remove</button>
+                <SubmitButton type="submit" className="cap-btn danger">Remove</SubmitButton>
               </form>
             </div>
           </div>
@@ -357,7 +358,7 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
         <label className="mr-field-label">Persona / lens (the system prompt that defines how this agent thinks)</label>
         <textarea name="lens" className="mr-lens-input" rows={3} required
           placeholder="e.g. legal and contractual risk — IP, liability, compliance, terms, and what could expose the org legally." />
-        <button type="submit" className="cap-btn primary">Add role-agent</button>
+        <SubmitButton type="submit" className="cap-btn primary">Add role-agent</SubmitButton>
       </form>
     </div>
   );
