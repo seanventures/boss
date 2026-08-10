@@ -701,7 +701,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCodeTasksFeed(activeProjectId),
       fetchDiscoveriesFeed(activeProjectId),
       fetchPreviews(activeProjectId),
-      fetchQaBenchmarkApps(),
+      fetchQaBenchmarkApps(activeProjectId),
       fetchSandboxFeed(),
       fetchPipelineData(activeProjectId),
       fetchDashboard(activeProjectId),

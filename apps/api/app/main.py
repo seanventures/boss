@@ -5425,15 +5425,38 @@ def build_web_app_endpoint(payload: dict):
 
 
 @app.get("/v1/qa/benchmark-apps")
-def list_qa_benchmark_apps_endpoint():
+def list_qa_benchmark_apps_endpoint(project_id: str = ""):
     """List pinned end-to-end application contracts used to evaluate BOSS itself.
 
     Catalog reads are side-effect free. A benchmark is not a claimed result; it becomes
     a governed code-task run only through the explicit launch endpoint below.
-    """
-    from boss_engine.services.benchmark_apps import list_benchmark_apps
 
-    return {"benchmark_apps": list_benchmark_apps()}
+    Each entry carries whether it has ALREADY been built in this project. Without that the
+    card can only say "Launch", so a benchmark that finished hours ago still invites the press
+    that would build a second copy of it -- and the operator only discovers that by pressing.
+    Telling them beforehand is the difference between a guard and an interface.
+    """
+    from boss_engine.services.benchmark_apps import benchmark_task_input, list_benchmark_apps
+    from boss_engine.services.meeting_service import completed_work_for, meeting_fingerprint
+
+    apps = list_benchmark_apps()
+    if not project_id or not database_is_reachable(engine):
+        return {"benchmark_apps": apps}
+    with begin(engine) as c:
+        for app_entry in apps:
+            try:
+                directive = benchmark_task_input(app_entry["id"])["instructions"]
+                done = completed_work_for(
+                    c, project_id, meeting_fingerprint(project_id, directive, ""))
+            except Exception:  # noqa: BLE001 - a catalog read must never fail on one entry
+                done = None
+            if done and done.get("run_id"):
+                app_entry["built"] = {
+                    "run_id": done["run_id"],
+                    "run_status": done["run_status"],
+                    "pull_request_url": done["pull_request_url"],
+                }
+    return {"benchmark_apps": apps}
 
 
 @app.post("/v1/qa/benchmark-apps/{benchmark_id}/runs", status_code=201)

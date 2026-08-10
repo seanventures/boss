@@ -378,6 +378,10 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
                 kind?: "meeting" | "code" | "existing") => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
+  // What the CATALOG already knows: this benchmark has been built in this project. Read at
+  // render, so the card never invites a press whose only effect would be a second copy. The
+  // guard behind the button covers an API caller; this covers the person looking at it.
+  const alreadyBuilt = benchmark.built?.run_id ?? null;
 
   // `force` is the difference between "build this" and "build it AGAIN". It is only ever set
   // by the second, explicit control -- so a plain press can never spend a second build.
@@ -408,11 +412,12 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
       {/* Once launched this becomes a way IN to the run, exactly like the task cards. The
           state lives in the PARENT: held here it was destroyed by the reload the launch
           triggers, so the button reverted and the operator saw nothing happen. */}
-      {startedId && startedKind === "existing" ? (
+      {(startedId && startedKind === "existing") || (!startedId && alreadyBuilt) ? (
         // The work already exists. Offering it is the useful answer; building a second copy
         // is still possible and now has to be asked for by name.
         <>
-          <button className="cap-btn primary" onClick={() => onOpen?.(startedId)}
+          <button className="cap-btn primary"
+                  onClick={() => onOpen?.((startedId || alreadyBuilt) as string)}
                   title="Open the build that already exists">
             View {benchmark.name} →
           </button>
@@ -443,8 +448,9 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
       <span className="detail">
         {sent ? "starting…"
               : failed ? failed
-              : startedId && startedKind === "existing"
-                ? "already built — nothing new was started; opening it costs nothing"
+              : (startedId && startedKind === "existing") || (!startedId && alreadyBuilt)
+                ? "already built in this project — opening it costs nothing; building again "
+                  + "runs the whole panel and pipeline"
               : startedId
                 ? (startedKind === "meeting"
                     ? `panel convened ${startedId.slice(0, 13)}… — it drafts a PRD, approves it `

@@ -54,9 +54,10 @@ export async function fetchCodeTasksFeed(projectId = PROJECT_ID): Promise<CodeTa
   }
 }
 
-export async function fetchQaBenchmarkApps(): Promise<QaBenchmarkApp[]> {
+export async function fetchQaBenchmarkApps(projectId?: string): Promise<QaBenchmarkApp[]> {
   try {
-    return (await client.getQaBenchmarkApps()).benchmark_apps ?? [];
+    // Passing the project is what lets each card know whether it has already been built here.
+    return (await client.getQaBenchmarkApps(projectId)).benchmark_apps ?? [];
   } catch {
     return [];
   }

@@ -1098,6 +1098,13 @@ export type QaBenchmarkApp = {
     evidence: string;
   }>;
   score_baselines: Record<string, number>;
+  /** Present when this benchmark has already been built in the project being viewed, so the
+   *  card can offer the existing app rather than inviting a second, identical build. */
+  built?: {
+    run_id: string;
+    run_status?: string;
+    pull_request_url?: string | null;
+  };
 };
 
 export type QaBenchmarkAppsResponse = { benchmark_apps: QaBenchmarkApp[] };
@@ -5699,8 +5706,10 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId, limit },
       });
     },
-    getQaBenchmarkApps() {
-      return request<QaBenchmarkAppsResponse>("GET", "/v1/qa/benchmark-apps");
+    getQaBenchmarkApps(projectId?: string) {
+      // project_id is what lets the catalog say which of these already exist here.
+      return request<QaBenchmarkAppsResponse>("GET", "/v1/qa/benchmark-apps",
+        projectId ? { query: { project_id: projectId } } : undefined);
     },
     startQaBenchmarkApp(benchmarkId: string, payload: {
       project_id: string;

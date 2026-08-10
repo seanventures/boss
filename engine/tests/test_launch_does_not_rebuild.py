@@ -73,3 +73,26 @@ def test_the_button_offers_the_existing_build_before_offering_to_repeat_it():
     # The plain press must never force.
     assert "launch(false)" in text
     assert "launch(true)" in text
+
+
+def test_the_catalog_reports_which_benchmarks_are_already_built():
+    """A guard the operator only discovers by pressing is not an interface.
+
+    The button said "Launch BugBox" hours after BugBox was built. The press was safe by then --
+    the API answers with the existing run -- but the card still invited it, which is the same
+    confusion one step later. The catalog now carries `built`, so the card can say so at rest.
+    """
+    catalog = inspect.getsource(api_main.list_qa_benchmark_apps_endpoint)
+    assert "completed_work_for" in catalog
+    assert "project_id" in catalog
+    # A catalog read must not fail because one entry could not be resolved.
+    assert "except Exception" in catalog
+
+
+def test_the_card_reads_that_state_before_any_click():
+    import pathlib
+
+    ui = pathlib.Path(__file__).resolve().parents[2] / "apps/web/app/code-tasks-ui.tsx"
+    text = ui.read_text()
+    assert "benchmark.built?.run_id" in text
+    assert "!startedId && alreadyBuilt" in text
