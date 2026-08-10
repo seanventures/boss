@@ -381,6 +381,121 @@ def _tool_read_repo_file(connection: Connection, project_id: str, settings: Sett
     }
 
 
+def _tool_list_apps(connection, project_id, settings, args) -> dict:
+    """The apps this project has built, so the agent can resolve "the ApproveIt app" to a run.
+
+    Without this the agent could read repository FILES but had no idea what BOSS had built, so
+    a request naming an app by name had nothing to attach to.
+    """
+    from sqlalchemy import text as _sql
+
+    rows = connection.execute(_sql(
+        "SELECT id, title, status, phase, spec->>'owner' AS owner, spec->>'repo' AS repo, "
+        "       finalize_ctx->>'root_run_id' AS root, pull_request_url, created_at "
+        "FROM code_task_runs WHERE project_id = :p "
+        "ORDER BY created_at DESC LIMIT :n"),
+        {"p": project_id, "n": int(args.get("limit") or 20)}).mappings().all()
+    return {"apps": [{
+        "run_id": r["id"], "title": r["title"], "status": r["status"], "phase": r["phase"],
+        "repo": f"{r['owner']}/{r['repo']}" if r["owner"] else None,
+        "branch": f"boss/code/{r['root'] or r['id']}",
+        "pull_request": r["pull_request_url"],
+        "created_at": str(r["created_at"]),
+    } for r in rows]}
+
+
+def _tool_inspect_app(connection, project_id, settings, args) -> dict:
+    """Report what a built app actually IS: does it have a server, does its UI call one.
+
+    An operator asked why an app forgot everything on reload. Answering needed the built
+    bundle and the source tree; the agent could reach neither, so it guessed. This returns
+    facts -- whether a server exists, whether the frontend makes API calls, what the preview
+    would launch -- so the agent explains instead of speculating.
+    """
+    from pathlib import Path
+    from .code_task_service import load_code_task_run, work_branch_for
+    from .preview_service import resolve_app_entry
+
+    run = load_code_task_run(connection, str(args.get("run_id") or ""))
+    if run is None:
+        return {"error": f"no such run: {args.get('run_id')}"}
+    spec = run.get("spec") or {}
+    owner, repo = spec.get("owner"), spec.get("repo")
+    branch = work_branch_for(run)
+
+    import subprocess
+    import tempfile
+
+    from .github_app_adapter import repo_token
+
+    workdir = Path(tempfile.mkdtemp(prefix="boss-inspect-"))
+    try:
+        token = repo_token(settings, owner, repo)
+        clone = subprocess.run(
+            ["git", "clone", "--depth", "1", "--branch", branch,
+             f"https://x-access-token:{token}@github.com/{owner}/{repo}.git", str(workdir / "r")],
+            capture_output=True, text=True, timeout=300)
+        if clone.returncode != 0:
+            return {"error": f"could not read {owner}/{repo}@{branch}",
+                    "detail": clone.stderr[-300:]}
+        root = workdir / "r"
+        files = [str(f.relative_to(root)) for f in root.rglob("*")
+                 if f.is_file() and ".git/" not in str(f)]
+        servers = [f for f in files if f.endswith(("server.js", "server.ts", "index.js"))
+                   and ("server" in f or "api" in f)]
+        sources = [f for f in files if f.endswith((".tsx", ".ts", ".js", ".jsx"))
+                   and not f.startswith(("node_modules", "dist"))]
+        calls = 0
+        for rel in sources[:400]:
+            try:
+                body = (root / rel).read_text(errors="ignore")
+            except OSError:
+                continue
+            calls += body.count("fetch(") + body.count("axios.")
+        try:
+            kind, value = resolve_app_entry(root, files)
+        except Exception as error:  # noqa: BLE001
+            kind, value = "ambiguous", str(error)[:200]
+        return {
+            "run_id": run["id"], "title": run.get("title"), "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "preview_would_run": {"kind": kind, "entry": value},
+            "has_server_file": bool(servers), "server_files": servers[:5],
+            "frontend_api_calls": calls,
+            "has_database": any(f.endswith(".sql") or "migrations" in f for f in files),
+            "verdict": (
+                "No backend: the UI holds state in memory, so anything entered is lost on "
+                "reload." if not servers and calls == 0 else
+                "Has a server but the UI never calls it." if servers and calls == 0 else
+                "Frontend calls an API but no server was found in this branch."
+                if calls and not servers else
+                "Full stack: a server exists and the frontend calls it."),
+        }
+    finally:
+        import shutil
+
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _wt_change_existing_app(connection, project_id, settings, args) -> dict:
+    """Change an app that already exists, starting from its own code.
+
+    The agent's only write tools created TASK ROWS -- a to-do nothing acts on. Asked to "make
+    this save to a database", the best it could do was file a note, which is why asking it to
+    fix an app produced nothing useful. This starts real, governed work on the app's branch.
+    """
+    from .code_task_service import start_followup_task
+    from .jobs import JobLeaseService
+
+    run_id = str(args.get("run_id") or "").strip()
+    instructions = str(args.get("instructions") or "").strip()
+    if not run_id or not instructions:
+        return {"error": "run_id and instructions are both required"}
+    return start_followup_task(
+        connection, parent_run_id=run_id, instructions=instructions,
+        jobs=JobLeaseService(settings), title=args.get("title"), actor="boss_agent")
+
+
 ToolFn = Callable[[Connection, str, Settings, dict], dict]
 
 TOOLS: list[dict[str, Any]] = [
@@ -403,6 +518,47 @@ TOOLS: list[dict[str, Any]] = [
                 "name": "get_project_status",
                 "description": "Get the project's real current state: open tasks, pending decisions, deadletters, jobs completed, and recent activity. Use this to ground plans in what is actually happening.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    },
+    {
+        "fn": _tool_list_apps,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "list_apps",
+                "description": (
+                    "List the apps this project has BUILT, with each one's run id, repo, branch "
+                    "and status. Use this FIRST whenever someone names an app ('the ApproveIt "
+                    "app', 'the expense tool') so you can attach their request to a real run. "
+                    "Reading repository files tells you what code exists; this tells you what "
+                    "BOSS built and where it lives."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer"}},
+                    "required": [],
+                },
+            },
+        },
+    },
+    {
+        "fn": _tool_inspect_app,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "inspect_app",
+                "description": (
+                    "Report what a built app actually IS: whether it has a server, whether its "
+                    "frontend calls an API, whether it has a database, and what a preview would "
+                    "launch for it. Use this to explain behaviour like 'it resets when I close "
+                    "the tab' or 'the preview shows an empty dashboard' instead of guessing -- "
+                    "those symptoms have different causes and this distinguishes them."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"run_id": {"type": "string",
+                                              "description": "run id from list_apps"}},
+                    "required": ["run_id"],
+                },
             },
         },
     },
@@ -592,13 +748,43 @@ def _wt_publish_document(connection, project_id, settings, args) -> dict:
 
 WRITE_TOOLS: list[dict[str, Any]] = [
     {
+        "fn": _wt_change_existing_app,
+        "risk_tier": 1,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "change_existing_app",
+                "description": (
+                    "Start real, governed work to CHANGE an app that already exists, building "
+                    "on the code it already has. Use this -- not create_followup_task -- "
+                    "whenever someone asks for a fix or an addition to an app that has been "
+                    "built ('make it save to a database', 'the server is broken', 'add a "
+                    "filter'). create_followup_task only files a note that nobody acts on. "
+                    "This starts from the app's own branch, so nothing is rebuilt; get the "
+                    "run_id from list_apps. Say what should change and why, in the "
+                    "instructions -- they are handed to a coding agent."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run_id": {"type": "string",
+                                   "description": "the app to change, from list_apps"},
+                        "instructions": {"type": "string",
+                                         "description": "the change to make, in detail"},
+                        "title": {"type": "string"},
+                    },
+                    "required": ["run_id", "instructions"],
+                },
+            },
+        },
+    },
+    {
         "fn": _wt_create_followup_task,
         "risk_tier": 1,
         "schema": {
             "type": "function",
             "function": {
                 "name": "create_followup_task",
-                "description": "Create a real follow-up task in BOSS for a concrete next step. Low risk — runs immediately.",
+                "description": ("Record a to-do in BOSS for a concrete next step. This only FILES an item -- no code is written and nothing runs. To actually change an app that exists, use change_existing_app instead; to start a new product, use a meeting. Reach for this only when the next step is genuinely for a person to do."),
                 "parameters": {
                     "type": "object",
                     "properties": {
