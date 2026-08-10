@@ -2950,6 +2950,33 @@ export async function deleteMeetingRoleAction(formData: FormData): Promise<void>
   revalidatePath("/");
 }
 
+/**
+ * Change an app that already exists.
+ *
+ * BOSS could always continue work on a shipped branch -- that is how deferred review findings
+ * are fixed. It just could not be ASKED to. Without this the only console control was "run this
+ * task again", which rebuilds the same app from the same prompt; continuing meant finding the
+ * app's git branch by hand and posting base_branch to the API, which is not something an
+ * operator can do. Most real software work is changing software that already exists.
+ */
+export async function followUpCodeTaskAction(
+  formData: FormData,
+): Promise<{ run_id?: string; error?: string }> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  const instructions = String(formData.get("instructions") ?? "").trim();
+  if (!runId) return { error: "no run named" };
+  if (!instructions) return { error: "describe the change you want" };
+  try {
+    const out = await client.followUpCodeTask(runId, instructions, getActor(formData));
+    // No revalidatePath: it replaces the client tree while this promise resolves, so the
+    // component that awaited it is remounted and the result lands on an instance nobody
+    // renders -- the "nothing happened" defect this console has had repeatedly.
+    return { run_id: out?.run_id };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function retryCodeTaskAction(formData: FormData): Promise<void> {
   const runId = String(formData.get("run_id") ?? "").trim();
   if (!runId) return;

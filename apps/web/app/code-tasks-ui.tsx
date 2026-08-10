@@ -17,6 +17,7 @@ import {
   retryCodeTaskWithStateAction,
   submitCodeTaskFeedbackAction,
   overrideCodeTaskAction,
+  followUpCodeTaskAction,
 } from "./actions";
 import { Markdown } from "./markdown";
 import { SubmitButton } from "./submit-button";
@@ -435,6 +436,104 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
                 // made somewhere else, which is how it was wrong in the first place.
                 : "Convenes the PRD panel first, then builds · balanced profile"}
       </span>
+    </div>
+  );
+}
+
+/**
+ * Change an app that already exists.
+ *
+ * The card's other control is "Run this task again", which rebuilds the same app from the same
+ * prompt. There was nothing for the far more common case -- the app is mostly right and needs
+ * one thing changed. Doing that meant finding the app's git branch by hand, which is not a
+ * thing an operator can do, so in practice people asked for a rebuild and got a different app.
+ *
+ * The branch is never named here. The run knows which app it built; that is the point.
+ */
+function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
+  run: CodeTaskRun;
+  startedId?: string | null;
+  onOpen?: (runId: string) => void;
+  onStarted?: (parentId: string, runId?: string, error?: string) => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    const data = new FormData();
+    data.set("run_id", run.id);
+    data.set("instructions", text);
+    let out: { run_id?: string; error?: string } | undefined;
+    try {
+      out = await followUpCodeTaskAction(data);
+    } finally {
+      setBusy(false);
+      if (out?.run_id) {
+        setOpen(false);
+        setText("");
+      } else {
+        setError(out?.error ?? "the API returned no run");
+      }
+      // Keyed apart from the relaunch button: both report through the same parent map, and
+      // sharing a key made one control's result appear under the other.
+      await onStarted?.(`chg:${run.id}`, out?.run_id, out?.error);
+    }
+  };
+
+  if (startedId) {
+    return (
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="cap-btn" onClick={() => onOpen?.(startedId)}
+                title="Open the change this started">
+          View change →
+        </button>
+        <span className="detail">
+          building on this app&apos;s existing code — nothing is rebuilt
+        </span>
+      </div>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button className="cap-btn" onClick={() => setOpen(true)}
+              title="Ask for a change to this app; it builds on the code that already exists">
+        Change this app
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <textarea
+        aria-label="What should change about this app?"
+        className="ct-feedback-input"
+        rows={3}
+        autoFocus
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={"What should change?\ne.g. save expenses to a database instead of "
+                     + "React state, so they survive a reload"}
+      />
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="cap-btn primary" disabled={busy || !text.trim()}
+                onClick={() => void submit()}>
+          {busy ? "Starting…" : "Start this change"}
+        </button>
+        <button className="cap-btn" disabled={busy} onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        <span className="detail">
+          {error
+            ? error
+            : "starts on this app\u2019s own branch — the existing code is already there"}
+        </span>
+      </div>
     </div>
   );
 }
@@ -1177,6 +1276,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[c.id]?.run_id}
                                    failed={launched[c.id]?.error} />
+                  <ChangeThisApp run={c} onStarted={noteLaunch}
+                                 onOpen={(id) => void openRun(id)}
+                                 startedId={launched[`chg:${c.id}`]?.run_id} />
                   <div className="ct-card-foot">
                     <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
                     {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
@@ -1246,6 +1348,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   </div>
                   <ContractDetails criteria={members[0].spec?.acceptance_criteria}
                                    verification={members[0].spec?.test_commands} />
+                  <ChangeThisApp run={members[0]} onStarted={noteLaunch}
+                                 onOpen={(id) => void openRun(id)}
+                                 startedId={launched[`chg:${members[0].id}`]?.run_id} />
                   <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[members[0].id]?.run_id}

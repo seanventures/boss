@@ -5786,6 +5786,14 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/retry`,
         { body: { fix_note: fixNote ?? "", actor } });
     },
+    /** Ask for a change to an app that already exists, naming the run that built it. */
+    followUpCodeTask(runId: string, instructions: string, actor = "executive_console",
+                     title?: string) {
+      return request<{ status: string; run_id: string; root_run_id: string;
+                       base_branch: string; owner?: string; repo?: string }>(
+        "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/follow-up`,
+        { body: { instructions, actor, title } });
+    },
     submitCodeTaskFeedback(runId: string, payload: {
       message: string;
       expected?: string;

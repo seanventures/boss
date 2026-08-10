@@ -333,6 +333,80 @@ def start_code_task(
     return run_id
 
 
+def work_branch_for(run: dict) -> str:
+    """The branch a run's code lives on — the branch further work must build on.
+
+    Attempts in a lineage share ONE branch derived from the root run, so this is the single
+    answer to "where is this app's code", and every caller that needs it should ask here rather
+    than re-deriving the naming rule.
+    """
+    fctx = run.get("finalize_ctx") or {}
+    root = fctx.get("root_run_id") or run["id"]
+    return f"boss/code/{root}"
+
+
+def start_followup_task(
+    connection, *, parent_run_id: str, instructions: str, jobs,
+    title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
+    test_commands: Optional[list] = None, profile: Optional[str] = None,
+    actor: str = "operator",
+) -> dict:
+    """Continue work on an app that already exists, from the run that built it.
+
+    BOSS could already do this for itself: when a review deferred a finding, it spawned a task
+    on the shipped branch with the parent's repo, profile and lineage. It could not be ASKED to.
+    An operator wanting "this app should save to a database instead of React state" had no path
+    to it -- the console only offered "run this task again", which rebuilds the same thing.
+
+    What that cost is worth stating plainly, because it is the normal case and not an edge:
+    someone had to find the app's branch among ninety-nine of them, identify it by matching
+    strings from the built bundle against the source, and hand-write `base_branch` into an API
+    payload. Nobody outside this repository could have done it. Yet almost all real software
+    work is changing software that already exists.
+
+    Lineage is why this belongs here rather than in a caller: the follow-up shares the parent's
+    root, so the preview knows which app it is (a follow-up spawned as its own root once
+    previewed a different application entirely), and the clone starts from the branch holding
+    the code being changed rather than from base.
+    """
+    run = load_code_task_run(connection, parent_run_id)
+    if run is None:
+        raise ValueError(f"code task run not found: {parent_run_id}")
+    spec = run.get("spec") or {}
+    fctx = run.get("finalize_ctx") or {}
+    parent_title = run.get("title") or "this app"
+    root = fctx.get("root_run_id") or run["id"]
+
+    run_id = start_code_task(
+        connection,
+        project_id=run["project_id"],
+        task_id=run.get("task_id"),
+        title=(title or f"Change to {parent_title}")[:160],
+        instructions=(
+            "Continue work on an EXISTING application. Its code is already on this branch: "
+            "read it first and build on top of it.\n\n"
+            "Do not rebuild the app, restructure it, or restyle it. Change what is asked for "
+            "and leave the rest as it is -- someone is already using this.\n\n"
+            f"REQUESTED CHANGE:\n{instructions}"),
+        acceptance_criteria=acceptance_criteria or [
+            "The requested change works in the running app.",
+            "Existing behaviour and appearance are unchanged except where the change requires it.",
+            "Existing tests still pass.",
+        ],
+        test_commands=test_commands or spec.get("test_commands") or [],
+        owner=spec.get("owner"), repo=spec.get("repo"),
+        # THE point of this function: start from the app's own branch, not from base.
+        base_branch=work_branch_for(run),
+        finalize_ctx={"root_run_id": root, "parent_run_id": parent_run_id,
+                      "is_followup": True, "requested_by": actor},
+        jobs=jobs, profile=profile or spec.get("profile"),
+        risk_tier=int(spec.get("risk_tier") or 1),
+    )
+    return {"run_id": run_id, "root_run_id": root,
+            "base_branch": work_branch_for(run),
+            "owner": spec.get("owner"), "repo": spec.get("repo")}
+
+
 def _is_system_failure(error) -> bool:
     """Thin re-export so the retry can classify without importing the whole pipeline."""
     from .governed_code_task_service import is_system_failure

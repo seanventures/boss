@@ -78,7 +78,7 @@ describe("BOSS mission-control design system", () => {
     // because a plain form submit changes nothing on screen and an inert-looking button gets
     // pressed again. Each press is a budgeted governed pipeline.
     const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
-    for (const marker of ["function BenchmarkLaunch", "disabled={sent}", "Starting…"]) {
+    for (const marker of ["function BenchmarkLaunch", "Starting…"]) {
       expect(codeTasks).toContain(marker);
     }
     // Assert the PROPERTY, not the markup. The first version required every launch <form> to
@@ -94,12 +94,14 @@ describe("BOSS mission-control design system", () => {
       // A pattern, not a literal. `disabled={sent}` became `disabled={sent || !!startedId}`
       // — strictly stronger — and the exact-string version went red on the improvement. That
       // is the third time one of these has pinned an implementation instead of a guarantee.
-      // What must hold: the busy state disables the button.
-      expect(button.slice(0, 400)).toMatch(/disabled=\{sent\b/);
+      // Fourth: `disabled={sent}` went red when a new control used `busy`, which is the same
+      // guarantee under a different variable name. What must hold is that SOME in-flight flag
+      // disables the button -- not what that flag is called.
+      expect(button.slice(0, 400)).toMatch(/disabled=\{[^}]*\b(sent|busy|pending|inFlight)\b/);
     }
     // And the busy state must be able to CLEAR, or the button lies in the other direction:
     // it sat on "Starting…" forever while the run had in fact been created.
-    expect(codeTasks).toContain("setSent(false)");
+    expect(codeTasks).toMatch(/set(Sent|Busy)\(false\)/);
     // But it must NOT return to its original label afterwards. Resetting to "Launch again"
     // while the new row had not appeared yet is what made people press it a second time:
     // nothing on screen had changed, so nothing looked like it had happened.

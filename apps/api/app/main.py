@@ -5520,6 +5520,42 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     }
 
 
+@app.post("/v1/code-tasks/{run_id}/follow-up", status_code=201)
+def follow_up_code_task_endpoint(run_id: str, payload: dict):
+    """Ask for a change to an app that already exists, naming the run that built it.
+
+    Most software work is changing software that already exists, and BOSS had no route for it:
+    it could spawn follow-ups for its OWN deferred review findings, but an operator asking for
+    "save this to a database instead of React state" had to locate the app's git branch by hand
+    and post a base_branch. This is that capability, using the same lineage rules.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    instructions = str((payload or {}).get("instructions") or "").strip()
+    if not instructions:
+        raise HTTPException(status_code=422, detail="instructions are required.")
+    actor = str((payload or {}).get("actor") or "executive_console").strip()
+    from .services.code_task_service import load_code_task_run, start_followup_task
+
+    try:
+        with begin(engine) as c:
+            parent = load_code_task_run(c, run_id)
+            if parent is None:
+                raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+            require_project_actor(c, parent["project_id"], actor, "task_create")
+            result = start_followup_task(
+                c, parent_run_id=run_id, instructions=instructions, jobs=jobs,
+                title=(payload or {}).get("title"),
+                profile=(payload or {}).get("profile"),
+                actor=actor,
+            )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"status": "queued", **result}
+
+
 @app.get("/v1/qa/benchmark-apps/runs/{run_id}/report")
 def qa_benchmark_app_report_endpoint(run_id: str):
     """Read the evidence-backed completion report for a benchmark run."""
