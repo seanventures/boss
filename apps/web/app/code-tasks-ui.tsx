@@ -372,14 +372,16 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   benchmark: QaBenchmarkApp; projectId: string; actor: string;
   defaultOwner?: string; defaultRepo?: string;
   startedId?: string | null; failed?: string | null;
-  startedKind?: "meeting" | "code" | null;
+  startedKind?: "meeting" | "code" | "existing" | null;
   onOpen?: (runId: string) => void;
   onLaunched?: (key: string, runId?: string, error?: string,
-                kind?: "meeting" | "code") => void | Promise<void>;
+                kind?: "meeting" | "code" | "existing") => void | Promise<void>;
 }) {
   const [sent, setSent] = useState(false);
 
-  const launch = async () => {
+  // `force` is the difference between "build this" and "build it AGAIN". It is only ever set
+  // by the second, explicit control -- so a plain press can never spend a second build.
+  const launch = async (force = false) => {
     setSent(true);
     const data = new FormData();
     data.set("project_id", projectId);
@@ -387,7 +389,10 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
     data.set("benchmark_id", benchmark.id);
     data.set("owner", defaultOwner ?? "");
     data.set("repo", defaultRepo ?? "");
-    let out: { run_id?: string; kind?: "meeting" | "code"; error?: string } | undefined;
+    if (force) data.set("force", "true");
+    let out: {
+      run_id?: string; kind?: "meeting" | "code" | "existing"; error?: string;
+    } | undefined;
     try {
       out = await startQaBenchmarkAppAction(data);
     } finally {
@@ -403,7 +408,20 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
       {/* Once launched this becomes a way IN to the run, exactly like the task cards. The
           state lives in the PARENT: held here it was destroyed by the reload the launch
           triggers, so the button reverted and the operator saw nothing happen. */}
-      {startedId ? (
+      {startedId && startedKind === "existing" ? (
+        // The work already exists. Offering it is the useful answer; building a second copy
+        // is still possible and now has to be asked for by name.
+        <>
+          <button className="cap-btn primary" onClick={() => onOpen?.(startedId)}
+                  title="Open the build that already exists">
+            View {benchmark.name} →
+          </button>
+          <button className="cap-btn" disabled={sent} onClick={() => void launch(true)}
+                  title="Convene a new panel and build a second copy — this costs a full run">
+            {sent ? "Starting…" : "Build it again"}
+          </button>
+        </>
+      ) : startedId ? (
         startedKind === "meeting" ? (
           // A meeting run id means nothing to the code-task viewer. Send people to the panel
           // that is actually running, rather than to a viewer that renders nothing.
@@ -418,13 +436,15 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
           </button>
         )
       ) : (
-        <button className="cap-btn primary" disabled={sent} onClick={() => void launch()}>
+        <button className="cap-btn primary" disabled={sent} onClick={() => void launch(false)}>
           {sent ? "Starting…" : `Launch ${benchmark.name}`}
         </button>
       )}
       <span className="detail">
         {sent ? "starting…"
               : failed ? failed
+              : startedId && startedKind === "existing"
+                ? "already built — nothing new was started; opening it costs nothing"
               : startedId
                 ? (startedKind === "meeting"
                     ? `panel convened ${startedId.slice(0, 13)}… — it drafts a PRD, approves it `
@@ -682,9 +702,11 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
   defaultRepo?: string;
   // Held by CodeTasksHome, keyed by benchmark id, because a launch reloads the list and any
   // state inside these cards goes with it.
-  launched?: Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" }>;
+  launched?: Record<string, {
+    run_id?: string; error?: string; kind?: "meeting" | "code" | "existing";
+  }>;
   onLaunched?: (key: string, runId?: string, error?: string,
-                kind?: "meeting" | "code") => void | Promise<void>;
+                kind?: "meeting" | "code" | "existing") => void | Promise<void>;
   onOpen?: (runId: string) => void;
 }) {
   if (!benchmarks.length) return null;
@@ -1153,12 +1175,12 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   // What each card has launched, keyed by the card's own run id. Held here because the list
   // re-renders after a launch and any state inside a card is lost with it.
   const [launched, setLaunched] = useState<
-    Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" }>
+    Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" | "existing" }>
   >({});
   const [tasks, setTasks] = useState<CodeTaskRun[]>(codeTasks);
   useEffect(() => { setTasks(codeTasks); }, [codeTasks]);
   const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string,
-                                        kind?: "meeting" | "code") => {
+                                        kind?: "meeting" | "code" | "existing") => {
     setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error, kind } }));
     await reloadRef.current?.();
   }, []);

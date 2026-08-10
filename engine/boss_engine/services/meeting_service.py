@@ -383,6 +383,41 @@ def active_duplicate_meeting(connection, project_id: str, fingerprint: str):
     return (row["id"], row["task_id"]) if row else (None, None)
 
 
+def completed_work_for(connection, project_id: str, fingerprint: str):
+    """Work on this exact subject that has ALREADY been done, if any.
+
+    Distinct from active_duplicate_meeting, which asks "is this happening right now" and only
+    protects against a double-click. Nothing asked "has this already been built", so pressing
+    Launch on a finished benchmark quietly convened a fresh panel, published another PRD and
+    started another build: twenty minutes and several dollars to produce a second copy of
+    something the operator already had, with no indication that was what the click meant.
+
+    Returns the finished meeting and, when there is one, the code run it produced -- so the
+    caller can offer what exists rather than making it again.
+    """
+    row = connection.execute(
+        text("SELECT id, task_id FROM meeting_runs "
+             "WHERE project_id = :p AND status IN ('completed', 'done') "
+             "  AND finalize_ctx->>'meeting_fingerprint' = :fp "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "fp": fingerprint}).mappings().first()
+    if row is None:
+        return None
+    built = connection.execute(
+        text("SELECT id, status, pull_request_url, title FROM code_task_runs "
+             "WHERE project_id = :p AND task_id = :t "
+             "ORDER BY (status = 'completed') DESC, created_at DESC LIMIT 1"),
+        {"p": project_id, "t": row["task_id"]}).mappings().first()
+    return {
+        "meeting_run_id": row["id"],
+        "task_id": row["task_id"],
+        "run_id": built["id"] if built else None,
+        "run_status": built["status"] if built else None,
+        "pull_request_url": built["pull_request_url"] if built else None,
+        "title": built["title"] if built else None,
+    }
+
+
 def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys, finalize_ctx) -> str:
     run_id = make_id("mrun")
     personas = resolve_roles(role_keys, load_role_map(connection, project_id))

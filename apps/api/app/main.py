@@ -5464,7 +5464,33 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     # press and a later approval. `route=direct` still goes straight to a code task for
     # comparing the two paths.
     if str((payload or {}).get("route") or "meeting").lower() == "meeting":
-        from boss_engine.services.meeting_service import convene_prd_meeting_core
+        from boss_engine.services.meeting_service import (
+            completed_work_for, convene_prd_meeting_core, meeting_fingerprint,
+        )
+
+        # Refuse to silently rebuild something that already exists.
+        #
+        # Launch on a finished benchmark used to convene a fresh panel, publish another PRD and
+        # start another build -- twenty minutes and several dollars for a second copy of what
+        # the operator already had, with nothing about the click saying so. The in-flight guard
+        # did not help: it only catches a double-press while a meeting is still running.
+        #
+        # Answering with the existing work is the useful response. Building again stays
+        # available and now has to be asked for: `force`.
+        if not (payload or {}).get("force"):
+            with begin(engine) as c:
+                done = completed_work_for(
+                    c, project_id,
+                    meeting_fingerprint(project_id, task["instructions"], ""))
+            if done and done.get("run_id"):
+                return {
+                    "status": "already_built",
+                    **done,
+                    "benchmark": {"id": task["benchmark"]["id"],
+                                  "name": task["benchmark"]["name"]},
+                    "hint": ("This benchmark has already been built. Open the existing run, or "
+                             "pass force=true to build it again."),
+                }
 
         try:
             with begin(engine) as c:

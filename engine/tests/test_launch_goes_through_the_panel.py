@@ -36,9 +36,29 @@ def endpoint(monkeypatch):
     monkeypatch.setattr(api_main, "database_is_reachable", lambda _e: True)
     monkeypatch.setattr(api_main, "require_project_actor", lambda *a, **k: None)
 
+    class _NoRows:
+        """A connection that answers "nothing found" to anything.
+
+        The endpoint now checks whether this benchmark was ALREADY built before convening a
+        panel, so the double has to be able to answer that question. A bare object() was
+        enough only while the endpoint asked the database nothing.
+        """
+
+        def execute(self, *a, **k):
+            return self
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return None
+
+        def all(self):
+            return []
+
     class _Ctx:
         def __enter__(self):
-            return object()
+            return _NoRows()
 
         def __exit__(self, *exc):
             return False

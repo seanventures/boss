@@ -5710,8 +5710,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
       repo?: string;
       base_branch?: string;
       profile?: string;
+      /** Build a SECOND copy of something already built. Omitted, the API answers with the
+       *  existing run instead of spending another full build. */
+      force?: boolean;
     }) {
-      return request<{ status: string; run_id: string; benchmark: { id: string; name: string } }>(
+      return request<{
+        status: string;
+        run_id: string;
+        benchmark: { id: string; name: string };
+        pull_request_url?: string;
+        task_id?: string;
+        hint?: string;
+      }>(
         "POST", `/v1/qa/benchmark-apps/${encodeURIComponent(benchmarkId)}/runs`, { body: payload },
       );
     },

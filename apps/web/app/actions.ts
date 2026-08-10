@@ -2457,7 +2457,12 @@ export async function getQaBenchmarkReportAction(runId: string) {
 
 export async function startQaBenchmarkAppAction(
   formData: FormData,
-): Promise<{ run_id?: string; kind?: "meeting" | "code"; error?: string }> {
+): Promise<{
+  run_id?: string;
+  kind?: "meeting" | "code" | "existing";
+  pullRequestUrl?: string;
+  error?: string;
+}> {
   const projectId = getProjectId(formData);
   const benchmarkId = String(formData.get("benchmark_id") ?? "").trim();
   if (!benchmarkId) return { error: "no benchmark named" };
@@ -2468,6 +2473,9 @@ export async function startQaBenchmarkAppAction(
       owner: String(formData.get("owner") ?? "").trim() || undefined,
       repo: String(formData.get("repo") ?? "").trim() || undefined,
       base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+      // Only ever set by the explicit "Build it again" control. Without it the API answers
+      // with the existing build instead of making a second one.
+      force: String(formData.get("force") ?? "") === "true" || undefined,
     });
     // Deliberately NO revalidatePath, and the id is returned.
     //
@@ -2480,7 +2488,18 @@ export async function startQaBenchmarkAppAction(
     // Launch now convenes a PRD panel first, so the id can be a MEETING run. Saying which
     // kind matters: handing an mrun_ id to the code-task viewer opens nothing, and "View run
     // ->" that opens nothing is the failure mode this button has already had twice.
-    const out = started as { run_id?: string; status?: string };
+    const out = started as {
+      run_id?: string; status?: string; pull_request_url?: string; title?: string;
+    };
+    if (out?.status === "already_built") {
+      // Not an error and not a launch: the work exists. The card offers it instead of
+      // quietly spending twenty minutes and several dollars making a second copy.
+      return {
+        run_id: out.run_id,
+        kind: "existing",
+        pullRequestUrl: out.pull_request_url,
+      };
+    }
     return {
       run_id: out?.run_id,
       kind: out?.status === "meeting_convened" ? "meeting" : "code",
