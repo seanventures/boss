@@ -113,23 +113,22 @@ class GitHubAdapter:
     def _auth_token(self) -> str:
         """Prefer a short-lived, repo-scoped GitHub-App installation token
         (Phase 2 developer impersonation); fall back to the PAT (Phase 0)."""
-        from .github_app_adapter import GitHubAppAdapter  # optional dependency
+        from .github_app_adapter import (  # optional dependency
+            GitHubAppAdapter, GitHubAppConfigurationError, repo_token,
+        )
 
         if self._app is None:
-            self._app = GitHubAppAdapter(
-                self.settings,
-                api_base_url=self.api_base_url,
-            )
+            self._app = GitHubAppAdapter(self.settings, api_base_url=self.api_base_url)
         if self._token_override:
             return self._token_override
-        if self._app.configured:
-            return self._app.token_for_repo(self.owner, self.repo)
-        if not self.settings.github_token:
-            raise IntegrationConfigurationError(
-                "No GitHub credentials configured (need a GitHub App installation "
-                "or BOSS_GITHUB_TOKEN)."
-            )
-        return self.settings.github_token
+        try:
+            # One shared decision: App token where the installation covers this repo, PAT
+            # where it does not. Choosing here independently is how BOSS came to be unable to
+            # open a PR against its own repository.
+            return repo_token(self.settings, self.owner, self.repo,
+                              api_base_url=self.api_base_url, app=self._app)
+        except GitHubAppConfigurationError as error:
+            raise IntegrationConfigurationError(str(error)) from error
 
     def _headers(self) -> dict[str, str]:
         return {

@@ -929,7 +929,11 @@ def run_code_task(engine, settings: Settings, jobs, run_id: str,
         token = settings.bitbucket_token or ""
     else:
         app = GitHubAppAdapter(settings)
-        token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
+        # Shared decision — see repo_token. Was: prefer the App and fail hard when this repo
+        # is outside its installation, even with a working PAT configured.
+        from .github_app_adapter import repo_token
+
+        token = repo_token(settings, owner, repo)
 
     # Feedback-iteration: reuse the ROOT run's branch and clone its accumulated code so the
     # model builds ON prior work (not from base), and update the SAME PR. Mirrors the governed

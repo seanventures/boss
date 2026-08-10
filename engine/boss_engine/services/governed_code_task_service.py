@@ -1251,7 +1251,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     if root_run != run_id and sf.github.branch_exists(work_branch):
         base_branch = work_branch  # prior attempt's code is present in the clone
     app = GitHubAppAdapter(settings)
-    token = app.token_for_repo(owner, repo) if app.configured else settings.github_token
+    # Shared decision — see repo_token.
+    from .github_app_adapter import repo_token
+
+    token = repo_token(settings, owner, repo)
 
     provider = LocalSubprocessProvider(settings)
     # Lane defaults: builder engine for design/tests/implement, adversary engine for

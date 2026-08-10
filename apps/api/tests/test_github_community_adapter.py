@@ -27,9 +27,12 @@ class _InstalledApp:
     def __init__(self) -> None:
         self.repositories: list[tuple[str, str]] = []
 
-    def token_for_repo(self, owner: str, repo: str) -> str:
+    def usable_token_for_repo(self, owner: str, repo: str) -> tuple[str, list[str]]:
         self.repositories.append((owner, repo))
-        return "app-installation-token"
+        return "app-installation-token", []
+
+    def token_for_repo(self, owner: str, repo: str) -> str:
+        return self.usable_token_for_repo(owner, repo)[0]
 
 
 def _settings() -> Settings:
