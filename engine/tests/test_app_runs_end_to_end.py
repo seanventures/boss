@@ -171,3 +171,55 @@ def test_static_and_python_deploy_modes_are_unchanged():
 
     assert "nginx" in _docker_run_cmd("a", 80, "/srv/a", "static", "")
     assert "python" in _docker_run_cmd("a", 80, "/srv/a", "py", "app.py")
+
+
+# --------------------------------------------------------------------------------------
+# The preview must run a full-stack app's server, not serve its build
+# --------------------------------------------------------------------------------------
+
+def test_a_vite_app_with_a_server_runs_that_server(tmp_path):
+    """BugBox previewed as "Error: HTTP 404" with a working backend sitting in the repo.
+
+    The Vite branch of _detect_command fired on `vite` alone and served dist/ with
+    `python3 -m http.server`. Correct for a frontend-only app; silently wrong for a full-stack
+    one, because the page loads and looks finished while every /api call 404s.
+
+    An earlier version of this fix added node detection to resolve_app_entry and was verified
+    against an app in a SUBDIRECTORY -- which never reaches the Vite branch. The scaffold puts
+    apps at the ROOT, so the case that mattered most was the one not covered.
+    """
+    write(tmp_path, {
+        "package.json": pkg(build="vite build", start="node server/index.js", dev="vite"),
+        "vite.config.ts": "export default {}",
+        "index.html": "<html></html>",
+        "server/index.js": "// express + sqlite",
+    })
+    command = " ".join(_detect_command(tmp_path, ["server/index.js"]) or [])
+    assert "npm start" in command
+    assert "http.server" not in command
+    # Assets must stay relative or they resolve against the API origin under the proxy prefix.
+    assert "--base=./" in command
+
+
+def test_a_vite_app_without_a_server_is_still_served_statically(tmp_path):
+    """The behaviour that was correct all along must not regress."""
+    write(tmp_path, {
+        "package.json": pkg(build="vite build", dev="vite"),
+        "vite.config.ts": "export default {}",
+        "index.html": "<html></html>",
+    })
+    command = " ".join(_detect_command(tmp_path, ["src/App.tsx"]) or [])
+    assert "http.server" in command
+    assert "npm start" not in command
+
+
+def test_the_resolver_agrees_with_the_command_for_a_root_full_stack_app(tmp_path):
+    """Host path and container path must reach the same answer; drift here has previewed the
+    wrong application twice."""
+    write(tmp_path, {
+        "package.json": pkg(build="vite build", start="node server/index.js"),
+        "vite.config.ts": "export default {}",
+        "index.html": "<html></html>",
+        "server/index.js": "// server",
+    })
+    assert resolve_app_entry(tmp_path, ["server/index.js"]) == ("node", ".")

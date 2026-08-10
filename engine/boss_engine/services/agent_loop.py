@@ -496,6 +496,189 @@ def _wt_change_existing_app(connection, project_id, settings, args) -> dict:
         jobs=JobLeaseService(settings), title=args.get("title"), actor="boss_agent")
 
 
+def _tool_diagnose_preview(connection, project_id, settings, args) -> dict:
+    """Look at a preview and report what is actually wrong with it.
+
+    Asked why a preview showed "Error: HTTP 404", the agent had nothing to look at. It has no
+    way to make an HTTP request and no tool that reports what a preview is running, so it
+    answered from imagination: that the preview was "still building", that the operator should
+    open a 127.0.0.1 address belonging to a container, and that a tunnel might help. None of
+    that was true -- the gateway was returning 200 and the app's own /api calls were 404ing
+    because the preview was serving built files with no server behind them.
+
+    A confident wrong answer is worse than "I cannot see that", and the fix is to let it see.
+    This fetches the page and the API paths the bundle actually calls, so the difference
+    between "not ready", "serving statically with no backend" and "the server crashed" is
+    read off the responses rather than guessed.
+    """
+    import re
+    import urllib.error
+    import urllib.request
+
+    from sqlalchemy import text as _sql
+
+    preview_id = str(args.get("preview_id") or "").strip()
+    if not preview_id:
+        return {"error": "preview_id is required (prev_...)"}
+    row = connection.execute(_sql(
+        "SELECT id, run_id, status, mode, url, failure_kind, error, expires_at "
+        "FROM app_previews WHERE id = :id"), {"id": preview_id}).mappings().first()
+    if row is None:
+        return {"error": f"no such preview: {preview_id}"}
+
+    report: dict = {
+        "preview_id": row["id"], "run_id": row["run_id"], "status": row["status"],
+        "mode": row["mode"], "url": row["url"],
+        "failure_kind": row["failure_kind"], "error": (row["error"] or "")[:300],
+    }
+
+    base = (row["url"] or "").rstrip("/")
+    if not base:
+        report["verdict"] = "the preview has no URL yet; it has not started serving."
+        return report
+
+    def fetch(path: str = "") -> dict:
+        target = f"{base}/{path}" if path else base + "/"
+        try:
+            with urllib.request.urlopen(target, timeout=20) as response:
+                body = response.read(200_000)
+                return {"status": response.status, "bytes": len(body), "body": body}
+        except urllib.error.HTTPError as error:
+            return {"status": error.code, "bytes": 0, "body": b""}
+        except Exception as error:  # noqa: BLE001
+            return {"status": None, "error": str(error)[:200], "bytes": 0, "body": b""}
+
+    page = fetch()
+    report["page_http"] = page.get("status")
+    report["page_bytes"] = page.get("bytes")
+
+    # Which API paths does the SHIPPED bundle call? Guessing /api/health tells you nothing
+    # about an app whose routes are /api/bugs.
+    api_paths: list[str] = []
+    html = (page.get("body") or b"").decode("utf-8", "ignore")
+    for asset in re.findall(r'src="\.?/?(assets/[^"]+\.js)"', html)[:2]:
+        bundle = fetch(asset)
+        text_body = (bundle.get("body") or b"").decode("utf-8", "ignore")
+        api_paths.extend(re.findall(r'"(/api/[a-zA-Z0-9/_-]+)"', text_body))
+    api_paths = sorted(set(api_paths))[:6]
+
+    checks = {}
+    for path in api_paths or ["/api/health"]:
+        checks[path] = fetch(path.lstrip("/")).get("status")
+    report["api_calls_in_bundle"] = api_paths
+    report["api_responses"] = checks
+
+    live = [code for code in checks.values() if code and 200 <= code < 400]
+    if page.get("status") != 200:
+        report["verdict"] = (
+            f"the page itself returns HTTP {page.get('status')}; the preview is not serving.")
+    elif not api_paths:
+        report["verdict"] = (
+            "the page serves and the bundle makes no API calls at all -- this app keeps its "
+            "state in the browser, so nothing it shows will survive a reload.")
+    elif live:
+        report["verdict"] = "the page and its API both respond; this preview looks healthy."
+    else:
+        report["verdict"] = (
+            "the page serves but every API path the app calls returns "
+            f"{sorted({c for c in checks.values()})} -- the frontend is being served without "
+            "its server running behind it, so the UI loads and every action fails.")
+    return report
+
+
+def _tool_diagnose_deployment(connection, project_id, settings, args) -> dict:
+    """Look at what is actually deployed and whether it works.
+
+    The counterpart to diagnose_preview, and missing for the same reason: the agent could read
+    a deployment ROW but never reach the deployed thing, so "is it live?" was answered from a
+    status column. A status column says a deploy finished; it does not say the app serves, and
+    the health gate behind it is a 200 on `/` -- which a static shell with no backend passes.
+
+    Fetches the app's real address, and the /api paths its own bundle calls, so a deployment
+    that is green and useless can be told apart from one that works.
+    """
+    import re
+    import urllib.error
+    import urllib.request
+
+    from sqlalchemy import text as _sql
+
+    app_name = str(args.get("app_name") or "").strip()
+    where = "d.project_id = :p" + (" AND d.app_name = :a" if app_name else "")
+    params = {"p": project_id, **({"a": app_name} if app_name else {})}
+    rows = connection.execute(_sql(
+        f"""SELECT d.id, d.app_name, d.environment, d.status, d.target_kind, d.target_ref,
+                   d.commit_ref, d.failure_reason, d.health_check_results, d.finished_at,
+                   t.domains
+            FROM deployment_runs d
+            LEFT JOIN deployment_targets t ON t.id = d.deployment_target_id
+            WHERE {where}
+            ORDER BY d.created_at DESC LIMIT :n"""),
+        {**params, "n": int(args.get("limit") or 5)}).mappings().all()
+    if not rows:
+        return {"deployments": [], "verdict":
+                f"nothing has been deployed{' for ' + app_name if app_name else ''} in this "
+                f"project."}
+
+    def probe(url: str) -> dict:
+        try:
+            with urllib.request.urlopen(url, timeout=15) as response:
+                return {"http": response.status, "body": response.read(120_000)}
+        except urllib.error.HTTPError as error:
+            return {"http": error.code, "body": b""}
+        except Exception as error:  # noqa: BLE001
+            return {"http": None, "error": str(error)[:160], "body": b""}
+
+    out = []
+    for row in rows:
+        entry = {
+            "deployment_id": row["id"], "app": row["app_name"],
+            "environment": row["environment"], "status": row["status"],
+            "target": f"{row['target_kind']}:{row['target_ref']}",
+            "commit": (row["commit_ref"] or "")[:12],
+            "failure_reason": (row["failure_reason"] or "")[:200] or None,
+            "finished_at": str(row["finished_at"]) if row["finished_at"] else None,
+        }
+        domains = row["domains"] if isinstance(row["domains"], list) else []
+        url = None
+        for candidate in domains:
+            if isinstance(candidate, str) and candidate.startswith("http"):
+                url = candidate.rstrip("/")
+                break
+        if url is None and row["target_kind"] == "ssh" and row["target_ref"]:
+            url = f"http://{row['target_ref'].split('@')[-1]}"
+        if url:
+            entry["url"] = url
+            page = probe(url + "/")
+            entry["page_http"] = page.get("http")
+            html = (page.get("body") or b"").decode("utf-8", "ignore")
+            api_paths: list[str] = []
+            for asset in re.findall(r'src="\.?/?(assets/[^"]+\.js)"', html)[:2]:
+                bundle = probe(f"{url}/{asset}")
+                api_paths.extend(re.findall(
+                    r'"(/api/[a-zA-Z0-9/_-]+)"',
+                    (bundle.get("body") or b"").decode("utf-8", "ignore")))
+            api_paths = sorted(set(api_paths))[:5]
+            entry["api_calls_in_bundle"] = api_paths
+            entry["api_responses"] = {q: probe(url + q).get("http") for q in api_paths}
+            live = [c for c in entry["api_responses"].values() if c and 200 <= c < 400]
+            if entry["page_http"] != 200:
+                entry["verdict"] = f"the app does not serve (HTTP {entry['page_http']})."
+            elif api_paths and not live:
+                entry["verdict"] = (
+                    "serves the frontend but every API path it calls fails -- deployed without "
+                    "its server running, so it looks live and does nothing.")
+            elif not api_paths:
+                entry["verdict"] = "serves; the bundle makes no API calls (nothing persists)."
+            else:
+                entry["verdict"] = "serves, and its API responds."
+        else:
+            entry["verdict"] = ("no address recorded for this deployment, so it cannot be "
+                                "checked from here.")
+        out.append(entry)
+    return {"deployments": out}
+
+
 ToolFn = Callable[[Connection, str, Settings, dict], dict]
 
 TOOLS: list[dict[str, Any]] = [
@@ -518,6 +701,52 @@ TOOLS: list[dict[str, Any]] = [
                 "name": "get_project_status",
                 "description": "Get the project's real current state: open tasks, pending decisions, deadletters, jobs completed, and recent activity. Use this to ground plans in what is actually happening.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    },
+    {
+        "fn": _tool_diagnose_deployment,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "diagnose_deployment",
+                "description": (
+                    "Look at what is actually deployed for an app and whether it works: the "
+                    "recorded deployment, its address, and what the app's own API paths "
+                    "return when called. USE THIS for any question about a live or published "
+                    "app. A deployment row saying `succeeded` only means the deploy finished; "
+                    "the health gate behind it is a 200 on `/`, which a frontend with no "
+                    "backend passes. Do not answer from the status column."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "app_name": {"type": "string", "description": "omit for all apps"},
+                        "limit": {"type": "integer"},
+                    },
+                    "required": [],
+                },
+            },
+        },
+    },
+    {
+        "fn": _tool_diagnose_preview,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "diagnose_preview",
+                "description": (
+                    "Look at a running preview and report what is actually wrong: whether the "
+                    "page serves, which /api paths its bundle calls, and what each of those "
+                    "returns. USE THIS whenever someone reports anything about a preview -- a "
+                    "404, a blank page, an empty dashboard, 'it resets when I reload'. Those "
+                    "symptoms have different causes and only the responses tell them apart. "
+                    "Never speculate about a preview you have not looked at."),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"preview_id": {"type": "string",
+                                                  "description": "prev_... from the URL"}},
+                    "required": ["preview_id"],
+                },
             },
         },
     },

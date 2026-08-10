@@ -292,6 +292,25 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
         # to RELATIVE-path assets (base=./) that resolve correctly under any proxy prefix via the
         # injected <base href>. Served by Python's stdlib http.server (guaranteed present).
         if is_vite and (scripts.get("build") or "vite" in deps):
+            # A Vite app WITH a server of its own: build the frontend, then run that server.
+            #
+            # This branch used to fire on `vite` alone and serve dist/ with http.server, which
+            # is right for a frontend-only app and silently wrong for a full-stack one: the
+            # page loads, looks finished, and every /api call returns 404. BugBox shipped a
+            # working Express + SQLite backend and previewed as "Error: HTTP 404" because
+            # nothing was running it.
+            #
+            # The build still uses --base=./ rather than the app's own build script. Assets
+            # must be RELATIVE to resolve under the /v1/previews/<id>/web prefix; an absolute
+            # /assets/... path resolves against the API origin and 404s, and the injected
+            # <base href> cannot rescue it.
+            if scripts.get("start"):
+                return [
+                    "sh", "-lc",
+                    "npm install --no-audit --no-fund --loglevel=error && "
+                    "npx vite build --base=./ && "
+                    "npm start",
+                ]
             return [
                 "sh", "-lc",
                 "npm install --no-audit --no-fund --loglevel=error && "
