@@ -115,8 +115,15 @@ function NewMeetingForm({
   tasks: { id: string; title: string }[];
   onCancel: () => void;
 }) {
+  // Convening runs a full agent panel for three to five minutes and costs real money. The
+  // button gave no feedback at all, so an operator pressed it six times and got six PRDs —
+  // three of them inside the same second — and six approvals with no way to tell them apart.
+  // The server now refuses a duplicate while one is running; this stops the clicks reaching
+  // it, and says what is happening either way.
+  const [convening, setConvening] = useState(false);
   return (
-    <form action={conveneMeetingAction} className="mr-convene">
+    <form action={conveneMeetingAction} className="mr-convene"
+          onSubmit={() => setConvening(true)}>
       <input type="hidden" name="project_id" value={projectId} />
       <label className="mr-field-label" htmlFor="mr-directive">Directive</label>
       <textarea
@@ -160,8 +167,17 @@ function NewMeetingForm({
         PRD — then it goes to your approval gate before publishing. Runs ~3–5 min.
       </span>
       <div className="mr-form-actions">
-        <button type="submit" className="cap-btn primary">Convene the panel</button>
-        <button type="button" className="cap-btn" onClick={onCancel}>Cancel</button>
+        <button type="submit" className="cap-btn primary" disabled={convening}>
+          {convening ? "Convening the panel…" : "Convene the panel"}
+        </button>
+        <button type="button" className="cap-btn" onClick={onCancel} disabled={convening}>
+          Cancel
+        </button>
+        {convening ? (
+          <span className="detail">
+            the panel is being staffed — this takes 3–5 minutes and appears in the list below
+          </span>
+        ) : null}
       </div>
     </form>
   );

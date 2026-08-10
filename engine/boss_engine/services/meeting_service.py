@@ -360,6 +360,29 @@ def load_meeting_run(connection: Connection, run_id: str) -> Optional[dict]:
     return _row_to_run(r) if r else None
 
 
+def meeting_fingerprint(project_id: str, directive: str, url: str = "") -> str:
+    """A stable identity for "this meeting, about this thing, in this project".
+
+    Whitespace-normalised: a directive pasted twice differs by a trailing newline and means
+    the same meeting.
+    """
+    import hashlib
+
+    parts = [project_id, " ".join((directive or "").split()), (url or "").strip()]
+    return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+def active_duplicate_meeting(connection, project_id: str, fingerprint: str):
+    """A meeting on the same subject that is STILL RUNNING, if there is one."""
+    row = connection.execute(
+        text("SELECT id, task_id FROM meeting_runs "
+             "WHERE project_id = :p AND status = 'running' "
+             "  AND finalize_ctx->>'meeting_fingerprint' = :fp "
+             "ORDER BY created_at ASC LIMIT 1"),
+        {"p": project_id, "fp": fingerprint}).mappings().first()
+    return (row["id"], row["task_id"]) if row else (None, None)
+
+
 def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys, finalize_ctx) -> str:
     run_id = make_id("mrun")
     personas = resolve_roles(role_keys, load_role_map(connection, project_id))
@@ -390,6 +413,27 @@ def convene_prd_meeting_core(
     Used by the /v1/meetings/prd endpoint and the Plane ``boss:design`` intake so
     both routes are governed identically."""
     constraints = constraints or {}
+
+    # Refuse to convene a meeting that is ALREADY being held.
+    #
+    # An operator pressed a button that gave no feedback and got six identical PRD meetings —
+    # three of them inside the same second. Each ran the full agent panel and produced its own
+    # 12k-word PRD, leaving six approvals in the inbox and no way to tell which to approve.
+    # A UI guard alone cannot fix that: by the time the button re-renders, the other clicks are
+    # already in flight. The check belongs here, where every route converges — the endpoint and
+    # the Plane intake both call this.
+    #
+    # Idempotent, not an error: the caller wanted a meeting on this subject and there is one.
+    fingerprint = meeting_fingerprint(project_id, directive, url)
+    if not constraints.get("allow_duplicate"):
+        existing_run, existing_task = active_duplicate_meeting(connection, project_id, fingerprint)
+        if existing_run:
+            emit_event(connection, project_id, "meeting.duplicate_suppressed", "boss",
+                       "meeting_run", existing_run,
+                       {"directive": directive[:200], "fingerprint": fingerprint})
+            return {"task_id": existing_task, "run_id": existing_run, "job_id": None,
+                    "duplicate_of": existing_run}
+
     if task_id is None:
         task = intake.create_task(
             connection,
@@ -417,7 +461,8 @@ def convene_prd_meeting_core(
     run_id = start_meeting_run(
         connection, project_id=project_id, task_id=task_id,
         directive=directive, url=url, constraints=constraints,
-        role_keys=role_keys or [], finalize_ctx={"reservation_id": reservation_id},
+        role_keys=role_keys or [],
+        finalize_ctx={"reservation_id": reservation_id, "meeting_fingerprint": fingerprint},
     )
     job = jobs.create_job(
         connection, project_id=project_id, task_id=task_id,
