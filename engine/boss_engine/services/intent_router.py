@@ -498,8 +498,15 @@ class IntentRouter:
                 "run_id": run_id,
                 "href": f"/?area=meetings&run={run_id}",
             }
+            # Say what will actually happen. This read "Publishing remains human-gated" long
+            # after auto-approval shipped, so the console told an operator a human still stood
+            # between the panel and a build while the PRD was approved thirty seconds later.
+            gated = not getattr(self.settings, "meeting_prd_auto_approve", False)
             return RouterTurn(
-                reply="Convened a governed PRD panel. Publishing remains human-gated.",
+                reply=("Convened a governed PRD panel. Publishing is human-gated — it will wait "
+                       "for your approval." if gated else
+                       "Convened a governed PRD panel. Its PRD publishes automatically and "
+                       "starts a build; cancel the run if that is not what you wanted."),
                 actions=[action],
                 tool_calls=[{"name": name, "arguments": arguments}],
             )
@@ -790,10 +797,19 @@ class IntentRouter:
         prompt = {
             "role": "system",
             "content": (
-                "Route exactly one user ask to one enabled BOSS initiator. Never select a disabled "
-                "capability. Prefer code for a narrow change, meeting for an open decision, PRD for "
-                "a fuzzy feature, discovery for research, and propose_command for two or more "
-                "dependent phases.\n\nCAPABILITY MANIFEST\n" + manifest.render_table()
+                "Decide whether this ask should START WORK, and if so which initiator.\n\n"
+                "SELECT NO TOOL when the user is asking ABOUT work that already exists — why "
+                "something failed, what the status is, what an app does, explain/investigate/"
+                "diagnose/check, or any question answerable by looking. Questions are answered, "
+                "not built. Starting a panel on 'why did this fail' spends real money, publishes "
+                "a document, and queues a build that nobody asked for.\n\n"
+                "Only when the user genuinely wants NEW WORK begun, pick exactly one enabled "
+                "initiator, and never a disabled one: code for a narrow change, meeting for an "
+                "open decision, PRD for a fuzzy feature, discovery for research, propose_command "
+                "for two or more dependent phases.\n\n"
+                "When it is unclear whether they want work started, select nothing. Answering a "
+                "request to build is a cheap mistake; building an answer to a question is not."
+                "\n\nCAPABILITY MANIFEST\n" + manifest.render_table()
             ),
         }
         try:
