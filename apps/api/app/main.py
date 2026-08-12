@@ -642,6 +642,10 @@ from .schemas import (
     VerifierDebateResponse,
     DesignPromptRequest,
     DesignPromptResponse,
+    LlmCallItem,
+    LlmCallListResponse,
+    LlmCallSummaryGroup,
+    LlmCallSummaryResponse,
 )
 from .services.a2a import (
     A2ANotFoundError,
@@ -16249,6 +16253,71 @@ def budget_insights(project_id: str):
     from boss_engine.services.cost_insights import build_insights
     with begin(engine) as connection:
         return JSONResponse(content=jsonable_encoder(build_insights(connection, project_id)))
+
+
+@app.get("/v1/llm-calls", response_model=LlmCallListResponse)
+def list_project_llm_calls(
+    project_id: str = Query(...),
+    stage: Optional[str] = None,
+    role: Optional[str] = None,
+    model: Optional[str] = None,
+    engine_name: Optional[str] = Query(None, alias="engine"),
+    ok: Optional[bool] = None,
+    code_task_run_id: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> LlmCallListResponse:
+    """Operator read path over the llm_calls spend/quality ledger (filters + pagination)."""
+    from boss_engine.services.llm_telemetry import list_llm_calls
+
+    try:
+        with begin(engine) as connection:
+            result = list_llm_calls(
+                connection,
+                project_id=project_id,
+                stage=stage,
+                role=role,
+                model=model,
+                engine_name=engine_name,
+                ok=ok,
+                code_task_run_id=code_task_run_id,
+                limit=limit,
+                offset=offset,
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return LlmCallListResponse(
+        project_id=result["project_id"],
+        count=result["count"],
+        total=result["total"],
+        limit=result["limit"],
+        offset=result["offset"],
+        items=[LlmCallItem(**item) for item in result["items"]],
+    )
+
+
+@app.get("/v1/llm-calls/summary", response_model=LlmCallSummaryResponse)
+def summarize_project_llm_calls(
+    project_id: str = Query(...),
+    group_by: str = Query("stage", pattern="^(stage|role|model|engine)$"),
+) -> LlmCallSummaryResponse:
+    """Roll up llm_calls by stage, role, model, or engine for FinOps / bake-off views."""
+    from boss_engine.services.llm_telemetry import summarize_llm_calls
+
+    try:
+        with begin(engine) as connection:
+            result = summarize_llm_calls(
+                connection, project_id=project_id, group_by=group_by
+            )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return LlmCallSummaryResponse(
+        project_id=result["project_id"],
+        group_by=result["group_by"],
+        total_calls=result["total_calls"],
+        total_cost_usd_micros=result["total_cost_usd_micros"],
+        groups=[LlmCallSummaryGroup(**g) for g in result["groups"]],
+    )
 
 
 @app.get("/v1/budget/status", response_model=BudgetStatusResponse)

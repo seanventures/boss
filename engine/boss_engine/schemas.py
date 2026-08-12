@@ -8207,3 +8207,55 @@ class DesignPromptResponse(BaseModel):
     product_design_prompt: Optional[str] = None
     design_impl_clause: Optional[str] = None
     design_review_clause: Optional[str] = None
+
+
+class LlmCallItem(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    code_task_run_id: Optional[str] = None
+    stage: Optional[str] = None
+    engine: Optional[str] = None
+    model: Optional[str] = None
+    role: Optional[str] = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd_micros: int = 0
+    price_estimated: Optional[bool] = None
+    latency_ms: int = 0
+    retries: int = 0
+    turns: int = 0
+    ok: bool = True
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class LlmCallListResponse(BaseModel):
+    project_id: str
+    count: int
+    total: int
+    limit: int
+    offset: int
+    items: list[LlmCallItem] = Field(default_factory=list)
+
+
+class LlmCallSummaryGroup(BaseModel):
+    group_key: str
+    calls: int
+    cost_usd_micros: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    ok_calls: int = 0
+    failed_calls: int = 0
+    avg_latency_ms: float = 0.0
+
+
+class LlmCallSummaryResponse(BaseModel):
+    project_id: str
+    group_by: str
+    total_calls: int
+    total_cost_usd_micros: int
+    groups: list[LlmCallSummaryGroup] = Field(default_factory=list)

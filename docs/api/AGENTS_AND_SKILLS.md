@@ -192,6 +192,12 @@ require `providerops_manage`. Wraps `KnowledgeGraphService` (also used by
 | `GET` | `/v1/knowledge/graph/known-causes?project_id=&service=` | Prior causes ranked by confidence |
 | `POST` | `/v1/knowledge/graph/seed-from-infra` | Seed `resource` nodes from active `infra_resources` |
 
+**Skipped:** `POST /v1/knowledge/graph/walk-k8s` — `graph_walkers.walk_kubernetes` is a live
+cluster HTTP walk (needs API server URL + optional bearer env), not a pure/inventory dry-run.
+Use `POST /v1/reliability/graph/walk` with `walker=infra` (DB inventory) or `walker=kubernetes`
+when cluster credentials are configured; unit coverage stubs the wire in
+`apps/api/tests/test_graph_walkers.py`.
+
 ```bash
 # Upsert a service + dependency, then read the subgraph
 curl -sS "${AUTH[@]}" -d "{
@@ -311,6 +317,16 @@ Concrete lease paths (see ROUTE_INDEX / OpenAPI for exact payloads):
 - `GET` `/v1/model-gateway/rate-limits?project_id=` — current rate-limit windows
 - `POST` `/v1/model-gateway/rate-limits/report` — report provider throttle telemetry
 - `GET` `/v1/pipeline-adapters/catalog` — registered pipeline adapters
+- `GET` `/v1/llm-calls?project_id=` — paginated spend/quality ledger (`stage`/`role`/`model`/`engine`/`ok` filters)
+- `GET` `/v1/llm-calls/summary?project_id=&group_by=stage|role|model|engine` — rollups for FinOps/bake-off
+- `GET` `/v1/budget/insights?project_id=` — deterministic top cost-saves from `llm_calls`
+
+```bash
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/llm-calls/summary?project_id=$PROJECT&group_by=stage" | jq .
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/budget/insights?project_id=$PROJECT" | jq .
+```
 
 Also: model route simulation via `/v1/model-route-decisions` and `/v1/model-route-decisions/simulate`.
 

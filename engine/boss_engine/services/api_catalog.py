@@ -134,8 +134,8 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
     },
     "models": {
         "title": "Model gateway",
-        "description": "Model leases, invocations, credentials, usage.",
-        "prefixes": ["/v1/model-gateway", "/v1/models"],
+        "description": "Model leases, invocations, credentials, usage, llm_calls ledger.",
+        "prefixes": ["/v1/model-gateway", "/v1/models", "/v1/llm-calls"],
     },
     "ops": {
         "title": "Ops, reliability, observability",
@@ -246,6 +246,18 @@ def build_api_catalog(
             }
         )
 
+    # Cheap operator note: which catalog domains currently expose mounted routes.
+    services_with_routes = [
+        {
+            "id": d["id"],
+            "title": d["title"],
+            "route_count": d["route_count"],
+            "documented_count": d["documented_count"],
+        }
+        for d in domains_out
+        if d.get("route_count", 0) > 0
+    ]
+
     return {
         "version": 1,
         "product": "boss",
@@ -255,6 +267,7 @@ def build_api_catalog(
         "documentation_coverage": (
             round(documented / total, 4) if total else 0.0
         ),
+        "services_with_routes": services_with_routes,
         "domains": domains_out,
         "openapi_url": "/openapi.json",
         "docs": {

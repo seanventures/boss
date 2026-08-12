@@ -4857,6 +4857,114 @@ paths:
           description: Invalid reporting window
         '404':
           description: Project not found
+  /v1/llm-calls:
+    get:
+      tags:
+      - Model gateway
+      summary: List project llm_calls spend/quality ledger
+      description: 'Operator read path over the canonical llm_calls table with optional filters (stage,
+        role, model, engine, ok, code_task_run_id) and limit/offset pagination.
+
+        '
+      operationId: get_v1_llm_calls
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: stage
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: role
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: model
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: engine
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: ok
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: code_task_run_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 200
+          default: 50
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      responses:
+        '200':
+          description: Paginated llm_calls rows for the project
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/llm-calls/summary:
+    get:
+      tags:
+      - Model gateway
+      summary: Roll up llm_calls by stage, role, model, or engine
+      description: 'Aggregate call counts, spend (usd micros), tokens, and success/failure for FinOps
+        and bake-off views. group_by must be stage|role|model|engine.
+
+        '
+      operationId: get_v1_llm_calls_summary
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: group_by
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - stage
+          - role
+          - model
+          - engine
+          default: stage
+      responses:
+        '200':
+          description: Rollup groups ordered by spend descending
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Invalid group_by or missing project_id
   /v1/model-gateway/leases/reap:
     post:
       summary: Mark expired model capacity leases terminal and release unused reservations
