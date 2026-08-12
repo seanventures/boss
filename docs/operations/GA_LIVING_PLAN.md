@@ -180,6 +180,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-12 | Multi-agent E2E Cloud bake: AC tests, Easy Connect link+sync, post-link team/marketplace/workers, retention+MC UX; 29 pytest green | agents |
 | 2026-08-12 | Cloud product expansion: comparison/capabilities/workers + complete/unlink; MC Community-safe cloud feed; device pending codes; honest managed workers | codex |
 | 2026-08-12 | BOSS Cloud product distinction: spec + `/v1/cloud/*` catalog/status/easy-connect (device+browser); Community independent; AC device authorize; MC Cloud CTA; tests 4/4 | codex |
 | 2026-08-12 | Console UI/UX IA panel (6 experts): 8-primary + Settings hub; zero feature loss; recs in UI_UX_IA_RECOMMENDATIONS.md | codex |
