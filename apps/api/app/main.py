@@ -491,6 +491,7 @@ from .schemas import (
     WorkerFailResponse,
     WorkerHeartbeatRequest,
     WorkerHeartbeatResponse,
+    WorkerRegistrationRequest,
     WorkerPoolListResponse,
     WorkerPoolSummary,
     WorkerPoolUpsertRequest,
@@ -723,6 +724,7 @@ from .services.resource_plane import (
 from .services import terraform_drift as terraform_drift_service
 from .services import terraform_export as terraform_export_service
 from .services.autonomy_engine import AutonomyEngine
+from boss_engine.services.worker_registry import WorkerRegistryService
 from .services.role_governance import RoleGovernanceService
 from .services.router_health import RouterHealthService
 from .services.skill_runtime import (
@@ -829,6 +831,7 @@ health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
 autonomy_engine = AutonomyEngine(settings)
+worker_registry = WorkerRegistryService()
 router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
 toolchain_registry = ToolchainRegistryService(settings)
@@ -14677,6 +14680,22 @@ def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
         if not job:
             return WorkerPollResponse(status="idle", job=None)
         return WorkerPollResponse(status="leased", job=LeasedJob(**job))
+
+
+@app.post("/v1/workers/register")
+def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
+        try:
+            return worker_registry.register(connection, project_id=payload.project_id, worker_id=payload.worker_id, capabilities=payload.capabilities, metadata=payload.metadata, actor=payload.actor)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/workers")
+def list_workers(project_id: str) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {"project_id": project_id, "items": worker_registry.list(connection, project_id)}
 
 
 @app.post("/v1/worker/heartbeat", response_model=WorkerHeartbeatResponse)
