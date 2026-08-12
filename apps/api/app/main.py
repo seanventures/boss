@@ -452,6 +452,8 @@ from .schemas import (
     RoleAutonomyCheckResponse,
     RoleGovernanceDetail,
     RoleReviewRequest,
+    RoleTrustEvidenceRequest,
+    RoleTrustEvidenceResponse,
     RoleDetail,
     RoleListResponse,
     RoleScopeCheckRequest,
@@ -499,6 +501,7 @@ from .schemas import (
     WorkerFailResponse,
     WorkerHeartbeatRequest,
     WorkerHeartbeatResponse,
+    WorkerRegistrationRequest,
     WorkerPoolListResponse,
     WorkerPoolSummary,
     WorkerPoolUpsertRequest,
@@ -555,6 +558,7 @@ from .schemas import (
     DeliveryStatusChannelUpsertRequest,
     ResourceAllocationPlanRequest,
     ResourceQuotaUpsertRequest,
+    WorkAdmissionRequest,
     WorkItemUpsertRequest,
     WorkTrackerBindingUpsertRequest,
     WorkTrackerSyncExecuteRequest,
@@ -733,6 +737,7 @@ from .services import terraform_drift as terraform_drift_service
 from .services import terraform_export as terraform_export_service
 from .services import iac_verify as iac_verify_service
 from .services.autonomy_engine import AutonomyEngine
+from boss_engine.services.worker_registry import WorkerRegistryService
 from .services.role_governance import RoleGovernanceService
 from .services.router_health import RouterHealthService
 from .services.skill_runtime import (
@@ -840,6 +845,7 @@ health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
 role_governance = RoleGovernanceService(settings)
 autonomy_engine = AutonomyEngine(settings)
+worker_registry = WorkerRegistryService()
 router_health = RouterHealthService(settings)
 skill_runtime = SkillRuntimeService(settings)
 toolchain_registry = ToolchainRegistryService(settings)
@@ -10304,6 +10310,39 @@ def evaluate_role_autonomy(
         return response
 
 
+@app.post(
+    "/v1/roles/{role_key}/trust-evidence",
+    response_model=RoleTrustEvidenceResponse,
+    status_code=201,
+)
+def record_role_trust_evidence(
+    role_key: str, request: RoleTrustEvidenceRequest
+) -> RoleTrustEvidenceResponse:
+    """Append an idempotent, attributable trust observation for a later autonomy review."""
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
+            result = autonomy_engine.record_trust_evidence(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                evidence_type=request.evidence_type,
+                evidence_ref=request.evidence_ref,
+                actor=request.actor,
+                detail=request.detail,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return RoleTrustEvidenceResponse(**result)
+
+
 @app.get("/v1/packs", response_model=PackListResponse)
 def list_packs(project_id: str) -> PackListResponse:
     with begin(engine) as connection:
@@ -15528,6 +15567,11 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
         job_payload = {
             **payload.payload,
             **(
+                {"completion_contract": payload.completion_contract.model_dump()}
+                if payload.completion_contract
+                else {}
+            ),
+            **(
                 {"requires_reservation": True}
                 if payload.requires_reservation
                 else {}
@@ -15967,6 +16011,22 @@ def worker_poll(payload: WorkerPollRequest) -> WorkerPollResponse:
         if not job:
             return WorkerPollResponse(status="idle", job=None)
         return WorkerPollResponse(status="leased", job=LeasedJob(**job))
+
+
+@app.post("/v1/workers/register")
+def register_worker(payload: WorkerRegistrationRequest) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
+        try:
+            return worker_registry.register(connection, project_id=payload.project_id, worker_id=payload.worker_id, capabilities=payload.capabilities, metadata=payload.metadata, actor=payload.actor)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/workers")
+def list_workers(project_id: str) -> dict[str, Any]:
+    with begin(engine) as connection:
+        return {"project_id": project_id, "items": worker_registry.list(connection, project_id)}
 
 
 @app.post("/v1/worker/heartbeat", response_model=WorkerHeartbeatResponse)
@@ -17583,6 +17643,28 @@ def upsert_ranked_work_item(
                 "allocation": allocation,
                 "tracker_sync_job": sync_job,
             }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/items/{work_item_id}/admission")
+def evaluate_work_admission(
+    work_item_id: str, payload: WorkAdmissionRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.evaluate_admission(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item_id,
+                role_key=payload.role_key,
+                requested_autonomy_level=payload.requested_autonomy_level,
+                estimated_cost_usd_micros=payload.estimated_cost_usd_micros,
+                actor=payload.actor,
+            )
         except ValueError as error:
             _raise_work_orchestration_error(error)
 

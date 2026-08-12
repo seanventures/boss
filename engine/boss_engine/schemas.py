@@ -2061,6 +2061,22 @@ class JobListResponse(BaseModel):
     offset: int
 
 
+class JobCompletionContract(BaseModel):
+    """Proof required before a worker may mark an opt-in job successful."""
+
+    required_result_fields: list[str] = Field(default_factory=list)
+    min_evidence_refs: int = Field(default=1, ge=1, le=100)
+    independent_verifier_required: bool = True
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "JobCompletionContract":
+        if self.required_result_fields:
+            self.required_result_fields = _require_non_empty_string_list(
+                self.required_result_fields, "required_result_fields"
+            )
+        return self
+
+
 class JobCreateRequest(BaseModel):
     project_id: str
     kind: str
@@ -2069,6 +2085,7 @@ class JobCreateRequest(BaseModel):
     tracker_binding_id: Optional[str] = None
     allocation_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    completion_contract: Optional[JobCompletionContract] = None
     data_boundary: Optional[DataBoundary] = None
     requires_reservation: bool = False
     reservation_id: Optional[str] = None
@@ -2206,6 +2223,14 @@ class WorkerPollRequest(BaseModel):
     lease_ttl_seconds: int = Field(default=60, ge=5, le=3600)
 
 
+class WorkerRegistrationRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    capabilities: list[str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
 class WorkerPollResponse(BaseModel):
     status: str
     job: Optional[LeasedJob] = None
@@ -2234,6 +2259,9 @@ class WorkerCompleteRequest(BaseModel):
 class WorkerCompleteResponse(BaseModel):
     job_id: str
     status: str
+    proof_disposition: Optional[Literal["accepted", "rejected", "not_required"]] = None
+    proof_artifact_id: Optional[str] = None
+    proof_rejection_reasons: list[str] = Field(default_factory=list)
     artifact_id: Optional[str] = None
     diff_artifact_id: Optional[str] = None
     test_report_artifact_id: Optional[str] = None
@@ -3620,6 +3648,31 @@ class AutonomyEvaluateRequest(BaseModel):
     def validate_fields(self) -> "AutonomyEvaluateRequest":
         self.actor = _require_text(self.actor, "actor")
         return self
+
+
+class RoleTrustEvidenceRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+    evidence_type: Literal[
+        "successful_run",
+        "duplicate_effect_attempt",
+        "hidden_failure",
+        "low_quality_output",
+    ]
+    evidence_ref: str
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "RoleTrustEvidenceRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.evidence_ref = _require_text(self.evidence_ref, "evidence_ref")
+        return self
+
+
+class RoleTrustEvidenceResponse(BaseModel):
+    event_id: str
+    recorded: bool
+    event_type: str
 
 
 class RoleAutonomyCheckRequest(BaseModel):
@@ -7090,6 +7143,20 @@ class WorkItemUpsertRequest(BaseModel):
     evidence: list[Any] = Field(default_factory=list)
     source: str = "boss"
     actor: str = "product_manager"
+
+
+class WorkAdmissionRequest(BaseModel):
+    project_id: str
+    role_key: str
+    requested_autonomy_level: int = Field(ge=0, le=10)
+    estimated_cost_usd_micros: int = Field(ge=0)
+    actor: str = "chief_operator"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkAdmissionRequest":
+        self.role_key = _require_text(self.role_key, "role_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
 
 
 class ResourceQuotaUpsertRequest(BaseModel):

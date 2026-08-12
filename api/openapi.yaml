@@ -3166,6 +3166,57 @@ paths:
           description: Role not found
         '422':
           description: Autonomy check payload is invalid
+  /v1/roles/{role_key}/autonomy/evaluate:
+    post:
+      summary: Evaluate durable role trust evidence against the autonomy policy
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '201': { description: Governance detail containing auditable evidence counts }
+        '403': { description: Actor is not allowed to review roles }
+        '404': { description: Role not found }
+        '422': { description: Invalid evaluation request }
+  /v1/roles/{role_key}/trust-evidence:
+    post:
+      summary: Append idempotent, attributable trust evidence for a role
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, evidence_type, evidence_ref]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+                evidence_type:
+                  type: string
+                  enum: [successful_run, duplicate_effect_attempt, hidden_failure, low_quality_output]
+                evidence_ref: { type: string, description: Immutable proof or observation reference }
+                detail: { type: object, additionalProperties: true }
+      responses:
+        '201': { description: Durable evidence event, or the prior event for the same proof }
+        '403': { description: Actor is not allowed to review roles }
+        '404': { description: Role not found }
+        '422': { description: Invalid trust evidence request }
   /v1/roles/{role_key}/scope/check:
     post:
       summary: Check RoleSpec scope and record drift if an action is out of scope
@@ -10443,6 +10494,21 @@ paths:
                   type: string
                 payload:
                   type: object
+                completion_contract:
+                  type: object
+                  description: Opt-in fail-closed proof requirements before a worker can mark this job successful.
+                  properties:
+                    required_result_fields:
+                      type: array
+                      items:
+                        type: string
+                    min_evidence_refs:
+                      type: integer
+                      minimum: 1
+                      default: 1
+                    independent_verifier_required:
+                      type: boolean
+                      default: true
                 data_boundary:
                   type: string
                   enum:
@@ -10565,7 +10631,7 @@ paths:
                   type: object
       responses:
         '200':
-          description: Completion recorded
+          description: Completion recorded, or verification_pending when the job contract lacks sufficient proof.
   /v1/worker/fail:
     post:
       summary: Fail leased job and trigger retry or deadletter handling
@@ -14717,6 +14783,22 @@ paths:
           description: Invalid score
           missing tracker: null
           or unavailable quota: null
+  /v1/work-orchestration/items/{work_item_id}/admission:
+    post:
+      summary: Evaluate a non-mutating budget and autonomy admission gate for work
+      parameters:
+      - name: work_item_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Admit or defer decision with score, autonomy ceiling, budget state, and reasons
+        '403':
+          description: Actor is not allowed to submit the evaluation
+        '422':
+          description: Invalid request or work item
   /v1/work-orchestration/quotas:
     post:
       summary: Create or update a bounded resource quota

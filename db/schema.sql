@@ -4759,6 +4759,23 @@ CREATE TABLE IF NOT EXISTS agent_group_member_runs (
 CREATE INDEX IF NOT EXISTS idx_agent_group_member_runs_group
   ON agent_group_member_runs(agent_group_run_id, status, created_at);
 
+-- Durable Worker Fabric inventory. Registration is informational; leases remain
+-- the execution fence in jobs and cannot be granted by this registry.
+CREATE TABLE IF NOT EXISTS worker_registrations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  worker_id TEXT NOT NULL,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'offline', 'draining')),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, worker_id)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_registrations_liveness
+  ON worker_registrations(project_id, status, last_seen_at DESC);
+
 -- ---------------------------------------------------------------------------
 -- Goldeneye bare-metal PaaS (BOSS control plane)
 -- ---------------------------------------------------------------------------
