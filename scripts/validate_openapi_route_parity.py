@@ -34,15 +34,37 @@ def fastapi_routes() -> set[tuple[str, str]]:
             if call is None:
                 continue
             func = _attr_name(call.func)
-            if func not in {f"app.{method}" for method in HTTP_METHODS}:
-                continue
-            method = func.split(".", 1)[1].upper()
             if not call.args:
                 continue
             path_arg = call.args[0]
-            if isinstance(path_arg, ast.Constant) and isinstance(path_arg.value, str):
-                routes.add((method, normalize_openapi_path(path_arg.value)))
+            if not (
+                isinstance(path_arg, ast.Constant) and isinstance(path_arg.value, str)
+            ):
+                continue
+            path = normalize_openapi_path(path_arg.value)
+            if func in {f"app.{method}" for method in HTTP_METHODS}:
+                method = func.split(".", 1)[1].upper()
+                routes.add((method, path))
+                continue
+            if func == "app.api_route":
+                methods = _methods_kwarg(call)
+                for method in methods:
+                    routes.add((method.upper(), path))
     return routes
+
+
+def _methods_kwarg(call: ast.Call) -> list[str]:
+    for keyword in call.keywords:
+        if keyword.arg != "methods":
+            continue
+        value = keyword.value
+        if isinstance(value, (ast.List, ast.Tuple)):
+            methods: list[str] = []
+            for elt in value.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    methods.append(elt.value.lower())
+            return methods or ["get"]
+    return ["get"]
 
 
 def openapi_routes() -> set[tuple[str, str]]:

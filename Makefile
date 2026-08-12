@@ -142,8 +142,12 @@ openapi-live-qa-parity: install-python
 	PYTHONPATH=.:engine $(PYTHON) scripts/validate_openapi_route_parity.py \
 		--prefix /v1/code-tasks \
 		--prefix /v1/delivery \
+		--prefix /v1/deployment \
 		--prefix /v1/deployment-targets \
-		--prefix /v1/sandboxes
+		--prefix /v1/sandboxes \
+		--prefix /v1/previews \
+		--prefix /v1/factory \
+		--prefix /v1/orchestration
 
 sandbox-template:
 	mkdir -p tmp
