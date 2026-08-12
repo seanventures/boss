@@ -24,6 +24,7 @@ from .config import get_settings
 from .db import begin, database_is_reachable, ensure_schema, get_engine
 from .routers import mount_edition_routers
 from .routers.governance import build_governance_router
+from .routers.platform import mount_platform_routers
 from .schemas import (
     AgentModuleDetail,
     AgentModuleInstallRecordListResponse,
@@ -20248,4 +20249,5 @@ app.include_router(
         require_actor=require_project_actor,
     )
 )
+mount_platform_routers(app)
 mount_edition_routers(app, settings.boss_edition)
