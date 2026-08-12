@@ -72,6 +72,21 @@ CMD ["uvicorn", "apps.api.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM python-base AS worker
 
+# Worker must carry the same coding toolchain as the api stage for any path where
+# jobs shell out on the worker host (and to stay aligned with
+# infra/containers/worker.Dockerfile). Goldeneye live QA (BOSS-342) found the
+# multi-target consolidation dropped git from the worker image while api kept it:
+# code.task deadlettered with `No such file or directory: 'git'`, and the worker
+# tag lagged (`norebuild` vs api/web `view2`).
+#
+# Minimum contract: git (clone/diff for EphemeralSandbox / local_subprocess) and
+# node/npm (project build / typecheck / lint). Playwright/Claude stay on the api
+# image where verification and builder CLIs run today — do not silently reintroduce
+# a half-empty worker image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY apps/api/requirements.txt /tmp/api-requirements.txt
 COPY apps/worker/requirements.txt /tmp/worker-requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
