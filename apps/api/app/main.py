@@ -547,6 +547,7 @@ from .schemas import (
     DeliveryStatusChannelUpsertRequest,
     ResourceAllocationPlanRequest,
     ResourceQuotaUpsertRequest,
+    WorkAdmissionRequest,
     WorkItemUpsertRequest,
     WorkTrackerBindingUpsertRequest,
     WorkTrackerSyncExecuteRequest,
@@ -16292,6 +16293,28 @@ def upsert_ranked_work_item(
                 "allocation": allocation,
                 "tracker_sync_job": sync_job,
             }
+        except ValueError as error:
+            _raise_work_orchestration_error(error)
+
+
+@app.post("/v1/work-orchestration/items/{work_item_id}/admission")
+def evaluate_work_admission(
+    work_item_id: str, payload: WorkAdmissionRequest
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "command_submit"
+        )
+        try:
+            return work_orchestration.evaluate_admission(
+                connection,
+                project_id=payload.project_id,
+                work_item_id=work_item_id,
+                role_key=payload.role_key,
+                requested_autonomy_level=payload.requested_autonomy_level,
+                estimated_cost_usd_micros=payload.estimated_cost_usd_micros,
+                actor=payload.actor,
+            )
         except ValueError as error:
             _raise_work_orchestration_error(error)
 

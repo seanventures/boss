@@ -13877,6 +13877,22 @@ paths:
           description: Invalid score
           missing tracker: null
           or unavailable quota: null
+  /v1/work-orchestration/items/{work_item_id}/admission:
+    post:
+      summary: Evaluate a non-mutating budget and autonomy admission gate for work
+      parameters:
+      - name: work_item_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Admit or defer decision with score, autonomy ceiling, budget state, and reasons
+        '403':
+          description: Actor is not allowed to submit the evaluation
+        '422':
+          description: Invalid request or work item
   /v1/work-orchestration/quotas:
     post:
       summary: Create or update a bounded resource quota

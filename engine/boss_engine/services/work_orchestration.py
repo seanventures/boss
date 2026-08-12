@@ -11,7 +11,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .budget import BudgetGovernor
 from .core import emit_event, make_id
+from .role_governance import RoleGovernanceService
 
 
 class WorkTrackerAdapter(Protocol):
@@ -152,6 +154,8 @@ class WorkOrchestrationService:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.budget = BudgetGovernor(settings)
+        self.governance = RoleGovernanceService(settings)
 
     # ------------------------------------------------------------------
     # Seeded plugin and policy defaults
@@ -291,6 +295,75 @@ class WorkOrchestrationService:
     # ------------------------------------------------------------------
     # Explainable portfolio priority
     # ------------------------------------------------------------------
+    def evaluate_admission(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        work_item_id: str,
+        role_key: str,
+        requested_autonomy_level: int,
+        estimated_cost_usd_micros: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Return an explainable, side-effect-free admission decision for a work claim.
+
+        This does not reserve budget, allocate capacity, or elevate permissions. It makes
+        those later effects auditable by showing exactly why a role and budget may admit
+        the proposed work now.
+        """
+        work_item = connection.execute(
+            text(
+                "SELECT * FROM work_items WHERE id=:id AND project_id=:project_id"
+            ),
+            {"id": work_item_id, "project_id": project_id},
+        ).mappings().first()
+        if work_item is None:
+            raise ValueError("Work item not found.")
+        if requested_autonomy_level < 0:
+            raise ValueError("requested_autonomy_level must be >= 0.")
+        if estimated_cost_usd_micros < 0:
+            raise ValueError("estimated_cost_usd_micros must be >= 0.")
+
+        role = self.governance.get_role(connection, project_id, role_key)
+        budget = self.budget.status_for_project(connection, project_id)
+        reasons: list[str] = []
+        current_level = int(role["autonomy_level"])
+        if requested_autonomy_level > current_level:
+            reasons.append("requested_autonomy_level_exceeds_role_ceiling")
+        if int(budget["available_usd_micros"]) < estimated_cost_usd_micros:
+            reasons.append("budget_available_below_estimate")
+        if budget["budget_state"] == "red" and work_item["priority_band"] not in {"p0", "p1"}:
+            reasons.append("red_budget_state_admits_only_p0_p1_work")
+        if work_item["status"] != "active":
+            reasons.append("work_item_not_active")
+
+        decision = "admit" if not reasons else "defer"
+        result = {
+            "project_id": project_id,
+            "work_item_id": work_item_id,
+            "role_key": role_key,
+            "decision": decision,
+            "reasons": reasons,
+            "effective_score": float(work_item["effective_score"]),
+            "priority_band": work_item["priority_band"],
+            "role_autonomy_ceiling": current_level,
+            "requested_autonomy_level": requested_autonomy_level,
+            "estimated_cost_usd_micros": estimated_cost_usd_micros,
+            "available_budget_usd_micros": int(budget["available_usd_micros"]),
+            "budget_state": budget["budget_state"],
+        }
+        emit_event(
+            connection,
+            project_id,
+            "work.claim_admission_evaluated",
+            actor,
+            "work_item",
+            work_item_id,
+            result,
+        )
+        return result
+
     def upsert_work_item(
         self,
         connection: Connection,
