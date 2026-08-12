@@ -10,12 +10,21 @@ Current release: `v0.11.0`
 
 | | |
 |---|---|
+| **Install** | `curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh \| bash` |
 | **Story** | [boss.sean.network/community/](https://boss.sean.network/community/) |
 | **Spec** | [`docs/product/BOSS_COMMUNITY_EDITION_SPEC.md`](docs/product/BOSS_COMMUNITY_EDITION_SPEC.md) |
 | **Features** | [`docs/community/FEATURES.md`](docs/community/FEATURES.md) |
 | **Quickstart** | [`docs/community/QUICKSTART.md`](docs/community/QUICKSTART.md) |
 
-You run the control plane (API + worker + Postgres), bring your own model and infrastructure keys, and use CLI, MCP, or Mission Control. Cloud is an optional Easy Connect path when you want BOSS to operate hosted team, marketplace, or managed capacity.
+### One-line installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+```
+
+Idiot-proof Community setup (Docker): checks the machine, prompts for your model key (BYOK), starts Postgres + API + worker + Mission Control, seeds the project, and verifies health. See [`install.sh`](install.sh) and [`scripts/install/README.md`](scripts/install/README.md).
+
+You run the control plane, bring your own model and infrastructure keys, and use CLI, MCP, or Mission Control. Cloud is an optional Easy Connect path when you want BOSS to operate hosted team, marketplace, or managed capacity.
 
 ```text
 Outcome → Plan → Work → Evidence → Decision

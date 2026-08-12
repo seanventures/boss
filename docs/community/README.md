@@ -38,13 +38,13 @@ BOSS Community is a fully functional, self-hosted product — not a crippled tri
 
 ## Start here
 
+**One-line (recommended):**
+
 ```bash
-# See QUICKSTART.md for the full path. Conceptually:
-# 1. Postgres
-# 2. API + worker (docker compose or make dev)
-# 3. Export a model key
-# 4. boss CLI / MCP / open Mission Control
+curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
 ```
+
+That installer checks your machine, installs dependencies via Docker, prompts for BYOK model keys, starts Postgres + API + worker (+ Mission Control), seeds `boss-dogfood`, and verifies health. See [QUICKSTART.md](./QUICKSTART.md) and [`scripts/install/README.md`](../../scripts/install/README.md).
 
 ## Contributing
 

@@ -5,6 +5,23 @@ Goal: a working self-hosted control plane with BYO keys in minutes on a develope
 > For production goldeneye-style deploy, see `docs/operations/GOLDENEYE_DEPLOYMENT.md`.  
 > For the full product contract, see [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md).
 
+## One-line install (recommended)
+
+OpenClaw-style: paste into a terminal. Checks Docker, installs Community stack, prompts for keys, seeds the project, verifies health.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash
+```
+
+With a key already exported:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanheiney/boss/main/install.sh | bash -s -- \
+  --openai-key "$OPENAI_API_KEY"
+```
+
+Details & flags: [`scripts/install/README.md`](../../scripts/install/README.md) · root [`install.sh`](../../install.sh).
+
 ## What you will run
 
 | Process | Role |
