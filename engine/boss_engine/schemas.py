@@ -6869,6 +6869,20 @@ class WorkItemUpsertRequest(BaseModel):
     actor: str = "product_manager"
 
 
+class WorkAdmissionRequest(BaseModel):
+    project_id: str
+    role_key: str
+    requested_autonomy_level: int = Field(ge=0, le=10)
+    estimated_cost_usd_micros: int = Field(ge=0)
+    actor: str = "chief_operator"
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "WorkAdmissionRequest":
+        self.role_key = _require_text(self.role_key, "role_key")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
 class ResourceQuotaUpsertRequest(BaseModel):
     project_id: str
     scope_type: Literal["global", "org", "workspace", "project", "agent", "workload"]
