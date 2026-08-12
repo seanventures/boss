@@ -604,6 +604,68 @@ class JobLeaseService:
     ) -> dict[str, Any]:
         row = self._load_leased_job_for_update(connection, worker_id, job_id, lease_token)
         project_id = row["project_id"]
+        result = result or {}
+        proof = self._validate_completion_proof(row, worker_id, result)
+        if proof["disposition"] == "rejected":
+            timestamp = now_utc()
+            connection.execute(
+                text(
+                    """
+                    UPDATE jobs
+                    SET last_error = CAST(:last_error AS JSONB),
+                        heartbeat_at = :heartbeat_at,
+                        updated_at = :updated_at
+                    WHERE id = :job_id
+                    """
+                ),
+                {
+                    "job_id": job_id,
+                    "last_error": json.dumps(
+                        {
+                            "code": "completion_proof_rejected",
+                            "reasons": proof["reasons"],
+                        }
+                    ),
+                    "heartbeat_at": timestamp,
+                    "updated_at": timestamp,
+                },
+            )
+            emit_event(
+                connection,
+                project_id,
+                "job.completion_proof_rejected",
+                worker_id,
+                "job",
+                job_id,
+                {"reasons": proof["reasons"]},
+            )
+            return {
+                "job_id": job_id,
+                "status": "verification_pending",
+                "proof_disposition": "rejected",
+                "proof_rejection_reasons": proof["reasons"],
+            }
+
+        proof_artifact_id = None
+        if proof["disposition"] == "accepted":
+            proof_artifact_id = create_artifact(
+                connection,
+                self.settings,
+                project_id,
+                row.get("task_id"),
+                "job_completion_proof",
+                f"Completion proof for job {job_id}",
+                {
+                    "job_id": job_id,
+                    "job_kind": row["kind"],
+                    "worker_id": worker_id,
+                    "contract": proof["contract"],
+                    "proof": proof["proof"],
+                    "disposition": "accepted",
+                },
+                created_by_job_id=job_id,
+                data_boundary=row.get("data_boundary"),
+            )
         connection.execute(
             text(
                 """
@@ -613,6 +675,7 @@ class JobLeaseService:
                     lease_token_hash = NULL,
                     lease_expires_at = NULL,
                     heartbeat_at = NULL,
+                    last_error = '{}'::jsonb,
                     updated_at = :updated_at
                 WHERE id = :job_id
                 """
@@ -631,8 +694,11 @@ class JobLeaseService:
         extras = self._finalize_success(
             connection,
             row,
-            result or {},
+            result,
         )
+        extras["proof_disposition"] = proof["disposition"]
+        if proof_artifact_id:
+            extras["proof_artifact_id"] = proof_artifact_id
         emit_event(
             connection,
             project_id,
@@ -643,6 +709,58 @@ class JobLeaseService:
             {"kind": row["kind"], **extras},
         )
         return {"job_id": job_id, "status": "succeeded", **extras}
+
+    def _validate_completion_proof(
+        self,
+        job_row: dict[str, Any],
+        worker_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Evaluate an opt-in contract without granting an unchecked success state."""
+        payload = job_row.get("payload") or {}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        contract = payload.get("completion_contract")
+        if not contract:
+            return {"disposition": "not_required", "reasons": []}
+        if not isinstance(contract, dict):
+            return {
+                "disposition": "rejected",
+                "reasons": ["completion_contract must be an object."],
+            }
+
+        reasons: list[str] = []
+        for field in contract.get("required_result_fields") or []:
+            if field not in result or result[field] in (None, ""):
+                reasons.append(f"Missing required result field: {field}.")
+        proof = result.get("completion_proof")
+        if not isinstance(proof, dict):
+            reasons.append("completion_proof is required.")
+            proof = {}
+        evidence_refs = proof.get("evidence_refs")
+        if not isinstance(evidence_refs, list) or not all(
+            isinstance(ref, str) and ref.strip() for ref in evidence_refs
+        ):
+            reasons.append("completion_proof.evidence_refs must be non-empty strings.")
+        elif len(evidence_refs) < int(contract.get("min_evidence_refs") or 1):
+            reasons.append("completion_proof does not include enough evidence references.")
+        verifier_actor = proof.get("verifier_actor")
+        if not isinstance(verifier_actor, str) or not verifier_actor.strip():
+            reasons.append("completion_proof.verifier_actor is required.")
+        elif contract.get("independent_verifier_required", True) and verifier_actor == worker_id:
+            reasons.append(
+                "completion_proof.verifier_actor must differ from the completing worker."
+            )
+        if proof.get("disposition") != "verified":
+            reasons.append("completion_proof.disposition must be 'verified'.")
+        if reasons:
+            return {"disposition": "rejected", "reasons": reasons}
+        return {
+            "disposition": "accepted",
+            "reasons": [],
+            "contract": contract,
+            "proof": proof,
+        }
 
     def fail(
         self,

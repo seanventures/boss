@@ -9537,6 +9537,21 @@ paths:
                   type: string
                 payload:
                   type: object
+                completion_contract:
+                  type: object
+                  description: Opt-in fail-closed proof requirements before a worker can mark this job successful.
+                  properties:
+                    required_result_fields:
+                      type: array
+                      items:
+                        type: string
+                    min_evidence_refs:
+                      type: integer
+                      minimum: 1
+                      default: 1
+                    independent_verifier_required:
+                      type: boolean
+                      default: true
                 data_boundary:
                   type: string
                   enum:
@@ -9659,7 +9674,7 @@ paths:
                   type: object
       responses:
         '200':
-          description: Completion recorded
+          description: Completion recorded, or verification_pending when the job contract lacks sufficient proof.
   /v1/worker/fail:
     post:
       summary: Fail leased job and trigger retry or deadletter handling

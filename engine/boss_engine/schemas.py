@@ -2011,6 +2011,22 @@ class JobListResponse(BaseModel):
     offset: int
 
 
+class JobCompletionContract(BaseModel):
+    """Proof required before a worker may mark an opt-in job successful."""
+
+    required_result_fields: list[str] = Field(default_factory=list)
+    min_evidence_refs: int = Field(default=1, ge=1, le=100)
+    independent_verifier_required: bool = True
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "JobCompletionContract":
+        if self.required_result_fields:
+            self.required_result_fields = _require_non_empty_string_list(
+                self.required_result_fields, "required_result_fields"
+            )
+        return self
+
+
 class JobCreateRequest(BaseModel):
     project_id: str
     kind: str
@@ -2019,6 +2035,7 @@ class JobCreateRequest(BaseModel):
     tracker_binding_id: Optional[str] = None
     allocation_id: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    completion_contract: Optional[JobCompletionContract] = None
     data_boundary: Optional[DataBoundary] = None
     requires_reservation: bool = False
     reservation_id: Optional[str] = None
@@ -2184,6 +2201,9 @@ class WorkerCompleteRequest(BaseModel):
 class WorkerCompleteResponse(BaseModel):
     job_id: str
     status: str
+    proof_disposition: Optional[Literal["accepted", "rejected", "not_required"]] = None
+    proof_artifact_id: Optional[str] = None
+    proof_rejection_reasons: list[str] = Field(default_factory=list)
     artifact_id: Optional[str] = None
     diff_artifact_id: Optional[str] = None
     test_report_artifact_id: Optional[str] = None
