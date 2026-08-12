@@ -25,15 +25,35 @@ For the platform-native path, push the images first and deploy with the
 image-backed compose file:
 
 ```sh
-docker buildx build --platform linux/amd64 --target api -t goldeneye.tail95d980.ts.net:5000/boss-api:<git-sha> --push .
-docker buildx build --platform linux/amd64 --target worker -t goldeneye.tail95d980.ts.net:5000/boss-worker:<git-sha> --push .
+# Use one shared tag for api/worker/web so tags cannot drift (BOSS-342: worker
+# lagged on `norebuild` while api/web were on `view2`, and worker lacked git).
+TAG=$(git rev-parse --short HEAD)
+REG=goldeneye.tail95d980.ts.net:5000
+
+docker buildx build --platform linux/amd64 --target api \
+  -t $REG/boss-api:$TAG --push .
+docker buildx build --platform linux/amd64 --target worker \
+  -t $REG/boss-worker:$TAG --push .
 docker buildx build --platform linux/amd64 --target web \
   --build-arg NEXT_PUBLIC_BOSS_API_URL=https://boss-api.local.sean.network \
   --build-arg NEXT_PUBLIC_BOSS_PROJECT_ID=boss-dogfood \
-  -t goldeneye.tail95d980.ts.net:5000/boss-web:<git-sha> --push .
-docker buildx build --platform linux/amd64 --target account-connect -t goldeneye.tail95d980.ts.net:5000/boss-account-connect:<git-sha> --push .
+  -t $REG/boss-web:$TAG --push .
+docker buildx build --platform linux/amd64 --target account-connect \
+  -t $REG/boss-account-connect:$TAG --push .
+
+# Optional contract probe against published tags (Dockerfile-level checks always run):
+#   BOSS_IMAGE=$REG/boss-api:$TAG BOSS_WORKER_IMAGE=$REG/boss-worker:$TAG \
+#     python tests/test_runtime_image_contract.py
+
 ssh root@goldeneye deploy boss --compose /path/to/goldeneye.compose.yaml --env-template /path/to/app.env.tmpl
 ```
+
+**Worker image contract (BOSS-342):** the multi-target `Dockerfile` `worker` stage
+must install `git`, `nodejs`, and `npm` (same packages as the api coding
+toolchain minus Playwright/Claude). Without `git`, `code.task` jobs
+deadletter with `No such file or directory: 'git'`. After rebuilding worker,
+point compose at the new shared tag — do not leave worker on a stale tag while
+api/web advance.
 
 `NEXT_PUBLIC_BOSS_API_URL` is a Next.js public value and is compiled into the
 browser bundle at build time. Setting it only in the runtime compose
