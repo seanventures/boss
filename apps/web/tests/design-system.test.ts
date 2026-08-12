@@ -229,6 +229,63 @@ describe("BOSS mission-control design system", () => {
     expect(css).toContain(".provider-drawer");
   });
 
+  it("keeps the Command Center bound to live commands, work, agents, and events", () => {
+    // BOSS-146: the surface must remain a control-plane projection, not a
+    // static showcase. These four sources are deliberately asserted together:
+    // removing any one turns the command center into an attractive, but
+    // misleading, dashboard.
+    expect(page).toContain("submitCommandAction");
+    expect(page).toContain("status.openTasks");
+    expect(page).toContain("ccRoster.filter");
+    expect(page).toContain("events.items.map");
+    expect(page).toContain('className="cc-stage"');
+    expect(page).toContain('className="cc-stage-lines"');
+    expect(page).toContain("CC_NODE_SPOTS");
+  });
+
+  it("keeps approvals decision-backed and exposes their complete evidence", () => {
+    // BOSS-147: a pending decision needs a clearly attributable proposer,
+    // impact, rationale/evidence, and the governed resolve action. A read-only
+    // card or a blind approve button would both violate the queue contract.
+    expect(page).toContain('className="dq-row"');
+    expect(page).toContain('className="dq-who"');
+    expect(page).toContain('className={`dq-impact ${impact.tone}`}');
+    expect(page).toContain('className="dq-evidence"');
+    expect(page).toContain("resolveDecisionAction");
+    expect(page).toContain('className={`dq-verdict ${');
+    expect(css).toContain(".dq-row + .dq-row");
+    expect(css).toContain(".dq-actions");
+  });
+
+  it("renders receipt evidence with governed completion proof rather than a status claim", () => {
+    // BOSS-150: a receipt view must communicate effect lineage plus measured
+    // checks. The completed-code-task and fallback-receipt branches both need
+    // the same visible evidence structure.
+    expect(page).toContain('className="mission-evidence-receipt"');
+    expect(page).toContain('className="mission-receipt-metrics mission-receipt-metrics--four"');
+    expect(page).toContain('className="mission-receipt-verification"');
+    expect(page).toContain('className="mission-receipt-files"');
+    expect(page).toContain("Independent reviewer signed off");
+    expect(page).toContain("Unique dedupe key prevents duplicate effects");
+    expect(css).toContain(".mission-receipt-metrics--four");
+    expect(css).toContain(".mission-receipt-verification");
+  });
+
+  it("keeps global controls accessible, motion-safe, and visibly stateful", () => {
+    // BOSS-151: the persistent shell, keyboard palette/dialog, completion
+    // feedback, and motion preference are system-level behavior, not isolated
+    // page decoration.
+    const forms = readFileSync(resolve(__dirname, "../app/client-forms.tsx"), "utf8");
+    expect(shell).toContain('className={`bx-nav-item${a.id === active ? " active" : ""}`}');
+    expect(shell).toContain('role="dialog"');
+    expect(shell).toContain("aria-modal=\"true\"");
+    expect(forms).toContain("role=\"alert\"");
+    expect(forms).toContain("boss:toast");
+    expect(css).toContain(".bx-nav-item.active");
+    expect(css).toContain(".toast-success");
+    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
   it("honors reduced-motion preferences", () => {
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
   });
