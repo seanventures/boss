@@ -14,10 +14,11 @@ Kit source of truth: modular ``modules/*/package.yaml`` + assembled
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -25,6 +26,11 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .core import emit_event, make_id
 from .receipts import ReceiptService
+
+# Optional injectable SSH runner: (host, user, port, command, timeout) -> dict
+# with keys returncode, stdout, stderr. Used by unit tests; production uses
+# SSHHostAdapter._run_remote when the deploy gate is open.
+SshRunner = Callable[..., dict[str, Any]]
 
 
 def _utcnow() -> datetime:
@@ -218,9 +224,16 @@ def load_package_catalog() -> dict[str, Any]:
 class GoldeneyePaasService:
     """Project-scoped Goldeneye node/package/app control plane."""
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        ssh_runner: Optional[SshRunner] = None,
+    ):
         self.settings = settings
         self.receipts = ReceiptService()
+        # Injected by tests; production falls back to SSHHostAdapter.
+        self.ssh_runner = ssh_runner
 
     # ------------------------------------------------------------------
     # Catalog
@@ -228,6 +241,27 @@ class GoldeneyePaasService:
 
     def package_catalog(self) -> dict[str, Any]:
         return load_package_catalog()
+
+    def catalog_bootstrap(self) -> dict[str, Any]:
+        """Default module install order for a fresh node (from kit catalog)."""
+        catalog = self.package_catalog()
+        order = list(
+            catalog.get("default_bootstrap")
+            or [
+                "layer0-host",
+                "layer1-runtime",
+                "layer2-edge",
+                "deploy-cli",
+            ]
+        )
+        return {
+            "default_bootstrap": order,
+            "count": len(order),
+            "kit_version": catalog.get("kit_version"),
+            "api_version": catalog.get("api_version") or 1,
+            "source": catalog.get("source"),
+            "modular": bool(catalog.get("modular", False)),
+        }
 
     def _package_by_id(self, package_id: str) -> dict[str, Any]:
         catalog = self.package_catalog()
@@ -271,6 +305,72 @@ class GoldeneyePaasService:
 
     def _real_host_allowed(self) -> bool:
         return bool(getattr(self.settings, "ssh_host_deploy_allowed", False))
+
+    def _actuate_remote_module_install(
+        self,
+        *,
+        node: dict[str, Any],
+        package_id: str,
+        timeout: int = 600,
+    ) -> dict[str, Any]:
+        """Run ``ge module install <id>`` on the node via SSH (or injected runner).
+
+        Returns a result dict with at least: ok, returncode, stdout, stderr,
+        command, host. Does not raise on remote non-zero exit — callers inspect
+        ``ok``. Raises only when the node lacks ssh_host or local SSH setup fails
+        before a remote attempt (adapter guard / key missing).
+        """
+        host = (node.get("ssh_host") or "").strip()
+        if not host:
+            raise ValueError("node has no ssh_host; cannot actuate real install")
+        user = str(node.get("ssh_user") or "root")
+        port = int(node.get("ssh_port") or 22)
+        # Prefer modular CLI surface; `ge pkg install` is an alias on the kit.
+        command = f"ge module install {shlex.quote(package_id)}"
+
+        if self.ssh_runner is not None:
+            result = self.ssh_runner(
+                host=host,
+                user=user,
+                port=port,
+                command=command,
+                timeout=timeout,
+            )
+            rc = int(result.get("returncode", 1))
+            return {
+                "ok": rc == 0,
+                "returncode": rc,
+                "stdout": str(result.get("stdout") or "")[:4000],
+                "stderr": str(result.get("stderr") or "")[:4000],
+                "command": command,
+                "host": host,
+                "user": user,
+                "port": port,
+                "via": "injected_runner",
+            }
+
+        from .ssh_host_adapter import SSHHostAdapter
+
+        adapter = SSHHostAdapter(self.settings)
+        proc = adapter._run_remote(
+            host=host,
+            user=user,
+            port=port,
+            command=command,
+            timeout=timeout,
+        )
+        rc = int(proc.returncode)
+        return {
+            "ok": rc == 0,
+            "returncode": rc,
+            "stdout": (proc.stdout or "")[:4000],
+            "stderr": (proc.stderr or "")[:4000],
+            "command": command,
+            "host": host,
+            "user": user,
+            "port": port,
+            "via": "ssh_host_adapter",
+        }
 
     # ------------------------------------------------------------------
     # Nodes
@@ -557,13 +657,16 @@ class GoldeneyePaasService:
                         f"(install it first, or pass force=true)"
                     )
 
-        real = self._real_host_allowed()
-        mode = "real" if real else "simulated"
-        status = "installed" if real else "simulated"
-        # Kit path does not open SSH from the control plane in v0.1 —
-        # real mode marks planned remote install for operator/agent actuation.
-        if real:
-            status = "planned"
+        # Actuation policy:
+        # - Gate off (default): simulated record + receipt; no SSH.
+        # - Gate on + node.ssh_host: remote `ge module install <id>` via
+        #   SSHHostAdapter (or injected ssh_runner); success → installed,
+        #   failure → failed with error jsonb.
+        # - Gate on without ssh_host: planned (operator must actuate).
+        real_allowed = self._real_host_allowed()
+        ssh_host = (node.get("ssh_host") or "").strip()
+        can_actuate = real_allowed and bool(ssh_host)
+        mode = "real" if real_allowed else "simulated"
 
         install_id = make_id("gepkg")
         now = _utcnow()
@@ -580,22 +683,136 @@ class GoldeneyePaasService:
                 "node_id": node["id"],
                 "package_id": package_id,
                 "mode": mode,
+                "ssh_host": ssh_host or None,
             },
             payload={"force": force, "layer": pkg.get("layer")},
             created_by_job_id=None,
         )
+
+        meta_base: dict[str, Any] = {
+            **(metadata or {}),
+            "package_name": pkg.get("name"),
+            "kind": pkg.get("kind"),
+        }
+        error_payload: dict[str, Any] = {}
+        actuation: Optional[dict[str, Any]] = None
+        status: str
+        completed_at: Optional[datetime]
+
+        if not real_allowed:
+            status = "simulated"
+            completed_at = now
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                provider_ref=install_id,
+                result={
+                    "install_id": install_id,
+                    "status": status,
+                    "mode": mode,
+                    "hint": (
+                        "BOSS_SSH_HOST_DEPLOY_ALLOWED=false; "
+                        "recorded simulated install. On the node run: "
+                        f"ge module install {package_id}"
+                    ),
+                },
+            )
+        elif not can_actuate:
+            # Gate open but node has no ssh_host — plan only.
+            status = "planned"
+            completed_at = None
+            meta_base["hint"] = f"Actuate on node: ge module install {package_id}"
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                provider_ref=install_id,
+                result={
+                    "install_id": install_id,
+                    "status": status,
+                    "mode": mode,
+                    "hint": (
+                        "BOSS_SSH_HOST_DEPLOY_ALLOWED=true but node has no "
+                        f"ssh_host. Actuate manually: ge module install {package_id}"
+                    ),
+                },
+            )
+        else:
+            # Real path: attempt remote install via SSH adapter patterns.
+            try:
+                actuation = self._actuate_remote_module_install(
+                    node=node, package_id=package_id
+                )
+            except Exception as exc:  # noqa: BLE001 — surface as failed install
+                actuation = {
+                    "ok": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc)[:2000],
+                    "command": f"ge module install {package_id}",
+                    "host": ssh_host,
+                    "via": "exception",
+                    "error_type": type(exc).__name__,
+                }
+
+            if actuation.get("ok"):
+                status = "installed"
+                completed_at = now
+                meta_base["actuation"] = {
+                    "host": actuation.get("host"),
+                    "command": actuation.get("command"),
+                    "returncode": actuation.get("returncode"),
+                    "via": actuation.get("via"),
+                }
+                self.receipts.mark_succeeded(
+                    connection,
+                    receipt["id"],
+                    provider_ref=install_id,
+                    result={
+                        "install_id": install_id,
+                        "status": status,
+                        "mode": mode,
+                        "actuation": meta_base["actuation"],
+                        "stdout_tail": (actuation.get("stdout") or "")[-500:],
+                    },
+                )
+            else:
+                status = "failed"
+                completed_at = now
+                error_payload = {
+                    "message": (
+                        f"Remote ge module install {package_id} failed on "
+                        f"{ssh_host}"
+                    ),
+                    "returncode": actuation.get("returncode"),
+                    "stderr": (actuation.get("stderr") or "")[:2000],
+                    "stdout": (actuation.get("stdout") or "")[:1000],
+                    "command": actuation.get("command"),
+                    "host": ssh_host,
+                    "via": actuation.get("via"),
+                    "error_type": actuation.get("error_type"),
+                }
+                meta_base["actuation"] = {
+                    "host": ssh_host,
+                    "command": actuation.get("command"),
+                    "returncode": actuation.get("returncode"),
+                    "via": actuation.get("via"),
+                    "failed": True,
+                }
+                self.receipts.mark_failed(
+                    connection, receipt["id"], error=error_payload
+                )
 
         connection.execute(
             text(
                 """
                 INSERT INTO goldeneye_package_installs (
                   id, project_id, node_id, package_id, status, layer, mode,
-                  receipt_id, created_by, metadata, created_at, updated_at,
+                  receipt_id, error, created_by, metadata, created_at, updated_at,
                   completed_at
                 ) VALUES (
                   :id, :project_id, :node_id, :package_id, :status, :layer, :mode,
-                  :receipt_id, :created_by, CAST(:metadata AS jsonb), :now, :now,
-                  :completed_at
+                  :receipt_id, CAST(:error AS jsonb), :created_by,
+                  CAST(:metadata AS jsonb), :now, :now, :completed_at
                 )
                 """
             ),
@@ -608,42 +825,20 @@ class GoldeneyePaasService:
                 "layer": pkg.get("layer"),
                 "mode": mode,
                 "receipt_id": receipt["id"],
+                "error": json.dumps(error_payload),
                 "created_by": actor,
-                "metadata": json.dumps(
-                    {
-                        **(metadata or {}),
-                        "package_name": pkg.get("name"),
-                        "kind": pkg.get("kind"),
-                    }
-                ),
+                "metadata": json.dumps(meta_base),
                 "now": now,
-                "completed_at": now if status in ("installed", "simulated") else None,
+                "completed_at": completed_at,
             },
         )
 
-        self.receipts.mark_succeeded(
-            connection,
-            receipt["id"],
-            provider_ref=install_id,
-            result={
-                "install_id": install_id,
-                "status": status,
-                "mode": mode,
-                "hint": (
-                    f"Actuate on node: ge pkg install {package_id}"
-                    if status == "planned"
-                    else (
-                        None
-                        if mode == "real"
-                        else "BOSS_SSH_HOST_DEPLOY_ALLOWED=false; "
-                        "recorded simulated install. On the node run: "
-                        f"ge pkg install {package_id}"
-                    )
-                ),
-            },
-        )
-
-        if node["status"] == "registered":
+        if node["status"] == "registered" and status in (
+            "installed",
+            "simulated",
+            "planned",
+            "installing",
+        ):
             connection.execute(
                 text(
                     "UPDATE goldeneye_nodes SET status = 'bootstrapping', "
@@ -665,6 +860,7 @@ class GoldeneyePaasService:
                 "package_id": package_id,
                 "status": status,
                 "mode": mode,
+                "actuated": bool(can_actuate and status == "installed"),
             },
         )
         return self._get_install(connection, project_id, install_id)

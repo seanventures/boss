@@ -45,7 +45,14 @@ def test_work_admission_is_explainable_and_does_not_reserve_budget(engine):
     assert allowed["reasons"] == []
     assert allowed["priority_band"] in {"p0", "p1"}
     assert allowed["role_autonomy_ceiling"] == 1
+    # BOSS-353: admission exposes priority_score + value density (zero cost → floor).
+    assert allowed["priority_score"] == allowed["effective_score"]
+    assert allowed["value_density"] == allowed["value_per_cost"]
+    assert allowed["value_density"] > 0
+    assert allowed["cost_floor_applied"] is True
+    assert allowed["value_per_cost_micros"] > 0
     assert denied["decision"] == "defer"
     assert "requested_autonomy_level_exceeds_role_ceiling" in denied["reasons"]
     assert "budget_available_below_estimate" in denied["reasons"]
+    assert denied["value_density"] < allowed["value_density"]
     assert status["reserved_usd_micros"] == 0

@@ -9,6 +9,7 @@ Resource Plane Kernel: provider accounts, ChangeSets, receipts, multi-cloud cata
 | `/v1/provider-definitions` | Catalog of known providers |
 | `/v1/provider-usage` | Usage ledger / sync |
 | `/v1/resources` | Inventory sync |
+| `/v1/resource-topology` | Durable topology graph (edges between inventory resources) |
 | `/v1/resource-receipts` | Provider effect receipts |
 | `/v1/changesets` | Planned provider writes |
 | `/v1/elastic/*` | Capacity fabric |
@@ -83,6 +84,50 @@ curl -sS "${AUTH[@]}" -d "{\"project_id\": \"$PROJECT\", \"actor\": \"ceo\"}" \
 curl -sS -H "Authorization: Bearer $BOSS_KEY" \
   "$BOSS_API/v1/provider-health?project_id=$PROJECT" | jq .
 ```
+
+### Resource topology (BOSS-240)
+
+Durable directed edges between inventory resources (`external_resources`). Inventory
+and drift remain separate; topology is the minimal graph store for ProviderOps
+(e.g. droplet → VPC, volume → droplet). Mutating writes emit a `Receipt`.
+
+| Method | Path |
+|--------|------|
+| `GET` | `/v1/resource-topology?project_id=` |
+| `POST` | `/v1/resource-topology/edges` |
+| `DELETE` | `/v1/resource-topology/edges/{edge_id}?project_id=&actor=` |
+| `POST` | `/v1/resource-topology/infer` |
+
+```bash
+# Graph summary (nodes + edges)
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/resource-topology?project_id=$PROJECT" | jq .
+
+# Manual edge (requires providerops_manage)
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\",
+  \"actor\": \"ceo\",
+  \"from_resource_id\": \"<external_resource_id_droplet>\",
+  \"to_resource_id\": \"<external_resource_id_vpc>\",
+  \"relation_type\": \"in_vpc\",
+  \"provider\": \"digitalocean\",
+  \"metadata\": {\"source\": \"manual\"}
+}" "$BOSS_API/v1/resource-topology/edges" | jq .
+
+# Infer edges from inventory tags/metadata (vpc_uuid, tags like vpc:<id>)
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\",
+  \"actor\": \"ceo\",
+  \"provider\": \"digitalocean\"
+}" "$BOSS_API/v1/resource-topology/infer" | jq .
+
+# Delete edge
+curl -sS -X DELETE -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/resource-topology/edges/<edge_id>?project_id=$PROJECT&actor=ceo" | jq .
+```
+
+Suggested `relation_type` values: `in_vpc`, `attached_to`, `depends_on`,
+`member_of`, `routes_to`, `hosts`, `uses`, `linked_to` (open-ended TEXT).
 
 ---
 

@@ -33,15 +33,20 @@ def test_initial_infrastructure_provider_definitions_are_truthful(client):
     assert set(definitions) == {"aws", "azure", "digitalocean", "gcp", "ovhcloud"}
     assert definitions["aws"]["adapter_status"] == "available"
     assert definitions["digitalocean"]["adapter_status"] == "available"
-    assert definitions["azure"]["adapter_status"] == "planned"
+    assert definitions["azure"]["adapter_status"] == "available"
+    assert definitions["ovhcloud"]["adapter_status"] == "available"
     assert definitions["gcp"]["adapter_status"] == "planned"
-    assert definitions["ovhcloud"]["adapter_status"] == "planned"
     ovh_slots = {
         slot["key"]
         for method in definitions["ovhcloud"]["auth_methods"]
         for slot in method["credential_slots"]
     }
-    assert ovh_slots == {"application_key", "application_secret", "consumer_key"}
+    # application_key, application_secret, consumer_key (+ optional endpoint/project slots)
+    assert {
+        "application_key",
+        "application_secret",
+        "consumer_key",
+    }.issubset(ovh_slots)
     assert "value" not in json.dumps(response.json()).lower()
 
 
@@ -52,23 +57,22 @@ def test_planned_provider_records_secret_refs_without_claiming_live_adapter(
         raise AssertionError("planned provider must not make an outbound call")
 
     monkeypatch.setattr(api_main.resource_plane, "_test_connection", unexpected_provider_call)
+    # GCP remains planned — use it to assert secret refs without live adapter claims.
     created = _create_provider(
         client,
-        provider="azure",
-        account_label="azure-planned",
+        provider="gcp",
+        account_label="gcp-planned",
         credential_refs={
-            "tenant_id": "env:BOSS_TEST_AZURE_TENANT",
-            "client_id": "env:BOSS_TEST_AZURE_CLIENT",
-            "client_secret": "env:BOSS_TEST_AZURE_SECRET",
+            "service_account": "env:BOSS_TEST_GCP_SA",
         },
-        connection_metadata={"subscription_id": "sub-metadata-only"},
+        connection_metadata={"project_id": "gcp-metadata-only"},
     )
     assert created.status_code == 201
     account = created.json()
     assert account["status"] == "pending_adapter"
-    assert account["auth_method"] == "service_principal"
-    assert account["credential_ref"] == "env:BOSS_TEST_AZURE_SECRET"
-    assert set(account["credential_refs"]) == {"tenant_id", "client_id", "client_secret"}
+    assert account["auth_method"] == "service_account"
+    assert account["credential_ref"] == "env:BOSS_TEST_GCP_SA"
+    assert set(account["credential_refs"]) == {"service_account"}
 
     tested = client.post(
         f"/v1/providers/{account['id']}/test",
@@ -85,13 +89,13 @@ def test_planned_provider_records_secret_refs_without_claiming_live_adapter(
                 """
                 SELECT scope_type, scope_id, secret_kind, status, metadata
                 FROM secret_refs
-                WHERE project_id = :project_id AND provider = 'azure'
+                WHERE project_id = :project_id AND provider = 'gcp'
                 ORDER BY ref_key
                 """
             ),
             {"project_id": PROJECT_ID},
         ).mappings().all()
-    assert len(refs) == 3
+    assert len(refs) == 1
     assert {row["scope_type"] for row in refs} == {"project"}
     assert {row["scope_id"] for row in refs} == {PROJECT_ID}
     assert {row["status"] for row in refs} == {"active"}

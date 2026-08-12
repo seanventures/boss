@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from html import escape
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -18,6 +18,15 @@ from .work_tracker_adapters import (
     get_adapter,
     list_catalog as list_tracker_catalog,
     strip_html,
+)
+from .work_value_scoring import (
+    SCORE_WEIGHTS as VALUE_SCORE_WEIGHTS,
+    annotate_work_item_scores,
+    compute_priority_score,
+    compute_value_density,
+    priority_band as value_priority_band,
+    rank_by_value_density,
+    score_preview as value_score_preview,
 )
 
 
@@ -60,14 +69,8 @@ DELIVERY_PLUGINS: tuple[dict[str, Any], ...] = (
 class WorkOrchestrationService:
     """Rank work, allocate bounded capacity, and mirror delivery presence."""
 
-    SCORE_WEIGHTS = {
-        "strategic_value": Decimal("0.25"),
-        "customer_impact": Decimal("0.22"),
-        "urgency": Decimal("0.18"),
-        "cost_of_delay": Decimal("0.15"),
-        "risk_reduction": Decimal("0.10"),
-        "dependency_pressure": Decimal("0.10"),
-    }
+    # Shared with work_value_scoring (single source of weight truth).
+    SCORE_WEIGHTS = VALUE_SCORE_WEIGHTS
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -574,19 +577,28 @@ class WorkOrchestrationService:
             reasons.append("work_item_not_active")
 
         decision = "admit" if not reasons else "defer"
+        priority_score = float(work_item["effective_score"])
+        density = compute_value_density(
+            priority_score, estimated_cost_usd_micros
+        )
         result = {
             "project_id": project_id,
             "work_item_id": work_item_id,
             "role_key": role_key,
             "decision": decision,
             "reasons": reasons,
-            "effective_score": float(work_item["effective_score"]),
+            "effective_score": priority_score,
+            "priority_score": priority_score,
             "priority_band": work_item["priority_band"],
             "role_autonomy_ceiling": current_level,
             "requested_autonomy_level": requested_autonomy_level,
             "estimated_cost_usd_micros": estimated_cost_usd_micros,
             "available_budget_usd_micros": int(budget["available_usd_micros"]),
             "budget_state": budget["budget_state"],
+            "value_density": density["value_density"],
+            "value_per_cost": density["value_per_cost"],
+            "value_per_cost_micros": density["value_per_cost_micros"],
+            "cost_floor_applied": density["cost_floor_applied"],
         }
         emit_event(
             connection,
@@ -636,7 +648,7 @@ class WorkOrchestrationService:
         }
         confidence = self._score_value(confidence)
         manual_adjustment = max(-100, min(100, int(manual_adjustment)))
-        score = self.calculate_score(
+        score = compute_priority_score(
             **values,
             confidence=confidence,
             manual_adjustment=manual_adjustment,
@@ -720,12 +732,13 @@ class WorkOrchestrationService:
             row["id"],
             {
                 "score": float(row["effective_score"]),
+                "priority_score": float(row["effective_score"]),
                 "priority_band": row["priority_band"],
                 "drivers": values,
                 "manual_adjustment": manual_adjustment,
             },
         )
-        return self._serialize(row)
+        return self._serialize_work_item(row)
 
     def calculate_score(
         self,
@@ -739,37 +752,93 @@ class WorkOrchestrationService:
         confidence: int,
         manual_adjustment: int,
     ) -> Decimal:
-        inputs = {
-            "strategic_value": strategic_value,
-            "customer_impact": customer_impact,
-            "urgency": urgency,
-            "cost_of_delay": cost_of_delay,
-            "risk_reduction": risk_reduction,
-            "dependency_pressure": dependency_pressure,
-        }
-        raw = sum(
-            Decimal(str(inputs[field])) * weight
-            for field, weight in self.SCORE_WEIGHTS.items()
+        """Backward-compatible wrapper around compute_priority_score."""
+        return compute_priority_score(
+            strategic_value=strategic_value,
+            customer_impact=customer_impact,
+            urgency=urgency,
+            cost_of_delay=cost_of_delay,
+            risk_reduction=risk_reduction,
+            dependency_pressure=dependency_pressure,
+            confidence=confidence,
+            manual_adjustment=manual_adjustment,
         )
-        confidence_factor = Decimal("0.65") + (
-            Decimal(str(confidence)) / Decimal("100") * Decimal("0.35")
+
+    def compute_priority_score(
+        self,
+        *,
+        strategic_value: int,
+        customer_impact: int,
+        urgency: int,
+        cost_of_delay: int,
+        risk_reduction: int,
+        dependency_pressure: int,
+        confidence: int = 75,
+        manual_adjustment: int = 0,
+    ) -> Decimal:
+        return compute_priority_score(
+            strategic_value=strategic_value,
+            customer_impact=customer_impact,
+            urgency=urgency,
+            cost_of_delay=cost_of_delay,
+            risk_reduction=risk_reduction,
+            dependency_pressure=dependency_pressure,
+            confidence=confidence,
+            manual_adjustment=manual_adjustment,
         )
-        adjusted = raw * confidence_factor + Decimal(str(manual_adjustment))
-        bounded = max(Decimal("0"), min(Decimal("100"), adjusted))
-        return bounded.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    def compute_value_density(
+        self,
+        priority_score: Decimal | float | int,
+        estimated_cost_usd_micros: int,
+    ) -> dict[str, Any]:
+        return compute_value_density(priority_score, estimated_cost_usd_micros)
+
+    def score_preview(
+        self,
+        *,
+        strategic_value: int = 50,
+        customer_impact: int = 50,
+        urgency: int = 50,
+        cost_of_delay: int = 50,
+        risk_reduction: int = 50,
+        dependency_pressure: int = 50,
+        confidence: int = 75,
+        manual_adjustment: int = 0,
+        estimated_cost_usd_micros: int = 0,
+    ) -> dict[str, Any]:
+        """Side-effect-free score + value-density preview (no DB write)."""
+        return value_score_preview(
+            strategic_value=strategic_value,
+            customer_impact=customer_impact,
+            urgency=urgency,
+            cost_of_delay=cost_of_delay,
+            risk_reduction=risk_reduction,
+            dependency_pressure=dependency_pressure,
+            confidence=confidence,
+            manual_adjustment=manual_adjustment,
+            estimated_cost_usd_micros=estimated_cost_usd_micros,
+        )
+
+    def rank_by_value_density(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        score_key: str = "priority_score",
+        cost_key: str = "estimated_cost_usd_micros",
+        id_key: str = "id",
+    ) -> list[dict[str, Any]]:
+        """Order candidates by value/$ then priority (pure; does not touch DB)."""
+        return rank_by_value_density(
+            candidates,
+            score_key=score_key,
+            cost_key=cost_key,
+            id_key=id_key,
+        )
 
     @staticmethod
     def priority_band(score: Decimal | float) -> str:
-        value = float(score)
-        if value >= 85:
-            return "p0"
-        if value >= 70:
-            return "p1"
-        if value >= 50:
-            return "p2"
-        if value >= 30:
-            return "p3"
-        return "p4"
+        return value_priority_band(score)
 
     def list_work_items(
         self,
@@ -778,6 +847,8 @@ class WorkOrchestrationService:
         *,
         status: Optional[str] = None,
         limit: int = 100,
+        estimated_cost_usd_micros: Optional[int] = None,
+        order_by_value_density: bool = False,
     ) -> list[dict[str, Any]]:
         filters = ["project_id=:project_id"]
         params: dict[str, Any] = {
@@ -798,7 +869,23 @@ class WorkOrchestrationService:
             ),
             params,
         ).mappings().all()
-        return [self._serialize(row) for row in rows]
+        items = [self._serialize_work_item(row) for row in rows]
+        if estimated_cost_usd_micros is not None:
+            cost = int(estimated_cost_usd_micros)
+            items = [
+                annotate_work_item_scores(
+                    item, estimated_cost_usd_micros=cost
+                )
+                for item in items
+            ]
+            if order_by_value_density:
+                items = rank_by_value_density(
+                    items,
+                    score_key="priority_score",
+                    cost_key="estimated_cost_usd_micros",
+                    id_key="id",
+                )
+        return items
 
     # ------------------------------------------------------------------
     # Quotas and dynamic allocation
@@ -2558,6 +2645,12 @@ class WorkOrchestrationService:
         for key, value in list(data.items()):
             data[key] = WorkOrchestrationService._serialize_value(value)
         return data
+
+    @classmethod
+    def _serialize_work_item(cls, row: Any) -> dict[str, Any]:
+        """Serialize a work_items row and expose priority_score as the public alias."""
+        data = cls._serialize(row)
+        return annotate_work_item_scores(data)
 
     @staticmethod
     def _serialize_value(value: Any) -> Any:

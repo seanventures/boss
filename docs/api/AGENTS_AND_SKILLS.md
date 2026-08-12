@@ -134,6 +134,45 @@ Restricted licensing, path escape, and policy bypass **fail closed**. Activation
 
 ---
 
+## Knowledge context packing
+
+Operator/agent surface over the same authority-preserving packer used by
+`toolchain.context.pack` (BOSS-356). Accepts chat-style **messages**, free-form
+**items**, or toolchain **chunks**; optional **tool_ids** inject native tool
+catalog snippets as reference context. Credential-shaped secrets are redacted
+before packing and **never** returned in `context`.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/v1/knowledge/status?project_id=` | Whether packing is available + default token budget |
+| `POST` | `/v1/knowledge/pack-context` | Requires `command_submit`; body includes `project_id`, `actor`, messages/items/chunks, optional `token_budget` / `tool_ids` |
+
+```bash
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/knowledge/status?project_id=$PROJECT" | jq .
+
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\",
+  \"actor\": \"ceo\",
+  \"token_budget\": 4096,
+  \"messages\": [
+    {\"role\": \"system\", \"content\": \"Prefer receipts and budget gates.\"},
+    {\"role\": \"user\", \"content\": \"Pack the decision inbox for review.\"}
+  ],
+  \"items\": [
+    {\"id\": \"proof-1\", \"text\": \"Smoke tests green.\", \"authority\": \"proof\"}
+  ],
+  \"tool_ids\": [\"list_tasks\"]
+}" "$BOSS_API/v1/knowledge/pack-context" | jq .
+```
+
+Authoritative authorities (`policy`, `approval`, `contract`, `proof`) are never
+silently truncated; if they exceed the budget the pack returns
+`budget_status=blocked_authoritative_overflow`. Low-level packing remains at
+`POST /v1/toolchain/context/pack`.
+
+---
+
 ## Model gateway
 
 Provider credentials stay in SecretRefs; agents never receive raw API keys.

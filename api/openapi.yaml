@@ -3845,6 +3845,84 @@ paths:
           description: Actor lacks command submission permission
         '422':
           description: Invalid budget or context chunk
+  /v1/knowledge/pack-context:
+    post:
+      tags:
+      - Knowledge
+      summary: Pack messages/context items under a token budget with secret redaction
+      description: >-
+        Operator/agent surface over ToolchainRegistryService.pack_context (BOSS-356).
+        Accepts chat-style messages, free-form items, or toolchain chunks; optional
+        tool_ids inject native tool catalog snippets. Credential-shaped secrets are
+        redacted before packing and never returned in context. Requires command_submit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - project_id
+              properties:
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: agent_loop
+                messages:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                items:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                chunks:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                token_budget:
+                  type: integer
+                  minimum: 128
+                  maximum: 2000000
+                  description: Defaults to 8192 when omitted.
+                reserved_output_tokens:
+                  type: integer
+                  minimum: 0
+                  default: 0
+                tool_ids:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Packed context with included/omitted ids, redaction_summary, tools_attached
+        '403':
+          description: Actor lacks command_submit permission
+        '422':
+          description: Invalid budget or empty context
+  /v1/knowledge/status:
+    get:
+      tags:
+      - Knowledge
+      summary: Knowledge packing availability and default token budget
+      description: >-
+        Lightweight probe for whether pack_context is available and the default
+        token budget used when clients omit token_budget on pack-context.
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Optional project id echoed in the response.
+      responses:
+        '200':
+          description: Availability, default/min/max budgets, redaction_enabled
   /v1/skills:
     get:
       summary: List registered control-plane skills from specpack

@@ -6,9 +6,12 @@
   Decision. The schema had commitments but no reconciler; this is it.
 - request_initiative_budget: a tier-2+ initiative above the approval threshold must be approved by a
   human (blocking Decision); smaller/lower-tier initiatives auto-approve.
+- build_summary (BOSS-244): multi-dimension FinOps chart payload — spend_by_provider,
+  spend_by_day, open anomalies, commitment utilization, top resources — for Mission Control.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -21,11 +24,197 @@ from .core import create_artifact, create_blocking_decision, emit_event, make_id
 UNDER_UTILIZED_BELOW = 0.5   # < 50% of a commitment used → waste review
 OVER_UTILIZED_ABOVE = 1.0    # > 100% used → overrun review
 INITIATIVE_APPROVAL_THRESHOLD_USD_MICROS = 50_000_000  # $50 — tier2+ above this needs approval
+DEFAULT_SUMMARY_DAYS = 30
+MIN_SUMMARY_DAYS = 1
+MAX_SUMMARY_DAYS = 366
+TOP_RESOURCES_LIMIT = 10
+
+
+def _clamp_days(days: int) -> int:
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        value = DEFAULT_SUMMARY_DAYS
+    return max(MIN_SUMMARY_DAYS, min(MAX_SUMMARY_DAYS, value))
+
+
+def _verdict_for_utilization(utilization: float) -> str:
+    if utilization < UNDER_UTILIZED_BELOW:
+        return "under_utilized"
+    if utilization > OVER_UTILIZED_ABOVE:
+        return "over_utilized"
+    return "on_track"
 
 
 class FinopsReconcilerService:
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    def build_summary(
+        self,
+        engine,
+        project_id: str,
+        *,
+        days: int = DEFAULT_SUMMARY_DAYS,
+    ) -> dict[str, Any]:
+        """Multi-dimension FinOps summary for charts (BOSS-244).
+
+        Aggregates ``cost_events`` over the trailing window, counts open
+        ``cost_anomalies``, scores active ``commitments``, and ranks resources
+        that have ``external_resource_id`` refs.
+        """
+        window_days = _clamp_days(days)
+        period_end = datetime.now(timezone.utc)
+        period_start = period_end - timedelta(days=window_days)
+
+        with begin(engine) as connection:
+            spend_by_provider = [
+                {
+                    "provider": str(row["provider"]),
+                    "cost_usd_micros": int(row["cost_usd_micros"] or 0),
+                    "event_count": int(row["event_count"] or 0),
+                }
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT provider,
+                               COALESCE(SUM(amount_usd_micros), 0)::bigint AS cost_usd_micros,
+                               COUNT(*)::int AS event_count
+                        FROM cost_events
+                        WHERE project_id = :p
+                          AND created_at >= :start
+                          AND created_at <= :end
+                        GROUP BY provider
+                        ORDER BY cost_usd_micros DESC, provider ASC
+                        """
+                    ),
+                    {"p": project_id, "start": period_start, "end": period_end},
+                ).mappings().all()
+            ]
+
+            spend_by_day = [
+                {
+                    "day": str(row["day"]),
+                    "cost_usd_micros": int(row["cost_usd_micros"] or 0),
+                }
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT to_char(date_trunc('day', created_at AT TIME ZONE 'UTC'),
+                                       'YYYY-MM-DD') AS day,
+                               COALESCE(SUM(amount_usd_micros), 0)::bigint AS cost_usd_micros
+                        FROM cost_events
+                        WHERE project_id = :p
+                          AND created_at >= :start
+                          AND created_at <= :end
+                        GROUP BY date_trunc('day', created_at AT TIME ZONE 'UTC')
+                        ORDER BY day ASC
+                        """
+                    ),
+                    {"p": project_id, "start": period_start, "end": period_end},
+                ).mappings().all()
+            ]
+
+            anomalies_open_count = int(
+                connection.execute(
+                    text(
+                        """
+                        SELECT COUNT(*)::int
+                        FROM cost_anomalies
+                        WHERE project_id = :p AND status = 'open'
+                        """
+                    ),
+                    {"p": project_id},
+                ).scalar()
+                or 0
+            )
+
+            commitment_utilization: list[dict[str, Any]] = []
+            commitments = connection.execute(
+                text(
+                    """
+                    SELECT id, provider, amount_usd_micros, period_start, period_end
+                    FROM commitments
+                    WHERE project_id = :p AND status = 'active'
+                    ORDER BY provider ASC, id ASC
+                    """
+                ),
+                {"p": project_id},
+            ).mappings().all()
+            for commitment in commitments:
+                committed = int(commitment["amount_usd_micros"] or 0)
+                actual = int(
+                    connection.execute(
+                        text(
+                            """
+                            SELECT COALESCE(SUM(amount_usd_micros), 0)
+                            FROM cost_events
+                            WHERE project_id = :p AND provider = :prov
+                              AND created_at >= :cstart AND created_at <= :cend
+                            """
+                        ),
+                        {
+                            "p": project_id,
+                            "prov": commitment["provider"],
+                            "cstart": commitment["period_start"],
+                            "cend": commitment["period_end"],
+                        },
+                    ).scalar()
+                    or 0
+                )
+                utilization = (actual / committed) if committed else 0.0
+                commitment_utilization.append(
+                    {
+                        "commitment_id": str(commitment["id"]),
+                        "provider": str(commitment["provider"]),
+                        "utilization": round(utilization, 4),
+                        "verdict": _verdict_for_utilization(utilization),
+                    }
+                )
+
+            top_resources = [
+                {
+                    "resource_ref": str(row["resource_ref"]),
+                    "provider": str(row["provider"]),
+                    "cost_usd_micros": int(row["cost_usd_micros"] or 0),
+                }
+                for row in connection.execute(
+                    text(
+                        """
+                        SELECT COALESCE(er.external_id, ce.external_resource_id) AS resource_ref,
+                               ce.provider,
+                               COALESCE(SUM(ce.amount_usd_micros), 0)::bigint AS cost_usd_micros
+                        FROM cost_events ce
+                        LEFT JOIN external_resources er ON er.id = ce.external_resource_id
+                        WHERE ce.project_id = :p
+                          AND ce.created_at >= :start
+                          AND ce.created_at <= :end
+                          AND ce.external_resource_id IS NOT NULL
+                        GROUP BY COALESCE(er.external_id, ce.external_resource_id), ce.provider
+                        ORDER BY cost_usd_micros DESC, resource_ref ASC
+                        LIMIT :lim
+                        """
+                    ),
+                    {
+                        "p": project_id,
+                        "start": period_start,
+                        "end": period_end,
+                        "lim": TOP_RESOURCES_LIMIT,
+                    },
+                ).mappings().all()
+            ]
+
+        return {
+            "project_id": project_id,
+            "days": window_days,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "spend_by_provider": spend_by_provider,
+            "spend_by_day": spend_by_day,
+            "anomalies_open_count": anomalies_open_count,
+            "commitment_utilization": commitment_utilization,
+            "top_resources": top_resources,
+        }
 
     def reconcile_commitments(
         self, engine, project_id: str, *, actor: str = "finops_reconciler"
@@ -61,12 +250,7 @@ class FinopsReconcilerService:
                     or 0
                 )
                 utilization = (actual / committed) if committed else 0.0
-                if utilization < UNDER_UTILIZED_BELOW:
-                    verdict = "under_utilized"
-                elif utilization > OVER_UTILIZED_ABOVE:
-                    verdict = "over_utilized"
-                else:
-                    verdict = "on_track"
+                verdict = _verdict_for_utilization(utilization)
 
                 decision_id = None
                 if verdict != "on_track":

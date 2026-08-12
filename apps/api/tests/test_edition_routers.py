@@ -94,6 +94,8 @@ def test_paid_surface_classification(path):
         "/v1/providers/pa_1/rotate",
         "/v1/resources",
         "/v1/resources/sync",
+        "/v1/resource-topology",
+        "/v1/resource-topology/edges",
         "/v1/resource-receipts",
         "/v1/changesets",
         "/v1/changesets/cs_x/approve",

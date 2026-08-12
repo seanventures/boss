@@ -114,6 +114,7 @@ POST /v1/goldeneye/nodes
 }
 
 GET  /v1/goldeneye/packages
+GET  /v1/goldeneye/catalog/bootstrap
 POST /v1/goldeneye/packages/install
 POST /v1/goldeneye/apps/deploy
 GET  /v1/goldeneye/status?project_id=…
@@ -121,15 +122,49 @@ GET  /v1/goldeneye/apps?project_id=…
 POST /v1/goldeneye/apps/{name}/rollback
 ```
 
+`GET /v1/goldeneye/catalog/bootstrap` returns the kit's `default_bootstrap` order
+(e.g. `layer0-host` → `layer1-runtime` → … → `deploy-cli`) so operators and
+agents can walk a fresh node without hard-coding layer sequence.
+
 ### Real vs simulated host effects
 
 | Gate | Behavior |
 |---|---|
-| `BOSS_SSH_HOST_DEPLOY_ALLOWED=false` (default) | Package install / deploy create **planned** or **simulated** records + receipts; no remote shell |
-| `BOSS_SSH_HOST_DEPLOY_ALLOWED=true` + SSH key | Real remote package/deploy via SSH host adapter path |
+| `BOSS_SSH_HOST_DEPLOY_ALLOWED=false` (default) | Package install / deploy create **simulated** records + receipts; no remote shell |
+| `BOSS_SSH_HOST_DEPLOY_ALLOWED=true` but node has **no** `ssh_host` | Package install is **planned** only (hint: run `ge module install <id>` on the node) |
+| `BOSS_SSH_HOST_DEPLOY_ALLOWED=true` + node `ssh_host` + SSH key | **Real actuation** via SSH host adapter |
 
 This matches ProviderOps honesty: Community can model fleet and prove receipts
 without pretending remote metal was mutated.
+
+### Actuation path (package install)
+
+When the gate is open **and** the node has `ssh_host` set, `POST /v1/goldeneye/packages/install`
+attempts a remote:
+
+```bash
+ge module install <package_id>
+```
+
+over SSH using `SSHHostAdapter` patterns (`BOSS_SSH_HOST_PRIVATE_KEY` or
+`BOSS_SSH_HOST_PRIVATE_KEY_FILE`, BatchMode, key material written to a 0600 temp
+file only for the call).
+
+| Outcome | Install `status` | Receipt | Notes |
+|---|---|---|---|
+| Remote exit 0 | `installed` | `succeeded` | `metadata.actuation` records host/command/via |
+| Remote non-zero / adapter error | `failed` | `failed` | `error` jsonb: returncode, stderr, host, command |
+| Gate off | `simulated` | `succeeded` | Default; safe for CI and Community |
+| Gate on, no `ssh_host` | `planned` | `succeeded` | Operator/agent must run `ge` on the box |
+
+Every attempt still emits a `Receipt` with a unique `dedupe_key` and a
+`goldeneye.package.install` event. Failures are never silent.
+
+App deploy real actuation remains planned for a follow-on slice; package install
+is the first closed remote loop.
+
+Dependencies: installs refuse missing `depends_on` unless `force=true`. Only
+`installed` / `simulated` rows satisfy dependency checks (`failed` does not).
 
 ---
 

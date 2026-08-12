@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { type ChaosRun } from "../lib/chaos";
-import { type CommitmentReconciliation } from "../lib/finops";
+import { type CommitmentReconciliation, type FinopsSummary } from "../lib/finops";
 import {
   type ActionResult,
   runChaosAction,
@@ -62,11 +62,21 @@ export function ChaosCard({ projectId, runs }: { projectId: string; runs: ChaosR
 export function FinopsCard({
   projectId,
   reconciliations,
+  summary,
 }: {
   projectId: string;
   reconciliations: CommitmentReconciliation[];
+  summary?: FinopsSummary | null;
 }) {
   const [initState, initAction, initPending] = useActionState(requestInitiativeBudgetAction, null);
+  const totalSpend = (summary?.spendByProvider ?? []).reduce(
+    (acc, row) => acc + row.costUsdMicros,
+    0,
+  );
+  const maxProviderSpend = Math.max(
+    1,
+    ...(summary?.spendByProvider ?? []).map((row) => row.costUsdMicros),
+  );
   return (
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -80,6 +90,67 @@ export function FinopsCard({
         Score each commitment’s utilization vs actual usage (on-track / under / over → review
         decision), and gate tier-2+ initiative budgets above the approval threshold.
       </p>
+      {summary?.apiReachable ? (
+        <div
+          style={{
+            display: "grid",
+            gap: 8,
+            marginBottom: 10,
+            padding: "8px 0",
+            borderBottom: "1px solid var(--hair, #131d34)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12.5 }}>
+            <span className="detail" style={{ margin: 0 }}>
+              Last {summary.days}d cloud spend
+            </span>
+            <b>{usd(totalSpend)}</b>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12.5 }}>
+            <span className="detail" style={{ margin: 0 }}>
+              Open cost anomalies
+            </span>
+            <b
+              style={{
+                color:
+                  summary.anomaliesOpenCount > 0
+                    ? "var(--amber, #d29922)"
+                    : "var(--muted, #8b949e)",
+              }}
+            >
+              {summary.anomaliesOpenCount}
+            </b>
+          </div>
+          {(summary.spendByProvider ?? []).slice(0, 4).map((row) => (
+            <div key={row.provider} style={{ display: "grid", gap: 3 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ fontFamily: "var(--mono, monospace)" }}>{row.provider}</span>
+                <span>
+                  <b>{usd(row.costUsdMicros)}</b>
+                  <span style={{ color: "var(--muted, #8b949e)" }}> · {row.eventCount} evt</span>
+                </span>
+              </div>
+              <div
+                aria-hidden
+                style={{
+                  height: 3,
+                  background: "var(--hair, #131d34)",
+                  position: "relative",
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    width: `${Math.round((row.costUsdMicros / maxProviderSpend) * 100)}%`,
+                    background: "var(--teal, #2ec5c5)",
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {reconciliations.length > 0 ? (
         <div className="feed-list">
           {reconciliations.slice(0, 6).map((r) => (

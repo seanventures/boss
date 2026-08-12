@@ -1361,6 +1361,44 @@ class CommitmentReconcileRequest(BaseModel):
     actor: str = "system"
 
 
+class FinopsSpendByProvider(BaseModel):
+    provider: str
+    cost_usd_micros: int
+    event_count: int
+
+
+class FinopsSpendByDay(BaseModel):
+    day: str
+    cost_usd_micros: int
+
+
+class FinopsCommitmentUtilization(BaseModel):
+    commitment_id: str
+    provider: str
+    utilization: float
+    verdict: str
+
+
+class FinopsTopResource(BaseModel):
+    resource_ref: str
+    provider: str
+    cost_usd_micros: int
+
+
+class FinopsSummaryResponse(BaseModel):
+    """BOSS-244 multi-dimension FinOps chart/summary payload for Mission Control."""
+
+    project_id: str
+    days: int
+    period_start: str
+    period_end: str
+    spend_by_provider: list[FinopsSpendByProvider]
+    spend_by_day: list[FinopsSpendByDay]
+    anomalies_open_count: int
+    commitment_utilization: list[FinopsCommitmentUtilization]
+    top_resources: list[FinopsTopResource]
+
+
 class SOC2EvidenceRequest(BaseModel):
     project_id: str
     actor: str = "system"
@@ -5808,6 +5846,93 @@ class ExternalResourceListResponse(BaseModel):
     offset: int
 
 
+class ResourceTopologyEdgeSummary(BaseModel):
+    id: str
+    project_id: str
+    from_resource_id: str
+    to_resource_id: str
+    relation_type: str
+    provider: Optional[str] = None
+    metadata: dict[str, Any] = {}
+    created_at: str
+    updated_at: str
+
+
+class ResourceTopologyEdgeUpsertRequest(BaseModel):
+    project_id: str
+    from_resource_id: str
+    to_resource_id: str
+    relation_type: str
+    provider: Optional[str] = None
+    metadata: dict[str, Any] = {}
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_edge_request(self) -> "ResourceTopologyEdgeUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.from_resource_id = _require_text(
+            self.from_resource_id, "from_resource_id"
+        )
+        self.to_resource_id = _require_text(self.to_resource_id, "to_resource_id")
+        self.relation_type = _require_text(self.relation_type, "relation_type").lower()
+        self.actor = _require_text(self.actor, "actor")
+        if self.from_resource_id == self.to_resource_id:
+            raise ValueError("from_resource_id and to_resource_id must differ.")
+        return self
+
+
+class ResourceTopologyEdgeMutationResponse(BaseModel):
+    edge: ResourceTopologyEdgeSummary
+    receipt_id: str
+    deleted: bool = False
+
+
+class ResourceTopologyNodeSummary(BaseModel):
+    id: str
+    project_id: str
+    provider: str
+    resource_type: str
+    external_id: str
+    name: str
+    state: Optional[str] = None
+    ownership: Optional[str] = None
+    environment: Optional[str] = None
+    health_status: Optional[str] = None
+    tags: list[str] = []
+    metadata: dict[str, Any] = {}
+
+
+class ResourceTopologyGraphResponse(BaseModel):
+    project_id: str
+    nodes: list[ResourceTopologyNodeSummary]
+    edges: list[ResourceTopologyEdgeSummary]
+    node_count: int
+    edge_count: int
+    relation_counts: dict[str, int] = {}
+
+
+class ResourceTopologyInferRequest(BaseModel):
+    project_id: str
+    provider: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_infer_request(self) -> "ResourceTopologyInferRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if self.provider is not None:
+            self.provider = _require_text(self.provider, "provider").lower()
+        return self
+
+
+class ResourceTopologyInferResponse(BaseModel):
+    project_id: str
+    resources_scanned: int
+    edges_upserted: int
+    skipped: int
+    edges: list[ResourceTopologyEdgeSummary]
+
+
 class CostEventSummary(BaseModel):
     id: str
     project_id: str
@@ -7159,6 +7284,20 @@ class WorkAdmissionRequest(BaseModel):
         return self
 
 
+class WorkScorePreviewRequest(BaseModel):
+    """Pure scoring preview — no DB write, no project required (BOSS-353)."""
+
+    strategic_value: int = Field(default=50, ge=0, le=100)
+    customer_impact: int = Field(default=50, ge=0, le=100)
+    urgency: int = Field(default=50, ge=0, le=100)
+    cost_of_delay: int = Field(default=50, ge=0, le=100)
+    risk_reduction: int = Field(default=50, ge=0, le=100)
+    dependency_pressure: int = Field(default=50, ge=0, le=100)
+    confidence: int = Field(default=75, ge=0, le=100)
+    manual_adjustment: int = Field(default=0, ge=-100, le=100)
+    estimated_cost_usd_micros: int = Field(default=0, ge=0)
+
+
 class ResourceQuotaUpsertRequest(BaseModel):
     project_id: str
     scope_type: Literal["global", "org", "workspace", "project", "agent", "workload"]
@@ -7293,3 +7432,105 @@ class ToolchainContextPackRequest(BaseModel):
     token_budget: int = Field(ge=128, le=2_000_000)
     reserved_output_tokens: int = Field(default=0, ge=0)
     actor: str = "agent_loop"
+
+
+class KnowledgeContextItem(BaseModel):
+    """A message or free-form context unit for knowledge packing.
+
+    Accepts either toolchain-style ``text`` or chat-style ``content`` (+ optional
+    ``role``). Empty bodies are ignored at pack time.
+    """
+
+    id: Optional[str] = Field(default=None, max_length=256)
+    text: Optional[str] = Field(default=None, max_length=1_000_000)
+    content: Optional[str] = Field(default=None, max_length=1_000_000)
+    role: Optional[str] = Field(default=None, max_length=64)
+    authority: Literal[
+        "policy", "approval", "contract", "proof", "fact", "reference"
+    ] = "reference"
+    required: bool = False
+    priority: int = Field(default=50, ge=0, le=100)
+    source_ref: Optional[str] = Field(default=None, max_length=2048)
+
+
+class KnowledgePackContextRequest(BaseModel):
+    """Operator/agent knowledge packing request (BOSS-356).
+
+    Provide any combination of ``messages``, ``items``, or ``chunks``. Optional
+    ``tool_ids`` inject native tool catalog snippets as reference context.
+    Secrets are redacted before packing and never returned in ``context``.
+    """
+
+    project_id: str
+    actor: str = "agent_loop"
+    messages: list[KnowledgeContextItem] = Field(default_factory=list, max_length=1000)
+    items: list[KnowledgeContextItem] = Field(default_factory=list, max_length=1000)
+    chunks: list[ToolchainContextChunk] = Field(default_factory=list, max_length=1000)
+    token_budget: Optional[int] = Field(default=None, ge=128, le=2_000_000)
+    reserved_output_tokens: int = Field(default=0, ge=0)
+    tool_ids: list[str] = Field(default_factory=list, max_length=100)
+
+class ProviderSloUpsertRequest(BaseModel):
+    """Create or update a provider SLO definition (BOSS-241)."""
+
+    project_id: str
+    provider: str
+    metric_key: str
+    target: float
+    window_seconds: int = Field(default=3600, ge=60, le=2_592_000)
+    comparator: str = "gte"
+    provider_account_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+    slo_id: Optional[str] = None
+
+class ProviderSloEvaluateRequest(BaseModel):
+    project_id: str
+    slo_id: Optional[str] = None
+    actor: str = "system"
+
+class ProviderSloSummary(BaseModel):
+    id: str
+    project_id: str
+    provider: str
+    provider_account_id: Optional[str] = None
+    metric_key: str
+    target: float
+    window_seconds: int
+    comparator: str
+    status: str
+    last_value: Optional[float] = None
+    evaluated_at: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_by: str = "system"
+    created_at: str
+    updated_at: str
+
+class ProviderSloListResponse(BaseModel):
+    project_id: str
+    items: list[ProviderSloSummary]
+    limit: int
+    offset: int
+
+class ProviderSloEvaluateResponse(BaseModel):
+    project_id: str
+    count: int
+    summary: dict[str, int]
+    evaluations: list[ProviderSloEvaluationSummary]
+
+
+class ProviderSloEvaluationSummary(BaseModel):
+    id: str
+    definition_id: str
+    project_id: str
+    provider: str
+    provider_account_id: Optional[str] = None
+    metric_key: str
+    target: float
+    window_seconds: int
+    comparator: str
+    status: str
+    last_value: Optional[float] = None
+    evaluated_at: Optional[datetime] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+

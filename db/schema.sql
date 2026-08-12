@@ -1910,6 +1910,29 @@ CREATE TABLE IF NOT EXISTS external_resources (
 CREATE INDEX IF NOT EXISTS idx_external_resources_project
   ON external_resources(project_id, provider, ownership, state, last_seen_at DESC);
 
+-- Durable ProviderOps topology graph (BOSS-240): directed edges between
+-- inventory resources (droplet→vpc, volume→droplet, etc.). Inventory + drift
+-- remain separate; this table is the minimal edge store for graph views.
+CREATE TABLE IF NOT EXISTS resource_topology_edges (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  from_resource_id TEXT NOT NULL REFERENCES external_resources(id) ON DELETE CASCADE,
+  to_resource_id TEXT NOT NULL REFERENCES external_resources(id) ON DELETE CASCADE,
+  relation_type TEXT NOT NULL,
+  provider TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, from_resource_id, to_resource_id, relation_type),
+  CHECK (from_resource_id <> to_resource_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resource_topology_edges_project
+  ON resource_topology_edges(project_id, relation_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resource_topology_edges_from
+  ON resource_topology_edges(project_id, from_resource_id);
+CREATE INDEX IF NOT EXISTS idx_resource_topology_edges_to
+  ON resource_topology_edges(project_id, to_resource_id);
+
 CREATE TABLE IF NOT EXISTS billing_accounts (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
@@ -4877,3 +4900,59 @@ CREATE TABLE IF NOT EXISTS goldeneye_deploys (
 );
 CREATE INDEX IF NOT EXISTS idx_goldeneye_deploys_app
   ON goldeneye_deploys(project_id, app_id, created_at DESC);
+
+-- Fail-closed: evaluations with no source data use status=unknown (never silent ok).
+CREATE TABLE IF NOT EXISTS provider_slo_definitions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider TEXT NOT NULL,
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  metric_key TEXT NOT NULL,
+  -- availability | healthy_ratio | api_available | cost_usd_micros | sample_count
+  target DOUBLE PRECISION NOT NULL,
+  window_seconds INTEGER NOT NULL DEFAULT 3600,
+  comparator TEXT NOT NULL DEFAULT 'gte',
+  -- gte | lte | gt | lt | eq
+  status TEXT NOT NULL DEFAULT 'unknown',
+  -- cached last evaluation: ok | breached | unknown
+  last_value DOUBLE PRECISION,
+  evaluated_at TIMESTAMPTZ,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Expression unique index so NULL provider_account_id still dedupes correctly.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_slo_definitions_key
+  ON provider_slo_definitions (
+    project_id,
+    provider,
+    COALESCE(provider_account_id, ''),
+    metric_key,
+    window_seconds
+  );
+CREATE INDEX IF NOT EXISTS idx_provider_slo_definitions_project
+  ON provider_slo_definitions(project_id, provider, status);
+
+CREATE TABLE IF NOT EXISTS provider_slo_evaluations (
+  id TEXT PRIMARY KEY,
+  definition_id TEXT NOT NULL REFERENCES provider_slo_definitions(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  provider TEXT NOT NULL,
+  provider_account_id TEXT REFERENCES provider_accounts(id),
+  metric_key TEXT NOT NULL,
+  target DOUBLE PRECISION NOT NULL,
+  window_seconds INTEGER NOT NULL,
+  comparator TEXT NOT NULL,
+  status TEXT NOT NULL,
+  -- ok | breached | unknown
+  last_value DOUBLE PRECISION,
+  evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_provider_slo_evaluations_def
+  ON provider_slo_evaluations(definition_id, evaluated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_slo_evaluations_project
+  ON provider_slo_evaluations(project_id, provider, status, evaluated_at DESC);
+

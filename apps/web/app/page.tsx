@@ -105,7 +105,7 @@ import {
   FactoryScaleCard,
 } from "./phase3-ui";
 import { fetchChaosRuns } from "../lib/chaos";
-import { fetchCommitmentReconciliations } from "../lib/finops";
+import { fetchCommitmentReconciliations, fetchFinopsSummary } from "../lib/finops";
 import { ChaosCard, FinopsCard, Soc2Card } from "./phase4-ui";
 import { fetchPlans } from "../lib/plans";
 import { PlansCard } from "./plans-ui";
@@ -164,6 +164,8 @@ import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
 import { fetchProviderOpsFeed } from "../lib/providerops";
 import { ProviderConfigurationSuite } from "./provider-configuration-ui";
+import { fetchInfraFabricFeed } from "../lib/infra-fabric";
+import { InfraFabricPanel } from "./infra-fabric-ui";
 import { fetchGitHubOperationsFeed } from "../lib/github-operations";
 import { GitHubOperations } from "./github-operations-ui";
 import { fetchRepoActivity } from "../lib/repo-activity";
@@ -592,6 +594,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     routingLogs,
     skills,
     providerOps,
+    infraFabric,
     githubOperations,
     repoActivity,
     receipts,
@@ -633,6 +636,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     wipStatus,
     chaosRuns,
     commitmentRecons,
+    finopsSummary,
     workflowFeed,
     agentStudioFeed,
     workOrchestrationFeed,
@@ -662,6 +666,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       }),
       fetchSkillFeed(),
       fetchProviderOpsFeed(activeProjectId),
+      fetchInfraFabricFeed(activeProjectId),
       fetchGitHubOperationsFeed(activeProjectId),
       fetchRepoActivity(activeProjectId, 30),
       fetchReceiptFeed(activeProjectId, 100),
@@ -712,6 +717,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchWipStatus(activeProjectId),
       fetchChaosRuns(activeProjectId),
       fetchCommitmentReconciliations(activeProjectId),
+      fetchFinopsSummary(activeProjectId, 30),
       fetchWorkflowFeed(activeProjectId),
       fetchAgentStudioFeed(activeProjectId),
       fetchWorkOrchestrationFeed(activeProjectId),
@@ -1652,7 +1658,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
           <div className="stack-grid">
-            <FinopsCard projectId={activeProjectId} reconciliations={commitmentRecons} />
+            <FinopsCard
+              projectId={activeProjectId}
+              reconciliations={commitmentRecons}
+              summary={finopsSummary}
+            />
           </div>
         </section>
 
@@ -1769,6 +1779,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             }
             events={events.items}
           />
+
+          <InfraFabricPanel feed={infraFabric} />
 
           {providerOps.apiReachable ? (
             <>

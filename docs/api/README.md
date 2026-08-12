@@ -72,7 +72,7 @@ Always pass a real project-scoped actor on writes (seed creates `ceo`, `system`,
 | Domain | Prefixes (examples) | Guide |
 |--------|---------------------|--------|
 | **core** | `/v1/commands`, `/tasks`, `/plans`, `/decisions`, `/jobs`, `/receipts`, `/events`, `/budget` | [CORE_CONTROL_PLANE.md](CORE_CONTROL_PLANE.md) |
-| **agents** | `/v1/agent-studio`, `/skills`, `/a2a`, `/shepherd`, `/agent-groups` | [AGENTS_AND_SKILLS.md](AGENTS_AND_SKILLS.md) |
+| **agents** | `/v1/agent-studio`, `/skills`, `/toolchain`, `/knowledge`, `/a2a`, `/shepherd`, `/agent-groups` | [AGENTS_AND_SKILLS.md](AGENTS_AND_SKILLS.md) |
 | **delivery** | `/v1/code-tasks`, `/github`, `/delivery`, `/previews`, `/sandboxes` | see ROUTE_INDEX + OpenAPI |
 | **providers** | `/v1/providers`, `/changesets`, `/elastic`, `/multi-cloud`, `/finops` | [PROVIDERS_AND_INFRA.md](PROVIDERS_AND_INFRA.md) · [MULTI_CLOUD.md](MULTI_CLOUD.md) |
 | **goldeneye** | `/v1/goldeneye/*` | [PROVIDERS_AND_INFRA.md](PROVIDERS_AND_INFRA.md) · [GOLDENEYE.md](GOLDENEYE.md) |

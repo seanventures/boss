@@ -363,6 +363,13 @@ from .schemas import (
     MeetingListResponse,
     ChaosRunRequest,
     CommitmentReconcileRequest,
+    FinopsSummaryResponse,
+    ProviderSloEvaluateRequest,
+    ProviderSloEvaluateResponse,
+    ProviderSloEvaluationSummary,
+    ProviderSloListResponse,
+    ProviderSloSummary,
+    ProviderSloUpsertRequest,
     FactoryChunkPlanRequest,
     FactoryMergeCheckRequest,
     FactoryQualityGateRequest,
@@ -447,6 +454,13 @@ from .schemas import (
     ResourceSyncRequest,
     ResourceSyncResponse,
     ResourceSyncRunSummary,
+    ResourceTopologyEdgeMutationResponse,
+    ResourceTopologyEdgeSummary,
+    ResourceTopologyEdgeUpsertRequest,
+    ResourceTopologyGraphResponse,
+    ResourceTopologyInferRequest,
+    ResourceTopologyInferResponse,
+    ResourceTopologyNodeSummary,
     AutonomyEvaluateRequest,
     RoleAutonomyCheckRequest,
     RoleAutonomyCheckResponse,
@@ -560,12 +574,14 @@ from .schemas import (
     ResourceQuotaUpsertRequest,
     WorkAdmissionRequest,
     WorkItemUpsertRequest,
+    WorkScorePreviewRequest,
     WorkTrackerBindingUpsertRequest,
     WorkTrackerSyncExecuteRequest,
     ToolchainAssessRequest,
     ToolchainCandidateReviewRequest,
     ToolchainCommandGuardRequest,
     ToolchainContextPackRequest,
+    KnowledgePackContextRequest,
 )
 from .services.a2a import (
     A2ANotFoundError,
@@ -733,6 +749,11 @@ from .services.resource_plane import (
     ProviderCredentialError,
     ResourcePlaneService,
 )
+from .services.resource_topology import (
+    ResourceTopologyError,
+    ResourceTopologyNotFoundError,
+    ResourceTopologyService,
+)
 from .services import terraform_drift as terraform_drift_service
 from .services import terraform_export as terraform_export_service
 from .services import iac_verify as iac_verify_service
@@ -861,8 +882,10 @@ ops_queue = OpsQueueService(settings)
 reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
+resource_topology = ResourceTopologyService(settings)
 from boss_engine.services.elastic_fabric import ElasticFabricService
 from boss_engine.services.goldeneye_paas import GoldeneyePaasService
+from boss_engine.services.provider_slo import ProviderSloService
 from boss_engine.services.multi_cloud_catalog import (
     multi_cloud_catalog,
     provider_entry as multi_cloud_provider_entry,
@@ -871,6 +894,7 @@ from boss_engine.services.multi_cloud_catalog import (
 
 elastic_fabric = ElasticFabricService(settings, resource_plane=resource_plane)
 goldeneye_paas = GoldeneyePaasService(settings)
+provider_slo = ProviderSloService(settings)
 agent_studio = AgentStudioService(settings)
 a2a = A2AService(settings)
 work_orchestration = WorkOrchestrationService(settings)
@@ -9581,6 +9605,22 @@ def list_commitment_reconciliations(project_id: str, limit: int = 50) -> dict:
     return {"items": finops_reconciler.list_reconciliations(engine, project_id, limit)}
 
 
+@app.get("/v1/finops/summary", response_model=FinopsSummaryResponse)
+def finops_summary(project_id: str, days: int = 30) -> FinopsSummaryResponse:
+    """BOSS-244 multi-dimension FinOps chart payload for Mission Control.
+
+    Aggregates trailing cost_events (by provider / by day), open anomaly count,
+    live commitment utilization+verdict, and top resources with resource refs.
+    """
+    if not project_id or not str(project_id).strip():
+        raise HTTPException(status_code=400, detail="project_id is required.")
+    if days < 1 or days > 366:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 366.")
+    return FinopsSummaryResponse(
+        **finops_reconciler.build_summary(engine, project_id, days=days)
+    )
+
+
 @app.post("/v1/finops/initiative-budget", status_code=201)
 def request_initiative_budget(payload: InitiativeBudgetRequest) -> dict:
     """Tier-2+ initiative budget approval: above the threshold it requires a human Decision
@@ -10800,6 +10840,67 @@ def pack_toolchain_context(payload: ToolchainContextPackRequest) -> dict:
                         "available_input_tokens": result["available_input_tokens"],
                     },
                 )
+            return result
+        except ToolchainImportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/knowledge/status")
+def knowledge_pack_status(project_id: Optional[str] = None) -> dict:
+    """Lightweight knowledge packing availability (BOSS-356).
+
+    Reports whether ``pack_context`` is available and the default token budget.
+    No actor binding required — this is a non-sensitive capability probe.
+    """
+    from .services import knowledge_context as knowledge_context_service
+
+    return knowledge_context_service.knowledge_status(project_id=project_id)
+
+
+@app.post("/v1/knowledge/pack-context")
+def knowledge_pack_context(payload: KnowledgePackContextRequest) -> dict:
+    """Pack messages/context items under a token budget for operators and agents.
+
+    Wraps ``ToolchainRegistryService.pack_context`` with message-style inputs,
+    optional tool catalog snippets, and mandatory secret/PII redaction so packed
+    context never returns raw credentials.
+    """
+    from .services import knowledge_context as knowledge_context_service
+
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection, payload.project_id, payload.actor, "command_submit"
+            )
+            result = knowledge_context_service.pack_knowledge_context(
+                messages=[item.model_dump() for item in payload.messages],
+                items=[item.model_dump() for item in payload.items],
+                chunks=[item.model_dump() for item in payload.chunks],
+                token_budget=payload.token_budget,
+                reserved_output_tokens=payload.reserved_output_tokens,
+                tool_ids=list(payload.tool_ids or []),
+            )
+            emit_event(
+                connection,
+                payload.project_id,
+                "knowledge.context_packed",
+                payload.actor,
+                "project",
+                payload.project_id,
+                {
+                    "budget_status": result["budget_status"],
+                    "included_ids": result["included_ids"],
+                    "omitted_ids": result["omitted_ids"],
+                    "duplicate_ids": result["duplicate_ids"],
+                    "estimated_tokens": result["estimated_tokens"],
+                    "available_input_tokens": result["available_input_tokens"],
+                    "token_budget": result.get("token_budget"),
+                    "tools_attached": result.get("tools_attached") or [],
+                    "redaction_labels": sorted(
+                        (result.get("redaction_summary") or {}).keys()
+                    ),
+                },
+            )
             return result
         except ToolchainImportError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -13572,6 +13673,136 @@ def list_external_resources(
         )
 
 
+@app.get("/v1/resource-topology", response_model=ResourceTopologyGraphResponse)
+def get_resource_topology(
+    project_id: str,
+    provider: Optional[str] = None,
+    limit: int = 500,
+) -> ResourceTopologyGraphResponse:
+    """ProviderOps topology graph: durable edges between inventory resources."""
+    if limit < 1 or limit > 2000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 2000.")
+    with begin(engine) as connection:
+        summary = resource_topology.build_graph_summary(
+            connection,
+            project_id,
+            provider=provider,
+            limit=limit,
+        )
+        return ResourceTopologyGraphResponse(
+            project_id=summary["project_id"],
+            nodes=[ResourceTopologyNodeSummary(**node) for node in summary["nodes"]],
+            edges=[ResourceTopologyEdgeSummary(**edge) for edge in summary["edges"]],
+            node_count=summary["node_count"],
+            edge_count=summary["edge_count"],
+            relation_counts=summary["relation_counts"],
+        )
+
+
+@app.post(
+    "/v1/resource-topology/edges",
+    response_model=ResourceTopologyEdgeMutationResponse,
+)
+def upsert_resource_topology_edge(
+    payload: ResourceTopologyEdgeUpsertRequest,
+) -> ResourceTopologyEdgeMutationResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_topology.upsert_edge(
+                connection,
+                project_id=payload.project_id,
+                from_resource_id=payload.from_resource_id,
+                to_resource_id=payload.to_resource_id,
+                relation_type=payload.relation_type,
+                provider=payload.provider,
+                metadata=payload.metadata,
+                actor=payload.actor,
+                source="manual",
+            )
+        except ResourceTopologyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ResourceTopologyError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return ResourceTopologyEdgeMutationResponse(
+            edge=ResourceTopologyEdgeSummary(**result["edge"]),
+            receipt_id=result["receipt_id"],
+            deleted=False,
+        )
+
+
+@app.delete(
+    "/v1/resource-topology/edges/{edge_id}",
+    response_model=ResourceTopologyEdgeMutationResponse,
+)
+def delete_resource_topology_edge(
+    edge_id: str,
+    project_id: str,
+    actor: str = "ceo",
+) -> ResourceTopologyEdgeMutationResponse:
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            project_id,
+            actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_topology.delete_edge(
+                connection,
+                project_id=project_id,
+                edge_id=edge_id,
+                actor=actor,
+            )
+        except ResourceTopologyNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ResourceTopologyError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return ResourceTopologyEdgeMutationResponse(
+            edge=ResourceTopologyEdgeSummary(**result["edge"]),
+            receipt_id=result["receipt_id"],
+            deleted=True,
+        )
+
+
+@app.post(
+    "/v1/resource-topology/infer",
+    response_model=ResourceTopologyInferResponse,
+)
+def infer_resource_topology(
+    payload: ResourceTopologyInferRequest,
+) -> ResourceTopologyInferResponse:
+    """Infer topology edges from inventory tags/metadata (e.g. droplet→vpc)."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        try:
+            result = resource_topology.infer_edges_from_inventory(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                provider=payload.provider,
+            )
+        except ResourceTopologyError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return ResourceTopologyInferResponse(
+            project_id=result["project_id"],
+            resources_scanned=result["resources_scanned"],
+            edges_upserted=result["edges_upserted"],
+            skipped=result["skipped"],
+            edges=[ResourceTopologyEdgeSummary(**edge) for edge in result["edges"]],
+        )
+
+
 @app.post("/v1/resources/sync", response_model=ResourceSyncResponse)
 def sync_external_resources(payload: ResourceSyncRequest, request: Request) -> ResourceSyncResponse:
     # Rate limit high-cost provider sync path (P2 per review). Early gate.
@@ -14543,6 +14774,12 @@ def describe_multi_cloud_skills(
 def goldeneye_package_catalog() -> dict[str, Any]:
     """Built-in package manager catalog (host → edge → optional services)."""
     return goldeneye_paas.package_catalog()
+
+
+@app.get("/v1/goldeneye/catalog/bootstrap")
+def goldeneye_catalog_bootstrap() -> dict[str, Any]:
+    """Default bootstrap install order from the kit catalog (no DB)."""
+    return goldeneye_paas.catalog_bootstrap()
 
 
 @app.get("/v1/goldeneye/status")
@@ -17669,6 +17906,25 @@ def evaluate_work_admission(
             _raise_work_orchestration_error(error)
 
 
+@app.post("/v1/work-orchestration/score-preview")
+def preview_work_score(payload: WorkScorePreviewRequest) -> dict[str, Any]:
+    """Deterministic priority_score + value_density preview (no DB write)."""
+    try:
+        return work_orchestration.score_preview(
+            strategic_value=payload.strategic_value,
+            customer_impact=payload.customer_impact,
+            urgency=payload.urgency,
+            cost_of_delay=payload.cost_of_delay,
+            risk_reduction=payload.risk_reduction,
+            dependency_pressure=payload.dependency_pressure,
+            confidence=payload.confidence,
+            manual_adjustment=payload.manual_adjustment,
+            estimated_cost_usd_micros=payload.estimated_cost_usd_micros,
+        )
+    except ValueError as error:
+        _raise_work_orchestration_error(error)
+
+
 @app.post("/v1/work-orchestration/quotas")
 def upsert_resource_quota(
     payload: ResourceQuotaUpsertRequest,
@@ -18710,6 +18966,111 @@ def get_a2a_audit(
 ) -> dict[str, Any]:
     with begin(engine) as connection:
         return a2a.audit_feed(connection, project_id, limit)
+
+
+
+
+# Provider SLOs (BOSS-241 depth)
+
+
+@app.get("/v1/provider-slos", response_model=ProviderSloListResponse)
+def list_provider_slos(
+    project_id: str,
+    provider: Optional[str] = None,
+    provider_account_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> ProviderSloListResponse:
+    """List provider SLO definitions for a project (BOSS-241 depth)."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0.")
+    with begin(engine) as connection:
+        items = provider_slo.list_slos(
+            connection,
+            project_id,
+            provider=provider,
+            provider_account_id=provider_account_id,
+            limit=limit,
+            offset=offset,
+        )
+        return ProviderSloListResponse(
+            project_id=project_id,
+            items=[ProviderSloSummary(**item) for item in items],
+            limit=limit,
+            offset=offset,
+        )
+
+
+@app.post("/v1/provider-slos", response_model=ProviderSloSummary, status_code=201)
+def upsert_provider_slo(payload: ProviderSloUpsertRequest) -> ProviderSloSummary:
+    """Create or update a provider SLO definition (BOSS-241 depth)."""
+    with begin(engine) as connection:
+        try:
+            item = provider_slo.upsert_slo(
+                connection,
+                project_id=payload.project_id,
+                provider=payload.provider,
+                metric_key=payload.metric_key,
+                target=payload.target,
+                window_seconds=payload.window_seconds,
+                comparator=payload.comparator,
+                provider_account_id=payload.provider_account_id,
+                metadata=payload.metadata,
+                actor=payload.actor,
+                slo_id=payload.slo_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ProviderSloSummary(**item)
+
+
+@app.post("/v1/provider-slos/evaluate", response_model=ProviderSloEvaluateResponse)
+def evaluate_provider_slos(payload: ProviderSloEvaluateRequest) -> ProviderSloEvaluateResponse:
+    """Evaluate one or all provider SLOs for a project.
+
+    Fail-closed: when no health/cost samples exist in the window, status is
+    ``unknown`` (never silent success).
+    """
+    with begin(engine) as connection:
+        try:
+            if payload.slo_id:
+                evaluation = provider_slo.evaluate_slo(
+                    connection,
+                    payload.slo_id,
+                    project_id=payload.project_id,
+                    actor=payload.actor,
+                )
+                summary = {
+                    "ok": 1 if evaluation["status"] == "ok" else 0,
+                    "breached": 1 if evaluation["status"] == "breached" else 0,
+                    "unknown": 1 if evaluation["status"] == "unknown" else 0,
+                }
+                result = {
+                    "project_id": payload.project_id,
+                    "count": 1,
+                    "summary": summary,
+                    "evaluations": [evaluation],
+                }
+            else:
+                result = provider_slo.evaluate_all_for_project(
+                    connection,
+                    payload.project_id,
+                    actor=payload.actor,
+                )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ProviderSloEvaluateResponse(
+            project_id=result["project_id"],
+            count=result["count"],
+            summary=result["summary"],
+            evaluations=[
+                ProviderSloEvaluationSummary(**item) for item in result["evaluations"]
+            ],
+        )
+
+
 
 
 app.include_router(

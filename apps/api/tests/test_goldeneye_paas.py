@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from apps.api.app import main as api_main
+from boss_engine.services.goldeneye_paas import GoldeneyePaasService
 
 PROJECT_ID = "boss-dogfood"
 
@@ -25,6 +31,19 @@ def test_goldeneye_package_catalog(client):
     recipe = layer0.get("recipe") or layer0.get("path") or ""
     if recipe:
         assert "layer0-host" in recipe
+
+
+def test_goldeneye_catalog_bootstrap(client):
+    response = client.get("/v1/goldeneye/catalog/bootstrap")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "default_bootstrap" in body
+    order = body["default_bootstrap"]
+    assert isinstance(order, list)
+    assert order[0] == "layer0-host"
+    assert "layer1-runtime" in order
+    assert body["count"] == len(order)
+    assert body["count"] >= 1
 
 
 def test_goldeneye_register_node_install_and_deploy(client):
@@ -195,3 +214,171 @@ def test_goldeneye_unknown_package(client):
         },
     )
     assert bad.status_code == 422
+
+
+def test_goldeneye_real_install_calls_ssh_runner(client, monkeypatch):
+    """When BOSS_SSH_HOST_DEPLOY_ALLOWED and node.ssh_host set, actuate via runner."""
+    calls: list[dict] = []
+
+    def fake_runner(*, host, user, port, command, timeout=600):
+        calls.append(
+            {
+                "host": host,
+                "user": user,
+                "port": port,
+                "command": command,
+                "timeout": timeout,
+            }
+        )
+        return {
+            "returncode": 0,
+            "stdout": "module layer0-host installed\n",
+            "stderr": "",
+        }
+
+    # Gate on + injected runner on the live API service instance.
+    monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", True)
+    api_main.goldeneye_paas.ssh_runner = fake_runner
+    try:
+        reg = client.post(
+            "/v1/goldeneye/nodes",
+            json={
+                "project_id": PROJECT_ID,
+                "actor": "ceo",
+                "name": "node-real",
+                "roles": ["control"],
+                "ssh_host": "node-real.tailnet.example",
+                "ssh_user": "ubuntu",
+                "ssh_port": 2222,
+            },
+        )
+        assert reg.status_code == 201, reg.text
+        node_id = reg.json()["id"]
+
+        inst = client.post(
+            "/v1/goldeneye/packages/install",
+            json={
+                "project_id": PROJECT_ID,
+                "actor": "ceo",
+                "package_id": "layer0-host",
+                "node_id": node_id,
+            },
+        )
+        assert inst.status_code == 201, inst.text
+        body = inst.json()
+        assert body["mode"] == "real"
+        assert body["status"] == "installed"
+        assert body["receipt_id"]
+        assert calls, "expected SSH runner to be invoked"
+        assert calls[0]["host"] == "node-real.tailnet.example"
+        assert calls[0]["user"] == "ubuntu"
+        assert calls[0]["port"] == 2222
+        assert "ge module install" in calls[0]["command"]
+        assert "layer0-host" in calls[0]["command"]
+        assert (body.get("metadata") or {}).get("actuation", {}).get("host") == (
+            "node-real.tailnet.example"
+        )
+    finally:
+        api_main.goldeneye_paas.ssh_runner = None
+        monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", False)
+
+
+def test_goldeneye_real_install_failure_marks_error(client, monkeypatch):
+    """Remote non-zero exit → status failed + error jsonb on the install row."""
+
+    def fail_runner(*, host, user, port, command, timeout=600):
+        return {
+            "returncode": 17,
+            "stdout": "",
+            "stderr": "ge: module layer0-host install failed: not root\n",
+        }
+
+    monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", True)
+    api_main.goldeneye_paas.ssh_runner = fail_runner
+    try:
+        reg = client.post(
+            "/v1/goldeneye/nodes",
+            json={
+                "project_id": PROJECT_ID,
+                "actor": "ceo",
+                "name": "node-fail",
+                "ssh_host": "node-fail.tailnet.example",
+            },
+        )
+        assert reg.status_code == 201, reg.text
+        node_id = reg.json()["id"]
+
+        inst = client.post(
+            "/v1/goldeneye/packages/install",
+            json={
+                "project_id": PROJECT_ID,
+                "actor": "ceo",
+                "package_id": "layer0-host",
+                "node_id": node_id,
+            },
+        )
+        assert inst.status_code == 201, inst.text
+        body = inst.json()
+        assert body["mode"] == "real"
+        assert body["status"] == "failed"
+        err = body.get("error") or {}
+        assert err.get("returncode") == 17
+        assert "not root" in (err.get("stderr") or "")
+        assert err.get("host") == "node-fail.tailnet.example"
+    finally:
+        api_main.goldeneye_paas.ssh_runner = None
+        monkeypatch.setattr(api_main.settings, "ssh_host_deploy_allowed", False)
+
+
+def test_actuate_remote_module_install_uses_adapter_when_no_runner(monkeypatch):
+    """Unit: without injected runner, production path calls SSHHostAdapter._run_remote."""
+    settings = SimpleNamespace(
+        ssh_host_deploy_allowed=True,
+        ssh_host_private_key="-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n",
+        ssh_host_private_key_file=None,
+    )
+    svc = GoldeneyePaasService(settings)
+
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = ""
+
+    def fake_run_remote(self, *, host, user, port, command, timeout=120):
+        captured["host"] = host
+        captured["user"] = user
+        captured["port"] = port
+        captured["command"] = command
+        captured["timeout"] = timeout
+        return FakeProc()
+
+    monkeypatch.setattr(
+        "boss_engine.services.ssh_host_adapter.SSHHostAdapter._run_remote",
+        fake_run_remote,
+    )
+
+    result = svc._actuate_remote_module_install(
+        node={
+            "ssh_host": "edge.example",
+            "ssh_user": "root",
+            "ssh_port": 22,
+        },
+        package_id="layer1-runtime",
+    )
+    assert result["ok"] is True
+    assert result["via"] == "ssh_host_adapter"
+    assert captured["host"] == "edge.example"
+    assert "ge module install" in captured["command"]
+    assert "layer1-runtime" in captured["command"]
+
+
+def test_actuate_requires_ssh_host():
+    settings = SimpleNamespace(ssh_host_deploy_allowed=True)
+    svc = GoldeneyePaasService(settings)
+    with pytest.raises(ValueError, match="ssh_host"):
+        svc._actuate_remote_module_install(
+            node={"ssh_host": "", "ssh_user": "root", "ssh_port": 22},
+            package_id="layer0-host",
+        )

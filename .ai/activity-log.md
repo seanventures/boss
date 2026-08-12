@@ -3,6 +3,17 @@
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-12 — Grok — BOSS-244 FinOps charts/summary API
+
+- Added `GET /v1/finops/summary?project_id=&days=30` multi-dimension chart payload.
+- Implemented `FinopsReconcilerService.build_summary` over `cost_events`,
+  `cost_anomalies`, active `commitments`, and `external_resources` refs.
+- Extended `apps/web/lib/finops.ts` with `fetchFinopsSummary`; optional spend strip on
+  `FinopsCard` in phase4-ui wired from Mission Control page.
+- Tests: `apps/api/tests/test_finops_summary.py` — 5 passed (isolated Postgres).
+- Plane: OPS/PLANE credentials unavailable in this session; no issue state update.
+
+---
 ## 2026-08-08 — Codex — BOSS-334 governed autonomous improvement programs
 
 - Evaluated the attached OSS shortlist against official sources. Selected Langfuse as the

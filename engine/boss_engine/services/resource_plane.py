@@ -8511,6 +8511,9 @@ class ResourcePlaneService:
                         "size": (droplet.get("size") or {}).get("slug"),
                         "image": (droplet.get("image") or {}).get("slug"),
                         "networks": droplet.get("networks") or {},
+                        # Surface VPC for topology inference (BOSS-240).
+                        "vpc_uuid": droplet.get("vpc_uuid"),
+                        "vpc_id": droplet.get("vpc_uuid"),
                     },
                 )
             )
