@@ -135,7 +135,12 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
     "models": {
         "title": "Model gateway",
         "description": "Model leases, invocations, credentials, usage, llm_calls ledger.",
-        "prefixes": ["/v1/model-gateway", "/v1/models", "/v1/llm-calls"],
+        "prefixes": [
+            "/v1/model-gateway",
+            "/v1/models",
+            "/v1/llm-calls",
+            "/v1/token-efficiency",
+        ],
     },
     "ops": {
         "title": "Ops, reliability, observability",
@@ -160,6 +165,36 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/change-correlation",
             "/v1/redaction",
             "/v1/platform-standards",
+            "/v1/oncall-sre",
+            "/v1/oncall",
+            "/v1/observability-suite",
+            "/v1/observability",
+            "/v1/security-scan",
+            "/v1/worker-autoscaling",
+        ],
+    },
+    "identity": {
+        "title": "Identity providers",
+        "description": "IdP catalog, OIDC/SAML/SCIM blueprints for top enterprise providers.",
+        "prefixes": [
+            "/v1/identity-providers",
+            "/v1/enterprise",
+            "/v1/auth",
+            "/saml/v2",
+            "/scim/v2",
+        ],
+    },
+    "delivery_cicd": {
+        "title": "CI/CD & release planning",
+        "description": "Multi-vendor pipelines, release boards, feature status.",
+        "prefixes": [
+            "/v1/cicd",
+            "/v1/ci-config",
+            "/v1/release-planning",
+            "/v1/features",
+            "/v1/delivery",
+            "/v1/pipeline-config",
+            "/v1/pipeline-adapters",
         ],
     },
     "knowledge": {
