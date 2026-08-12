@@ -4,6 +4,7 @@ import html
 import json
 import secrets
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -15,7 +16,61 @@ from sqlalchemy import text
 from .config import Settings, get_settings
 from .db import begin, ensure_schema, ensure_seed_org, get_engine
 
-app = FastAPI(title="BOSS Account Connect", version="0.1.0")
+
+def _seed_defaults(settings: Settings) -> None:
+    engine = get_engine(settings)
+    schema_path = str(
+        __import__("pathlib").Path(__file__).resolve().parents[1] / "db" / "schema.sql"
+    )
+    with begin(engine) as connection:
+        ensure_schema(connection, schema_path)
+        ensure_seed_org(connection, settings.default_org_id, settings.default_org_name)
+        connection.execute(
+            text(
+                """
+                INSERT INTO ac_entitlements (
+                    id, org_id, project_id, entitlement_key, status, edition, capabilities
+                )
+                VALUES (
+                    :id, :org_id, NULL, 'cloud_control_plane', 'active', 'cloud',
+                    CAST(:capabilities AS JSONB)
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {
+                "id": f"ent_{settings.default_org_id}_cloud",
+                "org_id": settings.default_org_id,
+                "capabilities": json.dumps(
+                    ["hosted_auth", "marketplace", "team_invites", "billing_portal"]
+                ),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO ac_marketplace_packs (
+                    id, org_id, pack_id, display_name, description, publisher,
+                    price_model, price_usd_micros, required_entitlement, visibility, status
+                )
+                VALUES (
+                    :id, :org_id, 'core_v1', 'Core Pack v1', 'Default BOSS company pack.',
+                    'BOSS', 'free', 0, 'cloud_control_plane', 'catalog', 'active'
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"id": f"pack_{settings.default_org_id}_core_v1", "org_id": settings.default_org_id},
+        )
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    _seed_defaults(get_settings())
+    yield
+
+
+app = FastAPI(title="BOSS Account Connect", version="0.1.0", lifespan=lifespan)
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -59,7 +114,17 @@ def _page(title: str, body: str) -> HTMLResponse:
 
 
 def _normalize_user_code(raw: str) -> str:
-    return raw.strip().upper().replace(" ", "").replace("–", "-")
+    """Canonical device code form: uppercase, single hyphens, no spaces.
+
+    Matches control-plane minting (``ABCD-EFGH``) and tolerates operators pasting
+    spaces, underscores, en/em dashes, or lower-case letters.
+    """
+    cleaned = (raw or "").strip().upper()
+    for ch in (" ", "\t", "_", ".", "–", "—", "−"):
+        cleaned = cleaned.replace(ch, "-")
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-")
 
 
 def _authorize_device_code(
@@ -211,55 +276,6 @@ def _require_service_auth(request: Request, settings: Settings) -> None:
 
 def _org_id(org_id: Optional[str], settings: Settings) -> str:
     return org_id or settings.default_org_id
-
-
-@app.on_event("startup")
-def startup() -> None:
-    settings = get_settings()
-    engine = get_engine(settings)
-    schema_path = str(
-        __import__("pathlib").Path(__file__).resolve().parents[1] / "db" / "schema.sql"
-    )
-    with begin(engine) as connection:
-        ensure_schema(connection, schema_path)
-        ensure_seed_org(connection, settings.default_org_id, settings.default_org_name)
-        connection.execute(
-            text(
-                """
-                INSERT INTO ac_entitlements (
-                    id, org_id, project_id, entitlement_key, status, edition, capabilities
-                )
-                VALUES (
-                    :id, :org_id, NULL, 'cloud_control_plane', 'active', 'cloud',
-                    CAST(:capabilities AS JSONB)
-                )
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": f"ent_{settings.default_org_id}_cloud",
-                "org_id": settings.default_org_id,
-                "capabilities": json.dumps(
-                    ["hosted_auth", "marketplace", "team_invites", "billing_portal"]
-                ),
-            },
-        )
-        connection.execute(
-            text(
-                """
-                INSERT INTO ac_marketplace_packs (
-                    id, org_id, pack_id, display_name, description, publisher,
-                    price_model, price_usd_micros, required_entitlement, visibility, status
-                )
-                VALUES (
-                    :id, :org_id, 'core_v1', 'Core Pack v1', 'Default BOSS company pack.',
-                    'BOSS', 'free', 0, 'cloud_control_plane', 'catalog', 'active'
-                )
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {"id": f"pack_{settings.default_org_id}_core_v1", "org_id": settings.default_org_id},
-        )
 
 
 @app.get("/v1/health", response_model=HealthResponse)
@@ -486,8 +502,8 @@ def org_health(org_id: str) -> HealthResponse:
 @app.get("/v1/orgs/{org_id}/entitlements", response_model=EntitlementsResponse)
 def list_entitlements(
     org_id: str,
+    request: Request,
     project_id: Optional[str] = None,
-    request: Request = None,
     settings: Settings = Depends(get_settings),
 ) -> EntitlementsResponse:
     _require_service_auth(request, settings)
@@ -522,8 +538,8 @@ def list_entitlements(
 @app.get("/v1/orgs/{org_id}/marketplace/packs", response_model=MarketplaceResponse)
 def list_marketplace_packs(
     org_id: str,
+    request: Request,
     project_id: Optional[str] = None,
-    request: Request = None,
     settings: Settings = Depends(get_settings),
 ) -> MarketplaceResponse:
     _require_service_auth(request, settings)
@@ -567,8 +583,8 @@ def list_marketplace_packs(
 @app.post("/v1/auth-sessions", response_model=AuthSessionResponse, status_code=201)
 def create_auth_session(
     payload: AuthSessionCreateRequest,
+    request: Request,
     org_id: Optional[str] = None,
-    request: Request = None,
     settings: Settings = Depends(get_settings),
 ) -> AuthSessionResponse:
     _require_service_auth(request, settings)
@@ -622,8 +638,8 @@ def create_auth_session(
 def complete_auth_session(
     session_id: str,
     payload: AuthSessionCompleteRequest,
+    request: Request,
     org_id: Optional[str] = None,
-    request: Request = None,
     settings: Settings = Depends(get_settings),
 ) -> AuthSessionCompleteResponse:
     _require_service_auth(request, settings)
@@ -632,7 +648,7 @@ def complete_auth_session(
         row = connection.execute(
             text(
                 """
-                SELECT id, org_id, project_id, state, status
+                SELECT id, org_id, project_id, state, status, metadata
                 FROM ac_auth_sessions
                 WHERE id = :session_id
                 """
@@ -646,6 +662,27 @@ def complete_auth_session(
         if row["project_id"] != payload.project_id:
             raise HTTPException(status_code=422, detail="Auth session project mismatch.")
         resolved_org = _org_id(org_id or row["org_id"], settings)
+        if row["status"] == "completed":
+            return AuthSessionCompleteResponse(
+                hosted_org_id=resolved_org,
+                status="completed",
+                project_id=payload.project_id,
+            )
+        metadata = row["metadata"] or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        stored_code = metadata.get("auth_code")
+        if isinstance(stored_code, str) and stored_code:
+            if not payload.code or payload.code != stored_code:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Auth session code mismatch.",
+                )
+        if row["status"] not in ("authorized", "pending"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Auth session cannot be completed from status '{row['status']}'.",
+            )
         connection.execute(
             text(
                 """
@@ -667,7 +704,7 @@ def complete_auth_session(
 def create_team_invite(
     org_id: str,
     payload: TeamInviteCreateRequest,
-    request: Request = None,
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> TeamInviteResponse:
     _require_service_auth(request, settings)
@@ -710,7 +747,7 @@ def revoke_team_invite(
     org_id: str,
     invite_id: str,
     payload: TeamInviteRevokeRequest,
-    request: Request = None,
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     _require_service_auth(request, settings)
@@ -743,7 +780,7 @@ def revoke_team_invite(
 def create_billing_portal_session(
     org_id: str,
     payload: BillingPortalSessionRequest,
-    request: Request = None,
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> BillingPortalSessionResponse:
     _require_service_auth(request, settings)

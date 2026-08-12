@@ -78,12 +78,16 @@ CREATE TABLE IF NOT EXISTS ac_billing_portal_sessions (
 );
 
 -- Device Easy Connect: short user codes authorized from any browser.
+-- user_code is UNIQUE so ON CONFLICT (user_code) upserts work and pollers
+-- always see a single authorization row per code.
 CREATE TABLE IF NOT EXISTS ac_device_authorizations (
   id TEXT PRIMARY KEY,
-  user_code TEXT NOT NULL UNIQUE,
+  user_code TEXT NOT NULL,
   hosted_org_id TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'authorized',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ac_device_authorizations_user_code
+  ON ac_device_authorizations(user_code);
 CREATE INDEX IF NOT EXISTS idx_ac_device_authorizations_code
   ON ac_device_authorizations(user_code, status);

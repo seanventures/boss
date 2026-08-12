@@ -84,10 +84,16 @@ services:
       - traefik.http.routers.boss-web.tls=true
       - traefik.http.services.boss-web.loadbalancer.server.port=3000
 
+  # Optional Cloud side of Easy Connect. Enable with:
+  #   docker compose --profile cloud up -d account-connect
+  #   docker compose --profile account-connect up -d account-connect
+  # Control plane must set BOSS_ACCOUNT_CONNECT_URL / BOSS_ACCOUNT_CONNECT_TOKEN
+  # to match AC_PUBLIC_BASE_URL / AC_SERVICE_TOKEN (see apps/account_connect/README.md).
   account-connect:
     <<: *boss-common
     profiles:
       - account-connect
+      - cloud
     platform: linux/amd64
     build:
       context: .
