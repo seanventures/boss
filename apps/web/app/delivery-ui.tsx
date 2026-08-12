@@ -17,7 +17,7 @@
  * rendering an empty table that reads like a failure.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useState } from "react";
 
 import { getDeliveryPipelineAction } from "./actions";
 import { OnboardWizard, SecretsPanel, TargetControls, type SecretsView } from "./delivery-manage";
@@ -44,6 +44,9 @@ type Target = {
 };
 export type Pipeline = {
   project_id: string; stages: Stage[]; targets: Target[]; configured: boolean;
+  /** From BOSS_ENABLE_SANDBOX_DEPLOY — fail-closed when false/undefined. */
+  sandbox_deploy_enabled?: boolean;
+  sandbox_merge_enabled?: boolean;
   error?: string;
 };
 
@@ -128,6 +131,12 @@ function HealthGraph({ series }: { series: HealthTarget["series"] }) {
   );
 }
 
+/** True when there is nothing to probe — empty registry, not an outage. */
+export function isHealthUnconfigured(health: Health | null | undefined): boolean {
+  if (!health || health.error) return false;
+  return (health.targets?.length ?? 0) === 0 || (health.summary?.total ?? 0) === 0;
+}
+
 export function DeploymentHealth({ health }: { health?: Health | null }) {
   if (!health) return null;
   if (health.error) {
@@ -135,12 +144,26 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
   }
   const { summary, targets } = health;
 
+  // Zero targets is not a fleet status. Rendering "● not_deployed · 0 up · 0 down" looks
+  // like an operations dashboard for a running system; it is not — nothing is registered.
+  if (isHealthUnconfigured(health)) {
+    return (
+      <section className="ct-block" data-empty-state="no-health-targets">
+        <div className="ct-block-title">Deployment health</div>
+        <p className="empty-state" style={{ padding: "18px 0" }}>
+          Nothing is registered to monitor. Health samples appear after you onboard a
+          deployment target in CI/CD and ship an app to it.
+        </p>
+      </section>
+    );
+  }
+
   return (
     <section className="ct-block">
       <div className="ct-block-title">
         Health of deployed apps{" "}
         <span style={{ color: HEALTH_TONE[summary.overall], fontSize: 12 }}>
-          ● {summary.overall}
+          ● {HEALTH_LABEL[summary.overall] ?? summary.overall}
         </span>
         <span className="detail" style={{ fontSize: 12, marginLeft: 8 }}>
           {summary.up} up · {summary.degraded} degraded · {summary.down} down
@@ -148,12 +171,6 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
           {summary.not_deployed ? ` · ${summary.not_deployed} never deployed` : ""}
         </span>
       </div>
-
-      {targets.length === 0 && (
-        <div className="detail">
-          Nothing deployed yet. Once BOSS deploys an app, its health is sampled automatically.
-        </div>
-      )}
 
       <div style={{ display: "grid", gap: 12 }}>
         {targets.map((t) => (
@@ -231,6 +248,21 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
   );
 }
 
+/** Fail-closed sandbox auto-deploy notice — only when the flag is known to be off. */
+export function SandboxDeployFlagNotice({ enabled }: { enabled?: boolean }) {
+  if (enabled !== false) return null;
+  return (
+    <p className="detail" data-testid="sandbox-deploy-disabled"
+       style={{ color: "#d29922", margin: 0 }}>
+      Automatic sandbox deploy is off (
+      <code>BOSS_ENABLE_SANDBOX_DEPLOY=false</code>
+      ). That is intentional fail-closed configuration — merge-triggered sandbox
+      deploys will not run until the flag is enabled. Manual onboarding of a
+      target and host still works when you choose to set one up.
+    </p>
+  );
+}
+
 export function DeliveryPipeline({ initial, secrets, deployments }: {
   initial?: Pipeline | null; secrets?: SecretsView | null; deployments?: any;
 }) {
@@ -261,8 +293,34 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
     return <div className="detail" style={{ color: "#f85149" }}>Delivery: {data.error}</div>;
   }
 
+  // Zero targets: setup path only. Do not render Deploy wizard, empty recent-deployments
+  // chrome, or a targets table that reads like a live fleet — that is the "full machinery
+  // while live has 0 targets" shell the audit called out.
+  if (!data.configured) {
+    return (
+      <div style={{ display: "grid", gap: 18 }} data-empty-state="no-targets">
+        <section className="ct-block">
+          <div className="ct-block-title">No deployment targets</div>
+          <p className="detail" style={{ marginTop: 0 }}>
+            No deployment target is registered for this project. Merged PRs deploy nowhere
+            and there is no deploy history to show. Register an app (host, credential,
+            environment) to unlock deploy controls.
+          </p>
+          <SandboxDeployFlagNotice enabled={data.sandbox_deploy_enabled} />
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center",
+                        marginTop: 12 }}>
+            <OnboardWizard secrets={secrets?.secrets ?? []} />
+          </div>
+        </section>
+        {/* Credentials are part of setup, not "running deploy" chrome. */}
+        <SecretsPanel initial={secrets} />
+      </div>
+    );
+  }
+
   return (
-    <div style={{ display: "grid", gap: 18 }}>
+    <div style={{ display: "grid", gap: 18 }} data-empty-state="configured">
+      <SandboxDeployFlagNotice enabled={data.sandbox_deploy_enabled} />
       <div><DeployWizard targets={(data.targets || []) as any} /></div>
 
       {/* Onboarding and credentials: the steps that used to be SQL and ssh-keygen.
@@ -274,21 +332,14 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
       {/* ---- targets: where anything could go at all ---- */}
       <section className="ct-block">
         <div className="ct-block-title">Deployment targets</div>
-        {!data.configured ? (
-          <div className="detail">
-            No deployment target is registered, so a merged PR deploys nowhere. Register one
-            (app, repo, environment, target kind) and merges to <code>staging</code> will
-            deploy automatically; anything else stays behind a promotion decision.
-          </div>
-        ) : (
-          <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-            <thead><tr style={{ textAlign: "left", opacity: .7 }}>
-              <th>app</th><th>environment</th><th>repo</th><th>kind</th><th>ref</th><th>status</th>
-            </tr></thead>
-            <tbody>
-              {data.targets.map((t) => (
-                <>
-                <tr key={t.id} style={{ borderTop: "1px solid rgba(255,255,255,.07)" }}>
+        <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+          <thead><tr style={{ textAlign: "left", opacity: .7 }}>
+            <th>app</th><th>environment</th><th>repo</th><th>kind</th><th>ref</th><th>status</th>
+          </tr></thead>
+          <tbody>
+            {data.targets.map((t) => (
+              <Fragment key={t.id}>
+                <tr style={{ borderTop: "1px solid rgba(255,255,255,.07)" }}>
                   <td>{t.app_name}</td>
                   <td><span className="cap-badge tone-blue">{t.environment}</span></td>
                   <td className="detail">{t.repo}</td>
@@ -296,7 +347,7 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
                   <td className="detail">{t.target_ref}</td>
                   <td style={{ color: t.status === "active" ? "#3fb950" : "#8b949e" }}>{t.status}</td>
                 </tr>
-                <tr key={`${t.id}-controls`}>
+                <tr>
                   {/* Trigger controls sit with the target they act on, so "deploys on merge"
                       is read in the same glance as which host it deploys to. */}
                   <td colSpan={6} style={{ paddingBottom: 10 }}>
@@ -304,11 +355,10 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
                                     onChanged={reload} />
                   </td>
                 </tr>
-                </>
-              ))}
-            </tbody>
-          </table>
-        )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
       </section>
 
       {/* The pipeline table listed every code task run that had ever opened a PR — eighteen

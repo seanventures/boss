@@ -16,7 +16,7 @@
  *     this is meant to remove.
  */
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -318,6 +318,12 @@ export type Observability = {
   error?: string;
 };
 
+/** Stack has never been deployed and there is nothing to scrape — pure empty, not "down". */
+export function isObservabilityUnconfigured(data: Observability | null | undefined): boolean {
+  if (!data || data.error) return false;
+  return !data.deployed && (data.apps?.length ?? 0) === 0;
+}
+
 export function MonitoringPanel({ initial, hostTargetId }: {
   initial?: Observability | null; hostTargetId?: string;
 }) {
@@ -328,7 +334,7 @@ export function MonitoringPanel({ initial, hostTargetId }: {
   if (!data || data.error) {
     return (
       <section className="ct-block">
-        <div className="ct-block-title">Monitoring</div>
+        <div className="ct-block-title">Observability stack</div>
         <div className="detail" style={{ color: data?.error ? "#f85149" : undefined }}>
           {data?.error ? `Monitoring: ${data.error}` : "Loading…"}
         </div>
@@ -336,14 +342,40 @@ export function MonitoringPanel({ initial, hostTargetId }: {
     );
   }
 
+  // Not deployed + no apps is setup debt, not a stack outage. Do not render "● stack not
+  // running", empty scrape tables, or a Deploy button that can only fail for lack of a host.
+  if (isObservabilityUnconfigured(data)) {
+    return (
+      <section className="ct-block" data-empty-state="stack-not-deployed">
+        <div className="ct-block-title">Observability stack</div>
+        <p className="empty-state" style={{ padding: "18px 0" }}>
+          The observability stack is not deployed. There is no Prometheus, Grafana, or
+          scrape config for this project yet.
+        </p>
+        <p className="detail" style={{ marginTop: 0 }}>
+          Onboard a deployment target in CI/CD first — the stack borrows that host and
+          credential. After a target exists, return here to deploy the collector /
+          Prometheus / Grafana stack.
+        </p>
+        {!hostTargetId && (
+          <p className="detail" data-testid="obs-needs-target" style={{ color: "#d29922" }}>
+            No active deployment target is available to host the stack.
+          </p>
+        )}
+      </section>
+    );
+  }
+
   const running = data.status?.running;
   return (
-    <section className="ct-block">
+    <section className="ct-block" data-empty-state={data.deployed ? "stack-deployed" : "stack-pending"}>
       <div className="ct-block-title">
-        Monitoring{" "}
+        Observability stack{" "}
         <span style={{ fontSize: 12,
                        color: running ? "#3fb950" : running === false ? "#d29922" : "#8b949e" }}>
-          ● {running ? "stack running" : running === false ? "stack not running" : "unknown"}
+          ● {data.deployed
+            ? (running ? "stack running" : running === false ? "stack not running" : "deployed")
+            : "not deployed"}
         </span>
       </div>
 
@@ -371,7 +403,7 @@ export function MonitoringPanel({ initial, hostTargetId }: {
                     ? `failed: ${typeof out.error === "string" ? out.error : JSON.stringify(out.error).slice(0, 200)}`
                     : `stack deployed — ${out.apps?.length ?? 0} app(s) on ${out.grafana_url}`);
                   }); }} />
-        {data.grafana_url && (
+        {data.deployed && data.grafana_url && (
           <a href={data.grafana_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
             Open Grafana ↗
           </a>
@@ -387,7 +419,7 @@ export function MonitoringPanel({ initial, hostTargetId }: {
         <tbody>
           {data.apps.length === 0 && (
             <tr><td colSpan={4} className="detail">
-              No active deployment targets, so there is nothing to monitor yet.
+              No active deployment targets, so there is nothing to scrape yet.
             </td></tr>
           )}
           {data.apps.map((a) => (

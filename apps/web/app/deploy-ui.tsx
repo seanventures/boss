@@ -14,7 +14,7 @@
  *   RecentDeployments — the last N DEPLOYMENTS (not every code task that opened a PR)
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   deployTargetAction, getDeliveryDefaultsAction, getDeploymentAction, listRefsAction,

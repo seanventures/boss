@@ -6287,7 +6287,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-head">
             <div>
               <span className="eyebrow">CI/CD</span>
-              <h2>From a merged PR to a running deployment — and where it stopped.</h2>
+              <h2>
+                {deliveryPipeline && !deliveryPipeline.error && !deliveryPipeline.configured
+                  ? "No deployment targets yet — onboard an app to unlock deploy."
+                  : "From a merged PR to a running deployment — and where it stopped."}
+              </h2>
             </div>
           </div>
           <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
@@ -6301,7 +6305,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="section-head">
             <div>
               <span className="eyebrow">Monitoring</span>
-              <h2>Health of what BOSS has deployed, and the dashboards behind it.</h2>
+              <h2>
+                {(!deploymentHealth?.targets?.length && !observability?.deployed)
+                  ? "Not configured — health and dashboards appear after CI/CD onboarding."
+                  : "Health of what BOSS has deployed, and the dashboards behind it."}
+              </h2>
             </div>
           </div>
           <MonitoringArea health={deploymentHealth} observability={observability}

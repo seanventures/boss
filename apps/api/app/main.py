@@ -6664,6 +6664,10 @@ def delivery_defaults_endpoint():
         "owner": owner, "repo": repo,
         "repo_url": f"https://github.com/{owner}/{repo}" if owner and repo else "",
         "host": getattr(settings, "target_repo_host", "github") or "github",
+        # Surfaced so the console can say "auto sandbox deploy is off" instead of
+        # rendering full deploy chrome when the safety flag is fail-closed.
+        "sandbox_deploy_enabled": bool(getattr(settings, "enable_sandbox_deploy", False)),
+        "sandbox_merge_enabled": bool(getattr(settings, "enable_sandbox_merge", False)),
     }
 
 
@@ -7110,7 +7114,12 @@ def delivery_pipeline_endpoint(project_id: str, limit: int = 25):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.delivery_pipeline import pipeline_view
     with begin(engine) as c:
-        return pipeline_view(c, project_id, limit=limit)
+        view = pipeline_view(c, project_id, limit=limit)
+    # Safety flags ride with the pipeline payload so the empty-state UI does not need a
+    # second round-trip (and cannot disagree about whether auto sandbox deploy is armed).
+    view["sandbox_deploy_enabled"] = bool(getattr(settings, "enable_sandbox_deploy", False))
+    view["sandbox_merge_enabled"] = bool(getattr(settings, "enable_sandbox_merge", False))
+    return view
 
 
 @app.get("/v1/shepherd/overview")
