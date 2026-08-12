@@ -113,6 +113,14 @@
 | BOSS-349 | OpenAPI parity | **Done** | #161; deploy lag |
 | BOSS-350 | Community keys decision | **Done** | Full kernel #157 |
 | BOSS-351 | Live E2E gate | **Done** (gate) | Factory E2E still open |
+| BOSS-314 | GA readiness closure loop | **In Progress** | Children closed this cycle listed in Plane comment; Phase A live still open |
+| BOSS-288–290 | YouTube EP scripts | **Done** (scripts) | Recording is production work outside repo |
+| BOSS-291 | Engine private extract | **Done** (checklist) | Execution of extract still operational work |
+| BOSS-292/293 | Partners / public flip | **In Progress / blocked** | Checklist ref; 293 needs BOSS-300 |
+| BOSS-295/304 | GTM reconciliation + AI SRE deck | **Done** (docs) | Apply brief to Google Slides source |
+| BOSS-300 | OSS licensing decision | **Todo BLOCKED** | Human legal/product |
+| BOSS-302/303 | Hosted Cloud / managed models | **Cancelled** (this cycle) | Phase-03 roadmap; reopen when Cloud tier starts |
+| BOSS-97/98/101/102 | Go S1–S3 scale track | **Backlog** | Community path covered by Python worker fabric + concurrency governance + elastic |
 
 ---
 
@@ -180,6 +188,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-12 | Plane open-issue honesty pass: YouTube EP1–3 scripts; engine extract checklist; GTM gap reconciliation (+ AI SRE `/v1/oncall-sre`); Cloud 302/303 cancelled as Phase-03 roadmap; Go S1–S3 left Backlog; licensing 300 remains human-blocked; GA umbrellas 314/337 stay In Progress pending Phase A | grok |
 | 2026-08-12 | Multi-agent E2E Cloud bake: AC tests, Easy Connect link+sync, post-link team/marketplace/workers, retention+MC UX; 29 pytest green | agents |
 | 2026-08-12 | Cloud product expansion: comparison/capabilities/workers + complete/unlink; MC Community-safe cloud feed; device pending codes; honest managed workers | codex |
 | 2026-08-12 | BOSS Cloud product distinction: spec + `/v1/cloud/*` catalog/status/easy-connect (device+browser); Community independent; AC device authorize; MC Cloud CTA; tests 4/4 | codex |

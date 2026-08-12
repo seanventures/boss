@@ -5,7 +5,7 @@
 **UI:** https://plane.local.sean.network  
 **Contract:** `AGENTS.md` — Plane is the system of record; dedupe before create; never commit API keys.  
 **Living plan (update first):** [`GA_LIVING_PLAN.md`](GA_LIVING_PLAN.md)  
-**Last refresh:** 2026-08-12 (post GA 15-panel assessment)
+**Last refresh:** 2026-08-12 (open-issue honesty pass + post GA 15-panel assessment)
 
 ## Umbrella
 
@@ -102,7 +102,20 @@ Automated + agent team Plane update (workspace `goldeneye`, BOSS project).
 - BOSS-1/2/3/4/12/16/17, BOSS-152/153
 
 ### Left open honestly (partial/roadmap)
-~40 open: GA/QA (337,314,324,346,347), Knowledge/Autonomy parents, PRV FinOps children, GTM/YouTube, Go/Firecracker backlog.
+GA/QA umbrellas (337, 314) remain **In Progress** until Phase A (shared-tag redeploy + `qa-live`) lands. Residual children: 346, 347, 324, rootfs/DLQ/factory honesty. Knowledge/Autonomy parents and PRV FinOps children may still be open.
 
-Reports: `/tmp/plane_session_sync_report.json`, `/tmp/plane_agent_*.json`
-Script: `scripts/plane_sync_session_work.py`
+### 2026-08-12 open-issue honesty pass (docs + Plane)
+
+| Issue | Action | Evidence |
+|---|---|---|
+| BOSS-288–290 | **Done** | `docs/marketing/youtube/EP{1,2,3}_SCRIPT.md` — script package; recording outside repo |
+| BOSS-291 | **Done** | `docs/product/ENGINE_EXTRACT_CHECKLIST.md` (actionable extract checklist) |
+| BOSS-292/293 | Progress comments | Reference extract checklist; public flip blocked on BOSS-300 |
+| BOSS-295 + 304 | **Done** | `docs/product/GTM_PRODUCT_GAP_RECONCILIATION.md` (+ AI SRE `/v1/oncall-sre`) |
+| BOSS-300 | **Todo** | BLOCKED — human legal decision; do not Done |
+| BOSS-302/303 | **Cancelled** | Phase-03 Cloud roadmap; not active this cycle |
+| BOSS-97/98/101/102 | **Backlog** (kept) | Python worker fabric + concurrency governance + elastic cover Community; Go S1–S3 optional scale |
+| BOSS-314 + 337 | **In Progress** | Progress comments only; Phase A live proof still required |
+
+Reports: `/tmp/plane_session_sync_report.json`, `/tmp/plane_agent_*.json`  
+Script: `scripts/plane_sync_session_work.py` · ops helper: `/tmp/plane_ops.py`
