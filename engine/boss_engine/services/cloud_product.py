@@ -487,7 +487,7 @@ class CloudProductService:
                        metadata, created_at, expires_at
                 FROM account_connect_auth_sessions
                 WHERE project_id = :project_id
-                  AND status IN ('pending', 'blocked')
+                  AND status IN ('pending', 'ready', 'authorized', 'blocked', 'blocked_configuration')
                   AND (
                     metadata->>'source' = 'cloud_easy_connect'
                     OR metadata->>'flow' IN ('device', 'browser')
@@ -557,6 +557,80 @@ class CloudProductService:
             "status": self.status(connection, project_id),
         }
 
+    def _sync_entitlements_after_link(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        hosted_org_id: Optional[str],
+        session_id: str,
+        method: str,
+    ) -> dict[str, Any]:
+        """Pull hosted entitlements after a successful Cloud link.
+
+        Sync failures must not reverse the link; they surface in response metadata
+        so operators can retry via ``POST /v1/account-connect/sync``.
+        """
+        if not hosted_org_id:
+            return {
+                "entitlements_synced": False,
+                "synced_entitlement_count": 0,
+                "entitlements_sync_error": "missing_hosted_org_id",
+            }
+        try:
+            sync_result = self.commercial.sync_account_connect_entitlements(
+                connection,
+                project_id,
+                actor=actor,
+                hosted_org_id=hosted_org_id,
+            )
+        except (
+            AccountConnectConfigurationError,
+            AccountConnectSyncError,
+            AccountConnectLinkNotFoundError,
+        ) as error:
+            emit_event(
+                connection,
+                project_id,
+                "cloud.entitlements_sync_failed",
+                actor,
+                "account_connect_org",
+                hosted_org_id,
+                {
+                    "session_id": session_id,
+                    "method": method,
+                    "error": str(error)[:300],
+                    "error_type": error.__class__.__name__,
+                },
+            )
+            return {
+                "entitlements_synced": False,
+                "synced_entitlement_count": 0,
+                "entitlements_sync_error": str(error)[:300],
+            }
+        count = int(sync_result.get("synced_entitlement_count") or 0)
+        emit_event(
+            connection,
+            project_id,
+            "cloud.entitlements_synced",
+            actor,
+            "account_connect_org",
+            hosted_org_id,
+            {
+                "session_id": session_id,
+                "method": method,
+                "synced_entitlement_count": count,
+                "hosted_org_id": hosted_org_id,
+            },
+        )
+        return {
+            "entitlements_synced": True,
+            "synced_entitlement_count": count,
+            "entitlements_sync_error": None,
+            "sync_edition": sync_result.get("edition"),
+        }
+
     def complete_easy_connect(
         self,
         connection: Connection,
@@ -570,6 +644,7 @@ class CloudProductService:
         """Complete browser Easy Connect after hosted Account Connect callback.
 
         Accepts either local ``session_id`` or ``state`` (from the hosted redirect).
+        On success, auto-syncs hosted entitlements (failures surface in metadata).
         """
         if session_id:
             row = connection.execute(
@@ -619,15 +694,22 @@ class CloudProductService:
                 actor=actor,
             )
         if row["status"] == "completed" and row["hosted_org_id"]:
+            edition = self.commercial.edition_status(connection, project_id)
             return {
                 "session_id": session_id,
                 "status": "completed",
                 "method": "browser",
                 "hosted_org_id": row["hosted_org_id"],
-                "linked": True,
-                "edition": self.commercial.edition_status(connection, project_id),
+                "linked": bool(edition.get("account_connect_org")),
+                "edition": edition,
+                "account_connect_org": edition.get("account_connect_org"),
+                "entitlements_synced": None,
+                "synced_entitlement_count": None,
+                "entitlements_sync_error": None,
             }
-        if row["status"] not in {"pending", "authorized"}:
+        # Browser sessions start as "ready" once hosted AC returns authorization_url;
+        # device sessions use "pending" until the user_code is authorized.
+        if row["status"] not in {"pending", "ready", "authorized"}:
             raise AccountConnectAuthSessionStateError(
                 f"Easy Connect session is {row['status']}; cannot complete."
             )
@@ -647,11 +729,14 @@ class CloudProductService:
             state=state,
             metadata={"source": "cloud_easy_connect_browser"},
         )
+        # Re-read edition after commercial complete (may be linked or failed)
         edition_after = self.commercial.edition_status(connection, project_id)
+        session_status = completed_session.get("status") or "completed"
         hosted = (
             completed_session.get("hosted_org_id")
             or (edition_after.get("account_connect_org") or {}).get("hosted_org_id")
         )
+        linked = bool(edition_after.get("account_connect_org")) and session_status == "completed"
         emit_event(
             connection,
             project_id,
@@ -659,17 +744,54 @@ class CloudProductService:
             actor,
             "account_connect_org",
             hosted or session_id,
-            {"session_id": session_id, "method": "browser"},
+            {
+                "session_id": session_id,
+                "method": "browser",
+                "linked": linked,
+                "status": session_status,
+            },
         )
-        return {
+        result: dict[str, Any] = {
             "session_id": session_id,
-            "status": completed_session.get("status") or "completed",
+            "status": session_status,
             "method": "browser",
             "hosted_org_id": hosted,
-            "linked": bool(edition_after.get("account_connect_org")),
+            "linked": linked,
             "edition": edition_after,
             "account_connect_org": edition_after.get("account_connect_org"),
+            "entitlements_synced": False,
+            "synced_entitlement_count": 0,
+            "entitlements_sync_error": None,
         }
+        if linked and hosted:
+            sync_meta = self._sync_entitlements_after_link(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                hosted_org_id=str(hosted),
+                session_id=session_id,
+                method="browser",
+            )
+            result.update(
+                {
+                    "entitlements_synced": sync_meta["entitlements_synced"],
+                    "synced_entitlement_count": sync_meta["synced_entitlement_count"],
+                    "entitlements_sync_error": sync_meta.get("entitlements_sync_error"),
+                }
+            )
+            if sync_meta.get("sync_edition"):
+                result["edition"] = sync_meta["sync_edition"]
+                result["account_connect_org"] = sync_meta["sync_edition"].get(
+                    "account_connect_org"
+                )
+        elif not linked:
+            # Surface commercial failure without raising so callers see status
+            failure = (completed_session.get("metadata") or {}).get(
+                "failure_reason"
+            ) or (completed_session.get("metadata") or {}).get("blocked_reason")
+            if failure:
+                result["message"] = str(failure)
+        return result
 
     def easy_connect(
         self,
@@ -1006,8 +1128,23 @@ class CloudProductService:
             actor,
             "account_connect_org",
             hosted_org_id,
-            {"session_id": session_id, "hosted_org_id": hosted_org_id},
+            {
+                "session_id": session_id,
+                "hosted_org_id": hosted_org_id,
+                "method": "device",
+                "linked": True,
+            },
         )
+        sync_meta = self._sync_entitlements_after_link(
+            connection,
+            project_id=project_id,
+            actor=actor,
+            hosted_org_id=hosted_org_id,
+            session_id=session_id,
+            method="device",
+        )
+        if sync_meta.get("sync_edition"):
+            edition_after = sync_meta["sync_edition"]
         return {
             "session_id": session_id,
             "status": "completed",
@@ -1016,6 +1153,9 @@ class CloudProductService:
             "linked": True,
             "edition": edition_after,
             "account_connect_org": (edition_after or {}).get("account_connect_org"),
+            "entitlements_synced": sync_meta["entitlements_synced"],
+            "synced_entitlement_count": sync_meta["synced_entitlement_count"],
+            "entitlements_sync_error": sync_meta.get("entitlements_sync_error"),
         }
 
     @staticmethod

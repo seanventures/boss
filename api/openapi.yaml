@@ -213,7 +213,11 @@ paths:
           schema: { type: string, default: ceo }
       responses:
         '200':
-          description: Session status pending, completed, or blocked
+          description: >
+            Session status (pending/ready/completed/blocked). On device authorization
+            completion also includes linked, hosted_org_id, entitlements_synced,
+            synced_entitlement_count, and entitlements_sync_error (sync failures do
+            not unlink).
         '404':
           description: Session not found
   /v1/cloud/easy-connect/{session_id}/complete:
@@ -238,7 +242,11 @@ paths:
                 state: { type: string }
       responses:
         '200':
-          description: Link completed or device poll result
+          description: >
+            Link completed or device poll result. Successful links auto-sync hosted
+            entitlements; response includes entitlements_synced (bool),
+            synced_entitlement_count (int), and entitlements_sync_error (string|null).
+            Sync failure leaves the link active.
         '404':
           description: Session not found
         '409':
@@ -261,7 +269,9 @@ paths:
                 session_id: { type: string }
       responses:
         '200':
-          description: Link completed
+          description: >
+            Link completed with auto entitlement sync metadata
+            (entitlements_synced, synced_entitlement_count, entitlements_sync_error).
         '404':
           description: Session not found
         '409':
