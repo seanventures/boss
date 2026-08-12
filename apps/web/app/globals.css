@@ -1014,6 +1014,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active="github"] .frame > section:is([data-area="github"], :has([data-area="github"])),
 .bx-content[data-active="infra"] .frame > section:is([data-area="infra"], :has([data-area="infra"])),
 .bx-content[data-active="ops"] .frame > section:is([data-area="ops"], :has([data-area="ops"])),
+.bx-content[data-active="assurance"] .frame > section:is([data-area="assurance"], :has([data-area="assurance"])),
 .bx-content[data-active="org"] .frame > section:is([data-area="org"], :has([data-area="org"])),
 .bx-content[data-active="reports"] .frame > section:is([data-area="reports"], :has([data-area="reports"])),
 .bx-content[data-active="capabilities"] .frame > section:is([data-area="capabilities"], :has([data-area="capabilities"])),

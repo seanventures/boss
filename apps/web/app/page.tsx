@@ -185,6 +185,39 @@ import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
+import { fetchIdentityProvidersFeed } from "../lib/identity-providers";
+import { IdentityProvidersCatalogView } from "./identity-providers-ui";
+import { fetchOncallSreStatus } from "../lib/oncall-sre";
+import { OncallSreHome } from "./oncall-sre-ui";
+import {
+  fetchLatestSecurityScan,
+  fetchSecurityScanners,
+} from "../lib/security-scan";
+import { SecurityScanCard } from "./security-scan-ui";
+import {
+  fetchReleaseBoard,
+  fetchReleaseStatus,
+  fetchReleases,
+} from "../lib/release-planning";
+import { ReleasePlanningPanel } from "./release-planning-ui";
+import {
+  fetchWorkerAutoscalingHistory,
+  fetchWorkerAutoscalingStatus,
+} from "../lib/worker-autoscaling";
+import { WorkerAutoscalingPanel } from "./worker-autoscaling-ui";
+import {
+  fetchTokenConsumption,
+  fetchTokenPolicies,
+  fetchTokenRecommendations,
+  fetchTokenScorecard,
+} from "../lib/token-efficiency";
+import { TokenEfficiencyPanel } from "./token-efficiency-ui";
+import { fetchObservabilitySuiteFeed } from "../lib/observability-suite";
+import { ObservabilitySuitePanel } from "./observability-suite-ui";
+import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
+import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
+import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
+import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -727,6 +760,44 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchCostInsights(activeProjectId),
     fetchLlmSpend(activeProjectId),
   ]);
+  // Platform ops panels nested into existing Mission Control areas (no new nav).
+  const [
+    identityProvidersFeed,
+    oncallSreStatus,
+    securityScanners,
+    latestSecurityScan,
+    releaseStatus,
+    releaseBoard,
+    releasePlans,
+    workerAutoscalingStatus,
+    workerAutoscalingHistory,
+    tokenScorecard,
+    tokenConsumption,
+    tokenPolicies,
+    tokenRecommendations,
+    observabilitySuiteFeed,
+    knowledgeGraphFeed,
+    cicdCatalog,
+    cicdStatus,
+  ] = await Promise.all([
+    fetchIdentityProvidersFeed(activeProjectId),
+    fetchOncallSreStatus(activeProjectId),
+    fetchSecurityScanners(),
+    fetchLatestSecurityScan(activeProjectId),
+    fetchReleaseStatus(activeProjectId),
+    fetchReleaseBoard(activeProjectId),
+    fetchReleases(activeProjectId),
+    fetchWorkerAutoscalingStatus(activeProjectId),
+    fetchWorkerAutoscalingHistory(activeProjectId),
+    fetchTokenScorecard(activeProjectId),
+    fetchTokenConsumption(activeProjectId),
+    fetchTokenPolicies(activeProjectId),
+    fetchTokenRecommendations(activeProjectId),
+    fetchObservabilitySuiteFeed(activeProjectId, obsHost),
+    fetchKnowledgeGraphFeed(activeProjectId),
+    fetchCICDCatalog(),
+    fetchCICDStatus(activeProjectId),
+  ]);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -803,6 +874,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <AssuranceCenter feed={assuranceFeed} />
         </section>
 
+        <section className="panel-stack" data-area="assurance" aria-label="Security scanning">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Security scan</span>
+              <h2>OSS vulnerability scanning with a governed go/no-go gate.</h2>
+            </div>
+            <p className="status-meta">
+              Semgrep · Trivy · OSV · Gitleaks — receipted runs for project{" "}
+              {activeProjectId}.
+            </p>
+          </div>
+          <SecurityScanCard
+            projectId={activeProjectId}
+            initialRun={latestSecurityScan}
+            scanners={securityScanners}
+          />
+        </section>
+
         <RepoActivityPanel repos={repoActivity} />
 
         <GitHubOperations
@@ -839,6 +928,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <WorkOrchestration
             feed={workOrchestrationFeed}
             actor={activeActorId}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="portfolio" aria-label="Release planning">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Release planning</span>
+              <h2>Built / building / planned / blocked — release board and plans.</h2>
+            </div>
+            <p className="status-meta">
+              Source: `/v1/release-planning/*` for project {activeProjectId}.
+            </p>
+          </div>
+          <ReleasePlanningPanel
+            snapshot={releaseStatus}
+            board={releaseBoard}
+            plans={releasePlans}
           />
         </section>
 
@@ -1647,6 +1753,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <TokenEfficiencyPanel
+          scorecard={tokenScorecard}
+          consumption={tokenConsumption}
+          policies={tokenPolicies}
+          recommendations={tokenRecommendations}
+        />
+
         <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
           <div className="section-head">
             <div>
@@ -1781,6 +1894,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           />
 
           <InfraFabricPanel feed={infraFabric} />
+
+          <WorkerAutoscalingPanel
+            feed={workerAutoscalingStatus}
+            history={workerAutoscalingHistory}
+          />
 
           {providerOps.apiReachable ? (
             <>
@@ -3917,6 +4035,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
+        </section>
+
+        <section className="panel-stack" data-area="enterprise" aria-label="Identity providers">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Identity providers</span>
+              <h2>Workforce and developer IdP packs — OIDC, SAML, SCIM blueprints.</h2>
+            </div>
+            <p className="status-meta">
+              Catalog and dry-run setup for project {activeProjectId}. Secrets stay out of
+              the catalog responses.
+            </p>
+          </div>
+          <IdentityProvidersCatalogView
+            feed={identityProvidersFeed}
+            projectId={activeProjectId}
+          />
         </section>
 
         <section className="panel-stack" data-area="enterprise" aria-label="SOC2 evidence">
@@ -6689,6 +6824,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             deployments={recentDeployments} />
         </section>
 
+        <section className="panel-stack" data-area="delivery" aria-label="Pipeline generators">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Pipeline generators</span>
+              <h2>Generate and validate CI config for GitHub Actions and peers.</h2>
+            </div>
+            <p className="status-meta">
+              Source: `/v1/cicd/*` for project {activeProjectId}.
+            </p>
+          </div>
+          <CICDPipelinesPanel
+            projectId={activeProjectId}
+            catalog={cicdCatalog}
+            status={cicdStatus}
+            initialRuns={cicdStatus.recent_runs ?? []}
+          />
+        </section>
+
         {/* Monitoring is its own area: "did it ship" and "is it working" are different
             questions asked at different times, and one page answering both buries whichever
             you did not come for. */}
@@ -6705,6 +6858,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <MonitoringArea health={deploymentHealth} observability={observability}
                           hostTargetId={obsHost} />
+        </section>
+
+        <section className="panel-stack" data-area="monitoring" aria-label="Observability suite">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Observability suite</span>
+              <h2>Recommended OSS stack, gaps, and source health checks.</h2>
+            </div>
+            <p className="status-meta">
+              Metrics · logs · traces · visualization — project {activeProjectId}.
+            </p>
+          </div>
+          <ObservabilitySuitePanel feed={observabilitySuiteFeed} />
         </section>
 
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
@@ -6743,6 +6909,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <ComponentsScreen />
         </section>
 
+        <section className="panel-stack" data-area="reliability" aria-label="On-call SRE">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">On-call</span>
+              <h2>Schedules, escalation policies, and open pages for this project.</h2>
+            </div>
+            <p className="status-meta">
+              Notify adapters default to dry-run until a token or webhook is configured.
+            </p>
+          </div>
+          <OncallSreHome status={oncallSreStatus} />
+        </section>
+
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
           <div className="section-head">
             <div>
@@ -6751,6 +6930,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ReliabilityHome feed={reliabilityFeed} />
+        </section>
+
+        <section className="panel-stack" data-area="reliability" aria-label="Knowledge graph">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Knowledge graph</span>
+              <h2>Service topology, known causes, and RCA context for reliability.</h2>
+            </div>
+            <p className="status-meta">
+              Seed from infra fabric; query known causes per service.
+            </p>
+          </div>
+          <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
         </section>
 
         <section className="panel-stack" data-area="discovery" aria-label="Discovery">
