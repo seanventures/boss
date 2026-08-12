@@ -12,6 +12,7 @@ PROJECT_ID = "boss-dogfood"
 
 class FakeGitHubAdapter:
     calls = 0
+    list_calls = 0
 
     def __init__(self, *_args, **_kwargs) -> None:
         pass
@@ -34,6 +35,33 @@ class FakeGitHubAdapter:
                 "admin": False,
             },
         }
+
+    def list_accessible_repositories(self, *, per_page: int = 50, max_pages: int = 2):
+        type(self).list_calls += 1
+        return [
+            {
+                "full_name": "seanheiney/boss",
+                "owner": "seanheiney",
+                "name": "boss",
+                "repository_id": 4242,
+                "default_branch": "main",
+                "visibility": "private",
+                "archived": False,
+                "permissions": {"pull": True, "push": True, "triage": True},
+                "html_url": "https://github.com/seanheiney/boss",
+            },
+            {
+                "full_name": "seanheiney/other",
+                "owner": "seanheiney",
+                "name": "other",
+                "repository_id": 99,
+                "default_branch": "main",
+                "visibility": "private",
+                "archived": False,
+                "permissions": {"pull": True},
+                "html_url": "https://github.com/seanheiney/other",
+            },
+        ]
 
 
 def _create_secret_ref(
@@ -343,6 +371,74 @@ def test_github_app_connection_requires_non_secret_installation_identity(client)
     assert payload["app_id"] == "12345"
     assert payload["installation_id"] == "67890"
     assert "credential_ref" not in payload
+
+
+def test_github_easy_connect_links_repo_and_lists_accessible_repositories(
+    client, monkeypatch
+):
+    monkeypatch.setenv("BOSS_EASY_GITHUB_TOKEN", "github-easy-connect-secret")
+    FakeGitHubAdapter.calls = 0
+    FakeGitHubAdapter.list_calls = 0
+    monkeypatch.setattr(
+        api_main.github_connections,
+        "adapter_factory",
+        FakeGitHubAdapter,
+    )
+
+    response = client.post(
+        "/v1/github/easy-connect",
+        json={
+            "project_id": PROJECT_ID,
+            "connection_label": "easy-project-github",
+            "auth_method": "personal_access_token",
+            "env_credential_key": "boss_easy_github_token",
+            "repository": "seanheiney/boss",
+            "role": "primary",
+            "test_after_link": True,
+            "actor": "ceo",
+        },
+    )
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["credential_ref"] == "env:BOSS_EASY_GITHUB_TOKEN"
+    assert payload["connection"]["status"] == "active"
+    assert payload["connection"]["auth_method"] == "personal_access_token"
+    assert "credential_ref" not in payload["connection"]
+    assert payload["repository_binding"]["full_name"] == "seanheiney/boss"
+    assert payload["repository_binding"]["role"] == "primary"
+    assert payload["test"]["status"] == "passed"
+    assert payload["test"]["receipt_id"]
+    assert FakeGitHubAdapter.calls == 1
+    assert "github-easy-connect-secret" not in json.dumps(payload)
+
+    listed = client.get(
+        f"/v1/github/connections/{payload['connection']['id']}/repositories",
+        params={"project_id": PROJECT_ID, "limit": 20},
+    )
+    assert listed.status_code == 200, listed.text
+    repos = listed.json()
+    assert repos["connection_id"] == payload["connection"]["id"]
+    assert {item["full_name"] for item in repos["items"]} == {
+        "seanheiney/boss",
+        "seanheiney/other",
+    }
+    assert FakeGitHubAdapter.list_calls == 1
+
+    # Reusing the same env key should not fail SecretRef uniqueness when creating
+    # another labeled connection for a second repository link path is blocked by
+    # primary uniqueness — connect without repository succeeds with unique label.
+    second = client.post(
+        "/v1/github/easy-connect",
+        json={
+            "project_id": PROJECT_ID,
+            "connection_label": "easy-project-github-secondary",
+            "env_credential_key": "BOSS_EASY_GITHUB_TOKEN",
+            "actor": "ceo",
+        },
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["repository_binding"] is None
+    assert second.json()["test"] is None
 
 
 def test_github_repository_binding_is_project_scoped_and_primary_is_unique(client):

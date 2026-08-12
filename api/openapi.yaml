@@ -3368,6 +3368,53 @@ paths:
       responses:
         '204': { description: SecretRef revoked }
         '404': { description: SecretRef not found }
+  /v1/github/easy-connect:
+    post:
+      summary: Easy project GitHub connect (env SecretRef + connection + optional repo link)
+      description: >
+        One-shot setup for linking GitHub to a BOSS project. Creates an env SecretRef
+        for the named credential environment variable (never raw tokens), registers a
+        project GitHub connection (PAT or GitHub App), optionally binds owner/repo, and
+        can run a receipted connection test. Use Mission Control "Connect GitHub" form
+        or this API for self-managed / community BYOK dogfood.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                connection_label: { type: string, default: Project GitHub }
+                auth_method:
+                  type: string
+                  enum: [github_app, personal_access_token]
+                  default: personal_access_token
+                env_credential_key:
+                  type: string
+                  default: BOSS_GITHUB_TOKEN
+                  description: Runtime environment variable name holding the PAT or App private key
+                app_id: { type: string }
+                installation_id: { type: string }
+                api_base_url: { type: string, default: https://api.github.com }
+                required_permissions:
+                  type: array
+                  items: { type: string }
+                repository:
+                  type: string
+                  description: Optional owner/repo to bind to the project
+                role:
+                  type: string
+                  enum: [primary, source, upstream, mirror]
+                  default: primary
+                test_after_link: { type: boolean, default: true }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201': { description: Connection created; optional binding and test included }
+        '403': { description: Actor lacks github_manage permission }
+        '422': { description: Invalid env key, SecretRef, auth method, or repository }
   /v1/github/connections:
     get:
       summary: List project-scoped GitHub connections
@@ -3432,6 +3479,32 @@ paths:
       responses:
         '200': { description: GitHub connection posture without credential pointer or secret material }
         '404': { description: GitHub connection not found in the project }
+  /v1/github/connections/{connection_id}/repositories:
+    get:
+      summary: List repositories visible to a project GitHub connection
+      description: >
+        PAT-backed connections only. Returns owner/repo candidates for linking to the
+        project without requiring operators to type names from memory. Does not return
+        credential material.
+      parameters:
+        - name: connection_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200': { description: Accessible repository list }
+        '404': { description: Connection not found }
+        '409': { description: Connection disabled or revoked }
+        '422': { description: Unsupported auth method (e.g. GitHub App without list support) }
+        '502': { description: GitHub API call failed }
   /v1/github/connections/{connection_id}/enable:
     post:
       summary: Re-enable a disabled GitHub connection for required retesting

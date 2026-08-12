@@ -267,12 +267,16 @@ from .schemas import (
     GitHubCodeSyncRunSummary,
     GitHubConflictSetListResponse,
     GitHubConflictSetSummary,
+    GitHubAccessibleRepository,
+    GitHubAccessibleRepositoryListResponse,
     GitHubConnectionCreateRequest,
     GitHubConnectionLifecycleRequest,
     GitHubConnectionListResponse,
     GitHubConnectionSummary,
     GitHubConnectionTestRequest,
     GitHubConnectionTestResponse,
+    GitHubEasyConnectRequest,
+    GitHubEasyConnectResponse,
     GitHubMergeAuthorizationApplyRequest,
     GitHubMergeAuthorizationApproveRequest,
     GitHubMergeAuthorizationCreateRequest,
@@ -11079,6 +11083,108 @@ def create_github_connection(
         except (SecretRefNotFoundError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return GitHubConnectionSummary(**item)
+
+
+@app.post(
+    "/v1/github/easy-connect",
+    response_model=GitHubEasyConnectResponse,
+    status_code=201,
+)
+def easy_connect_github_to_project(
+    payload: GitHubEasyConnectRequest,
+) -> GitHubEasyConnectResponse:
+    """Easy project GitHub auth: env SecretRef + connection + optional repo link/test.
+
+    Operators never paste raw tokens into BOSS. Place a PAT or App private key in
+    the API runtime environment, then call this endpoint (or the Mission Control
+    form) with the env var name and optional owner/repo to bind to the project.
+    """
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "github_manage",
+        )
+        try:
+            result = github_connections.easy_connect(
+                connection,
+                project_id=payload.project_id,
+                connection_label=payload.connection_label,
+                auth_method=payload.auth_method,
+                env_credential_key=payload.env_credential_key,
+                app_id=payload.app_id,
+                installation_id=payload.installation_id,
+                api_base_url=payload.api_base_url,
+                required_permissions=payload.required_permissions,
+                repository=payload.repository,
+                role=payload.role,
+                test_after_link=payload.test_after_link,
+                metadata=payload.metadata,
+                actor=payload.actor,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            GitHubConnectionStateError,
+            SecretRefNotFoundError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        test_payload = result.get("test")
+        return GitHubEasyConnectResponse(
+            connection=GitHubConnectionSummary(**result["connection"]),
+            repository_binding=(
+                GitHubRepositoryBindingSummary(**result["repository_binding"])
+                if result.get("repository_binding")
+                else None
+            ),
+            test=(
+                GitHubConnectionTestResponse(**test_payload)
+                if test_payload
+                else None
+            ),
+            credential_ref=result["credential_ref"],
+        )
+
+
+@app.get(
+    "/v1/github/connections/{connection_id}/repositories",
+    response_model=GitHubAccessibleRepositoryListResponse,
+)
+def list_github_connection_repositories(
+    connection_id: str,
+    project_id: str,
+    limit: int = 50,
+) -> GitHubAccessibleRepositoryListResponse:
+    """List repositories visible to a PAT-backed project GitHub connection."""
+    with begin(engine) as connection:
+        try:
+            items = github_connections.list_accessible_repositories(
+                connection,
+                project_id=project_id,
+                connection_id=connection_id,
+                limit=limit,
+            )
+        except GitHubConnectionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except GitHubConnectionStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception as error:  # outbound GitHub failures must not 500 silently
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Failed to list repositories from GitHub: "
+                    f"{error.__class__.__name__}"
+                ),
+            ) from error
+        return GitHubAccessibleRepositoryListResponse(
+            project_id=project_id,
+            connection_id=connection_id,
+            items=[GitHubAccessibleRepository(**item) for item in items],
+        )
 
 
 @app.get(

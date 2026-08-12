@@ -9,6 +9,7 @@ import {
   createGitHubBranchPolicyAction,
   createGitHubConnectionAction,
   createGitHubRepositoryBindingAction,
+  easyConnectGitHubAction,
   enqueueGitHubMergeAction,
   planGitHubCodeSyncAction,
   repairGitHubReconciliationAction,
@@ -310,6 +311,104 @@ export function GitHubOperations({
         ) : null}
       </div>
 
+      {canManage && (feed.connections.length === 0 || feed.bindings.length === 0) ? (
+        <div className="ghx-easy-connect" data-testid="github-easy-connect">
+          <div className="ghx-easy-connect-copy">
+            <h3>
+              {feed.connections.length === 0
+                ? "Connect GitHub to this project"
+                : "Link a repository to this project"}
+            </h3>
+            <p>
+              Easy auth uses a SecretRef to an environment variable on the BOSS
+              API host — never paste a raw token into Mission Control. Place a
+              fine-grained PAT (or GitHub App private key) in the runtime env,
+              then connect and bind <span className="mono">owner/repo</span>.
+            </p>
+          </div>
+          {feed.connections.length === 0 ? (
+            <form action={easyConnectGitHubAction} className="ghx-admin-form ghx-easy-form">
+              <HiddenScope projectId={feed.projectId} actor={actor} />
+              <label>
+                Connection label
+                <input name="connection_label" defaultValue="Project GitHub" required />
+              </label>
+              <label>
+                Authentication
+                <select name="auth_method" defaultValue="personal_access_token">
+                  <option value="personal_access_token">Fine-grained PAT (recommended)</option>
+                  <option value="github_app">GitHub App install</option>
+                </select>
+              </label>
+              <label>
+                Env credential name
+                <input
+                  name="env_credential_key"
+                  defaultValue="BOSS_GITHUB_TOKEN"
+                  placeholder="BOSS_GITHUB_TOKEN"
+                  required
+                />
+              </label>
+              <label>
+                Primary repository (optional)
+                <input name="repository" placeholder="owner/repository" />
+              </label>
+              <label>
+                Role
+                <select name="role" defaultValue="primary">
+                  <option value="primary">Primary</option>
+                  <option value="source">Source</option>
+                  <option value="upstream">Upstream</option>
+                  <option value="mirror">Mirror</option>
+                </select>
+              </label>
+              <label>
+                App ID <span className="ghx-muted">(App only)</span>
+                <input name="app_id" placeholder="optional" />
+              </label>
+              <label>
+                Installation ID <span className="ghx-muted">(App only)</span>
+                <input name="installation_id" placeholder="optional" />
+              </label>
+              <input type="hidden" name="test_after_link" value="true" />
+              <SubmitButton className="button" type="submit">
+                Connect GitHub
+              </SubmitButton>
+            </form>
+          ) : (
+            <form action={createGitHubRepositoryBindingAction} className="ghx-admin-form ghx-easy-form">
+              <HiddenScope projectId={feed.projectId} actor={actor} />
+              <label>
+                Connection
+                <select name="connection_id" required defaultValue={feed.connections[0]?.id}>
+                  {feed.connections.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.connection_label} · {item.status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Repository
+                <input name="repository" placeholder="owner/repository" required />
+              </label>
+              <label>
+                Role
+                <select name="role" defaultValue={feed.bindings.some((b) => b.role === "primary") ? "source" : "primary"}>
+                  <option value="primary">Primary</option>
+                  <option value="source">Source</option>
+                  <option value="upstream">Upstream</option>
+                  <option value="mirror">Mirror</option>
+                </select>
+              </label>
+              <SubmitButton className="button" type="submit">
+                Link repository to project
+              </SubmitButton>
+            </form>
+          )}
+        </div>
+      ) : null}
+
       {!canManage ? (
         <p className="ghx-permission">
           Read-only view. Actor <span className="mono">{actor}</span> does not
@@ -589,29 +688,52 @@ export function GitHubOperations({
       </div>
 
       {canManage ? (
-        <details className="ghx-admin">
+        <details className="ghx-admin" open={feed.connections.length === 0}>
           <summary>Connection, repository, and policy setup</summary>
           <div className="ghx-admin-grid">
-            <form action={createGitHubConnectionAction} className="ghx-admin-form">
+            <form action={easyConnectGitHubAction} className="ghx-admin-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
-              <h3>Connect GitHub</h3>
-              <label>Label<input name="connection_label" placeholder="Production GitHub App" required /></label>
+              <h3>Easy connect (env auth)</h3>
+              <p className="ghx-muted">
+                Creates SecretRef <span className="mono">env:&lt;name&gt;</span>, project
+                connection, and optional primary repo in one step.
+              </p>
+              <label>Label<input name="connection_label" defaultValue="Project GitHub" required /></label>
               <label>Authentication
-                <select name="auth_method" defaultValue="github_app">
+                <select name="auth_method" defaultValue="personal_access_token">
+                  <option value="personal_access_token">Fine-grained PAT</option>
                   <option value="github_app">GitHub App</option>
-                  <option value="personal_access_token">Fine-grained token</option>
                 </select>
               </label>
-              <label>Credential reference<input name="credential_ref" placeholder="secret://github/app-key" required /></label>
+              <label>Env credential name<input name="env_credential_key" defaultValue="BOSS_GITHUB_TOKEN" required /></label>
+              <label>Repository<input name="repository" placeholder="owner/repository" /></label>
+              <label>App ID<input name="app_id" placeholder="optional for App" /></label>
+              <label>Installation ID<input name="installation_id" placeholder="optional for App" /></label>
+              <input type="hidden" name="role" value="primary" />
+              <input type="hidden" name="test_after_link" value="true" />
+              <SubmitButton className="button" type="submit">Easy connect</SubmitButton>
+            </form>
+
+            <form action={createGitHubConnectionAction} className="ghx-admin-form">
+              <HiddenScope projectId={feed.projectId} actor={actor} />
+              <h3>Advanced connection</h3>
+              <label>Label<input name="connection_label" placeholder="Production GitHub App" required /></label>
+              <label>Authentication
+                <select name="auth_method" defaultValue="personal_access_token">
+                  <option value="personal_access_token">Fine-grained token</option>
+                  <option value="github_app">GitHub App</option>
+                </select>
+              </label>
+              <label>Credential reference<input name="credential_ref" placeholder="env:BOSS_GITHUB_TOKEN" required /></label>
               <label>App ID<input name="app_id" placeholder="optional" /></label>
               <label>Installation ID<input name="installation_id" placeholder="optional" /></label>
-              <label>Required permissions<textarea name="required_permissions" defaultValue={"contents:read\npull_requests:write\nchecks:read"} /></label>
+              <label>Required permissions<textarea name="required_permissions" defaultValue={"pull\npush\ntriage"} /></label>
               <SubmitButton className="button" type="submit">Create connection</SubmitButton>
             </form>
 
             <form action={createGitHubRepositoryBindingAction} className="ghx-admin-form">
               <HiddenScope projectId={feed.projectId} actor={actor} />
-              <h3>Bind repository</h3>
+              <h3>Link repository to project</h3>
               <label>Connection
                 <select name="connection_id" required>
                   <option value="">Choose connection</option>

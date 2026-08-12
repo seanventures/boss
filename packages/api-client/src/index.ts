@@ -3062,6 +3062,47 @@ export type GitHubConnectionCreateRequest = {
   actor?: string;
 };
 
+export type GitHubEasyConnectRequest = {
+  project_id: string;
+  connection_label?: string;
+  auth_method?: "github_app" | "personal_access_token";
+  env_credential_key?: string;
+  app_id?: string;
+  installation_id?: string;
+  api_base_url?: string;
+  required_permissions?: string[];
+  repository?: string;
+  role?: "primary" | "source" | "upstream" | "mirror";
+  test_after_link?: boolean;
+  metadata?: Record<string, unknown>;
+  actor?: string;
+};
+
+export type GitHubEasyConnectResponse = {
+  connection: GitHubConnectionSummary;
+  repository_binding?: GitHubRepositoryBindingSummary | null;
+  test?: GitHubConnectionTestResponse | null;
+  credential_ref: string;
+};
+
+export type GitHubAccessibleRepository = {
+  full_name: string;
+  owner: string;
+  name: string;
+  repository_id?: number | null;
+  default_branch?: string | null;
+  visibility?: string | null;
+  archived?: boolean;
+  permissions?: Record<string, boolean>;
+  html_url?: string | null;
+};
+
+export type GitHubAccessibleRepositoryListResponse = {
+  project_id: string;
+  connection_id: string;
+  items: GitHubAccessibleRepository[];
+};
+
 export type GitHubConnectionLifecycleRequest = {
   project_id: string;
   actor?: string;
@@ -6831,6 +6872,24 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST",
         "/v1/github/connections",
         { body: payload },
+      );
+    },
+    easyConnectGitHub(payload: GitHubEasyConnectRequest) {
+      return request<GitHubEasyConnectResponse>(
+        "POST",
+        "/v1/github/easy-connect",
+        { body: payload },
+      );
+    },
+    listGitHubAccessibleRepositories(
+      projectId: string,
+      connectionId: string,
+      limit = 50,
+    ) {
+      return request<GitHubAccessibleRepositoryListResponse>(
+        "GET",
+        `/v1/github/connections/${encodeURIComponent(connectionId)}/repositories`,
+        { query: { project_id: projectId, limit } },
       );
     },
     getGitHubConnection(projectId: string, connectionId: string) {

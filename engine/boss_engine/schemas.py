@@ -4581,6 +4581,73 @@ class GitHubConnectionTestResponse(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
 
 
+class GitHubEasyConnectRequest(BaseModel):
+    """One-shot project GitHub connect using env SecretRef + optional repo link."""
+
+    project_id: str
+    connection_label: str = "Project GitHub"
+    auth_method: Literal["github_app", "personal_access_token"] = (
+        "personal_access_token"
+    )
+    env_credential_key: str = "BOSS_GITHUB_TOKEN"
+    app_id: Optional[str] = None
+    installation_id: Optional[str] = None
+    api_base_url: str = "https://api.github.com"
+    required_permissions: list[str] = Field(
+        default_factory=lambda: ["pull", "push", "triage"]
+    )
+    repository: Optional[str] = None
+    role: Literal["primary", "source", "upstream", "mirror"] = "primary"
+    test_after_link: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_github_easy_connect(self) -> "GitHubEasyConnectRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.connection_label = _require_text(
+            self.connection_label, "connection_label"
+        )
+        self.env_credential_key = _require_text(
+            self.env_credential_key, "env_credential_key"
+        ).upper()
+        self.api_base_url = _require_text(self.api_base_url, "api_base_url")
+        self.required_permissions = _require_non_empty_string_list(
+            self.required_permissions, "required_permissions"
+        )
+        if self.repository is not None and self.repository.strip():
+            self.repository = _require_text(self.repository, "repository")
+        else:
+            self.repository = None
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class GitHubEasyConnectResponse(BaseModel):
+    connection: GitHubConnectionSummary
+    repository_binding: Optional[GitHubRepositoryBindingSummary] = None
+    test: Optional[GitHubConnectionTestResponse] = None
+    credential_ref: str
+
+
+class GitHubAccessibleRepository(BaseModel):
+    full_name: str
+    owner: str
+    name: str
+    repository_id: Optional[int] = None
+    default_branch: Optional[str] = None
+    visibility: Optional[str] = None
+    archived: bool = False
+    permissions: dict[str, bool] = Field(default_factory=dict)
+    html_url: Optional[str] = None
+
+
+class GitHubAccessibleRepositoryListResponse(BaseModel):
+    project_id: str
+    connection_id: str
+    items: list[GitHubAccessibleRepository]
+
+
 class GitHubBranchPolicySummary(BaseModel):
     id: str
     project_id: str

@@ -707,6 +707,212 @@ class GitHubConnectionService:
                 "detail": {"status": "failed", "message": safe_error["message"]},
             }
 
+    def ensure_env_credential_ref(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        env_key: str,
+        auth_method: str,
+        actor: str,
+    ) -> str:
+        """Ensure an env SecretRef exists and return credential_ref (env:KEY).
+
+        Easy project link never accepts raw tokens — only environment names.
+        """
+        key = self._required_text(env_key, "env_credential_key").upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            raise ValueError(
+                "env_credential_key must be an environment variable name "
+                "(letters, digits, underscore)."
+            )
+        method = auth_method.strip().lower()
+        secret_kind = (
+            "private_key" if method == "github_app" else "api_token"
+        )
+        credential_ref = f"env:{key}"
+        existing = self.secret_refs.list_secret_refs(
+            connection, project_id, provider="github", status="active", limit=200
+        )
+        for item in existing:
+            if item.get("ref_kind") == "env" and item.get("ref_key") == key:
+                if item.get("secret_kind") not in {
+                    secret_kind,
+                    "api_token",
+                    "private_key",
+                    "client_secret",
+                    "access_key",
+                    "session",
+                }:
+                    raise ValueError(
+                        f"SecretRef {credential_ref} exists with incompatible secret_kind."
+                    )
+                return credential_ref
+        # Also accept any provider=None github-ish active env ref
+        any_refs = self.secret_refs.list_secret_refs(
+            connection, project_id, status="active", limit=200
+        )
+        for item in any_refs:
+            if item.get("ref_kind") == "env" and item.get("ref_key") == key:
+                if item.get("provider") not in {None, "github"}:
+                    raise ValueError(
+                        f"SecretRef {credential_ref} already belongs to provider "
+                        f"{item.get('provider')}."
+                    )
+                return credential_ref
+        self.secret_refs.create_secret_ref(
+            connection,
+            project_id=project_id,
+            ref_kind="env",
+            ref_key=key,
+            provider="github",
+            status="active",
+            metadata={"purpose": "github_project_link"},
+            actor=actor,
+            secret_kind=secret_kind,
+        )
+        return credential_ref
+
+    def easy_connect(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        connection_label: str,
+        auth_method: str,
+        env_credential_key: str,
+        app_id: Optional[str],
+        installation_id: Optional[str],
+        api_base_url: str,
+        required_permissions: list[str],
+        repository: Optional[str],
+        role: str,
+        test_after_link: bool,
+        metadata: dict[str, Any],
+        actor: str,
+    ) -> dict[str, Any]:
+        """One-shot project GitHub connect: SecretRef → connection → optional repo bind/test.
+
+        Designed for Mission Control "easy auth": operator places a PAT or App private
+        key in the runtime environment, names the env var, and links owner/repo.
+        """
+        credential_ref = self.ensure_env_credential_ref(
+            connection,
+            project_id=project_id,
+            env_key=env_credential_key,
+            auth_method=auth_method,
+            actor=actor,
+        )
+        created_connection = self.create_connection(
+            connection,
+            project_id=project_id,
+            connection_label=connection_label,
+            auth_method=auth_method,
+            credential_ref=credential_ref,
+            app_id=app_id,
+            installation_id=installation_id,
+            api_base_url=api_base_url or "https://api.github.com",
+            required_permissions=required_permissions
+            or ["pull", "push", "triage"],
+            metadata={
+                **(metadata or {}),
+                "setup": "easy_connect",
+                "env_credential_key": env_credential_key.strip().upper()
+                if env_credential_key
+                else None,
+            },
+            actor=actor,
+        )
+        binding = None
+        test_result = None
+        if repository and repository.strip():
+            binding = self.create_repository_binding(
+                connection,
+                project_id=project_id,
+                connection_id=created_connection["id"],
+                repository=repository,
+                role=role or "primary",
+                default_branch=None,
+                metadata={"setup": "easy_connect"},
+                actor=actor,
+            )
+            if test_after_link:
+                test_result = self.test_connection(
+                    connection,
+                    project_id=project_id,
+                    connection_id=created_connection["id"],
+                    binding_id=binding["id"],
+                    dedupe_key=(
+                        f"github-easy-connect:{project_id}:"
+                        f"{created_connection['id']}:{binding['id']}"
+                    ),
+                    actor=actor,
+                )
+                created_connection = test_result.get("connection") or self.get_connection(
+                    connection, project_id, created_connection["id"]
+                )
+                binding = test_result.get("repository_binding") or binding
+        emit_event(
+            connection,
+            project_id,
+            "github.easy_connect_completed",
+            actor,
+            "github_connection",
+            created_connection["id"],
+            {
+                "auth_method": created_connection["auth_method"],
+                "repository": (binding or {}).get("full_name"),
+                "tested": bool(test_result),
+                "test_status": (test_result or {}).get("status"),
+            },
+        )
+        return {
+            "connection": created_connection,
+            "repository_binding": binding,
+            "test": test_result,
+            "credential_ref": credential_ref,
+        }
+
+    def list_accessible_repositories(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        connection_id: str,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List GitHub repositories visible to a project connection (for easy linking)."""
+        github_connection = self.get_connection(
+            connection, project_id, connection_id
+        )
+        if github_connection["status"] in {"disabled", "revoked"}:
+            raise GitHubConnectionStateError(
+                f"GitHub connection is {github_connection['status']}."
+            )
+        if github_connection["auth_method"] != "personal_access_token":
+            raise ValueError(
+                "Repository listing is available for personal_access_token "
+                "connections. For GitHub App installs, bind repositories by "
+                "owner/name from the installation."
+            )
+        page_limit = max(1, min(int(limit), 100))
+        # Binding-less adapter: use a placeholder repo identity; list uses /user/repos.
+        placeholder = {
+            "owner": "_",
+            "name": "_",
+            "full_name": "_/_",
+        }
+        adapter = self._make_adapter(
+            connection,
+            project_id=project_id,
+            github_connection=github_connection,
+            binding=placeholder,
+        )
+        return adapter.list_accessible_repositories(
+            per_page=min(page_limit, 50),
+            max_pages=max(1, (page_limit + 49) // 50),
+        )[:page_limit]
+
     def adapter_for_binding(
         self,
         connection: Connection,
