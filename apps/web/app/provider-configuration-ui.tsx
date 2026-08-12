@@ -1346,7 +1346,11 @@ function HealthView({ feed }: { feed: ProviderOpsFeed }) {
           {feed.workerPools.length === 0 && feed.scalePlans.length === 0 ? (
             <div className="provider-empty compact">
               <Gauge size={22} aria-hidden />
-              <p>No worker pools or scale plans are recorded.</p>
+              <p>
+                {feed.paidWriteAutomationAvailable === false
+                  ? "Worker pools and scale automation are Cloud/Enterprise write-automation features. Community keeps connections and inventory; fleet scale stays on paid editions."
+                  : "No worker pools or scale plans are recorded."}
+              </p>
             </div>
           ) : null}
         </div>
@@ -1534,14 +1538,35 @@ export function ProviderConfigurationSuite({
     );
   }
 
+  const editionLabel = feed.editionId
+    ? titleCase(feed.editionId)
+    : "this";
+  const hasEditionLimits = (feed.editionLimitations?.length ?? 0) > 0;
+  const hasPartialFailures = feed.partialFailures.length > 0;
+
   return (
     <div className="provider-suite" id="provider-connections">
-      {feed.partialFailures.length > 0 ? (
+      {hasEditionLimits ? (
+        <div className="provider-notice" role="status">
+          <Lock size={17} aria-hidden />
+          <span>
+            Paid write-automation unavailable on {editionLabel} edition
+            {feed.editionLimitations.length === 1
+              ? `: ${feed.editionLimitations[0]}`
+              : feed.editionLimitations.length > 1
+                ? `: ${feed.editionLimitations.join("; ")}`
+                : ""}
+            . Provider catalog, connections, and inventory remain available —
+            this is not a control-plane outage.
+          </span>
+        </div>
+      ) : null}
+      {hasPartialFailures ? (
         <div className="provider-notice warn" role="status">
           <Warning size={17} aria-hidden />
           <span>
-            Partial data: {feed.partialFailures.join("; ")}. Available sections
-            remain operational.
+            Partial data (secondary APIs): {feed.partialFailures.join("; ")}.
+            Catalog and connections remain operational where loaded.
           </span>
         </div>
       ) : null}

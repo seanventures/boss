@@ -318,11 +318,48 @@ export type ProviderOpsSummary = {
   activeDeploymentRuns: number;
 };
 
+/**
+ * Paid ProviderOps write-automation surface (enterprise router prefixes).
+ * Community mounts catalog/accounts/inventory; ChangeSets, worker-pools, and
+ * autoscaler remain Cloud/Enterprise. HTTP 404 on those routes is an edition
+ * limitation, not a control-plane outage.
+ */
+export const PAID_WRITE_AUTOMATION_LABELS = [
+  "ChangeSets",
+  "Worker pools",
+  "Scale plans",
+] as const;
+
+const PAID_EDITIONS = new Set([
+  "cloud",
+  "enterprise",
+  "enterprise_cloud",
+  "enterprise_self_hosted",
+]);
+
+export function isPaidWriteAutomationEdition(editionId?: string | null): boolean {
+  return PAID_EDITIONS.has(String(editionId ?? "").trim().toLowerCase());
+}
+
+export function isPaidWriteAutomationLabel(label: string): boolean {
+  return (PAID_WRITE_AUTOMATION_LABELS as readonly string[]).includes(label);
+}
+
 export type ProviderOpsFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
+  /** Unexpected secondary failures (not edition-gated paid routes). */
   partialFailures: string[];
+  /**
+   * Soft SKU limits — paid write-automation unavailable on this edition.
+   * These must never set apiReachable=false when catalog/accounts work.
+   */
+  editionLimitations: string[];
+  /** Resolved from GET /v1/edition when available. */
+  editionId?: string;
+  /** False on community (and unknown unpaid) editions. */
+  paidWriteAutomationAvailable: boolean;
   refreshedAt: string;
   providerDefinitions: ProviderDefinitionFeedItem[];
   providerAccounts: ProviderAccountFeedItem[];
@@ -675,7 +712,14 @@ function mapScalePlan(payload: ScalePlanSummary): ScalePlanFeedItem {
 function summarizeProviderOps(
   feed: Omit<
     ProviderOpsFeed,
-    "summary" | "apiReachable" | "blockedReason" | "partialFailures" | "refreshedAt"
+    | "summary"
+    | "apiReachable"
+    | "blockedReason"
+    | "partialFailures"
+    | "editionLimitations"
+    | "editionId"
+    | "paidWriteAutomationAvailable"
+    | "refreshedAt"
   >,
 ): ProviderOpsSummary {
   return {
@@ -718,6 +762,9 @@ function summarizeProviderOps(
   };
 }
 
+const COMMUNITY_PAID_LIMITATION_COPY =
+  "ChangeSets, worker pools, and scale automation require Cloud/Enterprise";
+
 export function emptyProviderOpsFeed(
   reason?: string,
   projectId = PROJECT_ID,
@@ -728,6 +775,8 @@ export function emptyProviderOpsFeed(
     apiReachable: false,
     blockedReason: reason,
     partialFailures: [],
+    editionLimitations: [],
+    paidWriteAutomationAvailable: false,
     refreshedAt: new Date().toISOString(),
     providerDefinitions: [],
     providerAccounts: [],
@@ -761,17 +810,44 @@ export function emptyProviderOpsFeed(
   };
 }
 
+function failureReason(error: unknown): string {
+  if (error instanceof BossApiError) {
+    return `HTTP ${error.status}`;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return "unknown error";
+}
+
+function isNotFoundFailure(error: unknown): boolean {
+  return error instanceof BossApiError && error.status === 404;
+}
+
 export async function fetchProviderOpsFeed(
   projectId = PROJECT_ID,
 ): Promise<ProviderOpsFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
-  const results = await Promise.allSettled([
+
+  // Best-effort edition probe: on community, skip paid write-automation calls so
+  // System Configuration does not look like a 404 outage when catalog/accounts work.
+  let editionId: string | undefined;
+  let paidWriteAutomationAvailable = true;
+  try {
+    const edition = await client.getEdition(resolvedProjectId);
+    editionId = String(edition.edition_id ?? "").trim().toLowerCase() || undefined;
+    paidWriteAutomationAvailable = isPaidWriteAutomationEdition(editionId);
+  } catch {
+    // Edition probe failed — still attempt paid routes; classify 404s as limitations.
+    paidWriteAutomationAvailable = true;
+  }
+
+  const communityResults = await Promise.allSettled([
     client.listProviderDefinitions(),
     client.listProviderAccounts(resolvedProjectId),
     client.listExternalResources(resolvedProjectId, { limit: 50 }),
     client.listProviderCosts(resolvedProjectId, 50),
     client.listProviderCostAnomalies(resolvedProjectId, 25),
-    client.listChangeSets(resolvedProjectId, undefined, 25),
     client.listResourceReceipts(resolvedProjectId, 25),
     client.listDeploymentTargets(resolvedProjectId),
     client.listDeploymentEnvironmentPolicies(resolvedProjectId),
@@ -780,8 +856,6 @@ export async function fetchProviderOpsFeed(
     client.listProviderHealth(resolvedProjectId, { limit: 25 }),
     client.listDriftReports(resolvedProjectId, 25),
     client.listReconciliationRuns(resolvedProjectId, 25),
-    client.listWorkerPools(resolvedProjectId),
-    client.listScalePlans(resolvedProjectId, 25),
   ] as const);
 
   const [
@@ -790,7 +864,6 @@ export async function fetchProviderOpsFeed(
     resourcesResult,
     costsResult,
     costAnomaliesResult,
-    changeSetsResult,
     resourceReceiptsResult,
     deploymentTargetsResult,
     deploymentPoliciesResult,
@@ -799,9 +872,40 @@ export async function fetchProviderOpsFeed(
     providerHealthResult,
     driftReportsResult,
     reconciliationRunsResult,
-    workerPoolsResult,
-    scalePlansResult,
-  ] = results;
+  ] = communityResults;
+
+  let changeSetsResult: PromiseSettledResult<{
+    project_id: string;
+    items: ChangeSetSummary[];
+  }>;
+  let workerPoolsResult: PromiseSettledResult<{
+    project_id: string;
+    items: WorkerPoolSummary[];
+  }>;
+  let scalePlansResult: PromiseSettledResult<{
+    project_id: string;
+    items: ScalePlanSummary[];
+  }>;
+
+  const editionLimitations: string[] = [];
+  if (paidWriteAutomationAvailable) {
+    const paidResults = await Promise.allSettled([
+      client.listChangeSets(resolvedProjectId, undefined, 25),
+      client.listWorkerPools(resolvedProjectId),
+      client.listScalePlans(resolvedProjectId, 25),
+    ] as const);
+    [changeSetsResult, workerPoolsResult, scalePlansResult] = paidResults;
+  } else {
+    editionLimitations.push(COMMUNITY_PAID_LIMITATION_COPY);
+    const skipped = {
+      status: "fulfilled" as const,
+      value: { project_id: resolvedProjectId, items: [] as never[] },
+    };
+    changeSetsResult = skipped;
+    workerPoolsResult = skipped;
+    scalePlansResult = skipped;
+  }
+
   const partialFailures: string[] = [];
   const read = <T>(
     result: PromiseSettledResult<T>,
@@ -811,12 +915,16 @@ export async function fetchProviderOpsFeed(
     if (result.status === "fulfilled") {
       return result.value;
     }
-    const reason =
-      result.reason instanceof BossApiError
-        ? `HTTP ${result.reason.status}`
-        : result.reason instanceof Error
-          ? result.reason.message
-          : "unknown error";
+    const reason = failureReason(result.reason);
+    // Paid write-automation 404s are SKU limits, not control-plane breakage.
+    if (isPaidWriteAutomationLabel(label) && isNotFoundFailure(result.reason)) {
+      paidWriteAutomationAvailable = false;
+      const note = `${label}: paid write-automation (Cloud/Enterprise)`;
+      if (!editionLimitations.includes(note) && !editionLimitations.includes(COMMUNITY_PAID_LIMITATION_COPY)) {
+        editionLimitations.push(note);
+      }
+      return fallback;
+    }
     partialFailures.push(`${label}: ${reason}`);
     return fallback;
   };
@@ -901,6 +1009,8 @@ export async function fetchProviderOpsFeed(
     items: [],
   });
 
+  // Hard-fail only when BOTH configuration endpoints fail. Paid-route 404s and
+  // other secondary failures stay soft partials so community catalog still works.
   if (
     providerDefinitionsResult.status === "rejected" &&
     providerAccountsResult.status === "rejected"
@@ -913,7 +1023,7 @@ export async function fetchProviderOpsFeed(
 
   try {
     const feedWithoutSummary = {
-      projectId: providerAccounts.project_id,
+      projectId: providerAccounts.project_id || resolvedProjectId,
       providerDefinitions: providerDefinitions.items.map(mapProviderDefinition),
       providerAccounts: providerAccounts.items.map(mapProviderAccount),
       resources: resources.items.map(mapResource),
@@ -937,6 +1047,9 @@ export async function fetchProviderOpsFeed(
       ...feedWithoutSummary,
       apiReachable: true,
       partialFailures,
+      editionLimitations,
+      editionId,
+      paidWriteAutomationAvailable,
       refreshedAt: new Date().toISOString(),
       summary: summarizeProviderOps(feedWithoutSummary),
     };
