@@ -1543,6 +1543,47 @@ export async function createGitHubConnectionAction(
   revalidatePath("/");
 }
 
+export async function easyConnectGitHubAction(
+  formData: FormData,
+): Promise<void> {
+  const label = String(
+    formData.get("connection_label") ?? "Project GitHub",
+  ).trim();
+  const envKey = String(
+    formData.get("env_credential_key") ?? "BOSS_GITHUB_TOKEN",
+  )
+    .trim()
+    .toUpperCase();
+  const authMethod = String(
+    formData.get("auth_method") ?? "personal_access_token",
+  ).trim();
+  if (!label || !envKey) {
+    throw new Error("connection_label and env_credential_key are required");
+  }
+  if (authMethod !== "github_app" && authMethod !== "personal_access_token") {
+    throw new Error("auth_method must be github_app or personal_access_token");
+  }
+  const repository = String(formData.get("repository") ?? "").trim();
+  const role = String(formData.get("role") ?? "primary").trim();
+  if (role && !["primary", "source", "upstream", "mirror"].includes(role)) {
+    throw new Error("role is invalid");
+  }
+  await client.easyConnectGitHub({
+    project_id: getProjectId(formData),
+    connection_label: label,
+    auth_method: authMethod,
+    env_credential_key: envKey,
+    app_id: getOptionalString(formData, "app_id"),
+    installation_id: getOptionalString(formData, "installation_id"),
+    repository: repository || undefined,
+    role: (role || "primary") as "primary" | "source" | "upstream" | "mirror",
+    test_after_link: String(formData.get("test_after_link") ?? "true") !== "false",
+    required_permissions: ["pull", "push", "triage"],
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function setGitHubConnectionStateAction(
   formData: FormData,
 ): Promise<void> {

@@ -3505,11 +3505,41 @@ select.input:focus {
 }
 .ghx-audit-strip b { color: var(--ink); }
 
+.ghx-easy-connect {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+  gap: 18px;
+  margin: 0 0 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+.ghx-easy-connect-copy h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+.ghx-easy-connect-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.ghx-easy-form {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--surface);
+}
+@media (max-width: 900px) {
+  .ghx-easy-connect { grid-template-columns: 1fr; }
+}
+
 .ghx-admin { border-top: 1px solid var(--border); }
 .ghx-admin > summary { padding: 16px 22px; }
 .ghx-admin-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 0;
   border-top: 1px solid var(--border);
 }

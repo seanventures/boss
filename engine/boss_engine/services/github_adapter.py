@@ -170,6 +170,60 @@ class GitHubAdapter:
     def repo_metadata(self) -> dict:
         return self._request("GET", f"/repos/{self.repository_full_name}")
 
+    def list_accessible_repositories(
+        self,
+        *,
+        per_page: int = 50,
+        max_pages: int = 2,
+    ) -> list[dict[str, Any]]:
+        """List repositories the current credential can see (PAT user/org scope).
+
+        Never returns tokens. Used by project-link UI to pick owner/repo without
+        requiring operators to type names from memory.
+        """
+        page_size = max(1, min(int(per_page), 100))
+        pages = max(1, min(int(max_pages), 5))
+        collected: list[dict[str, Any]] = []
+        for page in range(1, pages + 1):
+            payload = self._request(
+                "GET",
+                (
+                    f"/user/repos?per_page={page_size}&page={page}"
+                    "&sort=updated&affiliation=owner,collaborator,organization_member"
+                ),
+            )
+            if not isinstance(payload, list) or not payload:
+                break
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                full_name = str(item.get("full_name") or "").strip()
+                if not full_name or "/" not in full_name:
+                    continue
+                owner = (item.get("owner") or {}) if isinstance(item.get("owner"), dict) else {}
+                permissions = item.get("permissions") if isinstance(item.get("permissions"), dict) else {}
+                collected.append(
+                    {
+                        "full_name": full_name,
+                        "owner": str(owner.get("login") or full_name.split("/", 1)[0]),
+                        "name": str(item.get("name") or full_name.split("/", 1)[1]),
+                        "repository_id": item.get("id"),
+                        "default_branch": item.get("default_branch"),
+                        "visibility": item.get("visibility")
+                        or ("private" if item.get("private") else "public"),
+                        "archived": bool(item.get("archived", False)),
+                        "permissions": {
+                            key: bool(permissions.get(key))
+                            for key in ("pull", "triage", "push", "maintain", "admin")
+                            if key in permissions
+                        },
+                        "html_url": item.get("html_url"),
+                    }
+                )
+            if len(payload) < page_size:
+                break
+        return collected
+
     def rate_limit_status(self) -> dict:
         """Return the current GitHub core API quota without exposing credentials."""
         payload = self._request("GET", "/rate_limit")

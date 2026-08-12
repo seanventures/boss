@@ -297,8 +297,38 @@ describe("GitHub Mission Control", async () => {
     expect(managedHtml).toContain("Authorize");
     expect(managedHtml).toContain("Receipts linked");
     expect(managedHtml).toContain("Reconcile now");
+    expect(managedHtml).toContain("Easy connect");
+    expect(managedHtml).toContain("env:BOSS_GITHUB_TOKEN");
+    expect(managedHtml).toContain("Link repository to project");
     expect(readOnlyHtml).toContain("Read-only view");
     expect(readOnlyHtml).toContain("github_manage");
     expect(readOnlyHtml).not.toContain("Reconcile now");
+    expect(readOnlyHtml).not.toContain("github-easy-connect");
+  });
+
+  it("surfaces easy connect CTA when the project has no GitHub connection", () => {
+    const feed = {
+      ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),
+      apiReachable: true,
+      connections: [],
+      bindings: [],
+      summary: {
+        activeConnections: 0,
+        activeRepositories: 0,
+        protectedRefs: 0,
+        activeLeases: 0,
+        divergentSnapshots: 0,
+        openConflicts: 0,
+        pendingMergeAuthorizations: 0,
+        reconciliationAttention: 0,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <GitHubOperations feed={feed} actor="ceo" canManage />,
+    );
+    expect(html).toContain("github-easy-connect");
+    expect(html).toContain("Connect GitHub to this project");
+    expect(html).toContain("BOSS_GITHUB_TOKEN");
+    expect(html).toContain("Connect GitHub");
   });
 });
