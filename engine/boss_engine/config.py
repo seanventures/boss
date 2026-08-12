@@ -414,6 +414,11 @@ class Settings(BaseSettings):
     account_connect_timeout_seconds: int = Field(
         default=10, alias="BOSS_ACCOUNT_CONNECT_TIMEOUT_SECONDS"
     )
+    # Local receipt retention for Community (None/0 = indefinite). Cloud-linked
+    # projects may override via /v1/cloud/retention into org metadata.
+    receipt_retention_days: Optional[int] = Field(
+        default=None, alias="BOSS_RECEIPT_RETENTION_DAYS"
+    )
     enterprise_scim_bearer_tokens: str = Field(
         default="", alias="BOSS_ENTERPRISE_SCIM_BEARER_TOKENS"
     )

@@ -137,3 +137,128 @@ def test_cloud_easy_connect_rejects_bad_method(client):
         json={"project_id": PROJECT_ID, "method": "magic", "actor": "ceo"},
     )
     assert response.status_code == 422
+
+
+def test_cloud_retention_unlinked_community_default(client, monkeypatch):
+    from apps.api.app import main as api_main
+
+    monkeypatch.setattr(api_main.settings, "receipt_retention_days", None)
+    monkeypatch.setattr(
+        api_main.cloud_product.settings, "receipt_retention_days", None
+    )
+
+    response = client.get("/v1/cloud/retention", params={"project_id": PROJECT_ID})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["project_id"] == PROJECT_ID
+    assert body["linked"] is False
+    assert body["tier"] == "community_local"
+    assert body["indefinite"] is True
+    assert body["retention_days"] is None
+    assert body["support_sla"] is None
+    assert body["local_receipts"]["available_now"] is True
+    assert body["configurable"] is False
+
+    catalog = client.get("/v1/cloud/catalog", params={"project_id": PROJECT_ID})
+    assert catalog.status_code == 200
+    features = {item["key"]: item for item in catalog.json()["cloud_features"]}
+    retention_feature = features["evidence_retention_support"]
+    assert retention_feature["status"] == "partial"
+    assert retention_feature["available_now"] is True
+    assert retention_feature["community_local"] is True
+    assert retention_feature["retention"]["tier"] == "community_local"
+
+    # Unlinked PUT is denied (no silent drop)
+    denied = client.put(
+        "/v1/cloud/retention",
+        json={
+            "project_id": PROJECT_ID,
+            "retention_days": 365,
+            "reason": "should_fail_unlinked",
+            "actor": "ceo",
+        },
+    )
+    assert denied.status_code == 404, denied.text
+
+
+def test_cloud_retention_env_days_when_unlinked(client, monkeypatch):
+    from apps.api.app import main as api_main
+
+    monkeypatch.setattr(api_main.settings, "receipt_retention_days", 90)
+    monkeypatch.setattr(
+        api_main.cloud_product.settings, "receipt_retention_days", 90
+    )
+    response = client.get("/v1/cloud/retention", params={"project_id": PROJECT_ID})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["tier"] == "community_local"
+    assert body["linked"] is False
+    assert body["retention_days"] == 90
+    assert body["indefinite"] is False
+    assert body["source"] == "BOSS_RECEIPT_RETENTION_DAYS"
+
+
+def test_cloud_retention_get_put_when_linked(client):
+    link = client.post(
+        "/v1/account-connect/link",
+        json={
+            "project_id": PROJECT_ID,
+            "hosted_org_id": "acct_org_retention_test",
+            "connection_ref": "acctconn:retention",
+            "marketplace_identity": {"publisher": "seanheiney"},
+            "metadata": {"source": "retention_test"},
+            "actor": "ceo",
+        },
+    )
+    assert link.status_code == 200, link.text
+
+    got = client.get("/v1/cloud/retention", params={"project_id": PROJECT_ID})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["linked"] is True
+    assert body["tier"] == "cloud_linked"
+    assert body["support_sla"] == "design_partner"
+    assert body["retention_days"] == 365
+    assert body["configurable"] is True
+    assert body["bounds"]["min_days"] == 30
+    assert body["bounds"]["max_days"] == 2555
+
+    updated = client.put(
+        "/v1/cloud/retention",
+        json={
+            "project_id": PROJECT_ID,
+            "retention_days": 730,
+            "reason": "design_partner_sla_extension",
+            "actor": "ceo",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    up = updated.json()
+    assert up["retention_days"] == 730
+    assert up["tier"] == "cloud_linked"
+    assert up["support_sla"] == "design_partner"
+    assert up["receipt_id"]
+    assert up["reason"] == "design_partner_sla_extension"
+    assert up["updated"] is True
+
+    again = client.get("/v1/cloud/retention", params={"project_id": PROJECT_ID})
+    assert again.status_code == 200
+    assert again.json()["retention_days"] == 730
+    assert again.json()["source"] == "account_connect_org.metadata"
+
+    catalog = client.get("/v1/cloud/catalog", params={"project_id": PROJECT_ID})
+    features = {item["key"]: item for item in catalog.json()["cloud_features"]}
+    assert features["evidence_retention_support"]["retention"]["tier"] == "cloud_linked"
+    assert features["evidence_retention_support"]["retention"]["retention_days"] == 730
+    assert features["evidence_retention_support"]["available_now"] is True
+
+    bad = client.put(
+        "/v1/cloud/retention",
+        json={
+            "project_id": PROJECT_ID,
+            "retention_days": 7,
+            "reason": "too_short",
+            "actor": "ceo",
+        },
+    )
+    assert bad.status_code == 422, bad.text

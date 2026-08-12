@@ -930,6 +930,104 @@ export async function syncAccountConnectAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+/** Post-link Cloud card: prefer dedicated cloud sync if present, else Account Connect sync. */
+export async function syncCloudAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const actor = getActor(formData);
+  const hostedOrgId = getOptionalString(formData, "hosted_org_id");
+  const maybeCloudSync = (
+    client as {
+      syncCloud?: (payload: {
+        project_id: string;
+        hosted_org_id?: string;
+        actor?: string;
+      }) => Promise<unknown>;
+    }
+  ).syncCloud;
+  if (typeof maybeCloudSync === "function") {
+    await maybeCloudSync({
+      project_id: projectId,
+      hosted_org_id: hostedOrgId,
+      actor,
+    });
+  } else {
+    await client.syncAccountConnect({
+      project_id: projectId,
+      hosted_org_id: hostedOrgId,
+      actor,
+    });
+  }
+  revalidatePath("/");
+}
+
+/** Mini team invite from the Cloud Easy Connect card when linked. */
+export async function inviteCloudTeamAction(formData: FormData): Promise<void> {
+  const email = formData.get("email");
+  if (typeof email !== "string" || !email.trim()) {
+    throw new Error("email is required");
+  }
+  const maybeInvite = (
+    client as {
+      createAccountConnectTeamInvite?: typeof client.createAccountConnectTeamInvite;
+      inviteCloudTeam?: (payload: {
+        project_id: string;
+        email: string;
+        actor?: string;
+      }) => Promise<unknown>;
+    }
+  ).inviteCloudTeam;
+  if (typeof maybeInvite === "function") {
+    await maybeInvite({
+      project_id: getProjectId(formData),
+      email: email.trim(),
+      actor: getActor(formData),
+    });
+  } else if (typeof client.createAccountConnectTeamInvite === "function") {
+    await client.createAccountConnectTeamInvite({
+      project_id: getProjectId(formData),
+      email: email.trim(),
+      display_name: getOptionalString(formData, "display_name"),
+      role_keys: parseLines(formData.get("role_keys")),
+      permissions: parseLines(formData.get("permissions")),
+      actor: getActor(formData),
+    });
+  } else {
+    throw new Error("Cloud team invite client method is not available on this control plane.");
+  }
+  revalidatePath("/");
+}
+
+/** Save Cloud-linked evidence retention policy when /v1/cloud/retention is available. */
+export async function saveCloudRetentionAction(
+  formData: FormData,
+): Promise<void> {
+  const retentionRaw = formData.get("retention_days");
+  const days =
+    typeof retentionRaw === "string" ? Number.parseInt(retentionRaw, 10) : NaN;
+  if (!Number.isFinite(days)) {
+    throw new Error("retention_days is required");
+  }
+  const putRetention = (
+    client as {
+      putCloudRetention?: typeof client.putCloudRetention;
+    }
+  ).putCloudRetention;
+  if (typeof putRetention !== "function") {
+    throw new Error(
+      "Cloud retention API is not available on this control plane yet.",
+    );
+  }
+  await putRetention({
+    project_id: getProjectId(formData),
+    retention_days: days,
+    reason:
+      getOptionalString(formData, "reason") ??
+      "Operator updated evidence retention from Mission Control.",
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function runAccountConnectHealthCheckAction(
   formData: FormData,
 ): Promise<void> {

@@ -24,6 +24,9 @@ import {
   startCloudEasyConnectAction,
   unlinkCloudAction,
   pollCloudEasyConnectAction,
+  syncCloudAction,
+  inviteCloudTeamAction,
+  saveCloudRetentionAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
@@ -4005,6 +4008,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           ? "available"
                           : "planned — use local Community runners"}
                       </p>
+                      {commercial.cloud.retention ? (
+                        <p className="detail" data-testid="cloud-retention-summary">
+                          Evidence retention:{" "}
+                          {commercial.cloud.retention.indefinite
+                            ? "local receipts indefinite"
+                            : commercial.cloud.retention.retentionDays != null
+                              ? `${commercial.cloud.retention.retentionDays} days`
+                              : commercial.cloud.retention.tier}
+                          {commercial.cloud.retention.supportSla
+                            ? ` · support ${commercial.cloud.retention.supportSla}`
+                            : " · local receipts always available"}
+                          {commercial.cloud.retention.tier === "cloud_linked"
+                            ? " (Cloud-linked policy)"
+                            : ""}
+                        </p>
+                      ) : null}
                     </div>
                     <span
                       className={`pill${commercial.cloud.linked ? "" : " warn"}`}
@@ -4110,20 +4129,97 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </form>
                   </>
                 ) : (
-                  <form action={unlinkCloudAction}>
-                    <input type="hidden" name="project_id" value={activeProjectId} />
-                    <input type="hidden" name="actor" value={activeActorId} />
-                    <input
-                      type="hidden"
-                      name="reason"
-                      value="Operator disconnected BOSS Cloud from Mission Control."
-                    />
-                    <SubmitButton className="button secondary" type="submit">
-                      Disconnect from BOSS Cloud
-                    </SubmitButton>
-                  </form>
+                  <>
+                    <form action={syncCloudAction} data-testid="cloud-sync-entitlements">
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      {commercial.edition?.accountConnectOrg?.hostedOrgId ? (
+                        <input
+                          type="hidden"
+                          name="hosted_org_id"
+                          value={commercial.edition.accountConnectOrg.hostedOrgId}
+                        />
+                      ) : null}
+                      <SubmitButton className="button" type="submit">
+                        Sync entitlements
+                      </SubmitButton>
+                    </form>
+                    <form action={unlinkCloudAction}>
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <input
+                        type="hidden"
+                        name="reason"
+                        value="Operator disconnected BOSS Cloud from Mission Control."
+                      />
+                      <SubmitButton className="button secondary" type="submit">
+                        Disconnect from BOSS Cloud
+                      </SubmitButton>
+                    </form>
+                  </>
                 )}
               </div>
+              {commercial.cloud?.linked ? (
+                <div className="stack-grid" data-testid="cloud-post-link-tools">
+                  <form
+                    action={inviteCloudTeamAction}
+                    className="composer compact"
+                    data-testid="cloud-team-invite-mini"
+                  >
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <label className="field">
+                      <span>Invite teammate (Cloud)</span>
+                      <input
+                        className="input"
+                        type="email"
+                        name="email"
+                        placeholder="teammate@company.com"
+                        required
+                      />
+                    </label>
+                    <SubmitButton className="button secondary" type="submit">
+                      Send team invite
+                    </SubmitButton>
+                  </form>
+                  {commercial.cloud.retention?.configurable ? (
+                    <form
+                      action={saveCloudRetentionAction}
+                      className="composer compact"
+                      data-testid="cloud-retention-form"
+                    >
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <label className="field">
+                        <span>Evidence retention (days)</span>
+                        <input
+                          className="input"
+                          type="number"
+                          name="retention_days"
+                          min={30}
+                          max={2555}
+                          defaultValue={
+                            commercial.cloud.retention.retentionDays ?? 365
+                          }
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Reason</span>
+                        <input
+                          className="input"
+                          name="reason"
+                          placeholder="Why change retention?"
+                          defaultValue="Operator updated from Mission Control"
+                        />
+                      </label>
+                      <SubmitButton className="button secondary" type="submit">
+                        Save retention policy
+                      </SubmitButton>
+                    </form>
+                  ) : null}
+                </div>
+              ) : null}
               {!commercial.cloud?.easyConnectReady &&
               commercial.cloud?.easyConnectBlockedReason ? (
                 <p className="detail">

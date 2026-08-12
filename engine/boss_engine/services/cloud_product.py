@@ -29,6 +29,11 @@ from .commercial import (
 from .core import emit_event, make_id
 from .receipts import ReceiptService
 
+# Cloud-linked evidence retention bounds (days). Marketing partial SLA surface.
+RETENTION_DAYS_MIN = 30
+RETENTION_DAYS_MAX = 2555
+DEFAULT_CLOUD_RETENTION_DAYS = 365
+
 
 class CloudLinkRequiredError(RuntimeError):
     """Raised when a post-link Cloud capability is invoked without an AC link."""
@@ -205,10 +210,15 @@ class CloudProductService:
         {
             "key": "evidence_retention_support",
             "title": "Evidence retention & support",
-            "description": "Receipts and audit trails locally; retention SLAs and support on Cloud/Enterprise.",
+            "description": (
+                "Local receipts always available; when Cloud-linked, configurable "
+                "retention policy and design-partner support SLA metadata."
+            ),
             "status": "partial",
             "editions": ["community", "cloud", "enterprise_cloud", "enterprise_self_hosted"],
             "community_local": True,
+            # Local receipt surface is always available_now; Cloud SLA fields only when linked.
+            "available_now": True,
         },
     ]
 
@@ -274,19 +284,29 @@ class CloudProductService:
                 available_now = True
             if edition_id == "community" and item.get("requires_account_connect"):
                 available_now = linked
-            features.append(
-                {
-                    **item,
-                    "available_now": bool(available_now),
-                    "unlock": (
-                        "included"
-                        if available_now and available_local
-                        else "connect_cloud"
-                        if item.get("requires_account_connect") or not available_local
-                        else "edition_upgrade"
-                    ),
+            # Explicit catalog overrides (e.g. evidence_retention_support local always on)
+            if item.get("available_now") is True:
+                available_now = True
+            feature_row = {
+                **item,
+                "available_now": bool(available_now),
+                "unlock": (
+                    "included"
+                    if available_now and available_local
+                    else "connect_cloud"
+                    if item.get("requires_account_connect") or not available_local
+                    else "edition_upgrade"
+                ),
+            }
+            if item.get("key") == "evidence_retention_support":
+                policy = self.get_retention_policy(connection, project_id)
+                feature_row["retention"] = {
+                    "tier": policy.get("tier"),
+                    "retention_days": policy.get("retention_days"),
+                    "support_sla": policy.get("support_sla"),
+                    "configurable": policy.get("configurable"),
                 }
-            )
+            features.append(feature_row)
         enterprise = [
             {
                 **item,
@@ -901,6 +921,254 @@ class CloudProductService:
             "kind": "local_hybrid",
             "managed_fleet": False,
         }
+
+    def get_retention_policy(
+        self, connection: Connection, project_id: str
+    ) -> dict[str, Any]:
+        """Project evidence retention policy (local receipts + optional Cloud SLA).
+
+        Community default: local receipts retained indefinitely (or
+        ``BOSS_RECEIPT_RETENTION_DAYS`` when set). When Cloud-linked, tier becomes
+        ``cloud_linked`` with design-partner support SLA and configurable
+        ``retention_days`` (org metadata or default 365).
+        """
+        edition = self.commercial.edition_status(connection, project_id)
+        active = edition.get("account_connect_org")
+        linked = bool(active)
+        env_days = self.settings.receipt_retention_days
+        env_configured = env_days is not None and int(env_days) > 0
+
+        base: dict[str, Any] = {
+            "project_id": project_id,
+            "edition_id": edition["edition_id"],
+            "linked": linked,
+            "feature_key": "evidence_retention_support",
+            "status": "partial",
+            "local_receipts": {
+                "available_now": True,
+                "description": "Receipts and audit trails are stored on this control plane.",
+            },
+            "message": None,
+        }
+
+        if not linked:
+            if env_configured:
+                base.update(
+                    {
+                        "tier": "community_local",
+                        "retention_days": int(env_days),
+                        "retention_mode": "env_configured",
+                        "indefinite": False,
+                        "support_sla": None,
+                        "configurable": False,
+                        "source": "BOSS_RECEIPT_RETENTION_DAYS",
+                        "message": (
+                            f"Local receipts retained for {int(env_days)} days "
+                            "(BOSS_RECEIPT_RETENTION_DAYS). Link to BOSS Cloud for "
+                            "design-partner support SLA and operator-configurable retention."
+                        ),
+                    }
+                )
+            else:
+                base.update(
+                    {
+                        "tier": "community_local",
+                        "retention_days": None,
+                        "retention_mode": "indefinite",
+                        "indefinite": True,
+                        "support_sla": None,
+                        "configurable": False,
+                        "source": "community_default",
+                        "message": (
+                            "Local receipts retained indefinitely on this control plane. "
+                            "Link to BOSS Cloud for design-partner support SLA and "
+                            "operator-configurable retention (30–2555 days)."
+                        ),
+                    }
+                )
+            return base
+
+        metadata = active.get("metadata") if isinstance(active, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        retention_meta = metadata.get("evidence_retention")
+        if not isinstance(retention_meta, dict):
+            retention_meta = {}
+
+        retention_days = retention_meta.get("retention_days")
+        if retention_days is None:
+            retention_days = metadata.get("retention_days")
+        if retention_days is None:
+            retention_days = DEFAULT_CLOUD_RETENTION_DAYS
+        try:
+            retention_days = int(retention_days)
+        except (TypeError, ValueError):
+            retention_days = DEFAULT_CLOUD_RETENTION_DAYS
+
+        reason = retention_meta.get("reason") or metadata.get("retention_reason")
+        updated_by = retention_meta.get("updated_by")
+        updated_at = retention_meta.get("updated_at")
+        source = (
+            "account_connect_org.metadata"
+            if retention_meta.get("retention_days") is not None
+            or metadata.get("retention_days") is not None
+            else "cloud_default"
+        )
+
+        base.update(
+            {
+                "tier": "cloud_linked",
+                "retention_days": retention_days,
+                "retention_mode": "cloud_policy",
+                "indefinite": False,
+                "support_sla": "design_partner",
+                "configurable": True,
+                "source": source,
+                "hosted_org_id": active.get("hosted_org_id")
+                if isinstance(active, dict)
+                else None,
+                "account_connect_org_id": active.get("id")
+                if isinstance(active, dict)
+                else None,
+                "reason": reason,
+                "updated_by": updated_by,
+                "updated_at": updated_at,
+                "bounds": {
+                    "min_days": RETENTION_DAYS_MIN,
+                    "max_days": RETENTION_DAYS_MAX,
+                    "default_days": DEFAULT_CLOUD_RETENTION_DAYS,
+                },
+                "message": (
+                    f"Cloud-linked evidence retention: {retention_days} days with "
+                    "design_partner support SLA. PUT /v1/cloud/retention to change "
+                    f"({RETENTION_DAYS_MIN}–{RETENTION_DAYS_MAX} days)."
+                ),
+            }
+        )
+        return base
+
+    def update_retention_policy(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        retention_days: int,
+        reason: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Set Cloud-linked evidence retention_days (receipted into org metadata).
+
+        Requires an active Account Connect / Cloud link. Range: 30–2555 days.
+        """
+        try:
+            days = int(retention_days)
+        except (TypeError, ValueError) as error:
+            raise ValueError("retention_days must be an integer.") from error
+        if days < RETENTION_DAYS_MIN or days > RETENTION_DAYS_MAX:
+            raise ValueError(
+                f"retention_days must be between {RETENTION_DAYS_MIN} and "
+                f"{RETENTION_DAYS_MAX} inclusive."
+            )
+        reason_text = (reason or "").strip() or "operator_updated_retention"
+        if len(reason_text) > 500:
+            raise ValueError("reason must be 500 characters or fewer.")
+
+        active = self.commercial.active_account_connect_org(connection, project_id)
+        if not active:
+            raise AccountConnectLinkNotFoundError(
+                "Cloud evidence retention is configurable only when this project is "
+                "linked to BOSS Cloud. Local receipts remain available without a link."
+            )
+
+        scope = self.commercial._project_scope(connection, project_id)
+        dedupe_key = (
+            f"cloud-retention:{project_id}:{active['hosted_org_id']}:{days}:"
+            f"{reason_text[:80]}"
+        )
+        receipt, created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            dedupe_key,
+            "cloud.evidence_retention",
+            {
+                "project_id": project_id,
+                "hosted_org_id": active["hosted_org_id"],
+                "operation": "set_retention_days",
+            },
+            {
+                "retention_days": days,
+                "reason": reason_text,
+                "actor": actor,
+                "data_boundary": "internal",
+            },
+        )
+
+        now_iso = _utcnow().isoformat()
+        retention_blob = {
+            "retention_days": days,
+            "reason": reason_text,
+            "updated_by": actor,
+            "updated_at": now_iso,
+            "receipt_id": receipt["id"],
+            "support_sla": "design_partner",
+        }
+        patch = {
+            "evidence_retention": retention_blob,
+            "retention_days": days,
+            "retention_reason": reason_text,
+        }
+        connection.execute(
+            text(
+                """
+                UPDATE account_connect_orgs
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:metadata AS JSONB),
+                    updated_at = now()
+                WHERE id = :id AND project_id = :project_id AND status = 'linked'
+                """
+            ),
+            {
+                "id": active["id"],
+                "project_id": project_id,
+                "metadata": json.dumps(patch),
+            },
+        )
+
+        if created or receipt.get("status") == "in_progress":
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                f"retention:{active['hosted_org_id']}:{days}",
+                {
+                    "retention_days": days,
+                    "reason": reason_text,
+                    "tier": "cloud_linked",
+                    "support_sla": "design_partner",
+                },
+            )
+
+        emit_event(
+            connection,
+            project_id,
+            "cloud.retention_updated",
+            actor,
+            "account_connect_org",
+            active["id"],
+            {
+                "retention_days": days,
+                "reason": reason_text,
+                "receipt_id": receipt["id"],
+                "hosted_org_id": active["hosted_org_id"],
+                "support_sla": "design_partner",
+            },
+        )
+
+        policy = self.get_retention_policy(connection, project_id)
+        policy["receipt_id"] = receipt["id"]
+        policy["updated"] = True
+        return policy
+
 
     def list_pending_easy_connect(
         self, connection: Connection, project_id: str

@@ -144,6 +144,17 @@ export type CloudPendingSession = {
   message?: string;
 };
 
+export type CloudRetentionSummary = {
+  tier: string;
+  retentionDays: number | null;
+  indefinite: boolean;
+  supportSla?: string | null;
+  configurable: boolean;
+  linked: boolean;
+  message?: string | null;
+  source?: string;
+};
+
 export type CloudProductSnapshot = {
   independent: boolean;
   linked: boolean;
@@ -169,6 +180,8 @@ export type CloudProductSnapshot = {
     cloudUnlockedCount: number;
     cloudLockedCount: number;
   };
+  /** Evidence retention policy summary (local always; Cloud SLA when linked). */
+  retention?: CloudRetentionSummary;
 };
 
 export type CommercialFeed = {
@@ -354,12 +367,40 @@ async function settleOptional<T>(
   }
 }
 
+function mapRetentionSummary(
+  retention?: Awaited<ReturnType<typeof client.getCloudRetention>>,
+): CloudRetentionSummary | undefined {
+  if (!retention) return undefined;
+  return {
+    tier: String(retention.tier ?? "community_local"),
+    retentionDays:
+      typeof retention.retention_days === "number"
+        ? retention.retention_days
+        : retention.retention_days === null
+          ? null
+          : null,
+    indefinite: Boolean(retention.indefinite),
+    supportSla:
+      typeof retention.support_sla === "string"
+        ? retention.support_sla
+        : retention.support_sla === null
+          ? null
+          : undefined,
+    configurable: Boolean(retention.configurable),
+    linked: Boolean(retention.linked),
+    message:
+      typeof retention.message === "string" ? retention.message : undefined,
+    source: typeof retention.source === "string" ? retention.source : undefined,
+  };
+}
+
 function mapCloudSnapshot(
   catalog: Awaited<ReturnType<typeof client.getCloudCatalog>>,
   status: Awaited<ReturnType<typeof client.getCloudStatus>>,
   comparison?: Awaited<ReturnType<typeof client.getCloudComparison>>,
   capabilities?: Awaited<ReturnType<typeof client.getCloudCapabilities>>,
   workers?: Awaited<ReturnType<typeof client.getCloudWorkers>>,
+  retention?: Awaited<ReturnType<typeof client.getCloudRetention>>,
 ): CloudProductSnapshot {
   const pendingRaw = (status.easy_connect?.pending_sessions as
     | Array<Record<string, unknown>>
@@ -434,6 +475,7 @@ function mapCloudSnapshot(
           cloudLockedCount: Number(capabilities.summary.cloud_locked_count ?? 0),
         }
       : undefined,
+    retention: mapRetentionSummary(retention),
   };
 }
 
@@ -446,6 +488,13 @@ export async function fetchCommercialFeed(
     // Paid Account Connect list routes are optional (404 on community edition).
     // Edition + entitlements are the Community-safe core. Cloud routes are optional
     // so older APIs / Community-only deploys still load Editions like the site describes.
+    const getCloudRetention =
+      typeof (client as { getCloudRetention?: typeof client.getCloudRetention })
+        .getCloudRetention === "function"
+        ? (client as { getCloudRetention: typeof client.getCloudRetention })
+            .getCloudRetention.bind(client)
+        : null;
+
     const [
       edition,
       entitlementList,
@@ -454,6 +503,7 @@ export async function fetchCommercialFeed(
       comparison,
       capabilities,
       workers,
+      retention,
       healthChecks,
       authSessions,
       teamInvites,
@@ -466,6 +516,9 @@ export async function fetchCommercialFeed(
       settleOptional(client.getCloudComparison(resolvedProjectId)),
       settleOptional(client.getCloudCapabilities(resolvedProjectId)),
       settleOptional(client.getCloudWorkers(resolvedProjectId)),
+      getCloudRetention
+        ? settleOptional(getCloudRetention(resolvedProjectId))
+        : Promise.resolve(undefined),
       settleOptional(client.listAccountConnectHealthChecks(resolvedProjectId)),
       settleOptional(client.listAccountConnectAuthSessions(resolvedProjectId)),
       settleOptional(client.listAccountConnectTeamInvites(resolvedProjectId)),
@@ -481,6 +534,7 @@ export async function fetchCommercialFeed(
             comparison,
             capabilities,
             workers,
+            retention,
           )
         : {
             // Fallback when /v1/cloud/* is not deployed yet — still match website claims.
@@ -526,6 +580,17 @@ export async function fetchCommercialFeed(
               availableNow: false,
               message: "Use local Community runners until Cloud fleets ship.",
             },
+            retention: retention
+              ? mapRetentionSummary(retention)
+              : {
+                  tier: "community_local",
+                  retentionDays: null,
+                  indefinite: true,
+                  configurable: false,
+                  linked: edition.account_connect_status === "linked",
+                  message:
+                    "Local receipts retained indefinitely until Cloud retention APIs are available.",
+                },
           };
     return {
       projectId: resolvedProjectId,

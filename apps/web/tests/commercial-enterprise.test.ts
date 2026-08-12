@@ -77,6 +77,7 @@ vi.mock("../lib/client", () => ({
     getCloudComparison: vi.fn(),
     getCloudCapabilities: vi.fn(),
     getCloudWorkers: vi.fn(),
+    getCloudRetention: vi.fn(),
     listAccountConnectHealthChecks: vi.fn(),
     listAccountConnectAuthSessions: vi.fn(),
     listAccountConnectTeamInvites: vi.fn(),
@@ -157,6 +158,19 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
       linked: false,
       managed_capacity: { message: "planned" },
       enrollment: { ready: false },
+    } as never);
+    vi.mocked(client.getCloudRetention).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "community",
+      linked: false,
+      tier: "community_local",
+      retention_days: null,
+      indefinite: true,
+      support_sla: null,
+      configurable: false,
+      source: "community_default",
+      local_receipts: { available_now: true },
+      message: "Local receipts retained indefinitely.",
     } as never);
   }
 
@@ -338,6 +352,12 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.cloud?.features.some((f) => f.key === "durable_control_plane")).toBe(
       true,
     );
+    expect(feed.cloud?.retention).toMatchObject({
+      tier: "community_local",
+      indefinite: true,
+      configurable: false,
+      linked: false,
+    });
   });
 
   it("maps community edition (local, no hosted required) and falls back to edition-pack entitlements", async () => {

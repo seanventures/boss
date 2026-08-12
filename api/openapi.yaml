@@ -430,6 +430,43 @@ paths:
           description: Unlinked; local control plane continues
         '404':
           description: No active Cloud link
+  /v1/cloud/retention:
+    get:
+      summary: Evidence retention policy (local receipts + Cloud SLA when linked)
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: >
+            Community: local receipts indefinite (or BOSS_RECEIPT_RETENTION_DAYS).
+            Cloud-linked: tier cloud_linked, support_sla design_partner, retention_days.
+    put:
+      summary: Set Cloud-linked evidence retention_days (receipted)
+      description: >
+        Requires active Cloud/Account Connect link. Stores policy on
+        account_connect_orgs.metadata and emits cloud.retention_updated with a Receipt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, retention_days]
+              properties:
+                project_id: { type: string }
+                retention_days: { type: integer, minimum: 30, maximum: 2555 }
+                reason: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200':
+          description: Updated retention policy with receipt_id
+        '404':
+          description: No active Cloud link
+        '422':
+          description: Invalid retention_days or missing fields
   /v1/account-connect/link:
     post:
       summary: Link a local project to a hosted BOSS Account Connect org

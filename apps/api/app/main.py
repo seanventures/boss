@@ -2927,6 +2927,39 @@ def unlink_cloud(payload: dict) -> dict:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
 
+@app.get("/v1/cloud/retention")
+def get_cloud_retention(project_id: str) -> dict:
+    """Evidence retention policy for this project (local receipts + Cloud SLA when linked)."""
+    with begin(engine) as connection:
+        return cloud_product.get_retention_policy(connection, project_id)
+
+
+@app.put("/v1/cloud/retention")
+def put_cloud_retention(payload: dict) -> dict:
+    """Set Cloud-linked evidence retention_days (30–2555). Receipted; requires active link."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    if "retention_days" not in payload:
+        raise HTTPException(status_code=422, detail="retention_days is required")
+    reason = payload.get("reason")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return cloud_product.update_retention_policy(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                retention_days=payload["retention_days"],
+                reason=str(reason) if reason is not None else None,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.get("/v1/diag/sandbox-roundtrip")
 def diag_sandbox_roundtrip() -> dict:
     """Run a submit->poll round-trip to the sandbox-service FROM INSIDE this container,

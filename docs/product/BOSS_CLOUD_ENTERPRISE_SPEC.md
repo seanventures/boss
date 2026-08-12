@@ -132,6 +132,8 @@ Community **must not**:
 | GET | `/v1/cloud/easy-connect/{session_id}` | community+ | Poll device / session status |
 | POST | `/v1/cloud/easy-connect/{session_id}/complete` | community+ | Complete browser callback (code/state) |
 | POST | `/v1/cloud/unlink` | community+ | Disconnect Cloud; Community remains independent |
+| GET | `/v1/cloud/retention` | community+ | Evidence retention policy (local receipts; Cloud SLA when linked) |
+| PUT | `/v1/cloud/retention` | community+ | Set linked retention_days (30–2555), receipted into org metadata |
 | GET | `/v1/edition` | all | Existing edition status |
 
 Paid operational routes remain under `/v1/account-connect/*`, `/v1/marketplace/*`, `/v1/enterprise/*`, SAML/SCIM (enterprise router only).
@@ -140,8 +142,9 @@ Paid operational routes remain under `/v1/account-connect/*`, `/v1/marketplace/*
 
 Editions / Commercial panel loads Community-safe `/v1/cloud/*` even when
 Account Connect paid routes are unmounted. Shows independence banner, feature
-catalog with status honesty, pending device codes, Easy Connect CTAs, and
-Disconnect when linked.
+catalog with status honesty, pending device codes, Easy Connect CTAs, retention
+summary (local always; Cloud SLA when linked), and when linked: Sync entitlements,
+team invite mini-form, retention editor, and Disconnect.
 
 ---
 

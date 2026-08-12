@@ -6220,6 +6220,48 @@ export function createBossApiClient(config: BossApiClientConfig) {
         status: Record<string, unknown>;
       }>("POST", "/v1/cloud/unlink", { body: payload });
     },
+    getCloudRetention(projectId: string) {
+      return request<{
+        project_id: string;
+        edition_id: string;
+        linked: boolean;
+        tier: string;
+        retention_days: number | null;
+        retention_mode?: string;
+        indefinite?: boolean;
+        support_sla?: string | null;
+        configurable?: boolean;
+        source?: string;
+        local_receipts?: Record<string, unknown>;
+        message?: string | null;
+        bounds?: Record<string, number>;
+        reason?: string | null;
+        updated_by?: string | null;
+        updated_at?: string | null;
+        receipt_id?: string;
+        [key: string]: unknown;
+      }>("GET", "/v1/cloud/retention", {
+        query: { project_id: projectId },
+      });
+    },
+    putCloudRetention(payload: {
+      project_id: string;
+      retention_days: number;
+      reason?: string;
+      actor?: string;
+    }) {
+      return request<{
+        project_id: string;
+        linked: boolean;
+        tier: string;
+        retention_days: number | null;
+        support_sla?: string | null;
+        receipt_id?: string;
+        updated?: boolean;
+        message?: string | null;
+        [key: string]: unknown;
+      }>("PUT", "/v1/cloud/retention", { body: payload });
+    },
     listLicenseEntitlements(projectId: string, includeInactive = false) {
       return request<LicenseEntitlementListResponse>("GET", "/v1/entitlements", {
         query: {
