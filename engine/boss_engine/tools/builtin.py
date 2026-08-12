@@ -172,6 +172,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     )
     def list_previews(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
+        # list_previews already publicizes: url/open_url are gateway paths, not loopback.
         previews = ctx.list_previews(pid, int(args.get("limit") or 25))
         return {
             "count": len(previews),
@@ -181,6 +182,7 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                     "run_id": p.get("run_id"),
                     "status": p.get("status"),
                     "url": p.get("url"),
+                    "open_url": p.get("open_url") or p.get("url"),
                     "substrate": p.get("substrate"),
                 }
                 for p in previews
@@ -196,13 +198,22 @@ def _register_read_tools(reg: ToolRegistry) -> None:
     def get_task_preview(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         run_id = args["run_id"]
+        # list_previews already publicizes; never hand agents the sandbox loopback address.
         previews = [p for p in ctx.list_previews(pid, 100) if p.get("run_id") == run_id]
         live = [p for p in previews if p.get("status") == "running"]
         return {
             "run_id": run_id,
             "has_live_preview": bool(live),
-            "urls": [p.get("url") for p in live if p.get("url")],
-            "all": [{"id": p.get("id"), "status": p.get("status"), "url": p.get("url")} for p in previews],
+            "urls": [p.get("open_url") or p.get("url") for p in live if (p.get("open_url") or p.get("url"))],
+            "all": [
+                {
+                    "id": p.get("id"),
+                    "status": p.get("status"),
+                    "url": p.get("open_url") or p.get("url"),
+                    "open_url": p.get("open_url") or p.get("url"),
+                }
+                for p in previews
+            ],
         }
 
     @reg.tool(

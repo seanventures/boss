@@ -1197,7 +1197,12 @@ export type PreviewRec = {
   id: string;
   run_id?: string | null;
   status: string; // running | stopped | failed | expired
+  /** Operator-reachable gateway path (`/v1/previews/{id}/web/`). Never loopback. */
   url?: string | null;
+  /** Same as `url` — explicit name for the address a person can open. */
+  open_url?: string | null;
+  /** Sandbox-internal bind (e.g. http://127.0.0.1:PORT); API proxy only. */
+  internal_url?: string | null;
   mode?: string | null;
   substrate?: string | null;
   build_substrate?: string | null;

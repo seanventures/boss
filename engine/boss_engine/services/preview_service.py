@@ -41,6 +41,56 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def operator_preview_open_url(preview_id: str) -> str:
+    """Path a browser can open on the BOSS API host (reverse-proxied to the preview).
+
+    The preview process binds 127.0.0.1 inside the API host; only this gateway path is
+    reachable from an operator browser or agent on the tailnet.
+    """
+    return f"/v1/previews/{preview_id}/web/"
+
+
+def _is_loopback_url(url: Optional[str]) -> bool:
+    if not url:
+        return False
+    lowered = url.strip().lower()
+    return (
+        "://127." in lowered
+        or "://localhost" in lowered
+        or "://[::1]" in lowered
+        or lowered.startswith("127.")
+        or lowered.startswith("localhost")
+    )
+
+
+def publicize_preview(record: dict) -> dict:
+    """Never hand out the preview's internal address as the primary ``url``.
+
+    ``app_previews.url`` holds the sandbox-internal address
+    (``http://127.0.0.1:43053``), reachable from the API process and from nowhere a
+    browser runs. Listing that column as ``url`` is how operators and agents were
+    told to open an unreachable address.
+
+    The internal address is preserved under ``internal_url`` for diagnostics and
+    for the in-process reverse proxy, which still probes the loopback port.
+    """
+    out = dict(record)
+    preview_id = out.get("id")
+    internal = out.get("url")
+    if internal is not None:
+        out["internal_url"] = internal
+    if not preview_id:
+        return out
+    # Any record that ever had a live bind (or is still marked running) gets a
+    # gateway open URL as the primary `url`. Failed/never-started rows with no
+    # bind stay url=null so the console does not offer a dead "Open" link.
+    if internal is not None or str(out.get("status") or "").lower() == "running":
+        open_url = operator_preview_open_url(str(preview_id))
+        out["open_url"] = open_url
+        out["url"] = open_url
+    return out
+
+
 def _free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
@@ -665,11 +715,13 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
              "lg": log_path, "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "repo": f"{owner}/{repo}", "branch": branch})
-    return {"id": preview_id, "status": "running", "url": url, "port": port,
-            "pid": proc.pid, "expires_at": expires.isoformat(), "run_id": run_id,
-            "repo": f"{owner}/{repo}", "branch": branch,
-            "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
-            "build_substrate": build_substrate}
+    return publicize_preview({
+        "id": preview_id, "status": "running", "url": url, "port": port,
+        "pid": proc.pid, "expires_at": expires.isoformat(), "run_id": run_id,
+        "repo": f"{owner}/{repo}", "branch": branch,
+        "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
+        "build_substrate": build_substrate,
+    })
 
 
 def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> int:
@@ -808,11 +860,13 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
              "exp": expires})
         emit_event(c, project_id, "app_preview.started", "operator", "app_preview", preview_id,
                    {"run_id": run_id, "url": url, "mode": "docker", "image": tag})
-    return {"id": preview_id, "status": "running", "url": url, "port": host_port, "mode": "docker",
-            "container_id": container_id, "image": tag, "expires_at": expires.isoformat(),
-            "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
-            "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
-            "build_substrate": build_substrate}
+    return publicize_preview({
+        "id": preview_id, "status": "running", "url": url, "port": host_port, "mode": "docker",
+        "container_id": container_id, "image": tag, "expires_at": expires.isoformat(),
+        "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
+        "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
+        "build_substrate": build_substrate,
+    })
 
 
 def start_rootfs_preview(
@@ -872,13 +926,13 @@ def start_rootfs_preview(
             {"run_id": run_id, "mode": "rootfs", "sandbox_task_id": sandbox_id,
              "substrate": ExecutionSubstrate.PREVIEW_ROOTFS.value},
         )
-    return {
-        "id": preview_id, "status": "running", "mode": "rootfs",
+    return publicize_preview({
+        "id": preview_id, "status": "running", "mode": "rootfs", "url": remote_url,
         "substrate": ExecutionSubstrate.PREVIEW_ROOTFS.value,
         "build_substrate": build_substrate, "sandbox_task_id": sandbox_id,
         "expires_at": expires.isoformat(), "run_id": run_id,
         "repo": f"{owner}/{repo}", "branch": branch,
-    }
+    })
 
 
 def _process_alive(pid: Optional[int]) -> bool:
@@ -1277,8 +1331,16 @@ def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> 
         emit_event(c, row["project_id"], "app_preview.smoke", "operator", "app_preview", preview_id,
                    {"run_id": row["run_id"], "passed": passed, "total": len(checks),
                     "ok": all_ok, "results": results})
-    return {"preview_id": preview_id, "url": base, "ok": all_ok,
-            "passed": passed, "total": len(checks), "results": results}
+    return {
+        "preview_id": preview_id,
+        "url": operator_preview_open_url(preview_id),
+        "internal_url": base,
+        "open_url": operator_preview_open_url(preview_id),
+        "ok": all_ok,
+        "passed": passed,
+        "total": len(checks),
+        "results": results,
+    }
 
 
 def _teardown(row, settings: Optional[Settings] = None) -> None:
@@ -1334,7 +1396,8 @@ def list_previews(
             "status,error,failure_kind,expires_at,created_at "
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
-    return [dict(r) for r in rows]
+    # Publicize at the boundary: DB keeps loopback for the proxy; callers get open_url.
+    return [publicize_preview(dict(r)) for r in rows]
 
 
 def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:

@@ -469,7 +469,12 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
         "title": row["title"],
         "task_id": row["task_id"],
         "preview_id": row["preview_id"],
-        "preview_url": row["preview_url"],
+        # Never hand out app_previews.url (loopback). Operators open the gateway path.
+        "preview_url": (
+            f"/v1/previews/{row['preview_id']}/web/"
+            if row["preview_id"]
+            else None
+        ),
         "preview_status": row["preview_status"],
     }
 
