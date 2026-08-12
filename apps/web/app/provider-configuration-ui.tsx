@@ -18,6 +18,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 
+import { formatDateTime as formatDateTimeUtc } from "../lib/datetime";
 import type { ActivityFeedItem } from "../lib/events";
 import type {
   CostEventFeedItem,
@@ -98,20 +99,8 @@ function titleCase(value: string): string {
 }
 
 function formatDate(value?: string): string {
-  if (!value) {
-    return "Never";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(parsed);
+  // UTC absolute — matches SSR and every browser (React #418).
+  return formatDateTimeUtc(value, "Never");
 }
 
 function formatMicros(value: number): string {
@@ -458,7 +447,7 @@ function ProviderAccountTable({
                 </td>
                 <td>
                   <StatusBadge status={freshness} />
-                  <small suppressHydrationWarning>{formatDate(account.lastTestedAt)}</small>
+                  <small>{formatDate(account.lastTestedAt)}</small>
                 </td>
                 <td>
                   <strong>
@@ -927,7 +916,7 @@ function AccountDrawer({
               <div key={event.id}>
                 <span>
                   <strong>{titleCase(event.eventType)}</strong>
-                  <small suppressHydrationWarning>
+                  <small>
                     {event.actor} · {formatDate(event.createdAt)}
                   </small>
                 </span>
@@ -938,7 +927,7 @@ function AccountDrawer({
               <div key={receipt.id}>
                 <span>
                   <strong>{titleCase(receipt.action)}</strong>
-                  <small suppressHydrationWarning>
+                  <small>
                     {receipt.status} · {formatDate(receipt.createdAt)}
                   </small>
                 </span>
@@ -1133,7 +1122,7 @@ function ResourceView({
                     </td>
                     <td>
                       <StatusBadge status={resource.healthStatus} />
-                      <small suppressHydrationWarning>Seen {formatDate(resource.lastSeenAt)}</small>
+                      <small>Seen {formatDate(resource.lastSeenAt)}</small>
                     </td>
                     <td>
                       <strong>
@@ -1247,7 +1236,7 @@ function ResourceDrawer({
           </div>
           <div>
             <dt>Last seen</dt>
-            <dd suppressHydrationWarning>{formatDate(resource.lastSeenAt)}</dd>
+            <dd>{formatDate(resource.lastSeenAt)}</dd>
           </div>
         </dl>
         <section>
@@ -1291,7 +1280,7 @@ function HealthView({ feed }: { feed: ProviderOpsFeed }) {
               <div key={health.id}>
                 <span>
                   <strong>{account?.accountLabel ?? titleCase(health.provider)}</strong>
-                  <small suppressHydrationWarning>
+                  <small>
                     Rate limit {health.rateLimitStatus} · cap{" "}
                     {health.usageCapStatus} · {formatDate(health.lastCheckedAt)}
                   </small>
@@ -1433,7 +1422,7 @@ function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
             <div key={run.id}>
               <span>
                 <strong>{titleCase(run.provider ?? "all providers")}</strong>
-                <small suppressHydrationWarning>
+                <small>
                   {run.resourcesSeen} resources · {run.costsSeen} costs ·{" "}
                   {formatDate(run.startedAt)}
                 </small>
@@ -1666,7 +1655,7 @@ export function ProviderConfigurationSuite({
               <span className="eyebrow">Configured accounts</span>
               <h3>Credential and authority posture</h3>
             </div>
-            <span suppressHydrationWarning>Refreshed {formatDate(feed.refreshedAt)}</span>
+            <span>Refreshed {formatDate(feed.refreshedAt)}</span>
           </div>
           <ProviderAccountTable
             feed={feed}

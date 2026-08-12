@@ -5,15 +5,10 @@ import type {
   WorkflowRunSummary,
 } from "@boss/api-client";
 import React from "react";
+import { formatDateTimeShort } from "../lib/datetime";
 
 function formatTime(value?: string): string {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
+  return formatDateTimeShort(value, "—");
 }
 
 function tone(status: string): string {

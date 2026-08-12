@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode, type SVGProps } from "react";
+import { formatDate } from "../lib/datetime";
 import type { ReportFeed } from "../lib/reports";
 
 const mk =
@@ -175,7 +176,7 @@ export function ReportsView({ report }: { report: ReportFeed }) {
                 <span>L{a.autonomy_level}</span>
                 <span>{a.successful_runs}</span>
                 <span className={viol > 0 ? "tone-red" : "tone-muted"}>{viol > 0 ? `${viol}` : "0"}</span>
-                <span className="tone-muted" suppressHydrationWarning>{a.last_reviewed_at ? new Date(a.last_reviewed_at).toLocaleDateString() : "never"}</span>
+                <span className="tone-muted">{a.last_reviewed_at ? formatDate(a.last_reviewed_at) : "never"}</span>
               </div>
             );
           })}

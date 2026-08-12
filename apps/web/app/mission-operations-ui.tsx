@@ -6,6 +6,7 @@ import React from "react";
 import { pushUrlParam } from "./url-nav";
 import { AgentOrb } from "./agent-orb";
 
+import { formatDateTime } from "../lib/datetime";
 import type { ReceiptFeedItem } from "../lib/receipts";
 import type { RoleFeedItem } from "../lib/roles";
 import type { TaskFeedItem } from "../lib/tasks";
@@ -37,14 +38,6 @@ export function receiptCountForTask(
   return receipts.filter(
     (receipt) => receipt.createdByJobId && jobIds.has(receipt.createdByJobId),
   ).length;
-}
-
-function formatDateTime(value?: string): string {
-  if (!value) return "Unknown time";
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
 }
 
 function ownerInitial(ownerRoleId?: string): string {
@@ -159,7 +152,7 @@ export function MissionTaskBoard({
                         {boardStatus(task).replaceAll("_", " ")}
                       </span>
                     </footer>
-                    <time dateTime={task.updatedAt} suppressHydrationWarning>{formatDateTime(task.updatedAt)}</time>
+                    <time dateTime={task.updatedAt}>{formatDateTime(task.updatedAt)}</time>
                   </article>
                 );
               })}

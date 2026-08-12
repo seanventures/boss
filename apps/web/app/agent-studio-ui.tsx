@@ -28,6 +28,7 @@ import type {
   StudioWorkflowSpec,
 } from "../lib/agent-studio";
 import type { RoleFeedItem } from "../lib/roles";
+import { ClientRelativeTime } from "./client-relative-time";
 import type { SkillFeedItem } from "../lib/skills";
 import {
   createStudioWorkflow,
@@ -77,16 +78,7 @@ function compact(value: unknown): string {
   return "unknown";
 }
 
-function timeAgo(value: string): string {
-  const delta = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(delta)) return "unknown";
-  const minutes = Math.max(0, Math.floor(delta / 60000));
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
+
 
 function tone(status: string): "ok" | "warn" | "bad" | "quiet" {
   if (["active", "published", "passed", "completed", "acknowledged", "healthy"].includes(status)) {
@@ -670,7 +662,7 @@ export function AgentStudio({
                 <div>
                   <div className="as-message-top">
                     <b>{message.message_kind.replaceAll("_", " ")}</b>
-                    <time suppressHydrationWarning>{timeAgo(message.created_at)}</time>
+                    <ClientRelativeTime iso={message.created_at} style="short" empty="unknown" />
                   </div>
                   <p>{message.sender_id} <ArrowRight /> {String(message.payload.objective ?? message.payload.summary ?? message.channel_key)}</p>
                   <small>

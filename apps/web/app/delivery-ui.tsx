@@ -19,6 +19,7 @@
 
 import React, { Fragment, useCallback, useEffect, useState } from "react";
 
+import { formatDateTime } from "../lib/datetime";
 import { getDeliveryPipelineAction } from "./actions";
 import { OnboardWizard, SecretsPanel, TargetControls, type SecretsView } from "./delivery-manage";
 import { DeployWizard, RecentDeployments } from "./deploy-ui";
@@ -58,16 +59,10 @@ const tone = (s: string | null) => {
   return "#8b949e";
 };
 
-/** "3h 12m" — how long ago, or "" when the timestamp is absent. */
-function since(iso: string | null): string {
-  if (!iso) return "";
-  const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "";
-  const m = Math.floor(ms / 60000);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ${m % 60}m`;
-  return `${Math.floor(h / 24)}d ${h % 24}h`;
+/** Absolute UTC timestamp for deploy/check facts (hydration-safe). */
+function sinceLabel(iso: string | null): string {
+  if (!iso) return "—";
+  return formatDateTime(iso, "—");
 }
 
 /** How long the deploy itself took — start to finish, not wall-clock since. */
@@ -199,7 +194,7 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
               <span className="detail" style={{ fontSize: 11 }}>
                 {t.status === "not_deployed"
                   ? "registered as a destination; nothing has been deployed here yet"
-                  : t.status_since ? `${t.status} for ${since(t.status_since)}` : "never probed"}
+                  : t.status_since ? `${t.status} since ${sinceLabel(t.status_since)}` : "never probed"}
               </span>
             </div>
 
@@ -210,8 +205,8 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
               <Fact label="latency" value={t.last_latency_ms == null ? "—" : `${t.last_latency_ms}ms`} />
               <Fact label="p95" value={t.p95_ms == null ? "—" : `${t.p95_ms}ms`} />
               <Fact label="build" value={t.deployed_commit ? t.deployed_commit.slice(0, 12) : "—"} mono />
-              <Fact label="deployed" value={t.deployed_at ? `${since(t.deployed_at)} ago` : "—"} />
-              <Fact label="checked" value={t.last_checked ? `${since(t.last_checked)} ago` : "—"} />
+              <Fact label="deployed" value={sinceLabel(t.deployed_at)} />
+              <Fact label="checked" value={sinceLabel(t.last_checked)} />
             </div>
 
             <div style={{ display: "grid", gap: 3 }}>
@@ -232,7 +227,7 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
                 <span style={{ opacity: .55, fontFamily: "monospace", fontSize: 11 }}>incidents</span>
                 {t.incidents.map((i, n) => (
                   <div key={n} className="detail" style={{ fontSize: 12 }}>
-                    {new Date(i.started_at).toLocaleString()} ·{" "}
+                    {formatDateTime(i.started_at, "—")} ·{" "}
                     {i.ended_at
                       ? `recovered after ${Math.max(1, Math.round((i.duration_seconds ?? 0) / 60))}m`
                       : "ONGOING"}

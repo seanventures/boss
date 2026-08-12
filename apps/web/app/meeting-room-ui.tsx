@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { formatDateTimeShort } from "../lib/datetime";
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
 import { Markdown } from "./markdown";
 import { pushUrlParam, readUrlParam } from "./url-nav";
@@ -65,12 +66,7 @@ function phaseIndex(phase?: string): number {
   return i < 0 ? PHASE_STEPS.length : i;
 }
 function fmtDate(iso?: string | null): string {
-  if (!iso) return "";
-  try {
-    return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
-  } catch {
-    return "";
-  }
+  return formatDateTimeShort(iso, "");
 }
 
 // How long the meeting took, from start to conclusion (e.g. "2m 41s").
@@ -436,7 +432,7 @@ export function MeetingsHome({
                 <span className={`cap-badge tone-${m.status === "completed" ? "green" : isRunning(m) ? "blue" : "amber"}`}>
                   {isRunning(m) ? "running" : m.status}
                 </span>
-                <span className="mr-meeting-date" suppressHydrationWarning>{fmtDate(m.completed_at ?? m.created_at)}</span>
+                <span className="mr-meeting-date">{fmtDate(m.completed_at ?? m.created_at)}</span>
               </div>
               <span className="mr-meeting-title">{m.title.replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ")}</span>
               <div className="mr-meeting-avatars">
