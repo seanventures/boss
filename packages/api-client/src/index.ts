@@ -7828,6 +7828,144 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body: payload,
       });
     },
+    getElasticStatus(projectId: string) {
+      return request<Record<string, unknown>>("GET", "/v1/elastic/status", {
+        query: { project_id: projectId },
+      });
+    },
+    requestElasticCapacity(payload: {
+      project_id: string;
+      desired_workers: number;
+      actor?: string;
+      pool_key?: string;
+      worker_pool_id?: string;
+      kind?: "local" | "container" | "cloud" | "vm";
+      provider_account_id?: string;
+      auto_reconcile?: boolean;
+      cloud_spillover_enabled?: boolean;
+      reason?: string;
+    }) {
+      return request<Record<string, unknown>>("POST", "/v1/elastic/capacity", {
+        body: payload,
+      });
+    },
+    reconcileElasticPool(
+      workerPoolId: string,
+      payload: {
+        project_id: string;
+        actor?: string;
+        cloud_spillover_enabled?: boolean;
+        reason?: string;
+      },
+    ) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/elastic/pools/${encodeURIComponent(workerPoolId)}/reconcile`,
+        { body: payload },
+      );
+    },
+    listElasticInstances(
+      projectId: string,
+      query: {
+        worker_pool_id?: string;
+        status?: string;
+        active_only?: boolean;
+        limit?: number;
+      } = {},
+    ) {
+      return request<{
+        project_id: string;
+        items: Array<Record<string, unknown>>;
+        count: number;
+      }>("GET", "/v1/elastic/instances", {
+        query: { project_id: projectId, ...query },
+      });
+    },
+    heartbeatElasticInstance(
+      instanceId: string,
+      payload: {
+        project_id: string;
+        actor?: string;
+        status?: string;
+        endpoint?: string;
+        metadata?: Record<string, unknown>;
+      },
+    ) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/elastic/instances/${encodeURIComponent(instanceId)}/heartbeat`,
+        { body: payload },
+      );
+    },
+    terminateElasticInstance(
+      instanceId: string,
+      payload: {
+        project_id: string;
+        actor?: string;
+        reason?: string;
+        destroy_provider_resource?: boolean;
+      },
+    ) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/elastic/instances/${encodeURIComponent(instanceId)}/terminate`,
+        { body: payload },
+      );
+    },
+    listProviderUsage(
+      projectId: string,
+      query: {
+        provider?: string;
+        provider_account_id?: string;
+        category?: string;
+        limit?: number;
+      } = {},
+    ) {
+      return request<{
+        project_id: string;
+        items: Array<Record<string, unknown>>;
+        count: number;
+      }>("GET", "/v1/provider-usage", {
+        query: { project_id: projectId, ...query },
+      });
+    },
+    getProviderUsageSummary(projectId: string, provider?: string) {
+      return request<Record<string, unknown>>(
+        "GET",
+        "/v1/provider-usage/summary",
+        { query: { project_id: projectId, provider } },
+      );
+    },
+    ingestProviderUsage(payload: {
+      project_id: string;
+      provider: string;
+      operation: string;
+      actor?: string;
+      category?: string;
+      quantity?: number;
+      unit?: string;
+      cost_usd_micros?: number;
+      provider_account_id?: string;
+      resource_ref?: string;
+      metadata?: Record<string, unknown>;
+    }) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/provider-usage/ingest",
+        { body: payload },
+      );
+    },
+    syncProviderUsage(payload: {
+      project_id: string;
+      provider_account_id: string;
+      actor?: string;
+    }) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/provider-usage/sync",
+        { body: payload },
+      );
+    },
     listScalePlans(projectId: string, limit = 50) {
       return request<ScalePlanListResponse>("GET", "/v1/autoscaler/plans", {
         query: { project_id: projectId, limit },

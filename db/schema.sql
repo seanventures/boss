@@ -2294,6 +2294,66 @@ CREATE TABLE IF NOT EXISTS worker_pools (
 CREATE INDEX IF NOT EXISTS idx_worker_pools_project
   ON worker_pools(project_id, status, kind);
 
+-- Elastic fabric: per-pool VM/container/local worker instances (agents/projects scale these).
+CREATE TABLE IF NOT EXISTS worker_instances (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  worker_pool_id TEXT NOT NULL REFERENCES worker_pools(id) ON DELETE CASCADE,
+  instance_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'local',  -- local | vm | container
+  provider TEXT,
+  provider_account_id TEXT REFERENCES provider_accounts(id) ON DELETE SET NULL,
+  external_id TEXT,                  -- provider resource id (droplet id, container id, …)
+  status TEXT NOT NULL DEFAULT 'requested',
+  -- requested|provisioning|running|draining|terminated|failed|simulated
+  endpoint TEXT,
+  region TEXT,
+  size TEXT,
+  capability_tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  scale_plan_id TEXT,  -- optional scale_plans.id (no FK: created after pools)
+  changeset_id TEXT,
+  resource_receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  cost_event_id TEXT REFERENCES cost_events(id) ON DELETE SET NULL,
+  last_heartbeat_at TIMESTAMPTZ,
+  provisioned_at TIMESTAMPTZ,
+  terminated_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_instances_pool
+  ON worker_instances(project_id, worker_pool_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_instances_provider
+  ON worker_instances(project_id, provider, status);
+
+-- Provider-by-provider usage ledger (API calls, compute hours, tokens, etc.).
+CREATE TABLE IF NOT EXISTS provider_usage_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_account_id TEXT REFERENCES provider_accounts(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  -- api_call | compute_hour | storage | network | model_token | infra | other
+  operation TEXT NOT NULL,
+  quantity DOUBLE PRECISION NOT NULL DEFAULT 1,
+  unit TEXT NOT NULL DEFAULT 'count',
+  cost_usd_micros BIGINT,
+  resource_ref TEXT,
+  worker_instance_id TEXT REFERENCES worker_instances(id) ON DELETE SET NULL,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  source TEXT NOT NULL DEFAULT 'control_plane',
+  -- control_plane | provider_api | billing_sync | worker_heartbeat
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_project_provider
+  ON provider_usage_events(project_id, provider, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_account
+  ON provider_usage_events(project_id, provider_account_id, category, occurred_at DESC);
+
 -- Local hybrid worker enrollments after Cloud Easy Connect (not managed fleets).
 CREATE TABLE IF NOT EXISTS cloud_worker_enrollments (
   id TEXT PRIMARY KEY,

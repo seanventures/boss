@@ -140,6 +140,8 @@ def clean_tables(engine):
             "deployment_promotions",
             "deployment_rollouts",
             "resource_receipts",
+            "provider_usage_events",
+            "worker_instances",
             "scale_plans",
             "worker_pools",
             "deployment_runs",

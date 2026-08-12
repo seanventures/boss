@@ -168,10 +168,13 @@ class CloudProductService:
         {
             "key": "managed_workers",
             "title": "Managed workers & elastic infra",
-            "description": "Cloud-operated worker capacity and scale-out.",
-            "status": "planned",
-            "editions": ["cloud", "enterprise_cloud"],
-            "community_local": False,
+            "description": (
+                "Elastic fabric spins local/container capacity and BYOK cloud VMs "
+                "via ProviderOps ChangeSets; multi-tenant managed fleets remain Cloud."
+            ),
+            "status": "partial",
+            "editions": ["community", "cloud", "enterprise_cloud", "enterprise_self_hosted"],
+            "community_local": True,
         },
         {
             "key": "team_collaboration",

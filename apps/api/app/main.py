@@ -715,6 +715,7 @@ from .services.receipts import ReceiptService
 from .services.resource_plane import (
     ChangeSetNotFoundError,
     ProviderAccountNotFoundError,
+    ProviderAdapterError,
     ProviderCredentialError,
     ResourcePlaneService,
 )
@@ -843,6 +844,9 @@ ops_queue = OpsQueueService(settings)
 reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
+from boss_engine.services.elastic_fabric import ElasticFabricService
+
+elastic_fabric = ElasticFabricService(settings, resource_plane=resource_plane)
 agent_studio = AgentStudioService(settings)
 a2a = A2AService(settings)
 work_orchestration = WorkOrchestrationService(settings)
@@ -13752,6 +13756,252 @@ def run_autoscaler_plan(payload: ScalePlanRunRequest) -> ScalePlanRunResponse:
             changeset_id=result["changeset_id"],
             decision_id=result["decision_id"],
         )
+
+
+# ---------------------------------------------------------------------------
+# Elastic fabric — capacity, instances, provider usage (Community ProviderOps)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/elastic/status")
+def get_elastic_status(project_id: str) -> dict:
+    """Elastic fabric overview: pools, instances, per-provider usage."""
+    with begin(engine) as connection:
+        return elastic_fabric.fabric_status(connection, project_id)
+
+
+@app.post("/v1/elastic/capacity", status_code=201)
+def request_elastic_capacity(payload: dict) -> dict:
+    """Agents/projects request elastic worker capacity against a pool."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    try:
+        desired = int(payload.get("desired_workers"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="desired_workers is required") from None
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return elastic_fabric.request_capacity(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                desired_workers=desired,
+                pool_key=payload.get("pool_key"),
+                worker_pool_id=payload.get("worker_pool_id"),
+                kind=payload.get("kind"),
+                provider_account_id=payload.get("provider_account_id"),
+                capabilities=payload.get("capabilities"),
+                auto_reconcile=bool(payload.get("auto_reconcile", True)),
+                cloud_spillover_enabled=bool(
+                    payload.get("cloud_spillover_enabled", False)
+                ),
+                reason=payload.get("reason"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except (ProviderAccountNotFoundError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/elastic/pools/{worker_pool_id}/reconcile")
+def reconcile_elastic_pool(worker_pool_id: str, payload: dict) -> dict:
+    """Materialize desired pool capacity (local/container now; cloud via ChangeSet)."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return elastic_fabric.reconcile_pool(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                worker_pool_id=worker_pool_id,
+                cloud_spillover_enabled=bool(
+                    payload.get("cloud_spillover_enabled", False)
+                ),
+                reason=payload.get("reason"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/elastic/instances")
+def list_elastic_instances(
+    project_id: str,
+    worker_pool_id: Optional[str] = None,
+    status: Optional[str] = None,
+    active_only: bool = False,
+    limit: int = 100,
+) -> dict:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = elastic_fabric.list_instances(
+            connection,
+            project_id,
+            worker_pool_id=worker_pool_id,
+            status=status,
+            active_only=active_only,
+            limit=limit,
+        )
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+
+@app.post("/v1/elastic/instances/{instance_id}/heartbeat")
+def heartbeat_elastic_instance(instance_id: str, payload: dict) -> dict:
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "worker").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        try:
+            return elastic_fabric.heartbeat_instance(
+                connection,
+                project_id=project_id,
+                instance_id=instance_id,
+                actor=actor,
+                status=payload.get("status"),
+                endpoint=payload.get("endpoint"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/v1/elastic/instances/{instance_id}/terminate")
+def terminate_elastic_instance(instance_id: str, payload: dict) -> dict:
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return elastic_fabric.terminate_instance(
+                connection,
+                project_id=project_id,
+                instance_id=instance_id,
+                actor=actor,
+                reason=payload.get("reason"),
+                destroy_provider_resource=bool(
+                    payload.get("destroy_provider_resource", False)
+                ),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/v1/provider-usage")
+def list_provider_usage(
+    project_id: str,
+    provider: Optional[str] = None,
+    provider_account_id: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 100,
+) -> dict:
+    """Provider-by-provider usage ledger (API, compute, billing mirrors)."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
+    with begin(engine) as connection:
+        items = elastic_fabric.list_usage(
+            connection,
+            project_id,
+            provider=provider,
+            provider_account_id=provider_account_id,
+            category=category,
+            limit=limit,
+        )
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+
+@app.get("/v1/provider-usage/summary")
+def provider_usage_summary(
+    project_id: str, provider: Optional[str] = None
+) -> dict:
+    """Aggregated usage + billing cost events per provider."""
+    with begin(engine) as connection:
+        return elastic_fabric.usage_summary(
+            connection, project_id, provider=provider
+        )
+
+
+@app.post("/v1/provider-usage/ingest", status_code=201)
+def ingest_provider_usage(payload: dict) -> dict:
+    """Record a usage event (control plane or adapter instrumentation)."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "system").strip()
+    provider = str(payload.get("provider") or "").strip()
+    operation = str(payload.get("operation") or "").strip()
+    if not project_id or not provider or not operation:
+        raise HTTPException(
+            status_code=422,
+            detail="project_id, provider, and operation are required",
+        )
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return elastic_fabric.record_usage(
+                connection,
+                project_id=project_id,
+                provider=provider,
+                operation=operation,
+                category=str(payload.get("category") or "api_call"),
+                quantity=float(payload.get("quantity") or 1),
+                unit=str(payload.get("unit") or "count"),
+                provider_account_id=payload.get("provider_account_id"),
+                cost_usd_micros=(
+                    int(payload["cost_usd_micros"])
+                    if payload.get("cost_usd_micros") is not None
+                    else None
+                ),
+                resource_ref=payload.get("resource_ref"),
+                worker_instance_id=payload.get("worker_instance_id"),
+                receipt_id=payload.get("receipt_id"),
+                source=str(payload.get("source") or "control_plane"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+                actor=actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/provider-usage/sync")
+def sync_provider_usage(payload: dict) -> dict:
+    """Sync inventory/billing for a provider account and mirror costs into usage ledger."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    provider_account_id = str(payload.get("provider_account_id") or "").strip()
+    if not project_id or not provider_account_id:
+        raise HTTPException(
+            status_code=422,
+            detail="project_id and provider_account_id are required",
+        )
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return elastic_fabric.sync_provider_usage(
+                connection,
+                project_id=project_id,
+                provider_account_id=provider_account_id,
+                actor=actor,
+            )
+        except ProviderAccountNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (ProviderAdapterError, ProviderCredentialError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.post("/v1/resource-janitor/run", response_model=ResourceJanitorRunResponse)

@@ -2939,6 +2939,14 @@ class ResourcePlaneService:
                 changeset_id=changeset_id,
                 resource_receipts=resource_receipts,
             )
+            self._register_elastic_workers_from_apply(
+                connection,
+                project_id=project_id,
+                changeset_id=changeset_id,
+                actor=actor,
+                resource_receipts=resource_receipts,
+                operations=[dict(op) for op in operations],
+            )
         connection.execute(
             text(
                 """
@@ -4131,9 +4139,104 @@ class ResourcePlaneService:
                     "pool_key": pool["pool_key"],
                     "count": count,
                     "tags": ["boss", "worker", f"pool:{pool['pool_key']}"],
+                    "elastic_fabric": True,
                 },
             }
         raise ValueError(f"Provider {provider} does not support cloud worker creation.")
+
+    def _register_elastic_workers_from_apply(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        changeset_id: str,
+        actor: str,
+        resource_receipts: list[dict[str, Any]],
+        operations: list[dict[str, Any]],
+    ) -> None:
+        """After a successful apply, register VM instances into the elastic fabric."""
+        try:
+            from .elastic_fabric import ElasticFabricService
+        except Exception:
+            return
+        fabric = ElasticFabricService(self.settings, resource_plane=self)
+        ops_by_id = {op["id"]: op for op in operations}
+        for receipt in resource_receipts:
+            if receipt.get("status") != "succeeded":
+                continue
+            # Prefer resource_receipt payload fields
+            external_id = (
+                receipt.get("provider_resource_id")
+                or receipt.get("resource_external_id")
+                or (receipt.get("metadata") or {}).get("resource_external_id")
+            )
+            if not external_id:
+                # Fall back to ResourceReceipt table shape if present
+                external_id = (receipt.get("result") or {}).get("resource_external_id")
+            if not external_id:
+                continue
+            op = ops_by_id.get(receipt.get("operation_id") or "")
+            desired = {}
+            if op:
+                desired = op.get("desired_state") or {}
+            else:
+                desired = (receipt.get("desired_state") or {}) if isinstance(
+                    receipt.get("desired_state"), dict
+                ) else {}
+            pool_id = desired.get("worker_pool_id")
+            if not pool_id and not desired.get("elastic_fabric"):
+                # Still register if skill is droplet create and tags mention worker
+                skill = (op or {}).get("skill_id") or receipt.get("skill_id") or ""
+                if skill != "digitalocean.droplet.create":
+                    continue
+            if not pool_id:
+                # Attach to default cloud pool if any
+                pools = self.list_worker_pools(connection, project_id)
+                cloud_pools = [p for p in pools if p.get("kind") == "cloud"]
+                if not cloud_pools:
+                    continue
+                pool_id = cloud_pools[0]["id"]
+            try:
+                fabric.register_provider_instance(
+                    connection,
+                    project_id=project_id,
+                    worker_pool_id=str(pool_id),
+                    actor=actor,
+                    external_id=str(external_id),
+                    provider=str(
+                        receipt.get("provider")
+                        or (op or {}).get("provider")
+                        or "digitalocean"
+                    ),
+                    provider_account_id=receipt.get("provider_account_id")
+                    or (op or {}).get("provider_account_id"),
+                    kind="vm",
+                    region=desired.get("region")
+                    or (receipt.get("result") or {}).get("region"),
+                    size=desired.get("size")
+                    or (receipt.get("result") or {}).get("size"),
+                    changeset_id=changeset_id,
+                    receipt_id=receipt.get("receipt_id") or receipt.get("id"),
+                    metadata={
+                        "from_changeset_apply": True,
+                        "skill_id": (op or {}).get("skill_id"),
+                    },
+                )
+            except Exception:
+                # Never fail apply because elastic registration had a problem —
+                # surface via event only.
+                emit_event(
+                    connection,
+                    project_id,
+                    "elastic.instance_register_failed",
+                    actor,
+                    "changeset",
+                    changeset_id,
+                    {
+                        "external_id": str(external_id),
+                        "worker_pool_id": str(pool_id),
+                    },
+                )
 
     def _get_deployment_target(
         self,
@@ -5947,8 +6050,15 @@ class ResourcePlaneService:
 
     def _digitalocean_droplet_create(self, operation: dict[str, Any]) -> dict[str, Any]:
         desired = operation.get("desired_state") or {}
-        region = self._require_text(str(desired.get("region") or ""), "region")
-        size = self._require_text(str(desired.get("size") or ""), "size")
+        # Elastic fabric + pool metadata may supply defaults when operators omit them.
+        region = self._require_text(
+            str(desired.get("region") or "nyc3"),
+            "region",
+        )
+        size = self._require_text(
+            str(desired.get("size") or "s-1vcpu-1gb"),
+            "size",
+        )
         name = self._require_text(
             str(
                 desired.get("name")

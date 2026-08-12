@@ -8323,6 +8323,207 @@ paths:
           description: Resource receipts linked to ChangeSets
           providers: null
           and general receipts: null
+  /v1/elastic/status:
+    get:
+      summary: Elastic fabric overview (pools, instances, per-provider usage)
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Fabric status with instance counts and usage rollup
+  /v1/elastic/capacity:
+    post:
+      summary: Request elastic worker capacity for a pool (agents/projects)
+      description: >
+        Sets desired_workers and reconciles instances. Local/container capacity
+        starts immediately. Cloud/VM proposes ChangeSets or simulated instances
+        when BOSS_INFRA_REAL_PROVISION_ALLOWED is false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, desired_workers]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+                desired_workers: { type: integer }
+                pool_key: { type: string }
+                worker_pool_id: { type: string }
+                kind: { type: string, enum: [local, container, cloud, vm] }
+                provider_account_id: { type: string }
+                auto_reconcile: { type: boolean, default: true }
+                cloud_spillover_enabled: { type: boolean, default: false }
+                reason: { type: string }
+      responses:
+        '201':
+          description: Capacity requested and optionally reconciled
+  /v1/elastic/pools/{worker_pool_id}/reconcile:
+    post:
+      summary: Reconcile pool instances to desired_workers
+      parameters:
+        - name: worker_pool_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string }
+                cloud_spillover_enabled: { type: boolean }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Reconcile result with created/drained instances
+  /v1/elastic/instances:
+    get:
+      summary: List elastic worker instances
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: worker_pool_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: active_only
+          in: query
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: Worker instances
+  /v1/elastic/instances/{instance_id}/heartbeat:
+    post:
+      summary: Heartbeat an elastic worker instance
+      parameters:
+        - name: instance_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string }
+                status: { type: string }
+                endpoint: { type: string }
+      responses:
+        '200':
+          description: Updated instance
+  /v1/elastic/instances/{instance_id}/terminate:
+    post:
+      summary: Terminate (drain) an elastic worker instance
+      parameters:
+        - name: instance_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string }
+                reason: { type: string }
+                destroy_provider_resource: { type: boolean }
+      responses:
+        '200':
+          description: Terminated instance
+  /v1/provider-usage:
+    get:
+      summary: Provider-by-provider usage ledger
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: provider
+          in: query
+          schema: { type: string }
+        - name: provider_account_id
+          in: query
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Usage events
+  /v1/provider-usage/summary:
+    get:
+      summary: Aggregated usage and billing cost events per provider
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: provider
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Usage summary
+  /v1/provider-usage/ingest:
+    post:
+      summary: Ingest a provider usage event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider, operation]
+              properties:
+                project_id: { type: string }
+                provider: { type: string }
+                operation: { type: string }
+                category: { type: string }
+                quantity: { type: number }
+                unit: { type: string }
+                cost_usd_micros: { type: integer }
+                actor: { type: string }
+      responses:
+        '201':
+          description: Usage event recorded
+  /v1/provider-usage/sync:
+    post:
+      summary: Sync provider inventory/billing and mirror costs into usage ledger
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider_account_id]
+              properties:
+                project_id: { type: string }
+                provider_account_id: { type: string }
+                actor: { type: string }
+      responses:
+        '200':
+          description: Sync result with usage summary
   /v1/worker-pools:
     get:
       summary: List Budget-Aware Autoscaler worker pools
