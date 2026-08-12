@@ -1,0 +1,17 @@
+# Goldeneye module manifest — see docs/MODULE_CONTRACT.md
+api_version: 1
+id: meilisearch
+name: Search (Meilisearch)
+version: "0.2.0"
+layer: 6
+kind: optional
+description: >
+  Full-text search with per-app indexes
+depends_on: [layer2-edge]
+optional: true
+provides: [search]
+min_kit_version: "0.2.0"
+hooks:
+  install: install.sh
+  upgrade: install.sh
+  check: check.sh

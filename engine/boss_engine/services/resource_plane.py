@@ -57,6 +57,8 @@ SUPPORTED_PROVIDERS = {
             "aws.iam.role.upsert",
             "aws.route53.record.upsert",
             "aws.costs.sync",
+            "aws.bedrock.converse",
+            "aws.bedrock.list_models",
         ],
     },
     "digitalocean": {
@@ -67,12 +69,22 @@ SUPPORTED_PROVIDERS = {
             "digitalocean.droplet.create",
             "digitalocean.droplet.destroy",
             "digitalocean.app.deploy",
+            "digitalocean.firewall.ensure",
+            "digitalocean.floating_ip.create",
+            "digitalocean.inference.chat",
             "digitalocean.billing.sync",
         ],
     },
     "azure": {
         "credential_ref": "env:BOSS_AZURE_CLIENT_SECRET",
-        "capabilities": [],
+        "capabilities": [
+            "provider_connection_test",
+            "resource_inventory_sync",
+            "azure.resource_group.ensure",
+            "azure.vm.create",
+            "azure.vm.destroy",
+            "azure.openai.chat",
+        ],
     },
     "gcp": {
         "credential_ref": "env:BOSS_GCP_SERVICE_ACCOUNT",
@@ -80,7 +92,13 @@ SUPPORTED_PROVIDERS = {
     },
     "ovhcloud": {
         "credential_ref": "env:BOSS_OVH_APPLICATION_SECRET",
-        "capabilities": [],
+        "capabilities": [
+            "provider_connection_test",
+            "resource_inventory_sync",
+            "ovh.dedicated.server.list",
+            "ovh.cloud.instance.create",
+            "ovh.cloud.instance.destroy",
+        ],
     },
     "cloudflare": {
         "credential_ref": "env:BOSS_CLOUDFLARE_API_TOKEN",
@@ -188,11 +206,11 @@ PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
     "azure": {
         "display_name": "Microsoft Azure",
         "category": "infrastructure",
-        "adapter_status": "planned",
+        "adapter_status": "available",
         "default_auth_method": "service_principal",
         "auth_methods": {
             "service_principal": {
-                "runtime_status": "planned",
+                "runtime_status": "available",
                 "credential_slots": [
                     {
                         "key": "tenant_id",
@@ -212,6 +230,12 @@ PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
                         "required": True,
                         "primary": True,
                         "default_ref": "env:BOSS_AZURE_CLIENT_SECRET",
+                    },
+                    {
+                        "key": "subscription_id",
+                        "secret_kind": "access_key",
+                        "required": True,
+                        "default_ref": "env:BOSS_AZURE_SUBSCRIPTION_ID",
                     },
                 ],
             },
@@ -268,11 +292,11 @@ PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
     "ovhcloud": {
         "display_name": "OVHcloud",
         "category": "infrastructure",
-        "adapter_status": "planned",
+        "adapter_status": "available",
         "default_auth_method": "application_consumer_key",
         "auth_methods": {
             "application_consumer_key": {
-                "runtime_status": "planned",
+                "runtime_status": "available",
                 "credential_slots": [
                     {
                         "key": "application_key",
@@ -292,6 +316,18 @@ PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
                         "secret_kind": "consumer_key",
                         "required": True,
                         "default_ref": "env:BOSS_OVH_CONSUMER_KEY",
+                    },
+                    {
+                        "key": "endpoint",
+                        "secret_kind": "access_key",
+                        "required": False,
+                        "default_ref": "env:BOSS_OVH_ENDPOINT",
+                    },
+                    {
+                        "key": "cloud_project_id",
+                        "secret_kind": "access_key",
+                        "required": False,
+                        "default_ref": "env:BOSS_OVH_CLOUD_PROJECT_ID",
                     },
                 ],
             }
@@ -4125,7 +4161,14 @@ class ResourcePlaneService:
         pool: dict[str, Any],
         count: int,
     ) -> dict[str, Any]:
-        provider = pool["provider"]
+        provider = (pool.get("provider") or "").strip().lower()
+        base_desired = {
+            "worker_pool_id": pool["id"],
+            "pool_key": pool["pool_key"],
+            "count": count,
+            "tags": ["boss", "worker", f"pool:{pool['pool_key']}"],
+            "elastic_fabric": True,
+        }
         if provider == "digitalocean":
             return {
                 "skill_id": "digitalocean.droplet.create",
@@ -4134,13 +4177,43 @@ class ResourcePlaneService:
                 "risk_tier": 3,
                 "destructive": False,
                 "production_affecting": False,
+                "desired_state": base_desired,
+            }
+        if provider == "aws":
+            return {
+                "skill_id": "aws.ec2.instance.create",
+                "action": "create",
+                "resource_type": "ec2_instance",
+                "risk_tier": 3,
+                "destructive": False,
+                "production_affecting": False,
                 "desired_state": {
-                    "worker_pool_id": pool["id"],
-                    "pool_key": pool["pool_key"],
-                    "count": count,
-                    "tags": ["boss", "worker", f"pool:{pool['pool_key']}"],
-                    "elastic_fabric": True,
+                    **base_desired,
+                    "instance_type": pool.get("size") or "t3.medium",
                 },
+            }
+        if provider == "azure":
+            return {
+                "skill_id": "azure.vm.create",
+                "action": "create",
+                "resource_type": "vm",
+                "risk_tier": 3,
+                "destructive": False,
+                "production_affecting": False,
+                "desired_state": {
+                    **base_desired,
+                    "vm_size": pool.get("size") or "Standard_B2s",
+                },
+            }
+        if provider in {"ovhcloud", "ovh"}:
+            return {
+                "skill_id": "ovh.cloud.instance.create",
+                "action": "create",
+                "resource_type": "cloud_instance",
+                "risk_tier": 3,
+                "destructive": False,
+                "production_affecting": False,
+                "desired_state": base_desired,
             }
         raise ValueError(f"Provider {provider} does not support cloud worker creation.")
 
@@ -5285,6 +5358,30 @@ class ResourcePlaneService:
             return self._aws_iam_role_upsert(credential, operation)
         if skill_id == "aws.route53.record.upsert":
             return self._aws_route53_record_upsert(credential, operation)
+        if skill_id == "aws.bedrock.converse":
+            return self._aws_bedrock_converse(credential, operation)
+        if skill_id == "aws.bedrock.list_models":
+            return self._aws_bedrock_list_models(credential, operation)
+        if skill_id == "azure.resource_group.ensure":
+            return self._azure_resource_group_ensure(credential, operation)
+        if skill_id == "azure.vm.create":
+            return self._azure_vm_create(credential, operation)
+        if skill_id == "azure.vm.destroy":
+            return self._azure_vm_destroy(credential, operation)
+        if skill_id == "azure.openai.chat":
+            return self._azure_openai_chat(credential, operation)
+        if skill_id == "ovh.cloud.instance.create":
+            return self._ovh_cloud_instance_create(credential, operation)
+        if skill_id == "ovh.cloud.instance.destroy":
+            return self._ovh_cloud_instance_destroy(credential, operation)
+        if skill_id == "ovh.dedicated.server.list":
+            return self._ovh_dedicated_server_list(credential, operation)
+        if skill_id == "digitalocean.firewall.ensure":
+            return self._digitalocean_firewall_ensure(operation)
+        if skill_id == "digitalocean.floating_ip.create":
+            return self._digitalocean_floating_ip_create(operation)
+        if skill_id == "digitalocean.inference.chat":
+            return self._digitalocean_inference_chat(operation)
         raise ProviderAdapterError(
             "Provider write adapter execution is not enabled for this skill. "
             "The action was recorded and deadlettered without calling the provider."
@@ -6143,6 +6240,454 @@ class ResourcePlaneService:
             "status": result.status,
             "phase": result.phase,
             "api_url": result.api_url,
+        }
+
+    # ------------------------------------------------------------------
+    # Multi-cloud expand: Azure, OVH, Bedrock, DO extras
+    # ------------------------------------------------------------------
+
+    def _azure_creds(self, credential: str, desired: dict[str, Any]) -> dict[str, str]:
+        return {
+            "tenant_id": str(
+                desired.get("tenant_id") or self.settings.azure_tenant_id or ""
+            ),
+            "client_id": str(
+                desired.get("client_id") or self.settings.azure_client_id or ""
+            ),
+            "client_secret": str(
+                credential
+                or desired.get("client_secret")
+                or self.settings.azure_client_secret
+                or ""
+            ),
+            "subscription_id": str(
+                desired.get("subscription_id")
+                or self.settings.azure_subscription_id
+                or ""
+            ),
+        }
+
+    def _azure_adapter(self):
+        try:
+            from .azure_adapter import AzureAdapter
+        except ImportError as exc:
+            raise ProviderAdapterError(
+                "Azure adapter is not installed (azure_adapter.py missing)."
+            ) from exc
+        return AzureAdapter(self.settings)
+
+    def _azure_resource_group_ensure(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        creds = self._azure_creds(credential, desired)
+        name = self._require_text(str(desired.get("name") or desired.get("resource_group") or ""), "name")
+        location = self._require_text(str(desired.get("location") or "eastus"), "location")
+        result = self._azure_adapter().ensure_resource_group(
+            name=name, location=location, **creds
+        )
+        return {
+            "provider_ref": result.get("id") or f"azure:rg:{name}",
+            "resource_external_id": result.get("id") or name,
+            "resource_name": name,
+            "resource_type": "resource_group",
+            "state": "active",
+            "operation": "ensured",
+            "location": location,
+            **{k: v for k, v in result.items() if k not in {"client_secret"}},
+        }
+
+    def _azure_vm_create(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        creds = self._azure_creds(credential, desired)
+        name = self._require_text(
+            str(desired.get("name") or operation.get("resource_ref") or ""),
+            "name",
+        )
+        resource_group = self._require_text(
+            str(desired.get("resource_group") or desired.get("resourceGroup") or ""),
+            "resource_group",
+        )
+        location = str(desired.get("location") or "eastus")
+        size = str(desired.get("vm_size") or desired.get("size") or "Standard_B2s")
+        result = self._azure_adapter().create_vm(
+            name=name,
+            resource_group=resource_group,
+            location=location,
+            size=size,
+            admin_username=str(desired.get("admin_username") or "bossadmin"),
+            ssh_public_key=desired.get("ssh_public_key"),
+            image_ref=desired.get("image_ref") or desired.get("image"),
+            tags=desired.get("tags") if isinstance(desired.get("tags"), dict) else None,
+            **creds,
+        )
+        return {
+            "provider_ref": result.get("provider_ref")
+            or result.get("vm_id")
+            or f"azure:vm:{resource_group}/{name}",
+            "resource_external_id": result.get("vm_id") or name,
+            "resource_name": name,
+            "resource_type": "vm",
+            "state": self._resource_state_from_provider_status(
+                str(result.get("status") or "creating")
+            ),
+            "operation": "created",
+            "region": location,
+            "size": size,
+            **{k: v for k, v in result.items() if "secret" not in k.lower()},
+        }
+
+    def _azure_vm_destroy(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        creds = self._azure_creds(credential, desired)
+        name = self._require_text(
+            str(desired.get("name") or operation.get("resource_ref") or ""),
+            "name",
+        )
+        resource_group = self._require_text(
+            str(desired.get("resource_group") or ""),
+            "resource_group",
+        )
+        result = self._azure_adapter().destroy_vm(
+            resource_group=resource_group, name=name, **creds
+        )
+        return {
+            "provider_ref": result.get("provider_ref")
+            or f"azure:vm:{resource_group}/{name}",
+            "resource_external_id": result.get("vm_id") or name,
+            "resource_name": name,
+            "resource_type": "vm",
+            "state": "deleted",
+            "operation": "deleted",
+        }
+
+    def _azure_openai_chat(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        endpoint = str(
+            desired.get("endpoint")
+            or self.settings.azure_openai_endpoint
+            or ""
+        )
+        api_key = str(
+            credential
+            or desired.get("api_key")
+            or self.settings.azure_openai_key
+            or ""
+        )
+        deployment = str(
+            desired.get("deployment")
+            or self.settings.azure_openai_deployment
+            or ""
+        )
+        messages = desired.get("messages") or []
+        if not isinstance(messages, list) or not messages:
+            raise ProviderAdapterError("azure.openai.chat requires desired_state.messages")
+        result = self._azure_adapter().azure_openai_chat(
+            endpoint=endpoint,
+            api_key=api_key,
+            deployment=deployment,
+            api_version=str(
+                desired.get("api_version")
+                or getattr(self.settings, "azure_openai_api_version", None)
+                or "2024-02-15-preview"
+            ),
+            messages=messages,
+            max_tokens=desired.get("max_tokens"),
+        )
+        return {
+            "provider_ref": result.get("provider_ref") or f"azure:openai:{deployment}",
+            "resource_external_id": deployment,
+            "resource_name": deployment,
+            "resource_type": "model_invocation",
+            "state": "succeeded",
+            "operation": "invoked",
+            "content": result.get("content"),
+            "usage": result.get("usage") or {},
+            "model": result.get("model") or deployment,
+        }
+
+    def _ovh_adapter(self):
+        try:
+            from .ovh_adapter import OvhAdapter
+        except ImportError as exc:
+            raise ProviderAdapterError(
+                "OVH adapter is not installed (ovh_adapter.py missing)."
+            ) from exc
+        return OvhAdapter(self.settings)
+
+    def _ovh_auth_kwargs(
+        self, credential: str, desired: dict[str, Any]
+    ) -> dict[str, str]:
+        return {
+            "application_key": str(
+                desired.get("application_key")
+                or self.settings.ovh_application_key
+                or ""
+            ),
+            "application_secret": str(
+                credential
+                or desired.get("application_secret")
+                or self.settings.ovh_application_secret
+                or ""
+            ),
+            "consumer_key": str(
+                desired.get("consumer_key") or self.settings.ovh_consumer_key or ""
+            ),
+            "endpoint": str(
+                desired.get("endpoint") or self.settings.ovh_endpoint or ""
+            ),
+        }
+
+    def _ovh_dedicated_server_list(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        servers = self._ovh_adapter().list_dedicated_servers(
+            **self._ovh_auth_kwargs(credential, desired)
+        )
+        return {
+            "provider_ref": "ovh:dedicated:servers",
+            "resource_external_id": "dedicated-servers",
+            "resource_name": "dedicated-servers",
+            "resource_type": "inventory",
+            "state": "active",
+            "operation": "listed",
+            "items": servers,
+            "count": len(servers),
+        }
+
+    def _ovh_cloud_instance_create(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        auth = self._ovh_auth_kwargs(credential, desired)
+        project_id = str(
+            desired.get("project_id")
+            or self.settings.ovh_cloud_project_id
+            or ""
+        )
+        if not project_id:
+            raise ProviderAdapterError(
+                "ovh.cloud.instance.create requires project_id "
+                "(desired_state or BOSS_OVH_CLOUD_PROJECT_ID)."
+            )
+        name = self._require_text(
+            str(desired.get("name") or operation.get("resource_ref") or ""),
+            "name",
+        )
+        result = self._ovh_adapter().create_cloud_instance(
+            project_id,
+            name=name,
+            flavor_id=str(desired.get("flavor_id") or desired.get("size") or ""),
+            image_id=str(desired.get("image_id") or desired.get("image") or ""),
+            region=str(desired.get("region") or ""),
+            **auth,
+        )
+        instance_id = str(result.get("instance_id") or result.get("id") or name)
+        return {
+            "provider_ref": result.get("provider_ref")
+            or f"ovh:cloud:{project_id}:{instance_id}",
+            "resource_external_id": instance_id,
+            "resource_name": name,
+            "resource_type": "cloud_instance",
+            "state": self._resource_state_from_provider_status(
+                str(result.get("status") or "BUILD")
+            ),
+            "operation": "created",
+            "region": desired.get("region"),
+            "size": desired.get("flavor_id") or desired.get("size"),
+        }
+
+    def _ovh_cloud_instance_destroy(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        auth = self._ovh_auth_kwargs(credential, desired)
+        project_id = str(
+            desired.get("project_id") or self.settings.ovh_cloud_project_id or ""
+        )
+        instance_id = self._require_text(
+            str(
+                desired.get("instance_id")
+                or desired.get("external_id")
+                or operation.get("resource_ref")
+                or ""
+            ),
+            "instance_id",
+        )
+        result = self._ovh_adapter().destroy_cloud_instance(
+            project_id, instance_id, **auth
+        )
+        return {
+            "provider_ref": result.get("provider_ref")
+            or f"ovh:cloud:{project_id}:{instance_id}",
+            "resource_external_id": instance_id,
+            "resource_name": str(desired.get("name") or instance_id),
+            "resource_type": "cloud_instance",
+            "state": "deleted",
+            "operation": "deleted",
+        }
+
+    def _aws_bedrock_converse(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        try:
+            from .aws_bedrock_adapter import AwsBedrockAdapter
+        except ImportError as exc:
+            raise ProviderAdapterError(
+                "AWS Bedrock adapter is not installed (aws_bedrock_adapter.py missing)."
+            ) from exc
+        desired = operation.get("desired_state") or {}
+        model_id = self._require_text(
+            str(desired.get("model_id") or desired.get("model") or ""),
+            "model_id",
+        )
+        messages = desired.get("messages") or []
+        if not isinstance(messages, list) or not messages:
+            raise ProviderAdapterError(
+                "aws.bedrock.converse requires desired_state.messages"
+            )
+        adapter = AwsBedrockAdapter(self.settings)
+        result = adapter.converse(
+            model_id=model_id,
+            messages=messages,
+            max_tokens=int(desired.get("max_tokens") or 1024),
+            temperature=desired.get("temperature"),
+            system=desired.get("system"),
+            access_key_id=str(
+                desired.get("access_key_id") or self.settings.aws_access_key_id or ""
+            ),
+            secret_access_key=str(credential or ""),
+            region=str(desired.get("region") or self.settings.aws_region),
+            session_token=desired.get("session_token"),
+        )
+        return {
+            "provider_ref": result.get("provider_ref") or f"aws:bedrock:{model_id}",
+            "resource_external_id": model_id,
+            "resource_name": model_id,
+            "resource_type": "model_invocation",
+            "state": "succeeded",
+            "operation": "invoked",
+            "content": result.get("content"),
+            "usage": result.get("usage") or {},
+            "model": model_id,
+        }
+
+    def _aws_bedrock_list_models(
+        self, credential: str, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        try:
+            from .aws_bedrock_adapter import AwsBedrockAdapter
+        except ImportError as exc:
+            raise ProviderAdapterError(
+                "AWS Bedrock adapter is not installed (aws_bedrock_adapter.py missing)."
+            ) from exc
+        desired = operation.get("desired_state") or {}
+        adapter = AwsBedrockAdapter(self.settings)
+        models = adapter.list_foundation_models(
+            access_key_id=str(
+                desired.get("access_key_id") or self.settings.aws_access_key_id or ""
+            ),
+            secret_access_key=str(credential or ""),
+            region=str(desired.get("region") or self.settings.aws_region),
+            session_token=desired.get("session_token"),
+        )
+        return {
+            "provider_ref": "aws:bedrock:models",
+            "resource_external_id": "foundation-models",
+            "resource_name": "foundation-models",
+            "resource_type": "inventory",
+            "state": "active",
+            "operation": "listed",
+            "items": models,
+            "count": len(models),
+        }
+
+    def _digitalocean_firewall_ensure(self, operation: dict[str, Any]) -> dict[str, Any]:
+        desired = operation.get("desired_state") or {}
+        name = self._require_text(str(desired.get("name") or ""), "name")
+        ensure = getattr(self.digitalocean, "ensure_firewall", None)
+        if ensure is None:
+            raise ProviderAdapterError(
+                "DigitalOcean adapter does not implement ensure_firewall yet."
+            )
+        result = ensure(
+            name=name,
+            inbound_rules=desired.get("inbound_rules") or [],
+            outbound_rules=desired.get("outbound_rules") or [],
+            tags=desired.get("tags"),
+            droplet_ids=desired.get("droplet_ids"),
+        )
+        return {
+            "provider_ref": result.get("provider_ref")
+            or f"do:firewall:{result.get('id') or name}",
+            "resource_external_id": str(result.get("id") or name),
+            "resource_name": name,
+            "resource_type": "firewall",
+            "state": "active",
+            "operation": "ensured",
+        }
+
+    def _digitalocean_floating_ip_create(
+        self, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        create = getattr(self.digitalocean, "create_floating_ip", None)
+        if create is None:
+            raise ProviderAdapterError(
+                "DigitalOcean adapter does not implement create_floating_ip yet."
+            )
+        desired = operation.get("desired_state") or {}
+        result = create(
+            region=desired.get("region"),
+            droplet_id=desired.get("droplet_id"),
+        )
+        ip = str(result.get("ip") or result.get("floating_ip") or "")
+        return {
+            "provider_ref": result.get("provider_ref") or f"do:floating_ip:{ip}",
+            "resource_external_id": ip,
+            "resource_name": ip,
+            "resource_type": "floating_ip",
+            "state": "active",
+            "operation": "created",
+        }
+
+    def _digitalocean_inference_chat(
+        self, operation: dict[str, Any]
+    ) -> dict[str, Any]:
+        chat = getattr(self.digitalocean, "inference_chat", None)
+        if chat is None:
+            raise ProviderAdapterError(
+                "DigitalOcean adapter does not implement inference_chat yet."
+            )
+        desired = operation.get("desired_state") or {}
+        messages = desired.get("messages") or []
+        if not isinstance(messages, list) or not messages:
+            raise ProviderAdapterError(
+                "digitalocean.inference.chat requires desired_state.messages"
+            )
+        result = chat(
+            messages=messages,
+            model=str(desired.get("model") or "default"),
+            base_url=desired.get("base_url")
+            or getattr(self.settings, "do_inference_base_url", None),
+            api_key=desired.get("api_key")
+            or getattr(self.settings, "do_inference_api_key", None),
+        )
+        return {
+            "provider_ref": result.get("provider_ref") or "do:inference",
+            "resource_external_id": str(desired.get("model") or "default"),
+            "resource_name": str(desired.get("model") or "default"),
+            "resource_type": "model_invocation",
+            "state": "succeeded",
+            "operation": "invoked",
+            "content": result.get("content"),
+            "usage": result.get("usage") or {},
         }
 
     def _ssh_host_desired(self, operation: dict[str, Any]) -> tuple[dict, str, str, str, int]:
@@ -7572,6 +8117,46 @@ class ResourcePlaneService:
                 "status_code": status_code,
                 "summary": self._connection_summary(provider, payload),
             }
+        if provider == "azure":
+            try:
+                from .azure_adapter import AzureAdapter
+            except ImportError as exc:
+                raise ProviderAdapterError(
+                    "Azure adapter is not installed (azure_adapter.py missing)."
+                ) from exc
+            adapter = AzureAdapter(self.settings)
+            payload = adapter.test_connection(
+                tenant_id=str(self.settings.azure_tenant_id or ""),
+                client_id=str(self.settings.azure_client_id or ""),
+                client_secret=str(credential or self.settings.azure_client_secret or ""),
+                subscription_id=str(self.settings.azure_subscription_id or ""),
+            )
+            return {
+                "provider": provider,
+                "status_code": int(payload.get("status_code") or 200),
+                "summary": self._connection_summary(provider, payload),
+            }
+        if provider in {"ovhcloud", "ovh"}:
+            try:
+                from .ovh_adapter import OvhAdapter
+            except ImportError as exc:
+                raise ProviderAdapterError(
+                    "OVH adapter is not installed (ovh_adapter.py missing)."
+                ) from exc
+            adapter = OvhAdapter(self.settings)
+            payload = adapter.test_connection(
+                application_key=str(self.settings.ovh_application_key or ""),
+                application_secret=str(
+                    credential or self.settings.ovh_application_secret or ""
+                ),
+                consumer_key=str(self.settings.ovh_consumer_key or ""),
+                endpoint=str(self.settings.ovh_endpoint or ""),
+            )
+            return {
+                "provider": provider,
+                "status_code": int(payload.get("status_code") or 200),
+                "summary": self._connection_summary(provider, payload),
+            }
         headers = self._provider_headers(provider, credential)
         with httpx.Client(timeout=10) as client:
             if provider == "digitalocean":
@@ -7613,6 +8198,113 @@ class ResourcePlaneService:
     ) -> list[InventoryResource]:
         if provider == "aws":
             return self._aws_resources(credential)
+        if provider == "azure":
+            try:
+                from .azure_adapter import AzureAdapter
+            except ImportError as exc:
+                raise ProviderAdapterError(
+                    "Azure adapter is not installed (azure_adapter.py missing)."
+                ) from exc
+            raw = AzureAdapter(self.settings).list_resources(
+                tenant_id=str(self.settings.azure_tenant_id or ""),
+                client_id=str(self.settings.azure_client_id or ""),
+                client_secret=str(
+                    credential or self.settings.azure_client_secret or ""
+                ),
+                subscription_id=str(self.settings.azure_subscription_id or ""),
+            )
+            out: list[InventoryResource] = []
+            for item in raw:
+                if not (item.get("id") or item.get("external_id") or item.get("name")):
+                    continue
+                tags: list[str]
+                if isinstance(item.get("tags"), dict):
+                    tags = [f"{k}:{v}" for k, v in item["tags"].items()]
+                else:
+                    tags = [str(t) for t in (item.get("tags") or [])]
+                meta = dict(item) if isinstance(item, dict) else {}
+                meta.setdefault(
+                    "region", str(item.get("location") or item.get("region") or "")
+                )
+                out.append(
+                    InventoryResource(
+                        provider="azure",
+                        resource_type=str(
+                            item.get("type")
+                            or item.get("resource_type")
+                            or "azure_resource"
+                        ),
+                        external_id=str(
+                            item.get("id") or item.get("external_id") or ""
+                        ),
+                        name=str(item.get("name") or item.get("id") or "azure"),
+                        state=str(item.get("state") or "active"),
+                        ownership=str(item.get("ownership") or "unknown"),
+                        environment=str(item.get("environment") or "unknown"),
+                        health_status=str(
+                            item.get("health_status") or item.get("status") or "unknown"
+                        ),
+                        tags=tags,
+                        metadata=meta,
+                    )
+                )
+            return out
+        if provider in {"ovhcloud", "ovh"}:
+            try:
+                from .ovh_adapter import OvhAdapter
+            except ImportError as exc:
+                raise ProviderAdapterError(
+                    "OVH adapter is not installed (ovh_adapter.py missing)."
+                ) from exc
+            raw = OvhAdapter(self.settings).inventory(
+                application_key=str(self.settings.ovh_application_key or ""),
+                application_secret=str(
+                    credential or self.settings.ovh_application_secret or ""
+                ),
+                consumer_key=str(self.settings.ovh_consumer_key or ""),
+                endpoint=str(self.settings.ovh_endpoint or ""),
+            )
+            out = []
+            for item in raw:
+                if not (
+                    item.get("id") or item.get("external_id") or item.get("name")
+                ):
+                    continue
+                meta = dict(item) if isinstance(item, dict) else {}
+                meta.setdefault(
+                    "region",
+                    str(item.get("region") or item.get("datacenter") or ""),
+                )
+                out.append(
+                    InventoryResource(
+                        provider="ovhcloud",
+                        resource_type=str(
+                            item.get("type")
+                            or item.get("resource_type")
+                            or "ovh_resource"
+                        ),
+                        external_id=str(
+                            item.get("id")
+                            or item.get("external_id")
+                            or item.get("name")
+                            or ""
+                        ),
+                        name=str(item.get("name") or item.get("id") or "ovh"),
+                        state=str(
+                            item.get("state") or item.get("status") or "active"
+                        ),
+                        ownership=str(item.get("ownership") or "unknown"),
+                        environment=str(item.get("environment") or "unknown"),
+                        health_status=str(
+                            item.get("health_status")
+                            or item.get("status")
+                            or "unknown"
+                        ),
+                        tags=[str(t) for t in (item.get("tags") or [])],
+                        metadata=meta,
+                    )
+                )
+            return out
         headers = self._provider_headers(provider, credential)
         with httpx.Client(timeout=20) as client:
             if provider == "digitalocean":

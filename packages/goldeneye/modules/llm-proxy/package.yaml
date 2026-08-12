@@ -1,0 +1,17 @@
+# Goldeneye module manifest — see docs/MODULE_CONTRACT.md
+api_version: 1
+id: llm-proxy
+name: LLM gateway
+version: "0.2.0"
+layer: 6
+kind: optional
+description: >
+  OpenAI-compatible proxy (chat/transcription; no embeddings assumed)
+depends_on: [layer2-edge]
+optional: true
+provides: [llm]
+min_kit_version: "0.2.0"
+hooks:
+  install: install.sh
+  upgrade: install.sh
+  check: check.sh

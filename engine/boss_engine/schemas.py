@@ -6454,6 +6454,179 @@ class TerraformDriftReconcileResponse(BaseModel):
     opt_in_targets: int = 0
 
 
+class IacVerifyRequest(BaseModel):
+    """Operator-triggered IaC verification lane (fmt/validate/lint/security/plan-dry).
+
+    ``files`` is a path→content map written into a disposable workdir. Paths must
+    be relative and may not escape the workdir. Cloud credentials are scrubbed
+    from the lane subprocess environment (BOSS-67 / spec 05 §3.2).
+    """
+
+    files: dict[str, str] = Field(default_factory=dict)
+    actor: str = "operator"
+    project_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_iac_verify_request(self) -> "IacVerifyRequest":
+        self.actor = _require_text(self.actor, "actor")
+        if not isinstance(self.files, dict) or not self.files:
+            raise ValueError("files must be a non-empty path→content map.")
+        cleaned: dict[str, str] = {}
+        for raw_path, content in self.files.items():
+            path = str(raw_path or "").strip().replace("\\", "/")
+            if not path or path.startswith("/") or path.startswith("~"):
+                raise ValueError(
+                    f"files path must be a relative workspace path (got {raw_path!r})."
+                )
+            parts = [part for part in path.split("/") if part not in ("", ".")]
+            if any(part == ".." for part in parts):
+                raise ValueError(f"files path must not contain '..' (got {raw_path!r}).")
+            if not parts:
+                raise ValueError(f"files path must be a relative workspace path (got {raw_path!r}).")
+            cleaned["/".join(parts)] = "" if content is None else str(content)
+        self.files = cleaned
+        return self
+
+
+class IacVerifyStepSummary(BaseModel):
+    step: str
+    ok: bool
+    output: str = ""
+    duration_ms: int = 0
+    skipped: bool = False
+    reason: Optional[str] = None
+    note: Optional[str] = None
+
+
+class IacVerifyResponse(BaseModel):
+    ok: bool
+    tf_binary: Optional[str] = None
+    scanner: Optional[str] = None
+    files: list[str] = Field(default_factory=list)
+    steps: list[IacVerifyStepSummary] = Field(default_factory=list)
+    actor: str = "operator"
+    project_id: Optional[str] = None
+
+
+class IacDetectRequest(BaseModel):
+    """Detect whether a file map / task description is an IaC change (no tools run)."""
+
+    files: Optional[dict[str, str]] = None
+    file_paths: Optional[list[str]] = None
+    title: Optional[str] = None
+    instructions: Optional[str] = None
+    acceptance_criteria: Optional[list[str]] = None
+    task_type: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_iac_detect_request(self) -> "IacDetectRequest":
+        has_files = isinstance(self.files, dict) and bool(self.files)
+        has_paths = isinstance(self.file_paths, list) and bool(self.file_paths)
+        has_task = any(
+            [
+                (self.title or "").strip(),
+                (self.instructions or "").strip(),
+                bool(self.acceptance_criteria),
+                (self.task_type or "").strip(),
+            ]
+        )
+        if not (has_files or has_paths or has_task):
+            raise ValueError(
+                "Provide files, file_paths, and/or task title/instructions/task_type."
+            )
+        return self
+
+
+class IacDetectResponse(BaseModel):
+    is_iac_task: bool
+    iac_files: list[str] = Field(default_factory=list)
+    file_count: int = 0
+    task_type: Optional[str] = None
+
+
+class PdfRenderRequest(BaseModel):
+    """Markdown → PDF control-plane render (reportlab, no system deps)."""
+
+    markdown: str = ""
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    as_base64: bool = True
+
+    @model_validator(mode="after")
+    def validate_pdf_render_request(self) -> "PdfRenderRequest":
+        if not (self.markdown or "").strip() and not (self.title or "").strip():
+            raise ValueError("markdown or title is required.")
+        return self
+
+
+class PdfRenderResponse(BaseModel):
+    content_type: str = "application/pdf"
+    page_count: int = 1
+    byte_length: int = 0
+    content_base64: Optional[str] = None
+    title: Optional[str] = None
+
+
+class OncallPreviewRequest(BaseModel):
+    """Format an oncall investigation card without posting it."""
+
+    incident_id: str
+    alert: dict[str, Any] = Field(default_factory=dict)
+    hypothesis: Optional[dict[str, Any]] = None
+    autonomy: Optional[dict[str, Any]] = None
+    remediation: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_oncall_preview(self) -> "OncallPreviewRequest":
+        self.incident_id = _require_text(self.incident_id, "incident_id")
+        if not isinstance(self.alert, dict):
+            raise ValueError("alert must be an object.")
+        return self
+
+
+class OncallNotifyRequest(BaseModel):
+    """Post an oncall card to the configured webhook (receipted external effect)."""
+
+    project_id: str
+    actor: str = "operator"
+    incident_id: str
+    alert: dict[str, Any] = Field(default_factory=dict)
+    hypothesis: Optional[dict[str, Any]] = None
+    autonomy: Optional[dict[str, Any]] = None
+    remediation: Optional[dict[str, Any]] = None
+    dedupe_key: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_oncall_notify(self) -> "OncallNotifyRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.incident_id = _require_text(self.incident_id, "incident_id")
+        if not isinstance(self.alert, dict):
+            raise ValueError("alert must be an object.")
+        return self
+
+
+class MultiCloudSkillDescribeRequest(BaseModel):
+    """Describe multi-cloud skill(s) from the product catalog + Resource Plane registry."""
+
+    skill_id: Optional[str] = None
+    skill_ids: Optional[list[str]] = None
+
+    @model_validator(mode="after")
+    def validate_skill_describe(self) -> "MultiCloudSkillDescribeRequest":
+        ids: list[str] = []
+        if self.skill_id and str(self.skill_id).strip():
+            ids.append(str(self.skill_id).strip())
+        for item in self.skill_ids or []:
+            cleaned = str(item or "").strip()
+            if cleaned and cleaned not in ids:
+                ids.append(cleaned)
+        if not ids:
+            raise ValueError("skill_id or skill_ids is required.")
+        self.skill_ids = ids
+        return self
+
+
 AuditExportResponse.model_rebuild()
 OpsQueueInspectionResponse.model_rebuild()
 ProviderConnectionTestResponse.model_rebuild()

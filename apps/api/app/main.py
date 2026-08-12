@@ -137,6 +137,16 @@ from .schemas import (
     TerraformExportArtifactResponse,
     TerraformExportRequest,
     TerraformExportResponse,
+    IacDetectRequest,
+    IacDetectResponse,
+    IacVerifyRequest,
+    IacVerifyResponse,
+    IacVerifyStepSummary,
+    MultiCloudSkillDescribeRequest,
+    OncallNotifyRequest,
+    OncallPreviewRequest,
+    PdfRenderRequest,
+    PdfRenderResponse,
     CostAnomalyListResponse,
     CostAnomalySummary,
     CostEventListResponse,
@@ -721,6 +731,7 @@ from .services.resource_plane import (
 )
 from .services import terraform_drift as terraform_drift_service
 from .services import terraform_export as terraform_export_service
+from .services import iac_verify as iac_verify_service
 from .services.autonomy_engine import AutonomyEngine
 from .services.role_governance import RoleGovernanceService
 from .services.router_health import RouterHealthService
@@ -845,8 +856,15 @@ reports = ReportService(settings)
 break_glass = BreakGlassService()
 resource_plane = ResourcePlaneService(settings)
 from boss_engine.services.elastic_fabric import ElasticFabricService
+from boss_engine.services.goldeneye_paas import GoldeneyePaasService
+from boss_engine.services.multi_cloud_catalog import (
+    multi_cloud_catalog,
+    provider_entry as multi_cloud_provider_entry,
+    providers_for_category,
+)
 
 elastic_fabric = ElasticFabricService(settings, resource_plane=resource_plane)
+goldeneye_paas = GoldeneyePaasService(settings)
 agent_studio = AgentStudioService(settings)
 a2a = A2AService(settings)
 work_orchestration = WorkOrchestrationService(settings)
@@ -2561,6 +2579,86 @@ def get_edition(project_id: str) -> EditionStatusResponse:
         )
 
 
+@app.get("/v1/meta/api-catalog")
+def get_meta_api_catalog() -> dict[str, Any]:
+    """Full HTTP capability catalog: every mounted route grouped by product domain.
+
+    Use this to discover controls available over the API. Coverage compares
+    live FastAPI routes to ``api/openapi.yaml`` path entries.
+    """
+    from boss_engine.services.api_catalog import build_api_catalog
+    import re
+    from pathlib import Path
+
+    openapi_paths: set[str] = set()
+    try:
+        oa = Path(__file__).resolve().parents[3] / "api" / "openapi.yaml"
+        if not oa.is_file():
+            oa = Path.cwd() / "api" / "openapi.yaml"
+        if oa.is_file():
+            openapi_paths = set(
+                re.findall(r"^  (/[^:]+):", oa.read_text(encoding="utf-8"), re.M)
+            )
+    except Exception:
+        openapi_paths = set()
+
+    routes: list[dict[str, Any]] = []
+    for route in app.routes:
+        methods = getattr(route, "methods", None) or set()
+        path = getattr(route, "path", None)
+        if not path or not methods:
+            continue
+        name = getattr(route, "name", None)
+        for method in methods:
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            routes.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "name": name,
+                    "summary": (getattr(route, "summary", None) or name),
+                    "tags": list(getattr(route, "tags", None) or []),
+                }
+            )
+    return build_api_catalog(routes, openapi_paths=openapi_paths)
+
+
+@app.get("/v1/meta/api-catalog/{domain}")
+def get_meta_api_catalog_domain(domain: str) -> dict[str, Any]:
+    """Single domain slice of the API catalog (e.g. goldeneye, providers, core)."""
+    full = get_meta_api_catalog()
+    for item in full.get("domains") or []:
+        if item.get("id") == domain:
+            return item
+    raise HTTPException(status_code=404, detail=f"Unknown API domain: {domain}")
+
+
+@app.get("/v1/meta/openapi-coverage")
+def get_openapi_coverage() -> dict[str, Any]:
+    """Report OpenAPI documentation coverage vs live routes."""
+    catalog = get_meta_api_catalog()
+    missing = []
+    for domain in catalog.get("domains") or []:
+        for route in domain.get("routes") or []:
+            if route.get("path", "").startswith("/v1/") and not route.get(
+                "in_openapi"
+            ):
+                missing.append(
+                    {"method": route["method"], "path": route["path"], "domain": domain["id"]}
+                )
+    return {
+        "route_count": catalog["route_count"],
+        "documented_route_count": catalog["documented_route_count"],
+        "documentation_coverage": catalog["documentation_coverage"],
+        "missing_from_openapi_count": len(missing),
+        "missing_from_openapi": missing[:200],
+        "openapi_json": "/openapi.json",
+        "openapi_yaml": "api/openapi.yaml",
+        "docs_index": "docs/api/README.md",
+    }
+
+
 @app.get("/v1/cloud/catalog")
 def get_cloud_catalog(project_id: str) -> dict:
     """Community-callable Cloud/Enterprise feature catalog and independence contract."""
@@ -3458,6 +3556,148 @@ def reliability_meta_eval():
     the labeled synthetic corpus. Pure — writes nothing."""
     from .services.reliability_meta_eval import run_meta_eval
     return JSONResponse(content=jsonable_encoder(run_meta_eval()))
+
+
+@app.post("/v1/oncall/preview")
+def oncall_preview(payload: OncallPreviewRequest) -> dict[str, Any]:
+    """RB-20 — format an oncall investigation card without posting (pure, no external effect)."""
+    from .services import oncall_notify as oncall_notify_service
+
+    text = oncall_notify_service.format_card(
+        payload.incident_id,
+        payload.alert,
+        payload.hypothesis,
+        payload.autonomy,
+        payload.remediation,
+    )
+    webhook_configured = bool(
+        (getattr(settings, "reliability_oncall_webhook", None) or "").strip()
+    )
+    return {
+        "incident_id": payload.incident_id,
+        "text": text,
+        "webhook_configured": webhook_configured,
+        "posted": False,
+    }
+
+
+@app.post("/v1/oncall/notify")
+def oncall_notify(payload: OncallNotifyRequest) -> dict[str, Any]:
+    """RB-20 — post the investigation card to the configured oncall webhook.
+
+    External effect is receipted (dedupe_key). Best-effort delivery: a dead webhook
+    marks the receipt failed rather than raising, matching notify_incident's contract.
+    """
+    from .services import oncall_notify as oncall_notify_service
+
+    with begin(engine) as connection:
+        require_project_actor(
+            connection,
+            payload.project_id,
+            payload.actor,
+            "providerops_manage",
+        )
+        tenant = connection.execute(
+            text(
+                """
+                SELECT w.org_id, p.workspace_id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": payload.project_id},
+        ).mappings().first()
+        if not tenant:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        card_text = oncall_notify_service.format_card(
+            payload.incident_id,
+            payload.alert,
+            payload.hypothesis,
+            payload.autonomy,
+            payload.remediation,
+        )
+        dedupe_key = (
+            (payload.dedupe_key or "").strip()
+            or f"oncall.notify:{payload.project_id}:{payload.incident_id}"
+        )
+        effect_payload = {
+            "incident_id": payload.incident_id,
+            "alert_title": (payload.alert or {}).get("title"),
+            "severity": (payload.alert or {}).get("severity"),
+        }
+        receipt, created = receipts.create_or_reuse(
+            connection,
+            tenant["org_id"],
+            tenant["workspace_id"],
+            payload.project_id,
+            dedupe_key,
+            "oncall.notify",
+            {
+                "incident_id": payload.incident_id,
+                "channel": "reliability_oncall_webhook",
+            },
+            effect_payload,
+        )
+        if not created and receipt.get("status") == "succeeded":
+            return {
+                "incident_id": payload.incident_id,
+                "posted": True,
+                "reused": True,
+                "receipt_id": receipt["id"],
+                "dedupe_key": dedupe_key,
+                "text": card_text,
+            }
+        posted = oncall_notify_service.notify_incident(
+            settings,
+            payload.incident_id,
+            payload.alert,
+            payload.hypothesis,
+            payload.autonomy,
+            payload.remediation,
+        )
+        if posted:
+            receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                provider_ref="webhook:reliability_oncall",
+                result={"posted": True, "incident_id": payload.incident_id},
+            )
+        else:
+            receipts.mark_failed(
+                connection,
+                receipt["id"],
+                {
+                    "posted": False,
+                    "reason": (
+                        "webhook_not_configured_or_delivery_failed"
+                    ),
+                },
+            )
+        emit_event(
+            connection,
+            payload.project_id,
+            "oncall.notify",
+            payload.actor,
+            "incident",
+            payload.incident_id,
+            {
+                "posted": posted,
+                "receipt_id": receipt["id"],
+                "dedupe_key": dedupe_key,
+            },
+        )
+        return {
+            "incident_id": payload.incident_id,
+            "posted": posted,
+            "reused": False,
+            "receipt_id": receipt["id"],
+            "dedupe_key": dedupe_key,
+            "webhook_configured": bool(
+                (getattr(settings, "reliability_oncall_webhook", None) or "").strip()
+            ),
+            "text": card_text,
+        }
 
 
 @app.post("/v1/reliability/incidents/{incident_id}/verify",
@@ -4734,6 +4974,41 @@ def revoke_break_glass_grant(
             reason=payload.reason,
         )
         return break_glass_grant_summary_from_service(grant)
+
+
+@app.post("/v1/pdf/render", response_model=PdfRenderResponse)
+def render_pdf_document(payload: PdfRenderRequest) -> Any:
+    """Render markdown to PDF bytes (reportlab). Default response is JSON with base64.
+
+    Pass ``as_base64=false`` to download raw ``application/pdf``. Pure local render —
+    no external network, no receipts required.
+    """
+    import base64
+
+    from .services.pdf_render import pdf_page_count, render_markdown_pdf
+
+    pdf_bytes = render_markdown_pdf(
+        payload.markdown or "",
+        title=payload.title,
+        subtitle=payload.subtitle,
+    )
+    page_count = pdf_page_count(pdf_bytes)
+    if not payload.as_base64:
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": 'attachment; filename="document.pdf"',
+                "X-PDF-Page-Count": str(page_count),
+            },
+        )
+    return PdfRenderResponse(
+        content_type="application/pdf",
+        page_count=page_count,
+        byte_length=len(pdf_bytes),
+        content_base64=base64.b64encode(pdf_bytes).decode("ascii"),
+        title=payload.title,
+    )
 
 
 @app.get("/v1/reports/summary")
@@ -7042,6 +7317,19 @@ def verify_secret_endpoint(secret_ref_id: str, payload: Optional[dict] = None):
     with begin(engine) as connection:
         return verify_secret(connection, settings, secret_ref_id,
                              actor=str((payload or {}).get("actor") or "operator"))
+
+
+@app.get("/v1/secrets/{secret_ref_id}")
+def get_secret_metadata_endpoint(secret_ref_id: str, project_id: str):
+    """Secret METADATA only for one ref (no values). Scoped by project_id."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.secrets_service import list_secrets
+    with begin(engine) as connection:
+        for item in list_secrets(connection, project_id):
+            if item.get("secret_ref_id") == secret_ref_id:
+                return item
+    raise HTTPException(status_code=404, detail="Secret ref not found in project.")
 
 
 @app.post("/v1/deployment-targets/{target_id}/secrets")
@@ -12981,6 +13269,7 @@ def list_github_repository_ref_states(
 
 @app.get("/v1/provider-definitions", response_model=ProviderDefinitionListResponse)
 def list_provider_definitions() -> ProviderDefinitionListResponse:
+    """List static provider catalog definitions (auth methods, capabilities, adapter status)."""
     return ProviderDefinitionListResponse(
         items=[
             ProviderDefinitionSummary(**item)
@@ -13646,6 +13935,74 @@ def terraform_drift_reconcile(
         )
 
 
+@app.post("/v1/iac/detect", response_model=IacDetectResponse)
+def detect_iac_change(payload: IacDetectRequest) -> IacDetectResponse:
+    """Detect IaC files and/or whether a code task is an IaC-authoring task (no tools run)."""
+    file_map = payload.files if isinstance(payload.files, dict) else None
+    if file_map:
+        iac_files = iac_verify_service.detect_iac_files(file_map)
+    elif payload.file_paths:
+        iac_files = iac_verify_service.detect_iac_files(payload.file_paths)
+    else:
+        iac_files = []
+    spec = {
+        "task_type": payload.task_type,
+        "instructions": payload.instructions,
+        "acceptance_criteria": payload.acceptance_criteria or [],
+    }
+    is_task = iac_verify_service.is_iac_task(spec, payload.title)
+    return IacDetectResponse(
+        is_iac_task=is_task or bool(iac_files),
+        iac_files=list(iac_files),
+        file_count=len(iac_files),
+        task_type=payload.task_type,
+    )
+
+
+@app.post("/v1/iac/verify", response_model=IacVerifyResponse)
+def run_iac_verify(payload: IacVerifyRequest) -> IacVerifyResponse:
+    """Run the credential-scrubbed IaC verification lane on an operator-supplied file map.
+
+    Executes fmt → init/validate → tflint → checkov/tfsec → plan-dry (plan-live is a
+    recorded skip) with no cloud credentials in the subprocess environment. Fail-closed:
+    a missing toolchain binary fails the corresponding step rather than silently skipping.
+    Input paths are relative-only and confined to a disposable workdir.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="boss-iac-verify-") as scratch:
+        workdir = Path(scratch)
+        for rel_path, content in payload.files.items():
+            target = workdir / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        result = iac_verify_service.run_iac_verify_lane(
+            workdir,
+            settings,
+            files=payload.files,
+        )
+    return IacVerifyResponse(
+        ok=result.ok,
+        tf_binary=result.tf_binary,
+        scanner=result.scanner,
+        files=list(result.files),
+        steps=[IacVerifyStepSummary(**step.to_dict()) for step in result.steps],
+        actor=payload.actor,
+        project_id=payload.project_id,
+    )
+
+
+@app.post("/v1/iac/plan", response_model=IacVerifyResponse)
+def run_iac_plan(payload: IacVerifyRequest) -> IacVerifyResponse:
+    """Plan-oriented IaC lane entrypoint (same credential-free lane as /v1/iac/verify).
+
+    Terraform/OpenTofu ``plan -refresh=false`` is step ``plan_dry``; there is no separate
+    plan-only binary path because plan depends on init/validate graph resolution.
+    """
+    return run_iac_verify(payload)
+
+
 @app.get("/v1/resource-receipts", response_model=ResourceReceiptListResponse)
 def list_resource_receipts(
     project_id: str,
@@ -14002,6 +14359,321 @@ def sync_provider_usage(payload: dict) -> dict:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except (ProviderAdapterError, ProviderCredentialError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+# ---------------------------------------------------------------------------
+# Multi-cloud infra + models (AWS, Azure, DigitalOcean, OVHcloud)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/multi-cloud/catalog")
+def get_multi_cloud_catalog(
+    category: Optional[str] = None,
+) -> dict[str, Any]:
+    """Unified catalog of infra/model/bare-metal skills across cloud providers."""
+    if category:
+        items = providers_for_category(category)
+        return {
+            "version": 1,
+            "category": category,
+            "providers": items,
+            "count": len(items),
+        }
+    return multi_cloud_catalog()
+
+
+@app.get("/v1/multi-cloud/providers/{provider_key}")
+def get_multi_cloud_provider(provider_key: str) -> dict[str, Any]:
+    try:
+        entry = multi_cloud_provider_entry(provider_key)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    # Merge live Resource Plane definition when present
+    definitions = {
+        d["provider"]: d for d in resource_plane.list_provider_definitions()
+    }
+    live = definitions.get(provider_key) or definitions.get(
+        provider_key.replace("ovhcloud", "ovhcloud")
+    )
+    return {
+        "catalog": entry,
+        "resource_plane": live,
+        "capabilities": (live or {}).get("capabilities")
+        or entry.get("infra_skills", []) + entry.get("model_skills", []),
+    }
+
+
+@app.get("/v1/multi-cloud/skills")
+def list_multi_cloud_skills() -> dict[str, Any]:
+    catalog = multi_cloud_catalog()
+    return {
+        "skill_index": catalog["skill_index"],
+        "count": len(catalog["skill_index"]),
+    }
+
+
+@app.post("/v1/multi-cloud/skills/describe")
+def describe_multi_cloud_skills(
+    payload: MultiCloudSkillDescribeRequest,
+) -> dict[str, Any]:
+    """Return skill metadata merged from multi_cloud_catalog + SUPPORTED_PROVIDERS.
+
+    Unknown skill ids are returned with ``known=false`` rather than 404 so bulk
+    describe stays useful for inventory checks.
+    """
+    from boss_engine.services.resource_plane import SUPPORTED_PROVIDERS
+
+    catalog = multi_cloud_catalog()
+    skill_index = catalog.get("skill_index") or {}
+    providers_by_key = {
+        item["provider_key"]: item for item in catalog.get("providers") or []
+    }
+    items: list[dict[str, Any]] = []
+    for skill_id in payload.skill_ids or []:
+        provider_key = skill_index.get(skill_id)
+        catalog_entry = providers_by_key.get(provider_key) if provider_key else None
+        # Also scan SUPPORTED_PROVIDERS capabilities when skill is not in catalog index
+        plane_provider = None
+        plane_caps: list[str] = []
+        if provider_key and provider_key in SUPPORTED_PROVIDERS:
+            plane_provider = provider_key
+            plane_caps = list(SUPPORTED_PROVIDERS[provider_key].get("capabilities") or [])
+        else:
+            for key, definition in SUPPORTED_PROVIDERS.items():
+                caps = list(definition.get("capabilities") or [])
+                if skill_id in caps:
+                    plane_provider = key
+                    plane_caps = caps
+                    if not provider_key:
+                        provider_key = key
+                        catalog_entry = providers_by_key.get(key)
+                    break
+        category = None
+        if catalog_entry:
+            if skill_id in (catalog_entry.get("infra_skills") or []):
+                category = "infrastructure"
+            elif skill_id in (catalog_entry.get("model_skills") or []):
+                category = "models"
+        items.append(
+            {
+                "skill_id": skill_id,
+                "known": bool(provider_key or plane_provider),
+                "provider_key": provider_key or plane_provider,
+                "category": category,
+                "in_multi_cloud_catalog": skill_id in skill_index,
+                "in_supported_providers": skill_id in plane_caps,
+                "provider_catalog": (
+                    {
+                        "display_name": catalog_entry.get("display_name"),
+                        "adapter_status": catalog_entry.get("adapter_status"),
+                        "categories": catalog_entry.get("categories"),
+                        "default_auth_method": catalog_entry.get("default_auth_method"),
+                        "connection_test": catalog_entry.get("connection_test"),
+                    }
+                    if catalog_entry
+                    else None
+                ),
+                "resource_plane": (
+                    {
+                        "provider": plane_provider,
+                        "credential_ref": (
+                            SUPPORTED_PROVIDERS.get(plane_provider or "", {}).get(
+                                "credential_ref"
+                            )
+                        ),
+                        "capabilities": plane_caps,
+                    }
+                    if plane_provider
+                    else None
+                ),
+            }
+        )
+    return {
+        "count": len(items),
+        "items": items,
+        "supported_provider_keys": sorted(SUPPORTED_PROVIDERS.keys()),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Goldeneye bare-metal PaaS — nodes, packages, app deploys
+# ---------------------------------------------------------------------------
+
+
+@app.get("/v1/goldeneye/packages")
+def goldeneye_package_catalog() -> dict[str, Any]:
+    """Built-in package manager catalog (host → edge → optional services)."""
+    return goldeneye_paas.package_catalog()
+
+
+@app.get("/v1/goldeneye/status")
+def goldeneye_fleet_status(project_id: str) -> dict[str, Any]:
+    """Fleet overview: nodes, apps, package installs, kit catalog."""
+    with begin(engine) as connection:
+        return goldeneye_paas.fleet_status(connection, project_id)
+
+
+@app.get("/v1/goldeneye/nodes")
+def list_goldeneye_nodes(project_id: str) -> dict[str, Any]:
+    with begin(engine) as connection:
+        items = goldeneye_paas.list_nodes(connection, project_id)
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+
+@app.post("/v1/goldeneye/nodes", status_code=201)
+def register_goldeneye_node(payload: dict) -> dict[str, Any]:
+    """Register or update a bare-metal Goldeneye node."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    name = str(payload.get("name") or "").strip()
+    if not project_id or not name:
+        raise HTTPException(status_code=422, detail="project_id and name are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return goldeneye_paas.register_node(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                name=name,
+                roles=payload.get("roles")
+                if isinstance(payload.get("roles"), list)
+                else None,
+                public_ip=payload.get("public_ip"),
+                tailnet_ip=payload.get("tailnet_ip"),
+                ssh_host=payload.get("ssh_host"),
+                ssh_user=str(payload.get("ssh_user") or "root"),
+                ssh_port=int(payload.get("ssh_port") or 22),
+                kit_version=payload.get("kit_version"),
+                site_config=payload.get("site_config")
+                if isinstance(payload.get("site_config"), dict)
+                else None,
+                labels=payload.get("labels")
+                if isinstance(payload.get("labels"), dict)
+                else None,
+                display_name=payload.get("display_name"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/goldeneye/nodes/{node_id}/heartbeat")
+def heartbeat_goldeneye_node(node_id: str, payload: dict) -> dict[str, Any]:
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        try:
+            return goldeneye_paas.heartbeat_node(
+                connection,
+                project_id=project_id,
+                node_id=node_id,
+                status=payload.get("status"),
+                kit_version=payload.get("kit_version"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/v1/goldeneye/package-installs")
+def list_goldeneye_package_installs(
+    project_id: str, node_id: Optional[str] = None
+) -> dict[str, Any]:
+    with begin(engine) as connection:
+        items = goldeneye_paas.list_package_installs(
+            connection, project_id, node_id=node_id
+        )
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+
+@app.post("/v1/goldeneye/packages/install", status_code=201)
+def install_goldeneye_package(payload: dict) -> dict[str, Any]:
+    """Plan/simulate (or gate real) package install on a node."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    package_id = str(payload.get("package_id") or "").strip()
+    if not project_id or not package_id:
+        raise HTTPException(
+            status_code=422, detail="project_id and package_id are required"
+        )
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return goldeneye_paas.install_package(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                package_id=package_id,
+                node_id=payload.get("node_id"),
+                node_name=payload.get("node_name"),
+                force=bool(payload.get("force", False)),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/v1/goldeneye/apps")
+def list_goldeneye_apps(project_id: str) -> dict[str, Any]:
+    with begin(engine) as connection:
+        items = goldeneye_paas.list_apps(connection, project_id)
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+
+@app.post("/v1/goldeneye/apps/deploy", status_code=201)
+def deploy_goldeneye_app(payload: dict) -> dict[str, Any]:
+    """Deploy (or simulate) an app onto a Goldeneye node."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    name = str(payload.get("name") or "").strip()
+    if not project_id or not name:
+        raise HTTPException(status_code=422, detail="project_id and name are required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return goldeneye_paas.deploy_app(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                name=name,
+                node_id=payload.get("node_id"),
+                node_name=payload.get("node_name"),
+                image_ref=payload.get("image_ref") or payload.get("image"),
+                compose_ref=payload.get("compose_ref") or payload.get("compose"),
+                domain=payload.get("domain"),
+                metadata=payload.get("metadata")
+                if isinstance(payload.get("metadata"), dict)
+                else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/goldeneye/apps/{name}/rollback")
+def rollback_goldeneye_app(name: str, payload: dict) -> dict[str, Any]:
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return goldeneye_paas.rollback_app(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                name=name,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/v1/resource-janitor/run", response_model=ResourceJanitorRunResponse)
@@ -14434,6 +15106,7 @@ def list_provider_health(
     limit: int = 100,
     offset: int = 0,
 ) -> ProviderHealthListResponse:
+    """List recorded provider-health snapshots for a project (optionally one account)."""
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500.")
     if offset < 0:
@@ -15083,8 +15756,11 @@ def evals_list(project_id: str, limit: int = 20) -> dict:
 
 @app.post("/v1/provider-health/poll")
 def provider_health_poll(payload: ProviderHealthPollRequest) -> dict:
-    """Live provider-health polling: snapshot every model lane's health into provider_health so the
-    router fallback chain can be validated before an incident (spec §C)."""
+    """Poll model-lane provider health and persist snapshots into provider_health.
+
+    Used to validate router fallback chains before an incident (spec §C). Results are
+    readable via GET /v1/provider-health.
+    """
     with begin(engine) as connection:
         return router_health.poll_provider_health(connection, payload.project_id, payload.actor)
 

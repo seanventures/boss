@@ -150,6 +150,40 @@ class Settings(BaseSettings):
     )
     aws_region: str = Field(default="us-east-1", alias="BOSS_AWS_REGION")
     aws_role_arn: Optional[str] = Field(default=None, alias="BOSS_AWS_ROLE_ARN")
+    # Azure Resource Manager + Azure OpenAI (models also use AZURE_OPENAI_* above)
+    azure_tenant_id: Optional[str] = Field(default=None, alias="BOSS_AZURE_TENANT_ID")
+    azure_client_id: Optional[str] = Field(default=None, alias="BOSS_AZURE_CLIENT_ID")
+    azure_client_secret: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_CLIENT_SECRET"
+    )
+    azure_subscription_id: Optional[str] = Field(
+        default=None, alias="BOSS_AZURE_SUBSCRIPTION_ID"
+    )
+    # OVHcloud (application key + secret + consumer key)
+    ovh_endpoint: str = Field(
+        default="https://eu.api.ovh.com/1.0", alias="BOSS_OVH_ENDPOINT"
+    )
+    ovh_application_key: Optional[str] = Field(
+        default=None, alias="BOSS_OVH_APPLICATION_KEY"
+    )
+    ovh_application_secret: Optional[str] = Field(
+        default=None, alias="BOSS_OVH_APPLICATION_SECRET"
+    )
+    ovh_consumer_key: Optional[str] = Field(
+        default=None, alias="BOSS_OVH_CONSUMER_KEY"
+    )
+    ovh_cloud_project_id: Optional[str] = Field(
+        default=None, alias="BOSS_OVH_CLOUD_PROJECT_ID"
+    )
+    # DigitalOcean optional Spaces / Inference
+    do_spaces_key: Optional[str] = Field(default=None, alias="BOSS_DO_SPACES_KEY")
+    do_spaces_secret: Optional[str] = Field(default=None, alias="BOSS_DO_SPACES_SECRET")
+    do_inference_base_url: Optional[str] = Field(
+        default=None, alias="BOSS_DO_INFERENCE_BASE_URL"
+    )
+    do_inference_api_key: Optional[str] = Field(
+        default=None, alias="BOSS_DO_INFERENCE_API_KEY"
+    )
     # SSH host (bring-your-own / customer-provided compute) — Docker workload deploys.
     # Gated like DO provisioning; private key held as a SecretRef, never in agent context.
     ssh_host_deploy_allowed: bool = Field(

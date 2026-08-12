@@ -1,69 +1,58 @@
 # Live QA memory (do not forget)
 
-Last deep campaign: 2026-08-11/12. Plane **BOSS-337**. Report: `docs/operations/LIVE_QA_2026-08-11.md`.
+**Living plan:** `docs/operations/GA_LIVING_PLAN.md` — **update this first** after every ship.  
+**GA scorecard:** `docs/operations/ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md`  
+**Umbrella:** Plane **BOSS-337** (In Progress)
 
-## Settled deploy truth
-- App: `boss-app` on goldeneye → `boss.local.sean.network` + `boss-api.local.sean.network`
-- Images: api/web `view2`, worker `norebuild` (skew)
-- Edition: **community**
-- Health OK (DB/GitHub/OpenAI); worker idle polling OK
+## Settled deploy truth (2026-08-12)
 
-## Settled P0
-- ProviderOps enterprise-gated; community omits `/v1/providers` etc.
-- Web still SSR-fans ProviderOps on **every** area → permanent `apiReachable=false` banner class of bug
-- Same failure class as delivery edition-split tests warn about
+- App: `boss-app` → `boss.local.sean.network` + `boss-api.local.sean.network`
+- **Edition: community**
+- **Live images:** api/web `968bc47`, worker `91faf6d` (**skew**; main HEAD `4727de7`)
+- Health OK (DB/GitHub/OpenAI configured)
+- **Never** redeploy with `--env-template` (clobbers secrets)
 
-## Settled P1
-- 39 open deadletters (mostly code.task): max_turns, TPM, credits, timeouts, allowlist, missing git in worker, code-tasks/step 500, NoneType
-- Worker lacks `git`; api has it
+## Superseded (do not re-derive)
 
-## Settled P2
-- SSR ~6.6MB / ~5s; OpenAPI version 0.2.1 vs product 0.11.0; reliability incidents open
+| Old “settled” (08-11) | Current truth |
+|---|---|
+| ProviderOps enterprise-only 404 | **Community full kernel** 200 (#157) |
+| GitHub MC 0 connections | **2 connections + 2 bindings** (#158 live) |
+| OpenAPI 0.2.1 | **0.11.0 on main** (#161); live lags until redeploy |
+| Sandbox host refused | **host.connected=true**; rootfs still missing |
+| Worker no git | **Dockerfile fixed**; live shared-tag still needed |
 
-## Next mandate
-Much deeper E2E functional audit of UI panels/features that look baked but don't work. Catalog half-baked surfaces with evidence.
+## Still true / open
 
-## Deep UI functional audit (2026-08-12 follow-up)
+- ~**41** open deadletters (mostly code.task) — substrate reliability
+- Agent Studio **empty** on dogfood; seed **404** on image `968bc47` (redeploy main for #159)
+- Previews: View browser proof not sealed
+- Enterprise nav still shown on community (honesty residual)
+- Residual hydration #418 (BOSS-346)
+- Factory may still use **settings** GitHub token path vs project binding (dual plane)
 
-Full catalog: `docs/operations/LIVE_UI_FUNCTIONAL_AUDIT_2026-08-11.md`
+## Green live (2026-08-12)
 
-### Additional settled findings
-- **Self-Improvement UI DEAD**: `/v1/self-improvement/*` 404; live has only `/v1/improvement-programs/*`.
-- **Sandboxes host down**: connection refused from API; empty sandboxes.
-- **Previews**: many URLs are `http://127.0.0.1:*` — operator-unreachable.
-- **GitHub MC SHELL**: 0 connections/bindings despite github_configured for factory token.
-- **CI/CD SHELL**: 0 deployment targets; observability not deployed.
-- **Agent Studio SHELL**: empty agents/panels; A2A degraded.
-- **Enterprise/Account Connect DEAD** on community (expected edition) but UI still shown.
-- **React hydration #418** on work, code_tasks, shepherd, reports, pipeline, org.
-- **Works**: metatron, command propose, agent chat, budget, canary/eval/anomaly/finops actions.
-- **Code tasks FLAKY**: high DLQ; worker norebuild + no git.
+- `make qa-live` / `live_dogfood_gate` **10/10 PASS**
+- Community: providers, secret-refs, changesets, worker-pools **200**
+- Enterprise: account-connect / self-improvement **404**
+- Budget green; command propose → task; Metatron PASS
+- GitHub easy-connect + repo list work
 
-### Mandate
-Do not treat Mission Control as “done.” Track bake-out backlog in BOSS-337 until P0/P1 closed or accepted.
+## GA verdict
 
-## PRD critical gaps (2026-08-12)
+**NOT GA-READY** public. **CONDITIONAL** private Community preview with **narrow claims**.  
+Phase A: shared-tag redeploy, Studio seed, rootfs/claims, DLQ, dual-plane honesty, claims freeze.  
+See `GA_LIVING_PLAN.md`.
 
-Six parallel agents synthesized → `docs/operations/PRD_CRITICAL_GAPS_2026-08-12.md`.
+## Plane
 
-**Remember:** Kernel ≠ closed loop. Top critical: factory dogfood reliability, orchestration glue (next_move), ProviderOps/SIM community packaging vs UI, sandboxes/previews, GitHub MC wiring, earned autonomy G1–G3. Do not add more panels before closing dogfood loops + edition honesty.
+- Children BOSS-338–351: see `PLANE_TRACKING_LIVE_QA.md` (Done vs residual split)
+- Done only with live functional proof
+- Ops `/requests` auto-file Plane — do not duplicate
 
-## Plane system of record (mandatory)
+## Product decisions settled
 
-All live QA / PRD gap work is tracked in **goldeneye Plane** project BOSS.
-
-- Umbrella: **BOSS-337** (In Progress)
-- Children: **BOSS-338–351** (see `docs/operations/PLANE_TRACKING_LIVE_QA.md`)
-- Always dedupe against Plane before creating issues; update issue state with work.
-
-## Product decision — community API keys (2026-08-12)
-
-**Operator decision:** Community edition **must** support third-party API keys and infra API keys.
-
-**Code (branch `ai/grok/community-provider-keys`):**
-- Community mounts: `provider-definitions`, `providers` (test/rotate/…), `resources`, `resource-receipts`
-- Already community: `entitlements/sources`, `secret-refs`, env model keys
-- Remain paid: changesets, worker-pools, autoscaler, resource-janitor, self-improvement, account-connect, marketplace, SSO
-
-Plane: BOSS-350 (decision), BOSS-338 (related UI). Deploy new api image before goldeneye reflects this.
-
+1. Community **must** support third-party + infra API keys (BYOK).  
+2. Full ProviderOps **kernel** (including ChangeSets/pools) is community; paid = Account Connect, marketplace, SSO/SCIM, self-improvement automation.  
+3. Easy GitHub auth = env SecretRef (not browser paste).

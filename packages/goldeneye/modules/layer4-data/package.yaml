@@ -1,0 +1,17 @@
+# Goldeneye module manifest — see docs/MODULE_CONTRACT.md
+api_version: 1
+id: layer4-data
+name: Data & backup
+version: "0.2.0"
+layer: 4
+kind: data
+description: >
+  pg-dump discovery, volume backup hooks, restore-drill stub
+depends_on: [layer1-runtime]
+optional: false
+provides: [backup]
+min_kit_version: "0.2.0"
+hooks:
+  install: install.sh
+  upgrade: install.sh
+  check: check.sh

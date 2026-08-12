@@ -120,10 +120,11 @@ paths:
     get:
       summary: BOSS Cloud/Enterprise feature catalog and Community independence contract
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Feature matrix with available_now flags and packaging copy
@@ -131,10 +132,11 @@ paths:
     get:
       summary: Cloud link status and Easy Connect readiness
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Independence flag, edition status, easy-connect readiness, pending sessions
@@ -142,10 +144,11 @@ paths:
     get:
       summary: Community vs Cloud vs Enterprise packaging matrix
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Marketing-aligned feature comparison rows
@@ -153,49 +156,62 @@ paths:
     get:
       summary: Local vs Cloud-locked capabilities for this project
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Capability buckets with unlock paths
   /v1/cloud/workers:
     get:
       summary: Managed worker fabric status (honest planned until fleets ship)
-      description: >
-        Includes local hybrid enrollments when present. Never claims
-        managed available_now=true. Elastic fleets remain planned.
+      description: 'Includes local hybrid enrollments when present. Never claims managed available_now=true.
+        Elastic fleets remain planned.
+
+        '
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Managed workers availability, local enrollments, honesty flags
   /v1/cloud/workers/enroll:
     post:
       summary: Enroll a local worker node for hybrid attach (receipted)
-      description: >
-        Requires Cloud link via Easy Connect. Enrolls a local worker for hybrid
-        attach only — does not provision elastic managed fleets.
+      description: 'Requires Cloud link via Easy Connect. Enrolls a local worker for hybrid attach only
+        — does not provision elastic managed fleets.
+
+        '
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id, worker_node_id]
+              required:
+              - project_id
+              - worker_node_id
               properties:
-                project_id: { type: string }
-                worker_node_id: { type: string }
-                display_name: { type: string }
+                project_id:
+                  type: string
+                worker_node_id:
+                  type: string
+                display_name:
+                  type: string
                 capabilities:
                   type: array
-                  items: { type: string }
-                metadata: { type: object }
-                actor: { type: string, default: ceo }
+                  items:
+                    type: string
+                metadata:
+                  type: object
+                actor:
+                  type: string
+                  default: ceo
       responses:
         '201':
           description: Local worker enrolled with receipt
@@ -212,11 +228,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id]
+              required:
+              - project_id
               properties:
-                project_id: { type: string }
-                hosted_org_id: { type: string }
-                actor: { type: string, default: ceo }
+                project_id:
+                  type: string
+                hosted_org_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
       responses:
         '200':
           description: Entitlements synced from hosted Account Connect
@@ -230,14 +251,17 @@ paths:
     get:
       summary: List effective entitlements (local + hosted when linked)
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: include_inactive
-          in: query
-          required: false
-          schema: { type: boolean, default: false }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: include_inactive
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: Local and hosted entitlement grants
@@ -245,14 +269,17 @@ paths:
     get:
       summary: List local team invite records when Cloud-linked
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
       responses:
         '200':
           description: Team invite records
@@ -266,19 +293,29 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id, email]
+              required:
+              - project_id
+              - email
               properties:
-                project_id: { type: string }
-                email: { type: string }
-                display_name: { type: string }
+                project_id:
+                  type: string
+                email:
+                  type: string
+                display_name:
+                  type: string
                 role_keys:
                   type: array
-                  items: { type: string }
+                  items:
+                    type: string
                 permissions:
                   type: array
-                  items: { type: string }
-                metadata: { type: object }
-                actor: { type: string, default: ceo }
+                  items:
+                    type: string
+                metadata:
+                  type: object
+                actor:
+                  type: string
+                  default: ceo
       responses:
         '201':
           description: Team invite created or blocked with receipt
@@ -287,44 +324,61 @@ paths:
   /v1/cloud/marketplace:
     get:
       summary: List hosted marketplace packs when linked
-      description: >
-        When unlinked returns 200 with empty items and blocked_reason=cloud_not_linked.
-        Does not require paid edition mount — always available under /v1/cloud/*.
+      description: 'When unlinked returns 200 with empty items and blocked_reason=cloud_not_linked. Does
+        not require paid edition mount — always available under /v1/cloud/*.
+
+        '
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: include_inactive
-          in: query
-          required: false
-          schema: { type: boolean, default: false }
-        - name: limit
-          in: query
-          required: false
-          schema: { type: integer, default: 50 }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: include_inactive
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 50
       responses:
         '200':
           description: Marketplace listings or empty+blocked when unlinked
   /v1/cloud/easy-connect:
     post:
       summary: Start Easy Connect from self-hosted Community to BOSS Cloud
-      description: >
-        Browser or device OAuth-style link. Community remains fully independent when
-        BOSS_ACCOUNT_CONNECT_URL is unset (returns blocked with clear reason). Never
-        accepts raw Cloud credentials in the control plane.
+      description: 'Browser or device OAuth-style link. Community remains fully independent when BOSS_ACCOUNT_CONNECT_URL
+        is unset (returns blocked with clear reason). Never accepts raw Cloud credentials in the control
+        plane.
+
+        '
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id]
+              required:
+              - project_id
               properties:
-                project_id: { type: string }
-                method: { type: string, enum: [browser, device], default: browser }
-                return_url: { type: string }
-                actor: { type: string, default: ceo }
+                project_id:
+                  type: string
+                method:
+                  type: string
+                  enum:
+                  - browser
+                  - device
+                  default: browser
+                return_url:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
       responses:
         '201':
           description: Easy Connect session started or blocked with visible reason
@@ -334,54 +388,65 @@ paths:
     get:
       summary: Poll Easy Connect session (device flow)
       parameters:
-        - name: session_id
-          in: path
-          required: true
-          schema: { type: string }
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: actor
-          in: query
-          required: false
-          schema: { type: string, default: ceo }
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: actor
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ceo
       responses:
         '200':
-          description: >
-            Session status (pending/ready/completed/blocked). On device authorization
-            completion also includes linked, hosted_org_id, entitlements_synced,
-            synced_entitlement_count, and entitlements_sync_error (sync failures do
-            not unlink).
+          description: 'Session status (pending/ready/completed/blocked). On device authorization completion
+            also includes linked, hosted_org_id, entitlements_synced, synced_entitlement_count, and entitlements_sync_error
+            (sync failures do not unlink).
+
+            '
         '404':
           description: Session not found
   /v1/cloud/easy-connect/{session_id}/complete:
     post:
       summary: Complete browser Easy Connect after Account Connect callback
       parameters:
-        - name: session_id
-          in: path
-          required: true
-          schema: { type: string }
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id]
+              required:
+              - project_id
               properties:
-                project_id: { type: string }
-                actor: { type: string, default: ceo }
-                code: { type: string }
-                state: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                code:
+                  type: string
+                state:
+                  type: string
       responses:
         '200':
-          description: >
-            Link completed or device poll result. Successful links auto-sync hosted
-            entitlements; response includes entitlements_synced (bool),
-            synced_entitlement_count (int), and entitlements_sync_error (string|null).
-            Sync failure leaves the link active.
+          description: 'Link completed or device poll result. Successful links auto-sync hosted entitlements;
+            response includes entitlements_synced (bool), synced_entitlement_count (int), and entitlements_sync_error
+            (string|null). Sync failure leaves the link active.
+
+            '
         '404':
           description: Session not found
         '409':
@@ -395,18 +460,26 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id]
+              required:
+              - project_id
               properties:
-                project_id: { type: string }
-                actor: { type: string, default: ceo }
-                code: { type: string }
-                state: { type: string }
-                session_id: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                code:
+                  type: string
+                state:
+                  type: string
+                session_id:
+                  type: string
       responses:
         '200':
-          description: >
-            Link completed with auto entitlement sync metadata
-            (entitlements_synced, synced_entitlement_count, entitlements_sync_error).
+          description: 'Link completed with auto entitlement sync metadata (entitlements_synced, synced_entitlement_count,
+            entitlements_sync_error).
+
+            '
         '404':
           description: Session not found
         '409':
@@ -420,11 +493,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id]
+              required:
+              - project_id
               properties:
-                project_id: { type: string }
-                actor: { type: string, default: ceo }
-                reason: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                reason:
+                  type: string
       responses:
         '200':
           description: Unlinked; local control plane continues
@@ -434,32 +512,44 @@ paths:
     get:
       summary: Evidence retention policy (local receipts + Cloud SLA when linked)
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
-          description: >
-            Community: local receipts indefinite (or BOSS_RECEIPT_RETENTION_DAYS).
-            Cloud-linked: tier cloud_linked, support_sla design_partner, retention_days.
+          description: 'Community: local receipts indefinite (or BOSS_RECEIPT_RETENTION_DAYS). Cloud-linked:
+            tier cloud_linked, support_sla design_partner, retention_days.
+
+            '
     put:
       summary: Set Cloud-linked evidence retention_days (receipted)
-      description: >
-        Requires active Cloud/Account Connect link. Stores policy on
-        account_connect_orgs.metadata and emits cloud.retention_updated with a Receipt.
+      description: 'Requires active Cloud/Account Connect link. Stores policy on account_connect_orgs.metadata
+        and emits cloud.retention_updated with a Receipt.
+
+        '
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id, retention_days]
+              required:
+              - project_id
+              - retention_days
               properties:
-                project_id: { type: string }
-                retention_days: { type: integer, minimum: 30, maximum: 2555 }
-                reason: { type: string }
-                actor: { type: string, default: ceo }
+                project_id:
+                  type: string
+                retention_days:
+                  type: integer
+                  minimum: 30
+                  maximum: 2555
+                reason:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
       responses:
         '200':
           description: Updated retention policy with receipt_id
@@ -2625,6 +2715,34 @@ paths:
       responses:
         '200':
           description: Task summary including data_boundary classification
+    delete:
+      tags:
+      - Tasks
+      summary: DELETE /v1/tasks/{task_id}
+      operationId: delete_v1_tasks_task_id
+      parameters:
+      - name: task_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
   /v1/self-improvement/proposals:
     get:
       summary: List self-improvement proposals for a project
@@ -8325,205 +8443,441 @@ paths:
           and general receipts: null
   /v1/elastic/status:
     get:
-      summary: Elastic fabric overview (pools, instances, per-provider usage)
+      tags:
+      - Elastic fabric
+      summary: Elastic fabric overview
+      description: Pools, instances, and per-provider usage for a project.
+      operationId: get_elastic_status
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
-          description: Fabric status with instance counts and usage rollup
+          description: Fabric status
+          content:
+            application/json:
+              schema: &id001
+                type: object
+                additionalProperties: true
   /v1/elastic/capacity:
     post:
-      summary: Request elastic worker capacity for a pool (agents/projects)
-      description: >
-        Sets desired_workers and reconciles instances. Local/container capacity
-        starts immediately. Cloud/VM proposes ChangeSets or simulated instances
-        when BOSS_INFRA_REAL_PROVISION_ALLOWED is false.
+      tags:
+      - Elastic fabric
+      summary: Request elastic worker capacity
+      description: Agents/projects request desired worker capacity against a pool. May auto-reconcile.
+      operationId: request_elastic_capacity
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id, desired_workers]
               properties:
-                project_id: { type: string }
-                actor: { type: string, default: ceo }
-                desired_workers: { type: integer }
-                pool_key: { type: string }
-                worker_pool_id: { type: string }
-                kind: { type: string, enum: [local, container, cloud, vm] }
-                provider_account_id: { type: string }
-                auto_reconcile: { type: boolean, default: true }
-                cloud_spillover_enabled: { type: boolean, default: false }
-                reason: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                desired_workers:
+                  type: integer
+                  description: Desired number of workers
+                pool_key:
+                  type: string
+                  description: Logical pool key
+                worker_pool_id:
+                  type: string
+                  description: Existing pool id
+                kind:
+                  type: string
+                  description: Worker kind
+                provider_account_id:
+                  type: string
+                  description: Provider account for cloud spillover
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                auto_reconcile:
+                  type: boolean
+                  default: true
+                cloud_spillover_enabled:
+                  type: boolean
+                  default: false
+                reason:
+                  type: string
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
+              - desired_workers
       responses:
         '201':
-          description: Capacity requested and optionally reconciled
+          description: Capacity request accepted
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
   /v1/elastic/pools/{worker_pool_id}/reconcile:
     post:
-      summary: Reconcile pool instances to desired_workers
+      tags:
+      - Elastic fabric
+      summary: Reconcile pool instances to desired capacity
+      description: Materialize desired pool capacity (local/container; cloud via ChangeSet when spillover
+        enabled).
+      operationId: reconcile_elastic_pool
       parameters:
-        - name: worker_pool_id
-          in: path
-          required: true
-          schema: { type: string }
+      - name: worker_pool_id
+        in: path
+        required: true
+        schema:
+          type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id]
               properties:
-                project_id: { type: string }
-                actor: { type: string }
-                cloud_spillover_enabled: { type: boolean }
-                reason: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                cloud_spillover_enabled:
+                  type: boolean
+                  default: false
+                reason:
+                  type: string
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
       responses:
         '200':
-          description: Reconcile result with created/drained instances
+          description: Reconcile result
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
   /v1/elastic/instances:
     get:
+      tags:
+      - Elastic fabric
       summary: List elastic worker instances
+      operationId: list_elastic_instances
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: worker_pool_id
-          in: query
-          schema: { type: string }
-        - name: status
-          in: query
-          schema: { type: string }
-        - name: active_only
-          in: query
-          schema: { type: boolean }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: worker_pool_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: active_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+        description: 1–500
       responses:
         '200':
-          description: Worker instances
+          description: Instance list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  items:
+                    type: array
+                    items: *id001
+                  count:
+                    type: integer
+                additionalProperties: false
+        '400':
+          description: Invalid limit
   /v1/elastic/instances/{instance_id}/heartbeat:
     post:
+      tags:
+      - Elastic fabric
       summary: Heartbeat an elastic worker instance
+      operationId: heartbeat_elastic_instance
       parameters:
-        - name: instance_id
-          in: path
-          required: true
-          schema: { type: string }
+      - name: instance_id
+        in: path
+        required: true
+        schema:
+          type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id]
               properties:
-                project_id: { type: string }
-                actor: { type: string }
-                status: { type: string }
-                endpoint: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: worker
+                status:
+                  type: string
+                endpoint:
+                  type: string
+                  description: Worker endpoint URL
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
       responses:
         '200':
-          description: Updated instance
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema: *id001
+        '404':
+          description: Instance not found
+        '422':
+          description: Validation error
   /v1/elastic/instances/{instance_id}/terminate:
     post:
+      tags:
+      - Elastic fabric
       summary: Terminate (drain) an elastic worker instance
+      operationId: terminate_elastic_instance
       parameters:
-        - name: instance_id
-          in: path
-          required: true
-          schema: { type: string }
+      - name: instance_id
+        in: path
+        required: true
+        schema:
+          type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id]
               properties:
-                project_id: { type: string }
-                actor: { type: string }
-                reason: { type: string }
-                destroy_provider_resource: { type: boolean }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                reason:
+                  type: string
+                destroy_provider_resource:
+                  type: boolean
+                  default: false
+                  description: Also destroy underlying cloud resource when present
+              additionalProperties: false
+              required:
+              - project_id
       responses:
         '200':
-          description: Terminated instance
+          description: Terminate result
+          content:
+            application/json:
+              schema: *id001
+        '404':
+          description: Instance not found
+        '422':
+          description: Validation error
   /v1/provider-usage:
     get:
+      tags:
+      - Provider usage
       summary: Provider-by-provider usage ledger
+      description: API, compute, and billing-mirror usage events.
+      operationId: list_provider_usage
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: provider
-          in: query
-          schema: { type: string }
-        - name: provider_account_id
-          in: query
-          schema: { type: string }
-        - name: category
-          in: query
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: provider
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: provider_account_id
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: category
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+        description: 1–500
       responses:
         '200':
           description: Usage events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  items:
+                    type: array
+                    items: *id001
+                  count:
+                    type: integer
+                additionalProperties: false
+        '400':
+          description: Invalid limit
   /v1/provider-usage/summary:
     get:
-      summary: Aggregated usage and billing cost events per provider
+      tags:
+      - Provider usage
+      summary: Aggregated usage and billing cost per provider
+      operationId: provider_usage_summary
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
-        - name: provider
-          in: query
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: provider
+        in: query
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           description: Usage summary
+          content:
+            application/json:
+              schema: *id001
   /v1/provider-usage/ingest:
     post:
+      tags:
+      - Provider usage
       summary: Ingest a provider usage event
+      description: Record a usage event from control plane or adapter instrumentation. Requires providerops_manage.
+      operationId: ingest_provider_usage
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id, provider, operation]
               properties:
-                project_id: { type: string }
-                provider: { type: string }
-                operation: { type: string }
-                category: { type: string }
-                quantity: { type: number }
-                unit: { type: string }
-                cost_usd_micros: { type: integer }
-                actor: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: system
+                provider:
+                  type: string
+                  description: Provider key e.g. aws, azure
+                operation:
+                  type: string
+                  description: Operation name e.g. bedrock.converse
+                category:
+                  type: string
+                  default: api_call
+                quantity:
+                  type: number
+                  default: 1
+                unit:
+                  type: string
+                  default: count
+                provider_account_id:
+                  type: string
+                cost_usd_micros:
+                  type: integer
+                  description: Cost in micro-USD
+                resource_ref:
+                  type: string
+                worker_instance_id:
+                  type: string
+                receipt_id:
+                  type: string
+                source:
+                  type: string
+                  default: control_plane
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
+              - provider
+              - operation
       responses:
         '201':
-          description: Usage event recorded
+          description: Usage recorded
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
   /v1/provider-usage/sync:
     post:
-      summary: Sync provider inventory/billing and mirror costs into usage ledger
+      tags:
+      - Provider usage
+      summary: Sync provider inventory/billing into usage ledger
+      description: Pull inventory and cost data for a provider account and mirror into the usage ledger.
+      operationId: sync_provider_usage
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [project_id, provider_account_id]
               properties:
-                project_id: { type: string }
-                provider_account_id: { type: string }
-                actor: { type: string }
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                provider_account_id:
+                  type: string
+              additionalProperties: false
+              required:
+              - project_id
+              - provider_account_id
       responses:
         '200':
-          description: Sync result with usage summary
+          description: Sync result
+          content:
+            application/json:
+              schema: *id001
+        '404':
+          description: Provider account not found
+        '409':
+          description: Adapter/credential conflict
+        '422':
+          description: Validation error
   /v1/worker-pools:
     get:
       summary: List Budget-Aware Autoscaler worker pools
@@ -14387,10 +14741,11 @@ paths:
     get:
       summary: List installed tracker providers for a project
       parameters:
-        - name: project_id
-          in: query
-          required: true
-          schema: { type: string }
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
         '200':
           description: Providers with default flag and redacted configuration
@@ -14403,17 +14758,31 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id, provider_key]
+              required:
+              - project_id
+              - provider_key
               properties:
-                project_id: { type: string }
+                project_id:
+                  type: string
                 provider_key:
                   type: string
-                  enum: [plane, jira, linear, github_issues, azure_devops]
-                configuration: { type: object }
-                api_token: { type: string }
-                set_as_default: { type: boolean }
-                test: { type: boolean, default: true }
-                actor: { type: string }
+                  enum:
+                  - plane
+                  - jira
+                  - linear
+                  - github_issues
+                  - azure_devops
+                configuration:
+                  type: object
+                api_token:
+                  type: string
+                set_as_default:
+                  type: boolean
+                test:
+                  type: boolean
+                  default: true
+                actor:
+                  type: string
       responses:
         '200':
           description: Connected provider (secrets redacted)
@@ -14428,11 +14797,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id, provider_key]
+              required:
+              - project_id
+              - provider_key
               properties:
-                project_id: { type: string }
-                provider_key: { type: string }
-                actor: { type: string }
+                project_id:
+                  type: string
+                provider_key:
+                  type: string
+                actor:
+                  type: string
       responses:
         '200':
           description: Updated default provider
@@ -14445,11 +14819,16 @@ paths:
           application/json:
             schema:
               type: object
-              required: [project_id, provider_key]
+              required:
+              - project_id
+              - provider_key
               properties:
-                project_id: { type: string }
-                provider_key: { type: string }
-                actor: { type: string }
+                project_id:
+                  type: string
+                provider_key:
+                  type: string
+                actor:
+                  type: string
       responses:
         '200':
           description: Connection test result
@@ -15080,6 +15459,3957 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/agent-runs:
+    get:
+      tags:
+      - Agent Runs
+      summary: GET /v1/agent-runs
+      operationId: get_v1_agent_runs
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/agent-runs/{run_id}/resume:
+    post:
+      tags:
+      - Agent Runs
+      summary: POST /v1/agent-runs/{run_id}/resume
+      operationId: post_v1_agent_runs_run_id_resume
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/agent/threads:
+    get:
+      tags:
+      - Agent
+      summary: GET /v1/agent/threads
+      operationId: get_v1_agent_threads
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/agent/threads/{thread_id}/messages:
+    get:
+      tags:
+      - Agent
+      summary: GET /v1/agent/threads/{thread_id}/messages
+      operationId: get_v1_agent_threads_thread_id_messages
+      parameters:
+      - name: thread_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/anomalies/scan:
+    post:
+      tags:
+      - Anomalies
+      summary: POST /v1/anomalies/scan
+      operationId: post_v1_anomalies_scan
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/approval-rules:
+    get:
+      tags:
+      - Approval Rules
+      summary: GET /v1/approval-rules
+      operationId: get_v1_approval_rules
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/bakeoff/{batch_id}/report:
+    get:
+      tags:
+      - Bakeoff
+      summary: GET /v1/bakeoff/{batch_id}/report
+      operationId: get_v1_bakeoff_batch_id_report
+      parameters:
+      - name: batch_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/budget/insights:
+    get:
+      tags:
+      - Budget
+      summary: GET /v1/budget/insights
+      operationId: get_v1_budget_insights
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/budget/set_intensity:
+    post:
+      tags:
+      - Budget
+      summary: POST /v1/budget/set_intensity
+      operationId: post_v1_budget_set_intensity
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/capabilities:
+    get:
+      tags:
+      - Capabilities
+      summary: GET /v1/capabilities
+      operationId: get_v1_capabilities
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/changesets/{changeset_id}/terraform-export:
+    get:
+      tags:
+      - Changesets
+      summary: GET /v1/changesets/{changeset_id}/terraform-export
+      operationId: get_v1_changesets_changeset_id_terraform_export
+      parameters:
+      - name: changeset_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Changesets
+      summary: POST /v1/changesets/{changeset_id}/terraform-export
+      operationId: post_v1_changesets_changeset_id_terraform_export
+      parameters:
+      - name: changeset_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/chaos:
+    get:
+      tags:
+      - Chaos
+      summary: GET /v1/chaos
+      operationId: get_v1_chaos
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/chaos/run:
+    post:
+      tags:
+      - Chaos
+      summary: POST /v1/chaos/run
+      operationId: post_v1_chaos_run
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/comms/inbox/ack-state:
+    get:
+      tags:
+      - Comms
+      summary: GET /v1/comms/inbox/ack-state
+      operationId: get_v1_comms_inbox_ack_state
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/comms/slack/digest:
+    post:
+      tags:
+      - Comms
+      summary: POST /v1/comms/slack/digest
+      operationId: post_v1_comms_slack_digest
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/comms/slack/render:
+    post:
+      tags:
+      - Comms
+      summary: POST /v1/comms/slack/render
+      operationId: post_v1_comms_slack_render
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/concurrency-load:
+    post:
+      tags:
+      - Concurrency Load
+      summary: POST /v1/concurrency-load
+      operationId: post_v1_concurrency_load
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/dashboard:
+    get:
+      tags:
+      - Dashboard
+      summary: GET /v1/dashboard
+      operationId: get_v1_dashboard
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/dashboard/poll:
+    get:
+      tags:
+      - Dashboard
+      summary: GET /v1/dashboard/poll
+      operationId: get_v1_dashboard_poll
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/design-routing:
+    post:
+      tags:
+      - Design Routing
+      summary: POST /v1/design-routing
+      operationId: post_v1_design_routing
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/diag/host-capabilities:
+    get:
+      tags:
+      - Diag
+      summary: GET /v1/diag/host-capabilities
+      operationId: get_v1_diag_host_capabilities
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/discoveries:
+    get:
+      tags:
+      - Discoveries
+      summary: GET /v1/discoveries
+      operationId: get_v1_discoveries
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Discoveries
+      summary: POST /v1/discoveries
+      operationId: post_v1_discoveries
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/discoveries/{run_id}:
+    get:
+      tags:
+      - Discoveries
+      summary: GET /v1/discoveries/{run_id}
+      operationId: get_v1_discoveries_run_id
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/discoveries/{run_id}/deepen:
+    post:
+      tags:
+      - Discoveries
+      summary: POST /v1/discoveries/{run_id}/deepen
+      operationId: post_v1_discoveries_run_id_deepen
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/discoveries/{run_id}/promote:
+    post:
+      tags:
+      - Discoveries
+      summary: POST /v1/discoveries/{run_id}/promote
+      operationId: post_v1_discoveries_run_id_promote
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/engine/agent/chat:
+    post:
+      tags:
+      - Engine
+      summary: POST /v1/engine/agent/chat
+      operationId: post_v1_engine_agent_chat
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/enterprise/soc2-evidence:
+    post:
+      tags:
+      - Enterprise
+      summary: POST /v1/enterprise/soc2-evidence
+      operationId: post_v1_enterprise_soc2_evidence
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/evals:
+    get:
+      tags:
+      - Evals
+      summary: GET /v1/evals
+      operationId: get_v1_evals
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/evals/run:
+    post:
+      tags:
+      - Evals
+      summary: POST /v1/evals/run
+      operationId: post_v1_evals_run
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/finops/commitment-reconciliations:
+    get:
+      tags:
+      - FinOps
+      summary: GET /v1/finops/commitment-reconciliations
+      operationId: get_v1_finops_commitment_reconciliations
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/finops/initiative-budget:
+    post:
+      tags:
+      - FinOps
+      summary: POST /v1/finops/initiative-budget
+      operationId: post_v1_finops_initiative_budget
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/finops/reconcile-commitments:
+    post:
+      tags:
+      - FinOps
+      summary: POST /v1/finops/reconcile-commitments
+      operationId: post_v1_finops_reconcile_commitments
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/goldeneye/apps:
+    get:
+      tags:
+      - Goldeneye PaaS
+      summary: List apps deployed on Goldeneye
+      operationId: list_goldeneye_apps
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: App list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  items:
+                    type: array
+                    items: *id001
+                  count:
+                    type: integer
+                additionalProperties: false
+  /v1/goldeneye/apps/deploy:
+    post:
+      tags:
+      - Goldeneye PaaS
+      summary: Deploy (or simulate) an app onto a Goldeneye node
+      description: Ships a containerized app with optional domain. Real deploys stay policy-gated and
+        receipted.
+      operationId: deploy_goldeneye_app
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                name:
+                  type: string
+                  description: App name (stable id)
+                node_id:
+                  type: string
+                node_name:
+                  type: string
+                image_ref:
+                  type: string
+                  description: Container image reference
+                image:
+                  type: string
+                  description: Alias for image_ref
+                compose_ref:
+                  type: string
+                  description: Compose file / bundle reference
+                compose:
+                  type: string
+                  description: Alias for compose_ref
+                domain:
+                  type: string
+                  description: Public or tailnet domain for the app
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
+              - name
+      responses:
+        '201':
+          description: Deploy planned/recorded
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
+  /v1/goldeneye/apps/{name}/rollback:
+    post:
+      tags:
+      - Goldeneye PaaS
+      summary: Rollback a Goldeneye app to the previous revision
+      operationId: rollback_goldeneye_app
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+        description: App name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+              additionalProperties: false
+              required:
+              - project_id
+      responses:
+        '200':
+          description: Rollback planned/recorded
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
+  /v1/goldeneye/nodes:
+    get:
+      tags:
+      - Goldeneye PaaS
+      summary: List Goldeneye bare-metal nodes
+      operationId: list_goldeneye_nodes
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Node list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  items:
+                    type: array
+                    items: *id001
+                  count:
+                    type: integer
+                additionalProperties: false
+    post:
+      tags:
+      - Goldeneye PaaS
+      summary: Register or update a Goldeneye node
+      description: Register a bare-metal (or VM) Goldeneye node with SSH/tailnet metadata. Requires providerops_manage.
+      operationId: register_goldeneye_node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:
+                  type: string
+                  description: Project scope
+                actor:
+                  type: string
+                  description: Actor id (default ceo)
+                name:
+                  type: string
+                  description: Stable node name
+                display_name:
+                  type: string
+                  description: Human-readable name
+                roles:
+                  type: array
+                  items:
+                    type: string
+                  description: Node roles e.g. edge, control, data, app
+                public_ip:
+                  type: string
+                tailnet_ip:
+                  type: string
+                ssh_host:
+                  type: string
+                  description: SSH target host or IP
+                ssh_user:
+                  type: string
+                  default: root
+                  description: SSH user
+                ssh_port:
+                  type: integer
+                  default: 22
+                  description: SSH port
+                kit_version:
+                  type: string
+                site_config: *id001
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
+              - name
+      responses:
+        '201':
+          description: Node registered
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
+  /v1/goldeneye/nodes/{node_id}/heartbeat:
+    post:
+      tags:
+      - Goldeneye PaaS
+      summary: Heartbeat a Goldeneye node
+      description: Agent/kit reports node liveness, status, and kit version.
+      operationId: heartbeat_goldeneye_node
+      parameters:
+      - name: node_id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:
+                  type: string
+                status:
+                  type: string
+                  description: Node status e.g. ready, degraded, offline
+                kit_version:
+                  type: string
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
+      responses:
+        '200':
+          description: Heartbeat accepted
+          content:
+            application/json:
+              schema: *id001
+        '404':
+          description: Node not found
+        '422':
+          description: Validation error
+  /v1/goldeneye/package-installs:
+    get:
+      tags:
+      - Goldeneye PaaS
+      summary: List Goldeneye package install records
+      operationId: list_goldeneye_package_installs
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: node_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Optional filter to a single node
+      responses:
+        '200':
+          description: Install list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  project_id:
+                    type: string
+                  items:
+                    type: array
+                    items: *id001
+                  count:
+                    type: integer
+                additionalProperties: false
+  /v1/goldeneye/packages:
+    get:
+      tags:
+      - Goldeneye PaaS
+      summary: Goldeneye package manager catalog
+      description: Built-in layered package catalog (host → edge → optional services).
+      operationId: goldeneye_package_catalog
+      parameters: []
+      responses:
+        '200':
+          description: Package catalog
+          content:
+            application/json:
+              schema: *id001
+  /v1/goldeneye/packages/install:
+    post:
+      tags:
+      - Goldeneye PaaS
+      summary: Plan or gate package install on a node
+      description: Plans/simulates (or gates real) package install on a Goldeneye node. Real host writes
+        remain policy-gated; effects are receipted.
+      operationId: install_goldeneye_package
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                project_id:
+                  type: string
+                actor:
+                  type: string
+                  default: ceo
+                package_id:
+                  type: string
+                  description: Package id from the Goldeneye catalog
+                node_id:
+                  type: string
+                  description: Target node id (preferred)
+                node_name:
+                  type: string
+                  description: Target node name if id unknown
+                force:
+                  type: boolean
+                  default: false
+                  description: Bypass bootstrap order checks (operator risk)
+                metadata: *id001
+              additionalProperties: false
+              required:
+              - project_id
+              - package_id
+      responses:
+        '201':
+          description: Install planned/recorded
+          content:
+            application/json:
+              schema: *id001
+        '422':
+          description: Validation error
+  /v1/goldeneye/status:
+    get:
+      tags:
+      - Goldeneye PaaS
+      summary: Goldeneye fleet overview
+      description: Nodes, apps, package installs, and kit catalog status for a project.
+      operationId: goldeneye_fleet_status
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Project scope
+      responses:
+        '200':
+          description: Fleet status
+          content:
+            application/json:
+              schema: *id001
+  /v1/independence-check:
+    post:
+      tags:
+      - Independence Check
+      summary: POST /v1/independence-check
+      operationId: post_v1_independence_check
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/integrations/plane/sync:
+    post:
+      tags:
+      - Integrations
+      summary: POST /v1/integrations/plane/sync
+      operationId: post_v1_integrations_plane_sync
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meeting-roles:
+    get:
+      tags:
+      - Meeting Roles
+      summary: GET /v1/meeting-roles
+      operationId: get_v1_meeting_roles
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Meeting Roles
+      summary: POST /v1/meeting-roles
+      operationId: post_v1_meeting_roles
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meeting-roles/{role_key}:
+    delete:
+      tags:
+      - Meeting Roles
+      summary: DELETE /v1/meeting-roles/{role_key}
+      operationId: delete_v1_meeting_roles_role_key
+      parameters:
+      - name: role_key
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    patch:
+      tags:
+      - Meeting Roles
+      summary: PATCH /v1/meeting-roles/{role_key}
+      operationId: patch_v1_meeting_roles_role_key
+      parameters:
+      - name: role_key
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meeting-rooms:
+    get:
+      tags:
+      - Meeting Rooms
+      summary: GET /v1/meeting-rooms
+      operationId: get_v1_meeting_rooms
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/meetings/prd:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/prd
+      operationId: post_v1_meetings_prd
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/step:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/step
+      operationId: post_v1_meetings_step
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/sweep-stalled:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/sweep-stalled
+      operationId: post_v1_meetings_sweep_stalled
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/tally:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/tally
+      operationId: post_v1_meetings_tally
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meta/api-catalog:
+    get:
+      tags:
+      - Meta
+      summary: Full HTTP API capability catalog by product domain
+      description: Every mounted FastAPI route grouped by product domain, with OpenAPI coverage flags.
+        Use this to discover controls available over the API.
+      operationId: get_meta_api_catalog
+      parameters: []
+      responses:
+        '200':
+          description: Catalog of domains and routes with documentation coverage
+          content:
+            application/json:
+              schema: *id001
+  /v1/meta/api-catalog/{domain}:
+    get:
+      tags:
+      - Meta
+      summary: API catalog slice for a single domain
+      description: Returns one domain (e.g. goldeneye, providers, core) from the full catalog.
+      operationId: get_meta_api_catalog_domain
+      parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Domain id (e.g. goldeneye, multi-cloud, core, providers)
+      responses:
+        '200':
+          description: Domain catalog slice
+          content:
+            application/json:
+              schema: *id001
+        '404':
+          description: Unknown domain
+  /v1/meta/openapi-coverage:
+    get:
+      tags:
+      - Meta
+      summary: OpenAPI documentation coverage vs live routes
+      description: Reports how many live /v1 routes are present in api/openapi.yaml and lists missing
+        ones.
+      operationId: get_meta_openapi_coverage
+      parameters: []
+      responses:
+        '200':
+          description: Coverage report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  route_count:
+                    type: integer
+                  documented_route_count:
+                    type: integer
+                  documentation_coverage:
+                    type: number
+                  missing_from_openapi_count:
+                    type: integer
+                  missing_from_openapi:
+                    type: array
+                    items: *id001
+                  openapi_json:
+                    type: string
+                  openapi_yaml:
+                    type: string
+                  docs_index:
+                    type: string
+                additionalProperties: false
+  /v1/multi-cloud/catalog:
+    get:
+      tags:
+      - Multi-cloud
+      summary: Unified multi-cloud infra/model/bare-metal catalog
+      description: Catalog of AWS, Azure, DigitalOcean, and OVHcloud capabilities (infra skills, model
+        skills, bare metal). Optional category filter.
+      operationId: get_multi_cloud_catalog
+      parameters:
+      - name: category
+        in: query
+        required: false
+        schema:
+          type: string
+        description: 'Optional filter: infra | models | bare_metal | compute | storage | dns | billing'
+      responses:
+        '200':
+          description: Multi-cloud catalog or category slice
+          content:
+            application/json:
+              schema: *id001
+  /v1/multi-cloud/providers/{provider_key}:
+    get:
+      tags:
+      - Multi-cloud
+      summary: Multi-cloud provider entry plus live Resource Plane definition
+      description: Merges static catalog entry with registered provider definition and capabilities.
+      operationId: get_multi_cloud_provider
+      parameters:
+      - name: provider_key
+        in: path
+        required: true
+        schema:
+          type: string
+        description: 'Provider key: aws | azure | digitalocean | ovhcloud'
+      responses:
+        '200':
+          description: Catalog + resource plane + capabilities
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  catalog: *id001
+                  resource_plane: *id001
+                  capabilities:
+                    type: array
+                    items:
+                      type: string
+                additionalProperties: false
+        '404':
+          description: Unknown provider_key
+  /v1/multi-cloud/skills:
+    get:
+      tags:
+      - Multi-cloud
+      summary: Indexed multi-cloud skill IDs
+      description: Flattened skill index from the multi-cloud catalog (infra + model skills).
+      operationId: list_multi_cloud_skills
+      parameters: []
+      responses:
+        '200':
+          description: Skill index
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  skill_index:
+                    type: array
+                    items: *id001
+                  count:
+                    type: integer
+                additionalProperties: false
+  /v1/mutation-gate:
+    post:
+      tags:
+      - Mutation Gate
+      summary: POST /v1/mutation-gate
+      operationId: post_v1_mutation_gate
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/observability/stack:
+    get:
+      tags:
+      - Observability
+      summary: GET /v1/observability/stack
+      operationId: get_v1_observability_stack
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/observability/stack/deploy:
+    post:
+      tags:
+      - Observability
+      summary: POST /v1/observability/stack/deploy
+      operationId: post_v1_observability_stack_deploy
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/orgs:
+    get:
+      tags:
+      - Orgs
+      summary: GET /v1/orgs
+      operationId: get_v1_orgs
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Orgs
+      summary: POST /v1/orgs
+      operationId: post_v1_orgs
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/outputs:
+    get:
+      tags:
+      - Outputs
+      summary: GET /v1/outputs
+      operationId: get_v1_outputs
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/pipeline-profiles:
+    get:
+      tags:
+      - Pipeline Profiles
+      summary: GET /v1/pipeline-profiles
+      operationId: get_v1_pipeline_profiles
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Pipeline Profiles
+      summary: POST /v1/pipeline-profiles
+      operationId: post_v1_pipeline_profiles
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/pipeline-profiles/default:
+    post:
+      tags:
+      - Pipeline Profiles
+      summary: POST /v1/pipeline-profiles/default
+      operationId: post_v1_pipeline_profiles_default
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/plans/{plan_id}/dispatch:
+    post:
+      tags:
+      - Plans
+      summary: POST /v1/plans/{plan_id}/dispatch
+      operationId: post_v1_plans_plan_id_dispatch
+      parameters:
+      - name: plan_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/policy-evals:
+    get:
+      tags:
+      - Policy Evals
+      summary: GET /v1/policy-evals
+      operationId: get_v1_policy_evals
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/prd/decompose:
+    post:
+      tags:
+      - Prd
+      summary: POST /v1/prd/decompose
+      operationId: post_v1_prd_decompose
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/projects/{project_id}/terraform-drift-reconcile:
+    post:
+      tags:
+      - Projects
+      summary: POST /v1/projects/{project_id}/terraform-drift-reconcile
+      operationId: post_v1_projects_project_id_terraform_drift_reconcile
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/provider-health/poll:
+    post:
+      tags:
+      - Provider Health
+      summary: POST /v1/provider-health/poll
+      operationId: post_v1_provider_health_poll
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/alert:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/alert
+      operationId: post_v1_reliability_alert
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/graph:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/graph
+      operationId: get_v1_reliability_graph
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/reliability/graph/walk:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/graph/walk
+      operationId: post_v1_reliability_graph_walk
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/incidents:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/incidents
+      operationId: get_v1_reliability_incidents
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/reliability/incidents/{incident_id}:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/incidents/{incident_id}
+      operationId: get_v1_reliability_incidents_incident_id
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/reliability/incidents/{incident_id}/decision:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/incidents/{incident_id}/decision
+      operationId: get_v1_reliability_incidents_incident_id_decision
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/reliability/incidents/{incident_id}/diagnose:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/incidents/{incident_id}/diagnose
+      operationId: post_v1_reliability_incidents_incident_id_diagnose
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/incidents/{incident_id}/feedback:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/incidents/{incident_id}/feedback
+      operationId: post_v1_reliability_incidents_incident_id_feedback
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/incidents/{incident_id}/investigation:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/incidents/{incident_id}/investigation
+      operationId: get_v1_reliability_incidents_incident_id_investigation
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/reliability/incidents/{incident_id}/remediate:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/incidents/{incident_id}/remediate
+      operationId: post_v1_reliability_incidents_incident_id_remediate
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/incidents/{incident_id}/verify:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/incidents/{incident_id}/verify
+      operationId: post_v1_reliability_incidents_incident_id_verify
+      parameters:
+      - name: incident_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/learning:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/learning
+      operationId: get_v1_reliability_learning
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/reliability/meta-eval:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/meta-eval
+      operationId: post_v1_reliability_meta_eval
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/policy:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/policy
+      operationId: get_v1_reliability_policy
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/policy
+      operationId: post_v1_reliability_policy
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/scan:
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/scan
+      operationId: post_v1_reliability_scan
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reliability/sources:
+    get:
+      tags:
+      - Reliability
+      summary: GET /v1/reliability/sources
+      operationId: get_v1_reliability_sources
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Reliability
+      summary: POST /v1/reliability/sources
+      operationId: post_v1_reliability_sources
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/repair-policy:
+    post:
+      tags:
+      - Repair Policy
+      summary: POST /v1/repair-policy
+      operationId: post_v1_repair_policy
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/reports/summary:
+    get:
+      tags:
+      - Reports
+      summary: GET /v1/reports/summary
+      operationId: get_v1_reports_summary
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/roles/{role_key}/autonomy/evaluate:
+    post:
+      tags:
+      - Roles
+      summary: POST /v1/roles/{role_key}/autonomy/evaluate
+      operationId: post_v1_roles_role_key_autonomy_evaluate
+      parameters:
+      - name: role_key
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/router/rationale:
+    post:
+      tags:
+      - Router
+      summary: POST /v1/router/rationale
+      operationId: post_v1_router_rationale
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/scaffold:
+    post:
+      tags:
+      - Scaffold
+      summary: POST /v1/scaffold
+      operationId: post_v1_scaffold
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/secrets:
+    get:
+      tags:
+      - Secrets
+      summary: GET /v1/secrets
+      operationId: get_v1_secrets
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+    post:
+      tags:
+      - Secrets
+      summary: POST /v1/secrets
+      operationId: post_v1_secrets
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/secrets/keypair:
+    post:
+      tags:
+      - Secrets
+      summary: POST /v1/secrets/keypair
+      operationId: post_v1_secrets_keypair
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/secrets/{secret_ref_id}/verify:
+    post:
+      tags:
+      - Secrets
+      summary: POST /v1/secrets/{secret_ref_id}/verify
+      operationId: post_v1_secrets_secret_ref_id_verify
+      parameters:
+      - name: secret_ref_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/self-improvement/proposals/{proposal_id}/rollout/advance:
+    post:
+      tags:
+      - Self Improvement
+      summary: POST /v1/self-improvement/proposals/{proposal_id}/rollout/advance
+      operationId: post_v1_self_improvement_proposals_proposal_id_rollout_advance
+      parameters:
+      - name: proposal_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/self-improvement/proposals/{proposal_id}/rollout/start:
+    post:
+      tags:
+      - Self Improvement
+      summary: POST /v1/self-improvement/proposals/{proposal_id}/rollout/start
+      operationId: post_v1_self_improvement_proposals_proposal_id_rollout_start
+      parameters:
+      - name: proposal_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/self-improvement/proposals/{proposal_id}/run-canary:
+    post:
+      tags:
+      - Self Improvement
+      summary: POST /v1/self-improvement/proposals/{proposal_id}/run-canary
+      operationId: post_v1_self_improvement_proposals_proposal_id_run_canary
+      parameters:
+      - name: proposal_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/shepherd/escalations/{escalation_id}/answer:
+    post:
+      tags:
+      - Shepherd
+      summary: POST /v1/shepherd/escalations/{escalation_id}/answer
+      operationId: post_v1_shepherd_escalations_escalation_id_answer
+      parameters:
+      - name: escalation_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/shepherd/overview:
+    get:
+      tags:
+      - Shepherd
+      summary: GET /v1/shepherd/overview
+      operationId: get_v1_shepherd_overview
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/shepherd/propose:
+    post:
+      tags:
+      - Shepherd
+      summary: POST /v1/shepherd/propose
+      operationId: post_v1_shepherd_propose
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/shepherd/readiness:
+    get:
+      tags:
+      - Shepherd
+      summary: GET /v1/shepherd/readiness
+      operationId: get_v1_shepherd_readiness
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/shepherd/sweep:
+    post:
+      tags:
+      - Shepherd
+      summary: POST /v1/shepherd/sweep
+      operationId: post_v1_shepherd_sweep
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/shepherd/watch:
+    post:
+      tags:
+      - Shepherd
+      summary: POST /v1/shepherd/watch
+      operationId: post_v1_shepherd_watch
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/trace:
+    get:
+      tags:
+      - Trace
+      summary: GET /v1/trace
+      operationId: get_v1_trace
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Project scope when required by the handler.
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/verifier-meta-eval:
+    post:
+      tags:
+      - Verifier Meta Eval
+      summary: POST /v1/verifier-meta-eval
+      operationId: post_v1_verifier_meta_eval
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/verifier-ratchet/capture:
+    post:
+      tags:
+      - Verifier Ratchet
+      summary: POST /v1/verifier-ratchet/capture
+      operationId: post_v1_verifier_ratchet_capture
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/visual-gate:
+    post:
+      tags:
+      - Visual Gate
+      summary: POST /v1/visual-gate
+      operationId: post_v1_visual_gate
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/web-app:
+    post:
+      tags:
+      - Web App
+      summary: POST /v1/web-app
+      operationId: post_v1_web_app
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/webhooks/bitbucket:
+    post:
+      tags:
+      - Webhooks
+      summary: POST /v1/webhooks/bitbucket
+      operationId: post_v1_webhooks_bitbucket
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/webhooks/plane:
+    post:
+      tags:
+      - Webhooks
+      summary: POST /v1/webhooks/plane
+      operationId: post_v1_webhooks_plane
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/iac/detect:
+    post:
+      tags:
+      - Iac
+      summary: POST /v1/iac/detect
+      operationId: post_v1_iac_detect
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/iac/plan:
+    post:
+      tags:
+      - Iac
+      summary: POST /v1/iac/plan
+      operationId: post_v1_iac_plan
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/iac/verify:
+    post:
+      tags:
+      - Iac
+      summary: POST /v1/iac/verify
+      operationId: post_v1_iac_verify
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/multi-cloud/skills/describe:
+    post:
+      tags:
+      - Multi-cloud
+      summary: POST /v1/multi-cloud/skills/describe
+      operationId: post_v1_multi_cloud_skills_describe
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/oncall/notify:
+    post:
+      tags:
+      - Oncall
+      summary: POST /v1/oncall/notify
+      operationId: post_v1_oncall_notify
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/oncall/preview:
+    post:
+      tags:
+      - Oncall
+      summary: POST /v1/oncall/preview
+      operationId: post_v1_oncall_preview
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/pdf/render:
+    post:
+      tags:
+      - Pdf
+      summary: POST /v1/pdf/render
+      operationId: post_v1_pdf_render
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/secrets/{secret_ref_id}:
+    get:
+      tags:
+      - Secrets
+      summary: GET /v1/secrets/{secret_ref_id}
+      operationId: get_v1_secrets_secret_ref_id
+      parameters:
+      - name: secret_ref_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
 components:
   securitySchemes:
     BossBearerAuth:
@@ -15144,3 +19474,120 @@ components:
         updated_at:
           type: string
           format: date-time
+tags:
+- name: Tasks
+  description: Tasks API surface
+- name: Agent Runs
+  description: Agent Runs API surface
+- name: Agent
+  description: Agent API surface
+- name: Anomalies
+  description: Anomalies API surface
+- name: Approval Rules
+  description: Approval Rules API surface
+- name: Bakeoff
+  description: Bakeoff API surface
+- name: Budget
+  description: Budget API surface
+- name: Capabilities
+  description: Capabilities API surface
+- name: Changesets
+  description: Changesets API surface
+- name: Chaos
+  description: Chaos API surface
+- name: Comms
+  description: Comms API surface
+- name: Concurrency Load
+  description: Concurrency Load API surface
+- name: Dashboard
+  description: Dashboard API surface
+- name: Design Routing
+  description: Design Routing API surface
+- name: Diag
+  description: Diag API surface
+- name: Discoveries
+  description: Discoveries API surface
+- name: Engine
+  description: Engine API surface
+- name: Enterprise
+  description: Enterprise API surface
+- name: Evals
+  description: Evals API surface
+- name: FinOps
+  description: FinOps API surface
+- name: Goldeneye PaaS
+  description: Bare-metal PaaS control plane (nodes, packages, apps)
+- name: Independence Check
+  description: Independence Check API surface
+- name: Integrations
+  description: Integrations API surface
+- name: Meeting Roles
+  description: Meeting Roles API surface
+- name: Meeting Rooms
+  description: Meeting Rooms API surface
+- name: Meetings
+  description: Meetings API surface
+- name: Meta
+  description: API discovery and OpenAPI coverage
+- name: Multi-cloud
+  description: Multi-cloud infra/model catalog (AWS, Azure, DigitalOcean, OVHcloud)
+- name: Mutation Gate
+  description: Mutation Gate API surface
+- name: Observability
+  description: Observability API surface
+- name: Orgs
+  description: Orgs API surface
+- name: Outputs
+  description: Outputs API surface
+- name: Pipeline Profiles
+  description: Pipeline Profiles API surface
+- name: Plans
+  description: Plans API surface
+- name: Policy Evals
+  description: Policy Evals API surface
+- name: Prd
+  description: Prd API surface
+- name: Projects
+  description: Projects API surface
+- name: Provider Health
+  description: Provider Health API surface
+- name: Reliability
+  description: Reliability API surface
+- name: Repair Policy
+  description: Repair Policy API surface
+- name: Reports
+  description: Reports API surface
+- name: Roles
+  description: Roles API surface
+- name: Router
+  description: Router API surface
+- name: Scaffold
+  description: Scaffold API surface
+- name: Secrets
+  description: Secrets API surface
+- name: Self Improvement
+  description: Self Improvement API surface
+- name: Shepherd
+  description: Shepherd API surface
+- name: Trace
+  description: Trace API surface
+- name: Verifier Meta Eval
+  description: Verifier Meta Eval API surface
+- name: Verifier Ratchet
+  description: Verifier Ratchet API surface
+- name: Visual Gate
+  description: Visual Gate API surface
+- name: Web App
+  description: Web App API surface
+- name: Webhooks
+  description: Webhooks API surface
+- name: Elastic fabric
+  description: Elastic worker pools, capacity, and instances
+- name: Provider usage
+  description: Provider usage ledger and billing mirrors
+- name: Iac
+  description: Iac API surface
+- name: Oncall
+  description: Oncall API surface
+- name: Pdf
+  description: Pdf API surface

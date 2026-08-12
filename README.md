@@ -56,9 +56,17 @@ If a required credential is missing, the API must fail closed and create visible
 - New product capabilities should land in `apps/api` and `api/openapi.yaml` first, then be consumed by UI through the shared client in `packages/api-client`.
 - This keeps UI swappable and makes customer/API access a first-class path rather than an afterthought.
 
+## API docs
+
+- [`docs/api/README.md`](docs/api/README.md) — auth, conventions, domain index, discovery endpoints
+- [`docs/product/API_SURFACE.md`](docs/product/API_SURFACE.md) — product-level API surface summary
+- [`api/openapi.yaml`](api/openapi.yaml) — OpenAPI contract (`GET /openapi.json` when running)
+- [`docs/api/ROUTE_INDEX.md`](docs/api/ROUTE_INDEX.md) — generated METHOD + path list
+
 ## Repo layout
 
 - `AGENTS.md`: active repository rules
+- `docs/api/`: HTTP API guides and generated route index
 - `docs/community/`: open-source Community hub (features, quickstart)
 - `docs/product/BOSS_COMMUNITY_EDITION_SPEC.md`: Community product + feature contract
 - `docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md`: Cloud / Enterprise path

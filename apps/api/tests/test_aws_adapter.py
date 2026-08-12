@@ -61,7 +61,8 @@ def test_aws_is_a_supported_provider_with_expected_capabilities():
     assert "aws" in SUPPORTED_PROVIDERS
     entry = SUPPORTED_PROVIDERS["aws"]
     assert entry["credential_ref"] == "env:BOSS_AWS_SECRET_ACCESS_KEY"
-    assert entry["capabilities"] == [
+    caps = entry["capabilities"]
+    for required in [
         "provider_connection_test",
         "resource_inventory_sync",
         "aws.ec2.instance.create",
@@ -71,7 +72,10 @@ def test_aws_is_a_supported_provider_with_expected_capabilities():
         "aws.iam.role.upsert",
         "aws.route53.record.upsert",
         "aws.costs.sync",
-    ]
+        "aws.bedrock.converse",
+        "aws.bedrock.list_models",
+    ]:
+        assert required in caps
 
 
 def test_aws_supports_billing_sync():

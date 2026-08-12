@@ -5,6 +5,11 @@ Mission Control. The production compose package uses goldeneye-injected
 Postgres and platform services; it does not run its own Postgres, Redis,
 Supabase, MinIO, or mail infrastructure.
 
+> **Productize the platform itself:** Goldeneye is also a **BOSS function** —
+> a portable bare-metal PaaS kit (`packages/goldeneye/`) with installer, package
+> manager, and control-plane APIs (`/v1/goldeneye/*`). See
+> `docs/product/GOLDENEYE_PAAS.md`.
+
 ## Files
 
 - `Dockerfile`: multi-target linux/amd64 build for `api`, `worker`, `web`, and optional `account-connect`.
