@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import type { DataBoundary, LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
@@ -818,12 +819,45 @@ export async function startCloudEasyConnectAction(
   formData: FormData,
 ): Promise<void> {
   const method = String(formData.get("method") ?? "device").trim() || "device";
-  await client.startCloudEasyConnect({
+  const result = await client.startCloudEasyConnect({
     project_id: getProjectId(formData),
     method: method === "browser" ? "browser" : "device",
     return_url: getOptionalString(formData, "return_url"),
     actor: getActor(formData),
   });
+  // Browser flow: open hosted authorization when available.
+  if (
+    method === "browser" &&
+    typeof result.authorization_url === "string" &&
+    result.authorization_url.startsWith("http") &&
+    result.status !== "blocked"
+  ) {
+    redirect(result.authorization_url);
+  }
+  revalidatePath("/");
+}
+
+export async function unlinkCloudAction(formData: FormData): Promise<void> {
+  await client.unlinkCloud({
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    reason:
+      getOptionalString(formData, "reason") ??
+      "Operator disconnected BOSS Cloud from Mission Control.",
+  });
+  revalidatePath("/");
+}
+
+export async function pollCloudEasyConnectAction(
+  formData: FormData,
+): Promise<void> {
+  const sessionId = String(formData.get("session_id") ?? "").trim();
+  if (!sessionId) return;
+  await client.pollCloudEasyConnect(
+    sessionId,
+    getProjectId(formData),
+    getActor(formData),
+  );
   revalidatePath("/");
 }
 

@@ -123,6 +123,54 @@ export type AccountConnectHealthCheckItem = {
   createdAt: string;
 };
 
+export type CloudFeatureItem = {
+  key: string;
+  title: string;
+  description?: string;
+  status: string;
+  availableNow: boolean;
+  communityLocal?: boolean;
+  unlock?: string;
+};
+
+export type CloudPendingSession = {
+  sessionId: string;
+  status: string;
+  method: string;
+  userCode?: string;
+  verificationUri?: string;
+  authorizationUrl?: string;
+  expiresAt?: string;
+  message?: string;
+};
+
+export type CloudProductSnapshot = {
+  independent: boolean;
+  linked: boolean;
+  message: string;
+  easyConnectReady: boolean;
+  easyConnectBlockedReason?: string;
+  pendingSessions: CloudPendingSession[];
+  features: CloudFeatureItem[];
+  comparisonRows: Array<{
+    capability: string;
+    community: string;
+    cloud: string;
+    enterprise: string;
+    status: string;
+  }>;
+  managedWorkers: {
+    status: string;
+    availableNow: boolean;
+    message?: string;
+  };
+  capabilitySummary?: {
+    localCount: number;
+    cloudUnlockedCount: number;
+    cloudLockedCount: number;
+  };
+};
+
 export type CommercialFeed = {
   projectId: string;
   apiReachable: boolean;
@@ -133,6 +181,8 @@ export type CommercialFeed = {
   authSessions: AccountConnectAuthSessionItem[];
   teamInvites: AccountConnectTeamInviteItem[];
   billingPortalSessions: AccountConnectBillingPortalSessionItem[];
+  /** Community-safe Cloud product surface (catalog/status/comparison). */
+  cloud?: CloudProductSnapshot;
 };
 
 function mapEdition(payload: EditionStatusResponse): CommercialEditionItem {
@@ -290,14 +340,118 @@ export function emptyCommercialFeed(
   };
 }
 
+async function settleOptional<T>(
+  promise: Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await promise;
+  } catch (error) {
+    // Community edition does not mount paid Account Connect routes (404).
+    if (error instanceof BossApiError && [401, 403, 404, 405].includes(error.status)) {
+      return undefined;
+    }
+    return undefined;
+  }
+}
+
+function mapCloudSnapshot(
+  catalog: Awaited<ReturnType<typeof client.getCloudCatalog>>,
+  status: Awaited<ReturnType<typeof client.getCloudStatus>>,
+  comparison?: Awaited<ReturnType<typeof client.getCloudComparison>>,
+  capabilities?: Awaited<ReturnType<typeof client.getCloudCapabilities>>,
+  workers?: Awaited<ReturnType<typeof client.getCloudWorkers>>,
+): CloudProductSnapshot {
+  const pendingRaw = (status.easy_connect?.pending_sessions as
+    | Array<Record<string, unknown>>
+    | undefined) ?? [];
+  return {
+    independent: status.independent,
+    linked: status.linked,
+    message: status.message,
+    easyConnectReady: Boolean(status.easy_connect?.ready),
+    easyConnectBlockedReason:
+      typeof status.easy_connect?.blocked_reason === "string"
+        ? status.easy_connect.blocked_reason
+        : undefined,
+    pendingSessions: pendingRaw.map((row) => ({
+      sessionId: String(row.session_id ?? ""),
+      status: String(row.status ?? "pending"),
+      method: String(row.method ?? "browser"),
+      userCode:
+        typeof row.user_code === "string" ? row.user_code : undefined,
+      verificationUri:
+        typeof row.verification_uri === "string"
+          ? row.verification_uri
+          : undefined,
+      authorizationUrl:
+        typeof row.authorization_url === "string"
+          ? row.authorization_url
+          : undefined,
+      expiresAt:
+        typeof row.expires_at === "string" ? row.expires_at : undefined,
+      message: typeof row.message === "string" ? row.message : undefined,
+    })),
+    features: (catalog.cloud_features ?? []).map((feature) => ({
+      key: String(feature.key ?? ""),
+      title: String(feature.title ?? feature.key ?? ""),
+      description:
+        typeof feature.description === "string"
+          ? feature.description
+          : undefined,
+      status: String(feature.status ?? "planned"),
+      availableNow: Boolean(feature.available_now),
+      communityLocal: Boolean(feature.community_local),
+      unlock:
+        typeof feature.unlock === "string" ? feature.unlock : undefined,
+    })),
+    comparisonRows: (comparison?.rows ?? []).map((row) => ({
+      capability: String(row.capability ?? ""),
+      community: String(row.community ?? ""),
+      cloud: String(row.cloud ?? ""),
+      enterprise: String(row.enterprise ?? ""),
+      status: String(row.status ?? ""),
+    })),
+    managedWorkers: {
+      status: String(workers?.status ?? status.managed_workers?.status ?? "planned"),
+      availableNow: Boolean(
+        workers?.available_now ?? status.managed_workers?.available_now,
+      ),
+      message:
+        typeof workers?.managed_capacity?.message === "string"
+          ? workers.managed_capacity.message
+          : typeof (status.managed_workers as { managed_capacity?: { message?: string } } | undefined)
+                ?.managed_capacity?.message === "string"
+            ? (status.managed_workers as { managed_capacity: { message: string } })
+                .managed_capacity.message
+            : undefined,
+    },
+    capabilitySummary: capabilities
+      ? {
+          localCount: Number(capabilities.summary.local_count ?? 0),
+          cloudUnlockedCount: Number(
+            capabilities.summary.cloud_unlocked_count ?? 0,
+          ),
+          cloudLockedCount: Number(capabilities.summary.cloud_locked_count ?? 0),
+        }
+      : undefined,
+  };
+}
+
 export async function fetchCommercialFeed(
   projectId = PROJECT_ID,
 ): Promise<CommercialFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
   try {
+    // Community-safe core: edition + entitlements + /v1/cloud/* always mount.
+    // Paid Account Connect list routes are optional (404 on community edition).
     const [
       edition,
       entitlementList,
+      catalog,
+      cloudStatus,
+      comparison,
+      capabilities,
+      workers,
       healthChecks,
       authSessions,
       teamInvites,
@@ -305,21 +459,35 @@ export async function fetchCommercialFeed(
     ] = await Promise.all([
       client.getEdition(resolvedProjectId),
       client.listLicenseEntitlements(resolvedProjectId, true),
-      client.listAccountConnectHealthChecks(resolvedProjectId),
-      client.listAccountConnectAuthSessions(resolvedProjectId),
-      client.listAccountConnectTeamInvites(resolvedProjectId),
-      client.listAccountConnectBillingPortalSessions(resolvedProjectId),
+      client.getCloudCatalog(resolvedProjectId),
+      client.getCloudStatus(resolvedProjectId),
+      settleOptional(client.getCloudComparison(resolvedProjectId)),
+      settleOptional(client.getCloudCapabilities(resolvedProjectId)),
+      settleOptional(client.getCloudWorkers(resolvedProjectId)),
+      settleOptional(client.listAccountConnectHealthChecks(resolvedProjectId)),
+      settleOptional(client.listAccountConnectAuthSessions(resolvedProjectId)),
+      settleOptional(client.listAccountConnectTeamInvites(resolvedProjectId)),
+      settleOptional(
+        client.listAccountConnectBillingPortalSessions(resolvedProjectId),
+      ),
     ]);
     return {
       projectId: resolvedProjectId,
       apiReachable: true,
       edition: mapEdition(edition),
       entitlements: entitlementList.items.map(mapEntitlement),
-      healthChecks: healthChecks.items.map(mapHealthCheck),
-      authSessions: authSessions.items.map(mapAuthSession),
-      teamInvites: teamInvites.items.map(mapTeamInvite),
-      billingPortalSessions: billingPortalSessions.items.map(
+      healthChecks: (healthChecks?.items ?? []).map(mapHealthCheck),
+      authSessions: (authSessions?.items ?? []).map(mapAuthSession),
+      teamInvites: (teamInvites?.items ?? []).map(mapTeamInvite),
+      billingPortalSessions: (billingPortalSessions?.items ?? []).map(
         mapBillingPortalSession,
+      ),
+      cloud: mapCloudSnapshot(
+        catalog,
+        cloudStatus,
+        comparison,
+        capabilities,
+        workers,
       ),
     };
   } catch (error) {

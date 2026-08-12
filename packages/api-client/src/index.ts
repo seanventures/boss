@@ -6007,8 +6007,50 @@ export function createBossApiClient(config: BossApiClientConfig) {
         independent: boolean;
         linked: boolean;
         easy_connect: Record<string, unknown>;
+        managed_workers?: Record<string, unknown>;
+        linked_capabilities?: Record<string, unknown>;
         message: string;
       }>("GET", "/v1/cloud/status", {
+        query: { project_id: projectId },
+      });
+    },
+    getCloudComparison(projectId: string) {
+      return request<{
+        project_id: string;
+        edition_id: string;
+        linked: boolean;
+        rows: Array<Record<string, unknown>>;
+        marketing_url: string;
+        principle: string;
+        connect_path: Record<string, unknown>;
+      }>("GET", "/v1/cloud/comparison", {
+        query: { project_id: projectId },
+      });
+    },
+    getCloudCapabilities(projectId: string) {
+      return request<{
+        project_id: string;
+        edition_id: string;
+        linked: boolean;
+        local_capabilities: Array<Record<string, unknown>>;
+        cloud_unlocked: Array<Record<string, unknown>>;
+        cloud_locked: Array<Record<string, unknown>>;
+        enterprise_features: Array<Record<string, unknown>>;
+        summary: Record<string, unknown>;
+      }>("GET", "/v1/cloud/capabilities", {
+        query: { project_id: projectId },
+      });
+    },
+    getCloudWorkers(projectId: string) {
+      return request<{
+        project_id: string;
+        status: string;
+        available_now: boolean;
+        cloud_eligible: boolean;
+        linked: boolean;
+        managed_capacity: Record<string, unknown>;
+        enrollment: Record<string, unknown>;
+      }>("GET", "/v1/cloud/workers", {
         query: { project_id: projectId },
       });
     },
@@ -6042,6 +6084,34 @@ export function createBossApiClient(config: BossApiClientConfig) {
         `/v1/cloud/easy-connect/${encodeURIComponent(sessionId)}`,
         { query: { project_id: projectId, actor } },
       );
+    },
+    completeCloudEasyConnect(
+      sessionId: string,
+      payload: {
+        project_id: string;
+        actor?: string;
+        code?: string;
+        state?: string;
+      },
+    ) {
+      return request<Record<string, unknown>>(
+        "POST",
+        `/v1/cloud/easy-connect/${encodeURIComponent(sessionId)}/complete`,
+        { body: payload },
+      );
+    },
+    unlinkCloud(payload: {
+      project_id: string;
+      actor?: string;
+      reason?: string;
+    }) {
+      return request<{
+        project_id: string;
+        linked: boolean;
+        edition: EditionStatusResponse;
+        message: string;
+        status: Record<string, unknown>;
+      }>("POST", "/v1/cloud/unlink", { body: payload });
     },
     listLicenseEntitlements(projectId: string, includeInactive = false) {
       return request<LicenseEntitlementListResponse>("GET", "/v1/entitlements", {

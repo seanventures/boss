@@ -2571,6 +2571,27 @@ def get_cloud_status(project_id: str) -> dict:
         return cloud_product.status(connection, project_id)
 
 
+@app.get("/v1/cloud/comparison")
+def get_cloud_comparison(project_id: str) -> dict:
+    """Community vs Cloud vs Enterprise packaging matrix (marketing parity)."""
+    with begin(engine) as connection:
+        return cloud_product.comparison(connection, project_id)
+
+
+@app.get("/v1/cloud/capabilities")
+def get_cloud_capabilities(project_id: str) -> dict:
+    """Local vs Cloud-locked capabilities for this project."""
+    with begin(engine) as connection:
+        return cloud_product.capabilities(connection, project_id)
+
+
+@app.get("/v1/cloud/workers")
+def get_cloud_managed_workers(project_id: str) -> dict:
+    """Managed worker fabric status (honest planned until fleets ship)."""
+    with begin(engine) as connection:
+        return cloud_product.managed_workers_status(connection, project_id)
+
+
 @app.post("/v1/cloud/easy-connect", status_code=201)
 def start_cloud_easy_connect(payload: dict) -> dict:
     """Start Easy Connect from self-hosted Community (or any edition) to BOSS Cloud.
@@ -2623,6 +2644,58 @@ def poll_cloud_easy_connect(
             ValueError,
         ) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/v1/cloud/easy-connect/{session_id}/complete")
+def complete_cloud_easy_connect(session_id: str, payload: dict) -> dict:
+    """Complete browser Easy Connect after hosted Account Connect returns code/state."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    code = payload.get("code")
+    state = payload.get("state")
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return cloud_product.complete_easy_connect(
+                connection,
+                project_id=project_id,
+                session_id=session_id,
+                actor=actor,
+                code=str(code) if code is not None else None,
+                state=str(state) if state is not None else None,
+            )
+        except AccountConnectAuthSessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            AccountConnectAuthSessionStateError,
+            AccountConnectSyncError,
+            AccountConnectConfigurationError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/v1/cloud/unlink")
+def unlink_cloud(payload: dict) -> dict:
+    """Disconnect this project from BOSS Cloud; Community stays fully usable."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    reason = payload.get("reason")
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return cloud_product.unlink(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                reason=str(reason) if reason else None,
+            )
+        except AccountConnectLinkNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.get("/v1/diag/sandbox-roundtrip")

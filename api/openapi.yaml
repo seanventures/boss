@@ -137,7 +137,40 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Independence flag, edition status, easy-connect readiness
+          description: Independence flag, edition status, easy-connect readiness, pending sessions
+  /v1/cloud/comparison:
+    get:
+      summary: Community vs Cloud vs Enterprise packaging matrix
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Marketing-aligned feature comparison rows
+  /v1/cloud/capabilities:
+    get:
+      summary: Local vs Cloud-locked capabilities for this project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Capability buckets with unlock paths
+  /v1/cloud/workers:
+    get:
+      summary: Managed worker fabric status (honest planned until fleets ship)
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Managed workers availability and enrollment honesty
   /v1/cloud/easy-connect:
     post:
       summary: Start Easy Connect from self-hosted Community to BOSS Cloud
@@ -183,6 +216,52 @@ paths:
           description: Session status pending, completed, or blocked
         '404':
           description: Session not found
+  /v1/cloud/easy-connect/{session_id}/complete:
+    post:
+      summary: Complete browser Easy Connect after Account Connect callback
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+                code: { type: string }
+                state: { type: string }
+      responses:
+        '200':
+          description: Link completed or device poll result
+        '404':
+          description: Session not found
+        '409':
+          description: State mismatch or session not completable
+  /v1/cloud/unlink:
+    post:
+      summary: Disconnect project from BOSS Cloud (Community remains independent)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+                reason: { type: string }
+      responses:
+        '200':
+          description: Unlinked; local control plane continues
+        '404':
+          description: No active Cloud link
   /v1/account-connect/link:
     post:
       summary: Link a local project to a hosted BOSS Account Connect org

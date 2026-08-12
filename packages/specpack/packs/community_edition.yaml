@@ -1,6 +1,8 @@
 id: community_edition
 version: 2.0.0
-description: Self-hosted Community edition capability pack. Useful local BOSS without hosted Account Connect.
+description: >
+  Self-hosted Community edition capability pack. Full local BOSS product without
+  hosted Account Connect. Optional Easy Connect (/v1/cloud/*) links to BOSS Cloud.
 edition: community
 license_candidate: AGPLv3
 legal_review_required: true
@@ -18,10 +20,12 @@ includes:
   - basic_budget_governor
   - basic_software_factory
   - basic_model_entitlement_broker
+  - providerops_kernel
   - providerops_readonly_inventory
   - local_model_routing
   - role_skill_pack_formats
   - import_export
+  - cloud_easy_connect_opt_in
 requires:
   - default_safety
   - budget_governor_policy
@@ -32,4 +36,4 @@ installs:
   workflows: [ceo_command_to_pr, decision_inbox, budget_gated_job, model_entitlement_routing]
   policies: [default_safety, budget_governor_policy, model_entitlement_policy, commercial_packaging_policy, work_orchestration_policy]
   skills: [model_gateway, github, software_factory, model_providers, work_tracker, mattermost]
-status: active
+status: active  # Independent product; Cloud is opt-in via Easy Connect

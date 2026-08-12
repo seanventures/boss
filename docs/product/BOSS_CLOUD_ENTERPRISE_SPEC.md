@@ -124,12 +124,24 @@ Community **must not**:
 | Method | Path | Edition mount | Purpose |
 |---|---|---|---|
 | GET | `/v1/cloud/catalog` | community+ | Feature matrix + independence claims |
-| GET | `/v1/cloud/status` | community+ | Link state, blocked_reason, easy-connect readiness |
+| GET | `/v1/cloud/status` | community+ | Link state, pending sessions, workers honesty, easy-connect readiness |
+| GET | `/v1/cloud/comparison` | community+ | Community vs Cloud vs Enterprise packaging matrix |
+| GET | `/v1/cloud/capabilities` | community+ | Local vs Cloud-locked capability buckets |
+| GET | `/v1/cloud/workers` | community+ | Managed worker fabric status (**planned**, never fake capacity) |
 | POST | `/v1/cloud/easy-connect` | community+ | Start browser or device Easy Connect |
 | GET | `/v1/cloud/easy-connect/{session_id}` | community+ | Poll device / session status |
-| GET | `/v1/edition` | all | Existing edition status (enriched with `cloud` summary) |
+| POST | `/v1/cloud/easy-connect/{session_id}/complete` | community+ | Complete browser callback (code/state) |
+| POST | `/v1/cloud/unlink` | community+ | Disconnect Cloud; Community remains independent |
+| GET | `/v1/edition` | all | Existing edition status |
 
 Paid operational routes remain under `/v1/account-connect/*`, `/v1/marketplace/*`, `/v1/enterprise/*`, SAML/SCIM (enterprise router only).
+
+### 7.1 Mission Control surface
+
+Editions / Commercial panel loads Community-safe `/v1/cloud/*` even when
+Account Connect paid routes are unmounted. Shows independence banner, feature
+catalog with status honesty, pending device codes, Easy Connect CTAs, and
+Disconnect when linked.
 
 ---
 
@@ -140,7 +152,10 @@ Paid operational routes remain under `/v1/account-connect/*`, `/v1/marketplace/*
 3. Device flow: user_code issued; verify completes; link + entitlement sync when AC configured.  
 4. Cloud edition without link: `edition.status=blocked_account_connect_required`.  
 5. Community never returns 404 on core ProviderOps/command paths due to missing Cloud.  
-6. UI shows independence + Easy Connect CTA without requiring Enterprise edition env.
+6. UI shows independence + Easy Connect CTA without requiring Enterprise edition env.  
+7. `GET /v1/cloud/comparison` returns marketing-aligned rows; `workers.available_now=false`.  
+8. `POST /v1/cloud/unlink` without link → 404; after link → Community independent again.  
+9. Commercial MC feed remains reachable on Community when AC list routes 404.
 
 ---
 

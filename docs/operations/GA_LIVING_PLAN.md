@@ -168,9 +168,11 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 | Spec `docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md` | **Done** |
 | Community independence (no AC required) | **Enforced** |
 | `GET /v1/cloud/catalog` + `/status` | **Done** (community-mounted) |
+| `GET /v1/cloud/comparison` + `/capabilities` + `/workers` | **Done** (honest planned workers) |
 | `POST /v1/cloud/easy-connect` browser + device | **Done** (fail-closed without AC URL) |
+| `POST .../complete` + `POST /v1/cloud/unlink` | **Done** |
 | Account Connect device authorize | **Done** (`/v1/device/*`) |
-| MC Easy Connect CTA | **Done** (enterprise area card) |
+| MC Easy Connect + catalog + device code + disconnect | **Done** (Community-safe feed) |
 | Managed elastic workers / full SaaS billing | **Planned** (catalog status honest) |
 | Live deploy of this branch | **Todo** |
 
@@ -178,6 +180,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-12 | Cloud product expansion: comparison/capabilities/workers + complete/unlink; MC Community-safe cloud feed; device pending codes; honest managed workers | codex |
 | 2026-08-12 | BOSS Cloud product distinction: spec + `/v1/cloud/*` catalog/status/easy-connect (device+browser); Community independent; AC device authorize; MC Cloud CTA; tests 4/4 | codex |
 | 2026-08-12 | Console UI/UX IA panel (6 experts): 8-primary + Settings hub; zero feature loss; recs in UI_UX_IA_RECOMMENDATIONS.md | codex |
 | 2026-08-12 | Public site UX aligned to GTM simplification; redeployed boss-website `9268c69` | codex |

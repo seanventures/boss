@@ -1,11 +1,82 @@
 import { describe, expect, it, vi } from "vitest";
 
+const defaultCloudCatalog = {
+  project_id: "boss-dogfood",
+  edition_id: "community",
+  independence: {
+    community_runs_without_cloud: true,
+    account_connect_required_for_local_work: false,
+    easy_connect_available: true,
+  },
+  cloud_features: [
+    {
+      key: "durable_control_plane",
+      title: "Durable task & decision state",
+      status: "shipped",
+      available_now: true,
+      community_local: true,
+    },
+    {
+      key: "managed_workers",
+      title: "Managed workers & elastic infra",
+      status: "planned",
+      available_now: false,
+      community_local: false,
+      unlock: "connect_cloud",
+    },
+  ],
+  enterprise_features: [],
+  packaging: {
+    community: "Self-host",
+    cloud: "Managed",
+    enterprise: "Identity + fleets",
+  },
+};
+
+const defaultCloudStatus = {
+  project_id: "boss-dogfood",
+  edition: {
+    project_id: "boss-dogfood",
+    edition_id: "community",
+    display_name: "BOSS Community",
+    status: "active",
+    account_connect_required: false,
+    account_connect_status: "not_required",
+    local_auth_allowed: true,
+    hosted_auth_required: false,
+    connection_mode: "disabled",
+    legal_review_required: false,
+    included_capabilities: [],
+    commercial_capabilities: [],
+    source_pack: "community_edition.yaml",
+  },
+  independent: true,
+  linked: false,
+  easy_connect: {
+    ready: false,
+    methods: ["browser", "device"],
+    blocked_reason: "BOSS_ACCOUNT_CONNECT_URL is not configured",
+    pending_sessions: [],
+  },
+  managed_workers: {
+    status: "planned",
+    available_now: false,
+    managed_capacity: { message: "planned" },
+  },
+  message: "This install runs independently.",
+};
+
 vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
   client: {
     getEdition: vi.fn(),
     listLicenseEntitlements: vi.fn(),
+    getCloudCatalog: vi.fn(),
+    getCloudStatus: vi.fn(),
+    getCloudComparison: vi.fn(),
+    getCloudCapabilities: vi.fn(),
+    getCloudWorkers: vi.fn(),
     listAccountConnectHealthChecks: vi.fn(),
     listAccountConnectAuthSessions: vi.fn(),
     listAccountConnectTeamInvites: vi.fn(),
@@ -30,7 +101,67 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
   const { fetchEnterpriseFeed } = await import("../lib/enterprise");
   const { fetchAgentModuleFeed } = await import("../lib/agent-modules");
 
+  function mockCloudSurfaces(
+    overrides: {
+      catalog?: typeof defaultCloudCatalog;
+      status?: typeof defaultCloudStatus;
+    } = {},
+  ) {
+    vi.mocked(client.getCloudCatalog).mockResolvedValueOnce(
+      (overrides.catalog ?? defaultCloudCatalog) as never,
+    );
+    vi.mocked(client.getCloudStatus).mockResolvedValueOnce(
+      (overrides.status ?? defaultCloudStatus) as never,
+    );
+    vi.mocked(client.getCloudComparison).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "community",
+      linked: false,
+      rows: [
+        {
+          capability: "BYOK models & infra keys (SecretRefs)",
+          community: "yes",
+          cloud: "yes",
+          enterprise: "yes",
+          status: "shipped",
+        },
+      ],
+      marketing_url: "https://boss.sean.network/#cloud",
+      principle: "Community is real.",
+      connect_path: { methods: ["browser", "device"] },
+    } as never);
+    vi.mocked(client.getCloudCapabilities).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "community",
+      linked: false,
+      local_capabilities: [
+        { key: "durable_control_plane", title: "Durable", status: "shipped" },
+      ],
+      cloud_unlocked: [],
+      cloud_locked: [
+        { key: "managed_workers", title: "Workers", status: "planned" },
+      ],
+      enterprise_features: [],
+      summary: {
+        local_count: 1,
+        cloud_unlocked_count: 0,
+        cloud_locked_count: 1,
+        independent_without_cloud: true,
+      },
+    } as never);
+    vi.mocked(client.getCloudWorkers).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      status: "planned",
+      available_now: false,
+      cloud_eligible: false,
+      linked: false,
+      managed_capacity: { message: "planned" },
+      enrollment: { ready: false },
+    } as never);
+  }
+
   it("maps edition, Account Connect, and license entitlements", async () => {
+    mockCloudSurfaces();
     vi.mocked(client.getEdition).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       edition_id: "cloud",
@@ -203,9 +334,14 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
       portalUrl: "https://billing.example/session/1",
       status: "ready",
     });
+    expect(feed.cloud?.independent).toBe(true);
+    expect(feed.cloud?.features.some((f) => f.key === "durable_control_plane")).toBe(
+      true,
+    );
   });
 
   it("maps community edition (local, no hosted required) and falls back to edition-pack entitlements", async () => {
+    mockCloudSurfaces();
     vi.mocked(client.getEdition).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       edition_id: "community",
@@ -259,9 +395,31 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.entitlements[0]).toMatchObject({ capabilityKey: "core_control_plane", source: "edition_pack" });
     expect(feed.healthChecks).toEqual([]);
     expect(feed.authSessions).toEqual([]);
+    expect(feed.cloud?.independent).toBe(true);
+    expect(feed.cloud?.managedWorkers.status).toBe("planned");
   });
 
   it("maps blocked cloud edition (account_connect_required, not linked) with empty hosted lists + blockedReason", async () => {
+    mockCloudSurfaces({
+      status: {
+        ...defaultCloudStatus,
+        independent: false,
+        linked: false,
+        message: "account_connect_required",
+        edition: {
+          ...defaultCloudStatus.edition,
+          edition_id: "cloud",
+          display_name: "BOSS Cloud",
+          status: "blocked_account_connect_required",
+          account_connect_required: true,
+          account_connect_status: "not_linked",
+          local_auth_allowed: false,
+          hosted_auth_required: true,
+          connection_mode: "cloud_required",
+          source_pack: "cloud_edition.yaml",
+        },
+      },
+    });
     vi.mocked(client.getEdition).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       edition_id: "cloud",
@@ -297,6 +455,7 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
     expect(feed.edition?.blockedReason).toBe("account_connect_required");
     expect(feed.edition?.accountConnectStatus).toBe("not_linked");
     expect(feed.entitlements).toEqual([]);
+    expect(feed.cloud?.linked).toBe(false);
     // marketplace would be blocked too (see agent-modules + commercial context)
   });
 
@@ -318,6 +477,11 @@ describe("commercial, enterprise, and marketplace feeds", async () => {
   it("maps commercial feed error to empty blocked state (for marketplace / acct connect surfaces)", async () => {
     vi.mocked(client.getEdition).mockRejectedValueOnce(new Error("commercial api down"));
     vi.mocked(client.listLicenseEntitlements).mockRejectedValueOnce(new Error("entitlements down"));
+    vi.mocked(client.getCloudCatalog).mockRejectedValueOnce(new Error("cloud catalog down"));
+    vi.mocked(client.getCloudStatus).mockRejectedValueOnce(new Error("cloud status down"));
+    vi.mocked(client.getCloudComparison).mockRejectedValueOnce(new Error("cloud comparison down"));
+    vi.mocked(client.getCloudCapabilities).mockRejectedValueOnce(new Error("cloud caps down"));
+    vi.mocked(client.getCloudWorkers).mockRejectedValueOnce(new Error("cloud workers down"));
     vi.mocked(client.listAccountConnectHealthChecks).mockRejectedValueOnce(new Error("health down"));
     vi.mocked(client.listAccountConnectAuthSessions).mockRejectedValueOnce(new Error("auth down"));
     vi.mocked(client.listAccountConnectTeamInvites).mockRejectedValueOnce(new Error("invites down"));

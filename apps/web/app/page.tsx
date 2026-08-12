@@ -22,6 +22,8 @@ import {
   installPackAction,
   linkAccountConnectAction,
   startCloudEasyConnectAction,
+  unlinkCloudAction,
+  pollCloudEasyConnectAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
@@ -3935,33 +3937,162 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <article className="stack-card" data-testid="cloud-easy-connect">
               <h3>BOSS Cloud — Easy Connect</h3>
               <p className="detail">
-                Self-host Community forever, or link this project to BOSS Cloud for
-                hosted Mission Control collaboration, team invites, and managed
-                routing. Device flow: start connect → open verification URI → enter
-                short code.
+                Community is a full product (BYOK, local control plane, ProviderOps).
+                Link to BOSS Cloud only when you want hosted team, marketplace, or
+                managed capacity. Device flow: start → open verification URI → enter
+                short code. Never paste Cloud secrets here.
               </p>
+              {commercial.cloud ? (
+                <div className="feed-list" data-testid="cloud-product-status">
+                  <div className="feed-row">
+                    <div>
+                      <h4>
+                        {commercial.cloud.independent
+                          ? "Running independently"
+                          : "Cloud link required"}
+                      </h4>
+                      <p className="detail">{commercial.cloud.message}</p>
+                      {commercial.cloud.capabilitySummary ? (
+                        <p className="detail">
+                          Local {commercial.cloud.capabilitySummary.localCount} ·
+                          Cloud unlocked{" "}
+                          {commercial.cloud.capabilitySummary.cloudUnlockedCount} ·
+                          Locked {commercial.cloud.capabilitySummary.cloudLockedCount}
+                        </p>
+                      ) : null}
+                      <p className="detail">
+                        Managed workers:{" "}
+                        {commercial.cloud.managedWorkers.status}
+                        {commercial.cloud.managedWorkers.availableNow
+                          ? " (available)"
+                          : " (planned — local runners only)"}
+                      </p>
+                    </div>
+                    <span
+                      className={`pill${commercial.cloud.linked ? "" : " warn"}`}
+                    >
+                      {commercial.cloud.linked ? "Linked" : "Unlinked"}
+                    </span>
+                  </div>
+                  {commercial.cloud.pendingSessions.length > 0 ? (
+                    <div className="feed-row" data-testid="cloud-pending-sessions">
+                      <div>
+                        <h4>Pending Easy Connect</h4>
+                        {commercial.cloud.pendingSessions.map((session) => (
+                          <div key={session.sessionId} className="detail">
+                            <p>
+                              {session.method} · {session.status}
+                              {session.userCode ? (
+                                <>
+                                  {" "}
+                                  · code{" "}
+                                  <code className="mono">{session.userCode}</code>
+                                </>
+                              ) : null}
+                            </p>
+                            {session.verificationUri ? (
+                              <p>
+                                Open{" "}
+                                <a href={session.verificationUri}>
+                                  {session.verificationUri}
+                                </a>
+                              </p>
+                            ) : null}
+                            {session.message ? <p>{session.message}</p> : null}
+                            <form action={pollCloudEasyConnectAction}>
+                              <input
+                                type="hidden"
+                                name="project_id"
+                                value={activeProjectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="actor"
+                                value={activeActorId}
+                              />
+                              <input
+                                type="hidden"
+                                name="session_id"
+                                value={session.sessionId}
+                              />
+                              <SubmitButton
+                                className="button secondary"
+                                type="submit"
+                              >
+                                Check link status
+                              </SubmitButton>
+                            </form>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {commercial.cloud.features.length > 0 ? (
+                    <div className="feed-row" data-testid="cloud-feature-catalog">
+                      <div>
+                        <h4>Cloud feature catalog</h4>
+                        <ul className="detail">
+                          {commercial.cloud.features.map((feature) => (
+                            <li key={feature.key}>
+                              <b>{feature.title}</b> · {feature.status}
+                              {feature.availableNow
+                                ? " · available now"
+                                : feature.unlock
+                                  ? ` · unlock: ${feature.unlock}`
+                                  : " · not yet"}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="composer compact">
-                <form action={startCloudEasyConnectAction}>
-                  <input type="hidden" name="project_id" value={activeProjectId} />
-                  <input type="hidden" name="actor" value={activeActorId} />
-                  <input type="hidden" name="method" value="device" />
-                  <SubmitButton className="button" type="submit">
-                    Connect with device code
-                  </SubmitButton>
-                </form>
-                <form action={startCloudEasyConnectAction}>
-                  <input type="hidden" name="project_id" value={activeProjectId} />
-                  <input type="hidden" name="actor" value={activeActorId} />
-                  <input type="hidden" name="method" value="browser" />
-                  <SubmitButton className="button secondary" type="submit">
-                    Connect in browser
-                  </SubmitButton>
-                </form>
+                {!commercial.cloud?.linked ? (
+                  <>
+                    <form action={startCloudEasyConnectAction}>
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <input type="hidden" name="method" value="device" />
+                      <SubmitButton className="button" type="submit">
+                        Connect with device code
+                      </SubmitButton>
+                    </form>
+                    <form action={startCloudEasyConnectAction}>
+                      <input type="hidden" name="project_id" value={activeProjectId} />
+                      <input type="hidden" name="actor" value={activeActorId} />
+                      <input type="hidden" name="method" value="browser" />
+                      <SubmitButton className="button secondary" type="submit">
+                        Connect in browser
+                      </SubmitButton>
+                    </form>
+                  </>
+                ) : (
+                  <form action={unlinkCloudAction}>
+                    <input type="hidden" name="project_id" value={activeProjectId} />
+                    <input type="hidden" name="actor" value={activeActorId} />
+                    <input
+                      type="hidden"
+                      name="reason"
+                      value="Operator disconnected BOSS Cloud from Mission Control."
+                    />
+                    <SubmitButton className="button secondary" type="submit">
+                      Disconnect from BOSS Cloud
+                    </SubmitButton>
+                  </form>
+                )}
               </div>
+              {!commercial.cloud?.easyConnectReady &&
+              commercial.cloud?.easyConnectBlockedReason ? (
+                <p className="detail">
+                  Easy Connect blocked: {commercial.cloud.easyConnectBlockedReason}
+                </p>
+              ) : null}
               <p className="detail">
-                Catalog:{" "}
-                <code className="mono">GET /v1/cloud/catalog</code> · Status:{" "}
-                <code className="mono">GET /v1/cloud/status</code>. Spec:{" "}
+                Catalog{" "}
+                <code className="mono">GET /v1/cloud/catalog</code> · Comparison{" "}
+                <code className="mono">GET /v1/cloud/comparison</code> · Spec{" "}
                 <span className="mono">docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md</span>
               </p>
             </article>

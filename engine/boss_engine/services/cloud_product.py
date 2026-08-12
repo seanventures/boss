@@ -21,6 +21,7 @@ from .commercial import (
     AccountConnectAuthSessionNotFoundError,
     AccountConnectAuthSessionStateError,
     AccountConnectConfigurationError,
+    AccountConnectLinkNotFoundError,
     AccountConnectSyncError,
     CommercialService,
 )
@@ -30,6 +31,103 @@ from .receipts import ReceiptService
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Marketing comparison matrix (boss.sean.network #opensource / #cloud / #enterprise).
+# status: shipped | partial | planned | community_only | cloud_only | enterprise_only
+EDITION_COMPARISON: list[dict[str, Any]] = [
+    {
+        "capability": "Self-hosted workflow engine (CLI + MCP)",
+        "community": "yes",
+        "cloud": "yes (hosted + attach)",
+        "enterprise": "yes",
+        "status": "shipped",
+    },
+    {
+        "capability": "BYOK models & infra keys (SecretRefs)",
+        "community": "yes",
+        "cloud": "yes (or managed)",
+        "enterprise": "yes",
+        "status": "shipped",
+    },
+    {
+        "capability": "Budgets, decisions, receipts, leases",
+        "community": "yes",
+        "cloud": "yes",
+        "enterprise": "yes",
+        "status": "shipped",
+    },
+    {
+        "capability": "Self-host Mission Control console",
+        "community": "yes",
+        "cloud": "hosted MC",
+        "enterprise": "yes (self-host or hosted)",
+        "status": "shipped",
+    },
+    {
+        "capability": "Software Factory (governed PRs)",
+        "community": "yes",
+        "cloud": "yes",
+        "enterprise": "yes",
+        "status": "shipped",
+    },
+    {
+        "capability": "ProviderOps kernel (your infra keys)",
+        "community": "yes",
+        "cloud": "yes (+ hosted)",
+        "enterprise": "yes",
+        "status": "shipped",
+    },
+    {
+        "capability": "Hosted Account Connect & marketplace",
+        "community": "opt-in Easy Connect",
+        "cloud": "required",
+        "enterprise": "optional / required by deploy mode",
+        "status": "partial",
+    },
+    {
+        "capability": "Team collaboration (invites, seats)",
+        "community": "via Cloud link",
+        "cloud": "yes",
+        "enterprise": "yes",
+        "status": "partial",
+    },
+    {
+        "capability": "Managed workers & elastic fleets",
+        "community": "no (local runners)",
+        "cloud": "planned",
+        "enterprise": "hybrid planned",
+        "status": "planned",
+    },
+    {
+        "capability": "Managed model & skill routing",
+        "community": "local broker + BYOK",
+        "cloud": "partial",
+        "enterprise": "custom policies",
+        "status": "partial",
+    },
+    {
+        "capability": "SSO / SCIM",
+        "community": "no",
+        "cloud": "no",
+        "enterprise": "partial (routes, fail-closed)",
+        "status": "partial",
+    },
+    {
+        "capability": "HA / clustering",
+        "community": "ops DIY",
+        "cloud": "managed later",
+        "enterprise": "planned",
+        "status": "planned",
+    },
+    {
+        "capability": "Evidence retention SLAs & support",
+        "community": "local receipts",
+        "cloud": "partial",
+        "enterprise": "partial + design partnership",
+        "status": "partial",
+    },
+]
 
 
 class CloudProductService:
@@ -210,13 +308,18 @@ class CloudProductService:
     def status(self, connection: Connection, project_id: str) -> dict[str, Any]:
         edition = self.commercial.edition_status(connection, project_id)
         ac_url = (self.settings.account_connect_url or "").strip()
+        linked = bool(edition.get("account_connect_org"))
+        independent = (
+            edition["edition_id"] == "community"
+            or not edition.get("account_connect_required")
+            or linked
+        )
+        pending = self.list_pending_easy_connect(connection, project_id)
         return {
             "project_id": project_id,
             "edition": edition,
-            "independent": edition["edition_id"] == "community"
-            or not edition.get("account_connect_required")
-            or bool(edition.get("account_connect_org")),
-            "linked": bool(edition.get("account_connect_org")),
+            "independent": independent,
+            "linked": linked,
             "easy_connect": {
                 "ready": bool(ac_url),
                 "methods": ["browser", "device"],
@@ -225,7 +328,14 @@ class CloudProductService:
                     if ac_url
                     else "BOSS_ACCOUNT_CONNECT_URL is not configured on this control plane."
                 ),
+                "pending_sessions": pending,
             },
+            "managed_workers": self.managed_workers_status(
+                connection, project_id, edition=edition
+            ),
+            "linked_capabilities": self.capabilities(
+                connection, project_id, edition=edition
+            )["summary"],
             "message": (
                 "This install runs independently. Connect to BOSS Cloud only when you want "
                 "hosted team, marketplace, or managed capacity features."
@@ -233,6 +343,310 @@ class CloudProductService:
                 else edition.get("blocked_reason")
                 or "Edition status active."
             ),
+        }
+
+    def comparison(self, connection: Connection, project_id: str) -> dict[str, Any]:
+        """Community vs Cloud vs Enterprise packaging matrix (marketing parity)."""
+        edition = self.commercial.edition_status(connection, project_id)
+        return {
+            "project_id": project_id,
+            "edition_id": edition["edition_id"],
+            "linked": bool(edition.get("account_connect_org")),
+            "rows": list(EDITION_COMPARISON),
+            "marketing_url": "https://boss.sean.network/#cloud",
+            "principle": (
+                "Community is a real product (not a trial). Cloud is the managed control "
+                "plane. Enterprise adds identity, fleets, and design-partner wedges."
+            ),
+            "connect_path": {
+                "from_community": "POST /v1/cloud/easy-connect",
+                "methods": ["browser", "device"],
+                "requires": "BOSS_ACCOUNT_CONNECT_URL on the control plane",
+            },
+        }
+
+    def capabilities(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        edition: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """What this project can do locally vs only after Cloud link."""
+        edition = edition or self.commercial.edition_status(connection, project_id)
+        linked = bool(edition.get("account_connect_org"))
+        catalog = self.catalog(connection, project_id)
+        local = [
+            f
+            for f in catalog["cloud_features"]
+            if f.get("community_local") and f.get("available_now")
+        ]
+        cloud_locked = [
+            f
+            for f in catalog["cloud_features"]
+            if not f.get("available_now")
+            and (
+                f.get("requires_account_connect")
+                or not f.get("community_local")
+            )
+        ]
+        cloud_unlocked = [
+            f
+            for f in catalog["cloud_features"]
+            if f.get("available_now")
+            and (
+                f.get("requires_account_connect")
+                or not f.get("community_local")
+            )
+        ]
+        return {
+            "project_id": project_id,
+            "edition_id": edition["edition_id"],
+            "linked": linked,
+            "local_capabilities": [
+                {"key": f["key"], "title": f["title"], "status": f["status"]}
+                for f in local
+            ],
+            "cloud_unlocked": [
+                {"key": f["key"], "title": f["title"], "status": f["status"]}
+                for f in cloud_unlocked
+            ],
+            "cloud_locked": [
+                {
+                    "key": f["key"],
+                    "title": f["title"],
+                    "status": f["status"],
+                    "unlock": f.get("unlock"),
+                }
+                for f in cloud_locked
+            ],
+            "enterprise_features": catalog["enterprise_features"],
+            "summary": {
+                "local_count": len(local),
+                "cloud_unlocked_count": len(cloud_unlocked),
+                "cloud_locked_count": len(cloud_locked),
+                "independent_without_cloud": not edition.get(
+                    "account_connect_required"
+                ),
+            },
+        }
+
+    def managed_workers_status(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        edition: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        """Honest managed-worker fabric status (planned; no fake capacity)."""
+        edition = edition or self.commercial.edition_status(connection, project_id)
+        linked = bool(edition.get("account_connect_org"))
+        edition_id = edition["edition_id"]
+        cloud_eligible = edition_id in {
+            "cloud",
+            "enterprise_cloud",
+            "enterprise_self_hosted",
+        } or linked
+        return {
+            "project_id": project_id,
+            "status": "planned",
+            "available_now": False,
+            "cloud_eligible": cloud_eligible,
+            "linked": linked,
+            "local_runners": "Use Community local workers / worker pools (ProviderOps).",
+            "managed_capacity": {
+                "regions": [],
+                "pools": [],
+                "message": (
+                    "Elastic managed workers are specified for BOSS Cloud but not "
+                    "provisioned yet. Catalog status remains planned — not fake-done."
+                ),
+            },
+            "hybrid": {
+                "status": "planned",
+                "description": "Enterprise hybrid local + cloud workers (design partnership).",
+            },
+            "enrollment": {
+                "ready": False,
+                "blocked_reason": "managed_workers_not_shipped",
+                "next_step": (
+                    "Link to BOSS Cloud when ready; managed fleets ship after control-plane GA."
+                    if not linked
+                    else "Cloud linked; managed fleets still planned — use local workers."
+                ),
+            },
+        }
+
+    def list_pending_easy_connect(
+        self, connection: Connection, project_id: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            text(
+                """
+                SELECT id, status, authorization_url, return_url, hosted_org_id,
+                       metadata, created_at, expires_at
+                FROM account_connect_auth_sessions
+                WHERE project_id = :project_id
+                  AND status IN ('pending', 'blocked')
+                  AND (
+                    metadata->>'source' = 'cloud_easy_connect'
+                    OR metadata->>'flow' IN ('device', 'browser')
+                  )
+                ORDER BY created_at DESC
+                LIMIT 10
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            metadata = row["metadata"] or {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            items.append(
+                {
+                    "session_id": row["id"],
+                    "status": row["status"],
+                    "method": metadata.get("flow") or "browser",
+                    "user_code": metadata.get("user_code"),
+                    "verification_uri": metadata.get("verification_uri"),
+                    "authorization_url": row["authorization_url"],
+                    "expires_at": row["expires_at"].isoformat()
+                    if row["expires_at"]
+                    else None,
+                    "message": metadata.get("last_error"),
+                }
+            )
+        return items
+
+    def unlink(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        reason: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Detach Cloud/Account Connect link; Community remains independent."""
+        edition_after = self.commercial.unlink_account_connect_org(
+            connection,
+            project_id,
+            actor=actor,
+            reason=reason or "cloud_easy_disconnect",
+        )
+        emit_event(
+            connection,
+            project_id,
+            "cloud.unlinked",
+            actor,
+            "project",
+            project_id,
+            {
+                "reason": reason or "cloud_easy_disconnect",
+                "edition_id": edition_after.get("edition_id"),
+            },
+        )
+        return {
+            "project_id": project_id,
+            "linked": False,
+            "edition": edition_after,
+            "message": (
+                "Disconnected from BOSS Cloud. This control plane continues as Community "
+                "with local BYOK and ProviderOps."
+            ),
+            "status": self.status(connection, project_id),
+        }
+
+    def complete_easy_connect(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        session_id: str,
+        actor: str,
+        code: Optional[str] = None,
+        state: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Complete browser Easy Connect after hosted Account Connect callback."""
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, status, provider_ref, state,
+                       authorization_url, return_url, hosted_org_id, metadata,
+                       created_at, updated_at, expires_at
+                FROM account_connect_auth_sessions
+                WHERE project_id = :project_id AND id = :session_id
+                """
+            ),
+            {"project_id": project_id, "session_id": session_id},
+        ).mappings().first()
+        if row is None:
+            raise AccountConnectAuthSessionNotFoundError(
+                "Cloud Easy Connect session not found."
+            )
+        metadata = row["metadata"] or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        flow = metadata.get("flow") or "browser"
+        if flow == "device":
+            # Device completion is poll-driven
+            return self.poll_easy_connect(
+                connection,
+                project_id=project_id,
+                session_id=session_id,
+                actor=actor,
+            )
+        if row["status"] == "completed" and row["hosted_org_id"]:
+            return {
+                "session_id": session_id,
+                "status": "completed",
+                "method": "browser",
+                "hosted_org_id": row["hosted_org_id"],
+                "linked": True,
+                "edition": self.commercial.edition_status(connection, project_id),
+            }
+        if row["status"] not in {"pending", "authorized"}:
+            raise AccountConnectAuthSessionStateError(
+                f"Easy Connect session is {row['status']}; cannot complete."
+            )
+        if not code or not state:
+            raise ValueError("code and state are required to complete browser Easy Connect.")
+        if state != row["state"]:
+            raise AccountConnectAuthSessionStateError(
+                "Easy Connect state mismatch; deny without linking."
+            )
+        # Prefer commercial complete path (receipted + hosted org link)
+        completed_session = self.commercial.complete_auth_session(
+            connection,
+            session_id,
+            project_id=project_id,
+            actor=actor,
+            code=code,
+            state=state,
+            metadata={"source": "cloud_easy_connect_browser"},
+        )
+        edition_after = self.commercial.edition_status(connection, project_id)
+        hosted = (
+            completed_session.get("hosted_org_id")
+            or (edition_after.get("account_connect_org") or {}).get("hosted_org_id")
+        )
+        emit_event(
+            connection,
+            project_id,
+            "cloud.easy_connect_completed",
+            actor,
+            "account_connect_org",
+            hosted or session_id,
+            {"session_id": session_id, "method": "browser"},
+        )
+        return {
+            "session_id": session_id,
+            "status": completed_session.get("status") or "completed",
+            "method": "browser",
+            "hosted_org_id": hosted,
+            "linked": bool(edition_after.get("account_connect_org")),
+            "edition": edition_after,
+            "account_connect_org": edition_after.get("account_connect_org"),
         }
 
     def easy_connect(
