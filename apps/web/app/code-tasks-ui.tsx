@@ -917,11 +917,28 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   useLiveRefresh(live);
   // Step timing: completed phases carry their duration; the current phase's elapsed is computed
   // live from phase_started_at (re-renders every ~4s via useLiveRefresh, so it ticks up).
+  // Compute only after mount so SSR HTML matches the client's first paint (BOSS-346 / #418).
   const _fc = (run.finalize_ctx ?? {}) as Record<string, unknown>;
   const phaseTimings = (_fc.phase_timings as { ms: number; phase: string }[] | undefined) ?? [];
   const _phaseStartedAt = _fc.phase_started_at as string | undefined;
-  const currentPhaseMs = live && _phaseStartedAt
-    ? Math.max(0, Date.now() - new Date(_phaseStartedAt).getTime()) : null;
+  const [currentPhaseMs, setCurrentPhaseMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!live || !_phaseStartedAt) {
+      setCurrentPhaseMs(null);
+      return;
+    }
+    const tick = () => {
+      const started = new Date(_phaseStartedAt).getTime();
+      if (Number.isNaN(started)) {
+        setCurrentPhaseMs(null);
+        return;
+      }
+      setCurrentPhaseMs(Math.max(0, Date.now() - started));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [live, _phaseStartedAt]);
   const totalMs = phaseTimings.reduce((s, t) => s + (t.ms || 0), 0) + (currentPhaseMs ?? 0);
   const hasGateEvidence = Boolean(
     st.review_summary || st.adversarial_verdict || st.security_verdict || st.qa_summary || st.impl_summary,
@@ -955,7 +972,8 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {live ? (
         <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
           <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
-          {PHASE_LABEL[run.phase] ?? run.phase} — running <span suppressHydrationWarning>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase} — running{" "}
+          <span>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
           <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
         </div>
       ) : null}
@@ -973,12 +991,12 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             {live && currentPhaseMs != null ? (
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }} suppressHydrationWarning>{fmtDuration(currentPhaseMs)}</span>
+                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
               </div>
             ) : null}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
               <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
-              <span className="detail" suppressHydrationWarning>{fmtDuration(totalMs)}</span>
+              <span className="detail">{fmtDuration(totalMs)}</span>
             </div>
           </div>
         </div>

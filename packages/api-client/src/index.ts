@@ -5356,6 +5356,20 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { query: { project_id: projectId } },
       );
     },
+    seedAgentStudioCatalog(payload: {
+      project_id: string;
+      actor?: string;
+    }) {
+      return request<{
+        project_id: string;
+        status: string;
+        agents: Array<Record<string, unknown>>;
+        panels: Array<Record<string, unknown>>;
+        agent_count: number;
+        panel_count: number;
+        external_effects: number;
+      }>("POST", "/v1/agent-studio/catalog/seed", { body: payload });
+    },
     validateStudioWorkflow(payload: {
       project_id: string;
       spec: Record<string, unknown>;

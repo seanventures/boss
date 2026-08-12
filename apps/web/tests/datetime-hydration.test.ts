@@ -14,6 +14,8 @@ import { MissionTaskBoard } from "../app/mission-operations-ui";
 import type { TaskFeedItem } from "../lib/tasks";
 import type { ReceiptFeedItem } from "../lib/receipts";
 import type { OpsQueueJobItem } from "@boss/api-client";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 /**
  * BOSS-346: React #418 (HTML mismatch) was driven by locale/TZ-dependent date
@@ -60,6 +62,19 @@ describe("datetime helpers are hydration-safe", () => {
     expect(formatRelativeTime(undefined, now)).toBe("not yet");
   });
 
+  it("ClientRelativeTime SSRs absolute UTC then upgrades after mount", () => {
+    const src = readFileSync(
+      resolve(__dirname, "../app/client-relative-time.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("formatDateTime(iso");
+    expect(src).toContain("useState(absolute)");
+    expect(src).toContain("formatRelativeTime(iso, now");
+    // Must not call Date.now during the initial render path (only inside useEffect).
+    const withoutEffect = src.replace(/useEffect\([\s\S]*?\n  \}, \[[^\]]*\]\);/, "");
+    expect(withoutEffect).not.toContain("Date.now()");
+  });
+
   it("MissionTaskBoard SSR markup embeds the same UTC timestamp the client will paint", () => {
     const tasks: TaskFeedItem[] = [
       {
@@ -82,5 +97,36 @@ describe("datetime helpers are hydration-safe", () => {
     expect(html).toContain("Aug 12, 2026, 1:25 AM UTC");
     // Must not emit a bare locale-only short form that would diverge by TZ.
     expect(html).not.toMatch(/>\s*Aug 12, 2026, 1:25 AM\s*</);
+  });
+
+  it("named BOSS-346 areas avoid locale DateTimeFormat / raw Date.now labels", () => {
+    const files = [
+      "work-orchestration-ui.tsx",
+      "code-tasks-ui.tsx",
+      "shepherd-ui.tsx",
+      "reports-ui.tsx",
+      "pipeline-ui.tsx",
+      "org-gate.tsx",
+      "page.tsx",
+      "client-relative-time.tsx",
+    ];
+    for (const file of files) {
+      const src = readFileSync(resolve(__dirname, `../app/${file}`), "utf8");
+      expect(src).not.toMatch(/toLocaleDateString\s*\(/);
+      expect(src).not.toMatch(/toLocaleTimeString\s*\(/);
+      expect(src).not.toMatch(/new Intl\.DateTimeFormat\s*\(/);
+      if (file === "code-tasks-ui.tsx") {
+        // Live phase duration is mount-gated (useState null + useEffect).
+        expect(src).toContain("setCurrentPhaseMs");
+        expect(src).not.toContain("suppressHydrationWarning");
+      }
+      if (file === "page.tsx") {
+        expect(src).toContain("ClientRelativeTime");
+        expect(src).not.toMatch(/function waitedLabel/);
+      }
+      if (file === "work-orchestration-ui.tsx" || file === "reports-ui.tsx") {
+        expect(src).toMatch(/ClientRelativeTime|formatDate/);
+      }
+    }
   });
 });

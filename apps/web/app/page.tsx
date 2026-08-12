@@ -69,6 +69,7 @@ import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
+import { ClientRelativeTime } from "./client-relative-time";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
@@ -354,15 +355,8 @@ function roleInitials(name: string): string {
   return initials.toUpperCase();
 }
 
-function waitedLabel(createdAt: string): string {
-  const created = Date.parse(createdAt);
-  if (Number.isNaN(created)) return "";
-  const minutes = Math.max(0, Math.floor((Date.now() - created) / 60_000));
-  if (minutes < 60) return `waited ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `waited ${hours}h`;
-  return `waited ${Math.floor(hours / 24)}d`;
-}
+// Relative "waited Xm" labels use ClientRelativeTime (absolute UTC on SSR,
+// relative after mount) so decision-queue rows never trip React #418.
 
 // Command Center coordination graph: the handoff's node positions (percent of
 // the stage) with their SVG line endpoints (520x340 viewBox) and staggered
@@ -7434,7 +7428,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               Read the full document before approving
                               <span className="dq-doc-size">
                                 {" · "}
-                                {subject.length.toLocaleString()} characters
+                                {subject.length.toLocaleString("en-US")} characters
                               </span>
                             </summary>
                             <div className="decision-plan-sec">
@@ -7516,7 +7510,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               </SubmitButton>
                             </div>
                           </details>
-                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
+                          <span className="dq-waited">
+                            <ClientRelativeTime
+                              iso={decision.createdAt}
+                              empty=""
+                              as="span"
+                            />
+                          </span>
                         </form>
                       ) : (
                         <>
@@ -7558,7 +7558,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               </form>
                             </details>
                           ) : null}
-                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
+                          <span className="dq-waited">
+                            <ClientRelativeTime
+                              iso={decision.createdAt}
+                              empty=""
+                              as="span"
+                            />
+                          </span>
                         </>
                       )}
                     </div>

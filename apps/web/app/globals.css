@@ -4260,6 +4260,23 @@ select.input:focus {
 }
 .as-unavailable strong { color: var(--red); }
 .as-unavailable p { margin: 4px 0 0; }
+.as-first-run {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 14px;
+  padding: 16px 18px;
+  border: 1px solid rgba(99, 230, 216, 0.35);
+  border-radius: 12px;
+  background: rgba(99, 230, 216, 0.06);
+  color: var(--ink-soft);
+}
+.as-first-run b { display: block; color: var(--ink); font-size: 0.95rem; margin-bottom: 4px; }
+.as-first-run p { margin: 0 0 6px; max-width: 62ch; line-height: 1.45; font-size: 0.85rem; }
+.as-first-run .detail { margin: 0; color: var(--muted); font-size: 0.75rem; }
+.as-first-run .as-action-result { flex-basis: 100%; }
 
 /* Guided agent commissioning wizard */
 .aw-backdrop {
