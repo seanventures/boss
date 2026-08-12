@@ -132,7 +132,7 @@ Optional / later SKUs (not community DoD): Account Connect, live IdP/SCIM, manag
 
 | ID | Work | Exit |
 |---|---|---|
-| W5.1 | `scripts/qa/live/` (cheers-style): health, auth, providers catalog, budget, deadletter count, area crawl, console errors | `make qa:live` against goldeneye |
+| W5.1 | `scripts/qa/live_dogfood_gate.py`: health, auth, providers catalog+accounts, budget quote, command→task, decisions inbox, deadletters; metatron soft | `make qa-live` against goldeneye (`BOSS_API_KEY` required) |
 | W5.2 | Deploy gate: after boss-app image bump, run live suite; fail deploy on P0 checks | Documented in GOLDENEYE_DEPLOYMENT |
 | W5.3 | Plane: every PR links BOSS-IDs; move issues Todo→In Progress→Done only with live evidence comments | No “Done” without dogfood proof |
 | W5.4 | Weekly signal-poll: DLQ + reliability incidents + api 5xx → worklist before invented backlog | Process |
