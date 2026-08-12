@@ -7555,6 +7555,23 @@ paths:
         '200': { description: Per-agent durable test results, aggregate status, and zero-effect telemetry }
         '403': { description: Actor lacks role-review authority }
         '422': { description: Catalog is too large or an agent version is invalid }
+  /v1/agent-studio/catalog/seed:
+    post:
+      summary: Explicitly install the idempotent, zero-effect BOSS Agent Studio starter catalog for a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '200': { description: Seeded or confirmed the reviewed agent and panel catalog without dispatching work }
+        '403': { description: Actor lacks role-review authority }
+        '422': { description: The project cannot accept the catalog because a required role or policy is absent }
   /v1/agent-studio/workflows/validate:
     post:
       summary: Validate and normalize a Workflow draft without publishing or executing it

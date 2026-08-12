@@ -16562,6 +16562,41 @@ def run_agent_studio_catalog_smoke(
             _raise_agent_studio_error(error)
 
 
+@app.post("/v1/agent-studio/catalog/seed")
+def seed_agent_studio_catalog(
+    payload: AgentStudioActorRequest,
+) -> dict[str, Any]:
+    """Install the reviewed SpecPack starter catalog into one project.
+
+    This is deliberately an explicit, idempotent project setup action. A blank
+    Studio must not silently look like a configured but inactive workforce, and
+    an operator must not have to recreate the maintained BOSS role library by
+    hand. The catalog contains versioned definitions only; this endpoint does
+    not dispatch agents, call models, or create external effects.
+    """
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "role_review"
+        )
+        try:
+            seeded = agent_studio.seed_catalog(
+                connection,
+                payload.project_id,
+                actor=payload.actor,
+            )
+            return {
+                "project_id": payload.project_id,
+                "status": "seeded",
+                "agents": seeded["agents"],
+                "panels": seeded["panels"],
+                "agent_count": len(seeded["agents"]),
+                "panel_count": len(seeded["panels"]),
+                "external_effects": 0,
+            }
+        except Exception as error:  # noqa: BLE001 - typed API mapping
+            _raise_agent_studio_error(error)
+
+
 @app.post("/v1/agent-studio/workflows/validate")
 def validate_agent_studio_workflow(
     payload: WorkflowDraftValidateRequest,

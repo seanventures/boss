@@ -49,6 +49,11 @@ async function post(
 }
 
 function describeResult(payload: Record<string, unknown>): string {
+  if (payload.status === "seeded") {
+    const agents = typeof payload.agent_count === "number" ? payload.agent_count : 0;
+    const panels = typeof payload.panel_count === "number" ? payload.panel_count : 0;
+    return `Installed ${agents} governed starter agents and ${panels} executable panels. No work was dispatched.`;
+  }
   if (payload.valid === true) {
     const spec = payload.normalized_spec as Record<string, unknown> | undefined;
     if (spec) {
@@ -175,6 +180,15 @@ export async function runStudioCatalogSmoke(
   projectId: string,
 ): Promise<StudioActionResult> {
   return post("/v1/agent-studio/catalog-smoke", {
+    project_id: projectId,
+    actor: "vp_agents",
+  });
+}
+
+export async function seedStudioCatalog(
+  projectId: string,
+): Promise<StudioActionResult> {
+  return post("/v1/agent-studio/catalog/seed", {
     project_id: projectId,
     actor: "vp_agents",
   });

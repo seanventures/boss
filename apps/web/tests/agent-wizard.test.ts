@@ -9,8 +9,19 @@ import {
   slugifyAgentKey,
   validateAgentWizardDraft,
 } from "../lib/agent-wizard";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 describe("Agent Studio creation wizard", () => {
+  it("offers an explicit starter catalog when a project library is empty", () => {
+    const studio = readFileSync(resolve(__dirname, "../app/agent-studio-ui.tsx"), "utf8");
+    const actions = readFileSync(resolve(__dirname, "../app/agent-studio-actions.ts"), "utf8");
+
+    expect(studio).toContain("Install BOSS starter catalog");
+    expect(studio).toContain("The reviewed starter catalog is project-scoped and idempotent.");
+    expect(actions).toContain('post("/v1/agent-studio/catalog/seed"');
+  });
+
   it("normalizes human names and deduplicates reference lists", () => {
     expect(slugifyAgentKey("  Release & Risk Sentinel  ")).toBe(
       "release_risk_sentinel",

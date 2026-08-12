@@ -727,6 +727,28 @@ def test_agent_studio_catalog_smoke_checks_every_seeded_agent_without_external_e
     }
 
 
+def test_agent_studio_catalog_seed_is_explicit_idempotent_and_never_dispatches(client):
+    settings = get_settings()
+
+    first = client.post(
+        "/v1/agent-studio/catalog/seed",
+        json={"project_id": settings.default_project_id, "actor": "ceo"},
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "seeded"
+    assert first.json()["agent_count"] == 13
+    assert first.json()["panel_count"] == 3
+    assert first.json()["external_effects"] == 0
+
+    second = client.post(
+        "/v1/agent-studio/catalog/seed",
+        json={"project_id": settings.default_project_id, "actor": "ceo"},
+    )
+    assert second.status_code == 200, second.text
+    assert all(item["duplicate"] for item in second.json()["agents"])
+    assert all(item["duplicate"] for item in second.json()["panels"])
+
+
 def test_agent_studio_validates_workflow_drafts_without_publishing(client):
     settings = get_settings()
     definitions_before = client.get(

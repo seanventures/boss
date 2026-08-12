@@ -19,6 +19,7 @@ import {
   Warning,
 } from "@phosphor-icons/react";
 import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import type {
   AgentStudioFeed,
@@ -37,6 +38,7 @@ import {
   runStudioCatalogSmoke,
   runStudioPanel,
   runStudioWorkflow,
+  seedStudioCatalog,
   testStudioAgent,
   validateStudioWorkflow,
   type StudioActionResult,
@@ -132,6 +134,7 @@ export function AgentStudio({
   const [result, setResult] = useState<StudioActionResult | undefined>();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
 
   const filteredAgents = useMemo(() => {
     const q = query.toLowerCase().trim();
@@ -240,6 +243,15 @@ export function AgentStudio({
     setResult(undefined);
     startTransition(async () => {
       setResult(await runStudioCatalogSmoke(feed.projectId));
+    });
+  };
+
+  const installStarterCatalog = () => {
+    setResult(undefined);
+    startTransition(async () => {
+      const seeded = await seedStudioCatalog(feed.projectId);
+      setResult(seeded);
+      if (seeded.ok) router.refresh();
     });
   };
 
@@ -407,7 +419,7 @@ export function AgentStudio({
           </label>
           <div className="as-object-list">
             {mode === "agents" ? (
-              filteredAgents.map((agent) => (
+              filteredAgents.length > 0 ? filteredAgents.map((agent) => (
                   <button
                     key={agent.id}
                     className={
@@ -424,9 +436,16 @@ export function AgentStudio({
                     </span>
                     <i className={tone(agent.status)}>{agent.status}</i>
                   </button>
-                ))
+                )) : (
+                  <StudioEmptyState
+                    kind="agents"
+                    filtered={Boolean(query.trim())}
+                    pending={pending}
+                    onSeed={installStarterCatalog}
+                  />
+                )
             ) : mode === "panels" ? (
-              filteredPanels.map((panel) => (
+              filteredPanels.length > 0 ? filteredPanels.map((panel) => (
                   <button
                     key={panel.id}
                     className={
@@ -443,9 +462,16 @@ export function AgentStudio({
                     </span>
                     <i className={tone(panel.status)}>{panel.status}</i>
                   </button>
-                ))
+                )) : (
+                  <StudioEmptyState
+                    kind="panels"
+                    filtered={Boolean(query.trim())}
+                    pending={pending}
+                    onSeed={installStarterCatalog}
+                  />
+                )
             ) : (
-              filteredWorkflows.map((workflow) => (
+              filteredWorkflows.length > 0 ? filteredWorkflows.map((workflow) => (
                 <button
                   key={workflow.id}
                   className={
@@ -463,7 +489,14 @@ export function AgentStudio({
                   </span>
                   <i className={tone(workflow.status)}>{workflow.status}</i>
                 </button>
-              ))
+              )) : (
+                <StudioEmptyState
+                  kind="workflows"
+                  filtered={Boolean(query.trim())}
+                  pending={pending}
+                  onSeed={installStarterCatalog}
+                />
+              )
             )}
           </div>
           {mode === "agents" && (
@@ -626,7 +659,13 @@ export function AgentStudio({
             </>
           ) : (
             <div className="as-empty">
-              Select an agent, panel, or workflow to inspect its graph.
+              <b>No Studio object is selected.</b>
+              <span>Install the reviewed BOSS starter catalog or commission a scoped agent to begin.</span>
+              {feed.agents.length === 0 && (
+                <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
+                  <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
+                </button>
+              )}
             </div>
           )}
         </main>
@@ -700,6 +739,31 @@ export function AgentStudio({
           document.body,
         )
       )}
+    </div>
+  );
+}
+
+function StudioEmptyState({
+  kind,
+  filtered,
+  pending,
+  onSeed,
+}: {
+  kind: "agents" | "panels" | "workflows";
+  filtered: boolean;
+  pending: boolean;
+  onSeed: () => void;
+}) {
+  if (filtered) {
+    return <p className="as-library-empty">No {kind} match this filter.</p>;
+  }
+  return (
+    <div className="as-library-empty">
+      <b>No {kind} installed yet.</b>
+      <span>The reviewed starter catalog is project-scoped and idempotent.</span>
+      <button className="as-button secondary" disabled={pending} onClick={onSeed}>
+        <Sparkle /> {pending ? "Installing…" : "Install starter catalog"}
+      </button>
     </div>
   );
 }
