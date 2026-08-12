@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live
 
 install: install-node install-python
 
@@ -121,6 +121,22 @@ qa-benchmark-e2e: install-python
 	@test -n "$(BENCHMARK)" || (echo "BENCHMARK is required (bugbox, hookwatch, or approveit)."; exit 2)
 	@test -n "$(PROJECT_ID)" || (echo "PROJECT_ID is required."; exit 2)
 	BOSS_PROJECT_ID="$(PROJECT_ID)" PYTHONPATH=.:engine $(PYTHON) scripts/run_qa_benchmark.py --benchmark "$(BENCHMARK)" --sweep-tuning $(if $(OWNER),--owner "$(OWNER)") $(if $(REPO),--repo "$(REPO)") $(if $(QA_BENCHMARK_OUTPUT),--output "$(QA_BENCHMARK_OUTPUT)")
+
+# Live functional dogfood gate (Plane BOSS-351). Talks only to a running BOSS API.
+# Required: BOSS_API_KEY. Optional: BOSS_API_URL (default https://boss-api.local.sean.network),
+# BOSS_PROJECT_ID (default boss-dogfood), BOSS_LIVE_GATE_OUTPUT.
+# Proves health/auth, provider catalog+accounts, budget quote, command→task,
+# decisions inbox, deadletters; metatron is soft/optional. Exits non-zero on required fail.
+# Does not require full factory success (no sandbox/PR/merge). Never prints the API key.
+qa-live:
+	@test -n "$$BOSS_API_KEY" || (echo "BOSS_API_KEY is required (never commit it)."; exit 2)
+	$(PYTHON_BOOTSTRAP) scripts/qa/live_dogfood_gate.py \
+		--api-url "$${BOSS_API_URL:-https://boss-api.local.sean.network}" \
+		--api-key "$$BOSS_API_KEY" \
+		--project-id "$${BOSS_PROJECT_ID:-boss-dogfood}" \
+		$(if $(BOSS_LIVE_GATE_OUTPUT),--output "$(BOSS_LIVE_GATE_OUTPUT)") \
+		$(if $(SKIP_METATRON),--skip-metatron) \
+		$(if $(SKIP_COMMAND),--skip-command)
 
 sandbox-template:
 	mkdir -p tmp
