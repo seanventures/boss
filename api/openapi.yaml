@@ -2697,6 +2697,57 @@ paths:
           description: Role not found
         '422':
           description: Autonomy check payload is invalid
+  /v1/roles/{role_key}/autonomy/evaluate:
+    post:
+      summary: Evaluate durable role trust evidence against the autonomy policy
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+      responses:
+        '201': { description: Governance detail containing auditable evidence counts }
+        '403': { description: Actor is not allowed to review roles }
+        '404': { description: Role not found }
+        '422': { description: Invalid evaluation request }
+  /v1/roles/{role_key}/trust-evidence:
+    post:
+      summary: Append idempotent, attributable trust evidence for a role
+      parameters:
+        - name: role_key
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, evidence_type, evidence_ref]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: vp_agents }
+                evidence_type:
+                  type: string
+                  enum: [successful_run, duplicate_effect_attempt, hidden_failure, low_quality_output]
+                evidence_ref: { type: string, description: Immutable proof or observation reference }
+                detail: { type: object, additionalProperties: true }
+      responses:
+        '201': { description: Durable evidence event, or the prior event for the same proof }
+        '403': { description: Actor is not allowed to review roles }
+        '404': { description: Role not found }
+        '422': { description: Invalid trust evidence request }
   /v1/roles/{role_key}/scope/check:
     post:
       summary: Check RoleSpec scope and record drift if an action is out of scope

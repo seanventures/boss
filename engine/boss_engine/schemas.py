@@ -3572,6 +3572,31 @@ class AutonomyEvaluateRequest(BaseModel):
         return self
 
 
+class RoleTrustEvidenceRequest(BaseModel):
+    project_id: str
+    actor: str = "vp_agents"
+    evidence_type: Literal[
+        "successful_run",
+        "duplicate_effect_attempt",
+        "hidden_failure",
+        "low_quality_output",
+    ]
+    evidence_ref: str
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "RoleTrustEvidenceRequest":
+        self.actor = _require_text(self.actor, "actor")
+        self.evidence_ref = _require_text(self.evidence_ref, "evidence_ref")
+        return self
+
+
+class RoleTrustEvidenceResponse(BaseModel):
+    event_id: str
+    recorded: bool
+    event_type: str
+
+
 class RoleAutonomyCheckRequest(BaseModel):
     project_id: str
     actor: str = "system"
