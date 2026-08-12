@@ -3,103 +3,20 @@ from __future__ import annotations
 import json
 import re
 from html import escape
-from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Optional, Protocol
+from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .core import emit_event, make_id
-
-
-class WorkTrackerAdapter(Protocol):
-    """Typed seam for work-tracker plugins.
-
-    Adapters describe and normalize provider references here. Network writes
-    must still execute as leased, receipt-producing jobs; portfolio code never
-    calls a provider directly.
-    """
-
-    provider_key: str
-    display_name: str
-    capabilities: tuple[str, ...]
-
-    def issue_url(
-        self,
-        configuration: dict[str, Any],
-        *,
-        external_project_id: Optional[str],
-        external_issue_id: Optional[str],
-    ) -> Optional[str]: ...
-
-
-@dataclass(frozen=True)
-class PlaneWorkTrackerAdapter:
-    provider_key: str = "plane"
-    display_name: str = "Plane"
-    capabilities: tuple[str, ...] = (
-        "issue.create",
-        "issue.read",
-        "issue.update",
-        "issue.comment",
-        "issue.link",
-        "webhook.issue",
-    )
-
-    def issue_url(
-        self,
-        configuration: dict[str, Any],
-        *,
-        external_project_id: Optional[str],
-        external_issue_id: Optional[str],
-    ) -> Optional[str]:
-        base = str(configuration.get("web_base_url") or "").rstrip("/")
-        workspace = str(configuration.get("workspace_slug") or "").strip("/")
-        project_id = external_project_id or configuration.get("project_id")
-        if not (base and workspace and project_id and external_issue_id):
-            return None
-        return (
-            f"{base}/{workspace}/projects/{project_id}/issues/"
-            f"{external_issue_id}"
-        )
-
-
-@dataclass(frozen=True)
-class GenericWorkTrackerAdapter:
-    provider_key: str
-    display_name: str
-    capabilities: tuple[str, ...] = (
-        "issue.create",
-        "issue.read",
-        "issue.update",
-        "issue.comment",
-        "issue.link",
-    )
-
-    def issue_url(
-        self,
-        configuration: dict[str, Any],
-        *,
-        external_project_id: Optional[str],
-        external_issue_id: Optional[str],
-    ) -> Optional[str]:
-        template = str(configuration.get("issue_url_template") or "")
-        if not template or not external_issue_id:
-            return None
-        return template.format(
-            project_id=external_project_id or "",
-            issue_id=external_issue_id,
-        )
-
-
-TRACKER_ADAPTERS: dict[str, WorkTrackerAdapter] = {
-    "plane": PlaneWorkTrackerAdapter(),
-    "linear": GenericWorkTrackerAdapter("linear", "Linear"),
-    "jira": GenericWorkTrackerAdapter("jira", "Jira"),
-    "github_issues": GenericWorkTrackerAdapter("github_issues", "GitHub Issues"),
-}
+from .work_tracker_adapters import (
+    TRACKER_ADAPTERS,
+    get_adapter,
+    list_catalog as list_tracker_catalog,
+    strip_html,
+)
 
 
 DELIVERY_PLUGINS: tuple[dict[str, Any], ...] = (
@@ -187,40 +104,50 @@ class WorkOrchestrationService:
             "project_id": plane_project_id,
             "credential_ref": "secret:PLANE_API_KEY",
         }
-        for provider_key, display_name, is_default, configuration in (
+        seed_rows = [
             ("plane", "Plane", True, plane_configuration),
             (
                 "github_issues",
                 "GitHub Issues",
                 False,
                 {
-                    "credential_ref": "connection:github",
-                    "issue_url_template": (
-                        "https://github.com/{project_id}/issues/{issue_id}"
-                    ),
+                    "credential_ref": "env:BOSS_GITHUB_TOKEN",
+                    "api_base_url": "https://api.github.com",
+                    "owner": "",
+                    "repo": "",
                 },
             ),
             (
                 "linear",
                 "Linear",
                 False,
-                {
-                    "credential_ref": "connection:linear",
-                    "issue_url_template": (
-                        "https://linear.app/{project_id}/issue/{issue_id}"
-                    ),
-                },
+                {"credential_ref": "env:LINEAR_API_KEY", "team_id": "", "team_key": ""},
             ),
             (
                 "jira",
                 "Jira",
                 False,
                 {
-                    "credential_ref": "connection:jira",
-                    "issue_url_template": "{project_id}/browse/{issue_id}",
+                    "credential_ref": "env:JIRA_API_TOKEN",
+                    "base_url": "",
+                    "email": "",
+                    "project_key": "",
+                    "issue_type": "Task",
                 },
             ),
-        ):
+            (
+                "azure_devops",
+                "Azure DevOps",
+                False,
+                {
+                    "credential_ref": "env:AZURE_DEVOPS_PAT",
+                    "organization": "",
+                    "project": "",
+                    "work_item_type": "Task",
+                },
+            ),
+        ]
+        for provider_key, display_name, is_default, configuration in seed_rows:
             adapter = TRACKER_ADAPTERS[provider_key]
             connection.execute(
                 text(
@@ -239,7 +166,8 @@ class WorkOrchestrationService:
                     ON CONFLICT (project_id, provider_key) DO UPDATE
                     SET display_name=EXCLUDED.display_name,
                         capabilities=EXCLUDED.capabilities,
-                        configuration=EXCLUDED.configuration,
+                        configuration=work_tracker_providers.configuration
+                          || EXCLUDED.configuration,
                         enforcement_mode=EXCLUDED.enforcement_mode,
                         updated_at=now()
                     """
@@ -287,6 +215,313 @@ class WorkOrchestrationService:
             borrow_enabled=False,
             actor=actor,
         )
+
+    # ------------------------------------------------------------------
+    # Work-tracker plugins: catalog, connect, default selection
+    # ------------------------------------------------------------------
+    def tracker_catalog(self) -> list[dict[str, Any]]:
+        """Static catalog of selectable trackers (Plane default + alternatives)."""
+        return list_tracker_catalog()
+
+    def list_tracker_providers(
+        self, connection: Connection, project_id: str
+    ) -> list[dict[str, Any]]:
+        self.seed_defaults(connection, project_id)
+        rows = connection.execute(
+            text(
+                """
+                SELECT p.id, p.project_id, p.provider_key, p.display_name,
+                       p.adapter_kind, p.status, p.is_default, p.enforcement_mode,
+                       p.capabilities, p.configuration, p.created_by,
+                       p.created_at, p.updated_at,
+                       COALESCE((
+                         SELECT count(*) FROM work_tracker_bindings b
+                         WHERE b.provider_id = p.id
+                       ), 0) AS binding_count
+                FROM work_tracker_providers p
+                WHERE p.project_id = :project_id
+                ORDER BY p.is_default DESC, p.display_name ASC
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().all()
+        return [self._serialize_tracker_provider(row) for row in rows]
+
+    def connect_tracker_provider(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_key: str,
+        configuration: dict[str, Any],
+        actor: str,
+        set_as_default: bool = False,
+        test: bool = True,
+        api_token: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Configure and optionally test a work-tracker connection.
+
+        Secrets: pass ``api_token`` once; it is stored under configuration as
+        ``api_token`` for local/dev (prefer env credential_ref in production).
+        """
+        adapter = get_adapter(provider_key)
+        self.seed_defaults(connection, project_id)
+        config = dict(configuration or {})
+        if api_token and str(api_token).strip():
+            config["api_token"] = str(api_token).strip()
+            # Prefer env-style refs when caller only passed a bare token
+            if not config.get("credential_ref"):
+                env_name = {
+                    "plane": "PLANE_API_KEY",
+                    "jira": "JIRA_API_TOKEN",
+                    "linear": "LINEAR_API_KEY",
+                    "github_issues": "BOSS_GITHUB_TOKEN",
+                    "azure_devops": "AZURE_DEVOPS_PAT",
+                }.get(provider_key, "BOSS_TRACKER_TOKEN")
+                config.setdefault("credential_ref", f"env:{env_name}")
+
+        test_result: Optional[dict[str, Any]] = None
+        if test:
+            test_result = adapter.test_connection(config)
+            if not test_result.get("ok"):
+                raise ValueError(
+                    test_result.get("message")
+                    or f"Connection test failed for {provider_key}"
+                )
+
+        # Upsert provider row
+        connection.execute(
+            text(
+                """
+                INSERT INTO work_tracker_providers (
+                    id, project_id, provider_key, display_name, adapter_kind,
+                    status, is_default, enforcement_mode, capabilities,
+                    configuration, created_by
+                )
+                VALUES (
+                    :id, :project_id, :provider_key, :display_name, 'plugin',
+                    'active', false, 'advisory',
+                    CAST(:capabilities AS JSONB), CAST(:configuration AS JSONB),
+                    :created_by
+                )
+                ON CONFLICT (project_id, provider_key) DO UPDATE
+                SET display_name = EXCLUDED.display_name,
+                    status = 'active',
+                    capabilities = EXCLUDED.capabilities,
+                    configuration = EXCLUDED.configuration,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": make_id("tracker"),
+                "project_id": project_id,
+                "provider_key": provider_key,
+                "display_name": adapter.display_name,
+                "capabilities": json.dumps(list(adapter.capabilities)),
+                "configuration": json.dumps(config),
+                "created_by": actor,
+            },
+        )
+        if set_as_default:
+            self.set_default_tracker(
+                connection,
+                project_id=project_id,
+                provider_key=provider_key,
+                actor=actor,
+            )
+        providers = self.list_tracker_providers(connection, project_id)
+        provider = next(
+            (p for p in providers if p["provider_key"] == provider_key), None
+        )
+        emit_event(
+            connection,
+            project_id,
+            "work_tracker.provider_connected",
+            actor,
+            "work_tracker_provider",
+            (provider or {}).get("id") or provider_key,
+            {
+                "provider_key": provider_key,
+                "set_as_default": set_as_default,
+                "tested": bool(test),
+            },
+        )
+        return {
+            "provider": provider,
+            "test": test_result,
+            "default_provider_key": next(
+                (p["provider_key"] for p in providers if p.get("is_default")),
+                "plane",
+            ),
+        }
+
+    def set_default_tracker(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_key: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        get_adapter(provider_key)
+        self.seed_defaults(connection, project_id)
+        row = connection.execute(
+            text(
+                """
+                SELECT id FROM work_tracker_providers
+                WHERE project_id = :project_id AND provider_key = :provider_key
+                """
+            ),
+            {"project_id": project_id, "provider_key": provider_key},
+        ).mappings().first()
+        if row is None:
+            raise ValueError(f"Tracker provider '{provider_key}' is not installed.")
+        connection.execute(
+            text(
+                """
+                UPDATE work_tracker_providers
+                SET is_default = false, updated_at = now()
+                WHERE project_id = :project_id AND is_default = true
+                """
+            ),
+            {"project_id": project_id},
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE work_tracker_providers
+                SET is_default = true,
+                    status = 'active',
+                    enforcement_mode = 'required',
+                    updated_at = now()
+                WHERE project_id = :project_id AND provider_key = :provider_key
+                """
+            ),
+            {"project_id": project_id, "provider_key": provider_key},
+        )
+        emit_event(
+            connection,
+            project_id,
+            "work_tracker.default_changed",
+            actor,
+            "work_tracker_provider",
+            row["id"],
+            {"provider_key": provider_key},
+        )
+        return {
+            "project_id": project_id,
+            "default_provider_key": provider_key,
+            "providers": self.list_tracker_providers(connection, project_id),
+        }
+
+    def test_tracker_provider(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        provider_key: str,
+    ) -> dict[str, Any]:
+        providers = {
+            p["provider_key"]: p
+            for p in self.list_tracker_providers(connection, project_id)
+        }
+        if provider_key not in providers:
+            raise ValueError(f"Tracker provider '{provider_key}' is not installed.")
+        adapter = get_adapter(provider_key)
+        config = dict(providers[provider_key].get("configuration") or {})
+        result = adapter.test_connection(config)
+        return {
+            "provider_key": provider_key,
+            "display_name": providers[provider_key]["display_name"],
+            **result,
+        }
+
+    def execute_tracker_issue_create(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        binding_id: str,
+    ) -> dict[str, Any]:
+        """Create external issue for a binding via the configured adapter."""
+        context = self.tracker_sync_context(
+            connection, project_id=project_id, binding_id=binding_id
+        )
+        provider_key = context["provider"]["provider_key"]
+        adapter = get_adapter(provider_key)
+        config = dict(context["provider"]["configuration"] or {})
+        # Binding can override project/workspace
+        if context["binding"].get("external_project_id"):
+            config.setdefault(
+                "project_id", context["binding"]["external_project_id"]
+            )
+            config.setdefault(
+                "project_key", context["binding"]["external_project_id"]
+            )
+            config.setdefault(
+                "project", context["binding"]["external_project_id"]
+            )
+        html = context["description_html"]
+        text_body = strip_html(html)
+        result = adapter.create_issue(
+            config,
+            title=context["work_item"]["title"],
+            description_html=html,
+            description_text=text_body,
+        )
+        if result is None:
+            return {
+                "ok": False,
+                "reason": f"{provider_key}_issue_create_failed",
+                "provider": provider_key,
+            }
+        return {
+            "ok": True,
+            "provider": provider_key,
+            "external_issue_id": result.external_issue_id,
+            "external_key": result.external_key,
+            "external_url": result.external_url,
+            "external_state": result.external_state,
+        }
+
+    def _serialize_tracker_provider(self, row: Any) -> dict[str, Any]:
+        data = self._serialize(row)
+        config = data.get("configuration") or {}
+        if not isinstance(config, dict):
+            config = {}
+        # Never return raw secrets in list APIs
+        redacted = dict(config)
+        for secret_key in ("api_token", "access_token", "token", "pat", "password"):
+            if redacted.get(secret_key):
+                redacted[secret_key] = "***"
+        data["configuration"] = redacted
+        data["connected"] = self._provider_looks_configured(
+            data["provider_key"], config
+        )
+        return data
+
+    @staticmethod
+    def _provider_looks_configured(
+        provider_key: str, configuration: dict[str, Any]
+    ) -> bool:
+        if provider_key == "plane":
+            return bool(
+                configuration.get("api_base_url")
+                or configuration.get("web_base_url")
+            ) and bool(configuration.get("project_id"))
+        if provider_key == "jira":
+            return bool(configuration.get("base_url") and configuration.get("email"))
+        if provider_key == "linear":
+            return bool(
+                configuration.get("team_id") or configuration.get("team_key")
+            )
+        if provider_key == "github_issues":
+            return bool(configuration.get("owner") and configuration.get("repo"))
+        if provider_key == "azure_devops":
+            return bool(
+                configuration.get("organization") and configuration.get("project")
+            )
+        return bool(configuration)
 
     # ------------------------------------------------------------------
     # Explainable portfolio priority
@@ -1588,25 +1823,6 @@ class WorkOrchestrationService:
             f"<code>{escape(str(work_item.get('subject_id')))}</code></p>"
             f"{evidence_html}"
         )
-
-    def list_tracker_providers(
-        self, connection: Connection, project_id: str
-    ) -> list[dict[str, Any]]:
-        rows = connection.execute(
-            text(
-                """
-                SELECT p.*, COALESCE((
-                  SELECT count(*) FROM work_tracker_bindings b
-                  WHERE b.provider_id=p.id
-                ), 0) AS binding_count
-                FROM work_tracker_providers p
-                WHERE p.project_id=:project_id
-                ORDER BY p.is_default DESC, p.display_name
-                """
-            ),
-            {"project_id": project_id},
-        ).mappings().all()
-        return [self._serialize(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Delivery presence: channels, bot identities, and status ledger

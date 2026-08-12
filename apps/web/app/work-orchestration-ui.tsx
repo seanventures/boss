@@ -19,7 +19,9 @@ import type {
   WorkOrchestrationFeed,
 } from "../lib/work-orchestration";
 import {
+  connectWorkTrackerAction,
   planResourceAllocationsAction,
+  setDefaultWorkTrackerAction,
   syncTrackerBindingAction,
   upsertDeliveryBotAction,
   upsertRankedWorkAction,
@@ -92,8 +94,10 @@ export function WorkOrchestration({ feed, actor }: Props) {
           <span className="eyebrow">Allocation control plane</span>
           <h2>Put scarce attention and compute on the work that matters.</h2>
           <p>
-            Explainable priority feeds a quota-bounded lease queue. Plane is the
-            default record; delivery status stays visible here.
+            Explainable priority feeds a quota-bounded lease queue.{" "}
+            <strong>Plane is the default</strong> work tracker; connect Jira,
+            Linear, GitHub Issues, or Azure DevOps when you prefer another system
+            of record.
           </p>
         </div>
         <div className="wo-pulse" aria-label={`${feed.summary.active_jobs} active jobs`}>
@@ -267,15 +271,88 @@ export function WorkOrchestration({ feed, actor }: Props) {
             <div><PlugsConnected size={17} /><span>Delivery presence</span></div>
             <small>tracker + deploy truth</small>
           </div>
-          <div className="wo-provider-strip">
+          <div className="wo-provider-strip" data-testid="work-tracker-providers">
             {feed.trackerProviders.map((provider) => (
               <div className={provider.is_default ? "is-default" : ""} key={provider.id}>
                 <Ticket size={15} />
                 <span>{provider.display_name}</span>
-                <small>{provider.is_default ? "default" : "plugin"} · {provider.binding_count}</small>
+                <small>
+                  {provider.is_default ? "default" : "available"} ·{" "}
+                  {provider.binding_count} bound
+                </small>
+                {!provider.is_default ? (
+                  <form action={setDefaultWorkTrackerAction} className="wo-inline-sync">
+                    <input type="hidden" name="project_id" value={feed.projectId} />
+                    <input type="hidden" name="actor" value={actor} />
+                    <input type="hidden" name="provider_key" value={provider.provider_key} />
+                    <SubmitButton className="button secondary" type="submit">
+                      Make default
+                    </SubmitButton>
+                  </form>
+                ) : null}
               </div>
             ))}
           </div>
+          <details className="wo-editor" data-testid="work-tracker-connect">
+            <summary>Connect work tracker (Plane default · Jira · Linear · GitHub · Azure DevOps)</summary>
+            <form action={connectWorkTrackerAction}>
+              <input type="hidden" name="project_id" value={feed.projectId} />
+              <input type="hidden" name="actor" value={actor} />
+              <label>
+                System
+                <select name="provider_key" defaultValue="plane" required>
+                  <option value="plane">Plane (default)</option>
+                  <option value="jira">Jira Cloud</option>
+                  <option value="linear">Linear</option>
+                  <option value="github_issues">GitHub Issues</option>
+                  <option value="azure_devops">Azure DevOps</option>
+                </select>
+              </label>
+              <p className="wo-empty">
+                Fill the fields for your system. Leave blank fields unused.
+                Tokens are stored on the project config (prefer env SecretRefs in production).
+              </p>
+              <div className="wo-form-pair">
+                <label>API / site URL<input name="api_base_url" placeholder="Plane URL or Jira site" /></label>
+                <label>Base URL (Jira)<input name="base_url" placeholder="https://x.atlassian.net" /></label>
+              </div>
+              <div className="wo-form-pair">
+                <label>Workspace slug (Plane)<input name="workspace_slug" placeholder="goldeneye" /></label>
+                <label>Plane project UUID<input name="project_id_external" placeholder="cc97d5cc-…" /></label>
+              </div>
+              <div className="wo-form-pair">
+                <label>Jira email<input name="email" type="email" placeholder="you@company.com" /></label>
+                <label>Jira project key<input name="project_key" placeholder="BOSS" /></label>
+              </div>
+              <div className="wo-form-pair">
+                <label>Linear team id<input name="team_id" placeholder="uuid" /></label>
+                <label>Linear team key<input name="team_key" placeholder="ENG" /></label>
+              </div>
+              <div className="wo-form-pair">
+                <label>GitHub owner<input name="owner" placeholder="acme" /></label>
+                <label>GitHub repo<input name="repo" placeholder="product" /></label>
+              </div>
+              <div className="wo-form-pair">
+                <label>Azure org<input name="organization" placeholder="my-org" /></label>
+                <label>Azure project<input name="project" placeholder="Product" /></label>
+              </div>
+              <label>
+                API token / PAT
+                <input name="api_token" type="password" autoComplete="off" placeholder="••••••••" />
+              </label>
+              <label className="check-row">
+                <input type="checkbox" name="set_as_default" value="true" />
+                <span>Set as project default tracker</span>
+              </label>
+              <label className="check-row">
+                <input type="checkbox" name="skip_test" value="true" />
+                <span>Skip live connection test</span>
+              </label>
+              <SubmitButton className="button" type="submit">
+                Connect tracker
+              </SubmitButton>
+            </form>
+          </details>
           <div className="wo-binding-list">
             {feed.trackerBindings.slice(0, 8).map((binding) => (
               <div className="wo-binding" key={binding.id}>
@@ -365,7 +442,7 @@ export function WorkOrchestration({ feed, actor }: Props) {
               <input type="hidden" name="work_item_id" value={selected.id} />
               <input type="hidden" name="provider_key" value={selectedBinding.provider_key} />
               <input name="external_key" placeholder="BOSS-270" aria-label="External ticket key" />
-              <input name="external_issue_id" placeholder="Plane issue UUID" aria-label="External issue ID" />
+              <input name="external_issue_id" placeholder="External issue id (optional)" aria-label="External issue ID" />
               <SubmitButton className="button" type="submit">Confirm ticket link</SubmitButton>
             </form>
           ) : null}

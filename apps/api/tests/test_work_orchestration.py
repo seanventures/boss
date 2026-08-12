@@ -403,15 +403,20 @@ def test_plane_sync_executes_only_through_lease_and_persists_receipt(
     settings = get_settings()
     service = WorkOrchestrationService(settings)
     jobs = JobLeaseService(settings)
-    monkeypatch.setattr(
-        api_main.PlaneClient,
-        "create_issue",
-        lambda _self, project_id, **_payload: {
-            "id": "plane-issue-31",
-            "sequence_id": 31,
-            "state": "Backlog",
-        },
+    from boss_engine.services.work_tracker_adapters import (
+        IssueCreateResult,
+        PlaneWorkTrackerAdapter,
     )
+
+    def _fake_create(self, configuration, *, title, description_html, description_text):
+        return IssueCreateResult(
+            external_issue_id="plane-issue-31",
+            external_key="#31",
+            external_url=None,
+            external_state="Backlog",
+        )
+
+    monkeypatch.setattr(PlaneWorkTrackerAdapter, "create_issue", _fake_create)
 
     with engine.begin() as connection:
         tracked = service.ensure_tracked_work(

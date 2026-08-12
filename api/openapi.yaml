@@ -14377,6 +14377,82 @@ paths:
       responses:
         '200':
           description: Deterministic allocation plan with granted and throttled work
+  /v1/work-trackers/catalog:
+    get:
+      summary: Catalog of work/bug trackers (Plane default + Jira, Linear, GitHub Issues, Azure DevOps)
+      responses:
+        '200':
+          description: Provider catalog with connection field schemas
+  /v1/work-trackers:
+    get:
+      summary: List installed tracker providers for a project
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Providers with default flag and redacted configuration
+  /v1/work-trackers/connect:
+    post:
+      summary: Connect/configure a work tracker and optionally set as default
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider_key]
+              properties:
+                project_id: { type: string }
+                provider_key:
+                  type: string
+                  enum: [plane, jira, linear, github_issues, azure_devops]
+                configuration: { type: object }
+                api_token: { type: string }
+                set_as_default: { type: boolean }
+                test: { type: boolean, default: true }
+                actor: { type: string }
+      responses:
+        '200':
+          description: Connected provider (secrets redacted)
+        '422':
+          description: Validation or connection test failed
+  /v1/work-trackers/set-default:
+    post:
+      summary: Select the project default work tracker (Plane is seed default)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider_key]
+              properties:
+                project_id: { type: string }
+                provider_key: { type: string }
+                actor: { type: string }
+      responses:
+        '200':
+          description: Updated default provider
+  /v1/work-trackers/test:
+    post:
+      summary: Test connectivity for a configured tracker
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, provider_key]
+              properties:
+                project_id: { type: string }
+                provider_key: { type: string }
+                actor: { type: string }
+      responses:
+        '200':
+          description: Connection test result
   /v1/work-orchestration/tracker-bindings:
     post:
       summary: Bind work to an installed tracker plugin and queue provider synchronization when needed

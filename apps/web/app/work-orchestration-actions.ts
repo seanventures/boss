@@ -101,6 +101,51 @@ export async function syncTrackerBindingAction(formData: FormData): Promise<void
   });
 }
 
+export async function setDefaultWorkTrackerAction(formData: FormData): Promise<void> {
+  await post("/v1/work-trackers/set-default", {
+    project_id: text(formData, "project_id"),
+    actor: text(formData, "actor", "ceo"),
+    provider_key: text(formData, "provider_key", "plane"),
+  });
+}
+
+export async function connectWorkTrackerAction(formData: FormData): Promise<void> {
+  const providerKey = text(formData, "provider_key", "plane");
+  const configuration: Record<string, string> = {};
+  // Common fields from the connect form (provider-specific extras ignored if empty)
+  for (const key of [
+    "api_base_url",
+    "web_base_url",
+    "workspace_slug",
+    "project_id_external",
+    "base_url",
+    "email",
+    "project_key",
+    "issue_type",
+    "team_id",
+    "team_key",
+    "owner",
+    "repo",
+    "organization",
+    "project",
+    "work_item_type",
+  ]) {
+    const value = text(formData, key);
+    if (!value) continue;
+    if (key === "project_id_external") configuration.project_id = value;
+    else configuration[key] = value;
+  }
+  await post("/v1/work-trackers/connect", {
+    project_id: text(formData, "project_id"),
+    actor: text(formData, "actor", "ceo"),
+    provider_key: providerKey,
+    configuration,
+    api_token: text(formData, "api_token") || undefined,
+    set_as_default: formData.get("set_as_default") === "true",
+    test: formData.get("skip_test") !== "true",
+  });
+}
+
 export async function upsertDeliveryBotAction(formData: FormData): Promise<void> {
   await post("/v1/work-orchestration/bot-identities", {
     project_id: text(formData, "project_id"),

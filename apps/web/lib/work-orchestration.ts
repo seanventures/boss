@@ -86,6 +86,7 @@ export type TrackerProvider = {
   capabilities: string[];
   configuration: Record<string, unknown>;
   binding_count: number;
+  connected?: boolean;
 };
 
 export type TrackerBinding = {

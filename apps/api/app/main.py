@@ -16968,6 +16968,106 @@ def plan_resource_allocations(
             _raise_work_orchestration_error(error)
 
 
+@app.get("/v1/work-trackers/catalog")
+def work_tracker_catalog() -> dict[str, Any]:
+    """Selectable bug/work trackers (Plane is the default option)."""
+    return {
+        "default_provider_key": "plane",
+        "items": work_orchestration.tracker_catalog(),
+    }
+
+
+@app.get("/v1/work-trackers")
+def list_work_trackers(project_id: str) -> dict[str, Any]:
+    """Installed tracker providers for a project (Plane seeded as default)."""
+    with begin(engine) as connection:
+        items = work_orchestration.list_tracker_providers(connection, project_id)
+        default_key = next(
+            (i["provider_key"] for i in items if i.get("is_default")),
+            "plane",
+        )
+        return {
+            "project_id": project_id,
+            "default_provider_key": default_key,
+            "items": items,
+        }
+
+
+@app.post("/v1/work-trackers/connect")
+def connect_work_tracker(payload: dict) -> dict[str, Any]:
+    """Connect/configure a tracker (Jira, Linear, GitHub Issues, Azure DevOps, Plane)."""
+    project_id = str(payload.get("project_id") or "").strip()
+    provider_key = str(payload.get("provider_key") or "").strip().lower()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id or not provider_key:
+        raise HTTPException(
+            status_code=422, detail="project_id and provider_key are required"
+        )
+    configuration = payload.get("configuration")
+    if configuration is not None and not isinstance(configuration, dict):
+        raise HTTPException(status_code=422, detail="configuration must be an object")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "command_submit")
+        try:
+            return work_orchestration.connect_tracker_provider(
+                connection,
+                project_id=project_id,
+                provider_key=provider_key,
+                configuration=configuration or {},
+                actor=actor,
+                set_as_default=bool(payload.get("set_as_default", False)),
+                test=bool(payload.get("test", True)),
+                api_token=payload.get("api_token"),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/work-trackers/set-default")
+def set_default_work_tracker(payload: dict) -> dict[str, Any]:
+    """Select the project default work tracker (Plane remains seed default)."""
+    project_id = str(payload.get("project_id") or "").strip()
+    provider_key = str(payload.get("provider_key") or "").strip().lower()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id or not provider_key:
+        raise HTTPException(
+            status_code=422, detail="project_id and provider_key are required"
+        )
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "command_submit")
+        try:
+            return work_orchestration.set_default_tracker(
+                connection,
+                project_id=project_id,
+                provider_key=provider_key,
+                actor=actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/work-trackers/test")
+def test_work_tracker(payload: dict) -> dict[str, Any]:
+    """Test connectivity for a configured tracker without creating issues."""
+    project_id = str(payload.get("project_id") or "").strip()
+    provider_key = str(payload.get("provider_key") or "").strip().lower()
+    actor = str(payload.get("actor") or "ceo").strip()
+    if not project_id or not provider_key:
+        raise HTTPException(
+            status_code=422, detail="project_id and provider_key are required"
+        )
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "command_submit")
+        try:
+            return work_orchestration.test_tracker_provider(
+                connection,
+                project_id=project_id,
+                provider_key=provider_key,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 @app.post("/v1/work-orchestration/tracker-bindings")
 def upsert_work_tracker_binding(
     payload: WorkTrackerBindingUpsertRequest,
@@ -17074,9 +17174,18 @@ def execute_work_tracker_sync(
                     "binding": context["binding"],
                     "reused": True,
                 }
-            if provider_key != "plane":
+            # Multi-provider create via work_tracker_adapters (Plane default).
+            created_issue = work_orchestration.execute_tracker_issue_create(
+                connection,
+                project_id=payload.project_id,
+                binding_id=payload.binding_id,
+            )
+            if not created_issue.get("ok"):
+                failure_reason = str(
+                    created_issue.get("reason") or f"{provider_key}_issue_create_failed"
+                )
                 error = {
-                    "reason": "tracker_plugin_executor_not_configured",
+                    "reason": failure_reason,
                     "provider": provider_key,
                 }
                 receipts.mark_failed(connection, receipt["id"], error)
@@ -17090,54 +17199,18 @@ def execute_work_tracker_sync(
                 return {
                     "status": "failed",
                     "receipt_id": receipt["id"],
-                    "reason": error["reason"],
-                }
-            provider_project_id = (
-                context["binding"]["external_project_id"]
-                or context["provider"]["configuration"].get("project_id")
-            )
-            if not provider_project_id:
-                issue = None
-                failure_reason = "plane_project_not_configured"
-            else:
-                issue = PlaneClient(settings).create_issue(
-                    str(provider_project_id),
-                    name=context["work_item"]["title"],
-                    description_html=context["description_html"],
-                )
-                failure_reason = "plane_issue_create_failed"
-            if issue is None:
-                error = {
-                    "reason": failure_reason,
-                    "provider": "plane",
-                }
-                receipts.mark_failed(connection, receipt["id"], error)
-                work_orchestration.mark_tracker_sync_failed(
-                    connection,
-                    project_id=payload.project_id,
-                    binding_id=payload.binding_id,
-                    error=error,
-                    actor=payload.worker_id,
-                )
-                return {
-                    "status": "failed",
-                    "receipt_id": receipt["id"],
                     "reason": failure_reason,
                 }
-            external_issue_id = str(issue["id"])
-            sequence_id = issue.get("sequence_id")
-            external_key = (
-                str(issue.get("identifier") or "")
-                or (f"#{sequence_id}" if sequence_id is not None else None)
-            )
+            external_issue_id = str(created_issue["external_issue_id"])
+            external_key = created_issue.get("external_key")
             binding = work_orchestration.mark_tracker_synced(
                 connection,
                 project_id=payload.project_id,
                 binding_id=payload.binding_id,
                 external_issue_id=external_issue_id,
                 external_key=external_key,
-                external_url=None,
-                external_state=str(issue.get("state") or "Backlog"),
+                external_url=created_issue.get("external_url"),
+                external_state=str(created_issue.get("external_state") or "open"),
                 actor=payload.worker_id,
             )
             result = {
@@ -17145,6 +17218,7 @@ def execute_work_tracker_sync(
                 "external_issue_id": external_issue_id,
                 "external_key": external_key,
                 "external_url": binding.get("external_url"),
+                "provider": provider_key,
             }
             receipts.mark_succeeded(
                 connection,

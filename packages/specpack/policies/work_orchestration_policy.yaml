@@ -11,6 +11,12 @@ rules:
   system_of_record:
     work_tracker_binding_required: true
     default_provider: plane
+    supported_tracker_providers:
+      - plane
+      - jira
+      - linear
+      - github_issues
+      - azure_devops
     alternate_providers_require_installed_plugin: true
     tracker_provider_is_intake_authority: true
     boss_jobs_are_execution_authority: true
