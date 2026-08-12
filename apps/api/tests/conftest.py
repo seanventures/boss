@@ -62,6 +62,14 @@ def clean_tables(engine):
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
             "agent_group_member_runs",
+            "oncall_pages",
+            "oncall_policies",
+            "oncall_schedules",
+            "release_board_items",
+            "release_plans",
+            "worker_autoscaling_history",
+            "worker_autoscaling_policies",
+            "token_budget_policies",
             "agent_group_runs",
             "agent_group_versions",
             "agent_group_specs",

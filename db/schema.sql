@@ -4956,3 +4956,170 @@ CREATE INDEX IF NOT EXISTS idx_provider_slo_evaluations_def
 CREATE INDEX IF NOT EXISTS idx_provider_slo_evaluations_project
   ON provider_slo_evaluations(project_id, provider, status, evaluated_at DESC);
 
+-- Platform ops: on-call SRE
+CREATE TABLE IF NOT EXISTS oncall_schedules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  layers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_oncall_schedules_project
+  ON oncall_schedules(project_id, enabled);
+
+CREATE TABLE IF NOT EXISTS oncall_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL,
+  schedule_id TEXT,
+  steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_oncall_policies_project
+  ON oncall_policies(project_id);
+
+CREATE TABLE IF NOT EXISTS oncall_pages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  reliability_incident_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'warning',
+  status TEXT NOT NULL DEFAULT 'open',
+  schedule_id TEXT,
+  policy_id TEXT,
+  current_step INTEGER NOT NULL DEFAULT 0,
+  assignee TEXT NOT NULL DEFAULT '',
+  service TEXT NOT NULL DEFAULT '',
+  kg_node_id TEXT,
+  kg_node_key TEXT,
+  adapter TEXT NOT NULL DEFAULT 'slack_webhook',
+  notify_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acked_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_oncall_pages_project
+  ON oncall_pages(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_oncall_pages_incident
+  ON oncall_pages(project_id, reliability_incident_id);
+
+
+-- Platform ops: release planning
+CREATE TABLE IF NOT EXISTS release_plans (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  target_date DATE,
+  status TEXT NOT NULL DEFAULT 'planned',
+  item_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  issue_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_release_plans_project
+  ON release_plans(project_id, target_date NULLS LAST, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS release_board_items (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  column_key TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT,
+  external_url TEXT,
+  tracker TEXT,
+  issue_key TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, source_type, source_id),
+  CHECK (column_key IN ('built', 'building', 'planned', 'blocked'))
+);
+CREATE INDEX IF NOT EXISTS idx_release_board_items_project_col
+  ON release_board_items(project_id, column_key, sort_order, updated_at DESC);
+
+
+-- Platform ops: worker autoscaling
+CREATE TABLE IF NOT EXISTS worker_autoscaling_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pool_key TEXT NOT NULL DEFAULT 'default',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  min_workers INTEGER NOT NULL DEFAULT 0,
+  max_workers INTEGER NOT NULL DEFAULT 8,
+  scale_up_threshold INTEGER NOT NULL DEFAULT 1,
+  cooldown_seconds INTEGER NOT NULL DEFAULT 30,
+  max_queue_depth_per_worker INTEGER NOT NULL DEFAULT 5,
+  kind TEXT NOT NULL DEFAULT 'local',
+  provider_account_id TEXT REFERENCES provider_accounts(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_applied_at TIMESTAMPTZ,
+  last_scale_direction TEXT,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, pool_key)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_autoscaling_policies_project
+  ON worker_autoscaling_policies(project_id, enabled, pool_key);
+
+CREATE TABLE IF NOT EXISTS worker_autoscaling_history (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pool_key TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  queue_depth INTEGER NOT NULL DEFAULT 0,
+  leased_jobs INTEGER NOT NULL DEFAULT 0,
+  running_jobs INTEGER NOT NULL DEFAULT 0,
+  desired_workers INTEGER NOT NULL DEFAULT 0,
+  actual_workers INTEGER NOT NULL DEFAULT 0,
+  previous_desired INTEGER NOT NULL DEFAULT 0,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  elastic_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT,
+  actor TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_worker_autoscaling_history_project
+  ON worker_autoscaling_history(project_id, pool_key, created_at DESC);
+
+
+-- Platform ops: token efficiency policies
+CREATE TABLE IF NOT EXISTS token_budget_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT '*',
+  max_prompt_tokens INTEGER,
+  max_completion_tokens INTEGER,
+  max_total_tokens_per_call INTEGER,
+  max_tokens_per_day BIGINT,
+  max_cost_usd_micros_per_day BIGINT,
+  alert_at_pct NUMERIC NOT NULL DEFAULT 0.80,
+  preferred_model_class TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, stage),
+  CHECK (preferred_model_class IS NULL
+         OR preferred_model_class IN ('low_cost', 'strong')),
+  CHECK (alert_at_pct > 0 AND alert_at_pct <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_token_budget_policies_project
+  ON token_budget_policies (project_id, stage);
+
