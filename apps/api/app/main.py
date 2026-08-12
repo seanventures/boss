@@ -2677,6 +2677,38 @@ def complete_cloud_easy_connect(session_id: str, payload: dict) -> dict:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.post("/v1/cloud/easy-connect/complete")
+def complete_cloud_easy_connect_by_state(payload: dict) -> dict:
+    """Complete browser Easy Connect using code+state from the hosted redirect callback."""
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "ceo").strip()
+    code = payload.get("code")
+    state = payload.get("state")
+    session_id = payload.get("session_id")
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return cloud_product.complete_easy_connect(
+                connection,
+                project_id=project_id,
+                session_id=str(session_id) if session_id else None,
+                actor=actor,
+                code=str(code) if code is not None else None,
+                state=str(state) if state is not None else None,
+            )
+        except AccountConnectAuthSessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            AccountConnectAuthSessionStateError,
+            AccountConnectSyncError,
+            AccountConnectConfigurationError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.post("/v1/cloud/unlink")
 def unlink_cloud(payload: dict) -> dict:
     """Disconnect this project from BOSS Cloud; Community stays fully usable."""

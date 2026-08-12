@@ -3920,52 +3920,90 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" data-area="enterprise" aria-label="Editions Community Cloud Enterprise">
           <div className="section-head">
             <div>
-              <span className="eyebrow" data-area="enterprise">Commercial Trust Layer</span>
-              <h2>Edition, Account Connect, Enterprise, and SCIM governance.</h2>
+              <span className="eyebrow" data-area="enterprise">Editions</span>
+              <h2>Start open. Scale managed.</h2>
             </div>
             <p className="status-meta">
-              Community runs fully independently (BYOK, local control plane). Connect
-              to BOSS Cloud only when you want hosted team, marketplace, or managed
-              capacity — Easy Connect never requires pasting Cloud secrets here.
+              Same product path as boss.sean.network: Community is a full self-hosted
+              engine; BOSS Cloud is the easy button for hosted ops; Enterprise adds
+              identity and design-partner controls. Connecting never requires pasting
+              Cloud secrets into this console.
             </p>
           </div>
 
           <div className="stack-grid">
+            <article className="stack-card" data-testid="community-edition-card">
+              <h3>BOSS Community</h3>
+              <p className="detail">
+                Self-hosted workflow engine you operate: CLI + MCP, BYOK models and
+                infra keys, budgets, decisions, receipts, leases, Mission Control,
+                Software Factory, and the ProviderOps kernel.
+              </p>
+              {commercial.edition ? (
+                <div className="feed-list">
+                  <div className="feed-row">
+                    <div>
+                      <h4>{commercial.edition.displayName}</h4>
+                      <p className="detail">
+                        {commercial.edition.localAuthAllowed
+                          ? "Local auth allowed · "
+                          : "Hosted auth preferred · "}
+                        Account Connect{" "}
+                        {commercial.edition.accountConnectRequired
+                          ? "required"
+                          : "not required"}
+                      </p>
+                    </div>
+                    <span
+                      className={`pill${
+                        commercial.edition.status === "active" ? "" : " warn"
+                      }`}
+                    >
+                      {titleCaseToken(commercial.edition.status)}
+                    </span>
+                  </div>
+                </div>
+              ) : commercial.apiReachable ? (
+                <p className="detail">Edition status unavailable.</p>
+              ) : (
+                <p className="detail">
+                  {commercial.blockedReason ?? "Control plane unreachable."}
+                </p>
+              )}
+              <p className="detail">
+                {commercial.cloud?.independent !== false
+                  ? "This install runs independently of BOSS Cloud."
+                  : "This edition expects a Cloud link before commercial features activate."}
+              </p>
+            </article>
+
             <article className="stack-card" data-testid="cloud-easy-connect">
               <h3>BOSS Cloud — Easy Connect</h3>
               <p className="detail">
-                Community is a full product (BYOK, local control plane, ProviderOps).
-                Link to BOSS Cloud only when you want hosted team, marketplace, or
-                managed capacity. Device flow: start → open verification URI → enter
-                short code. Never paste Cloud secrets here.
+                Hosted Mission Control collaboration, team invites, marketplace, and
+                managed capacity when you want them. Device code or one-click browser
+                — no long-lived secrets pasted here.
               </p>
               {commercial.cloud ? (
                 <div className="feed-list" data-testid="cloud-product-status">
                   <div className="feed-row">
                     <div>
                       <h4>
-                        {commercial.cloud.independent
-                          ? "Running independently"
-                          : "Cloud link required"}
+                        {commercial.cloud.linked
+                          ? "Linked to BOSS Cloud"
+                          : commercial.cloud.independent
+                            ? "Not linked · Community still fully usable"
+                            : "Cloud link required"}
                       </h4>
                       <p className="detail">{commercial.cloud.message}</p>
-                      {commercial.cloud.capabilitySummary ? (
-                        <p className="detail">
-                          Local {commercial.cloud.capabilitySummary.localCount} ·
-                          Cloud unlocked{" "}
-                          {commercial.cloud.capabilitySummary.cloudUnlockedCount} ·
-                          Locked {commercial.cloud.capabilitySummary.cloudLockedCount}
-                        </p>
-                      ) : null}
                       <p className="detail">
                         Managed workers:{" "}
-                        {commercial.cloud.managedWorkers.status}
                         {commercial.cloud.managedWorkers.availableNow
-                          ? " (available)"
-                          : " (planned — local runners only)"}
+                          ? "available"
+                          : "planned — use local Community runners"}
                       </p>
                     </div>
                     <span
@@ -3977,24 +4015,25 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   {commercial.cloud.pendingSessions.length > 0 ? (
                     <div className="feed-row" data-testid="cloud-pending-sessions">
                       <div>
-                        <h4>Pending Easy Connect</h4>
+                        <h4>Finish Easy Connect</h4>
                         {commercial.cloud.pendingSessions.map((session) => (
                           <div key={session.sessionId} className="detail">
-                            <p>
-                              {session.method} · {session.status}
-                              {session.userCode ? (
-                                <>
-                                  {" "}
-                                  · code{" "}
-                                  <code className="mono">{session.userCode}</code>
-                                </>
-                              ) : null}
-                            </p>
+                            {session.userCode ? (
+                              <p>
+                                On any device open the verification page and enter{" "}
+                                <code className="mono" style={{ fontSize: "1.25rem" }}>
+                                  {session.userCode}
+                                </code>
+                              </p>
+                            ) : (
+                              <p>
+                                {session.method} · {session.status}
+                              </p>
+                            )}
                             {session.verificationUri ? (
                               <p>
-                                Open{" "}
-                                <a href={session.verificationUri}>
-                                  {session.verificationUri}
+                                <a href={session.verificationUri} target="_blank" rel="noreferrer">
+                                  Open device authorization
                                 </a>
                               </p>
                             ) : null}
@@ -4030,16 +4069,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   {commercial.cloud.features.length > 0 ? (
                     <div className="feed-row" data-testid="cloud-feature-catalog">
                       <div>
-                        <h4>Cloud feature catalog</h4>
+                        <h4>What Cloud adds</h4>
                         <ul className="detail">
                           {commercial.cloud.features.map((feature) => (
                             <li key={feature.key}>
-                              <b>{feature.title}</b> · {feature.status}
+                              <b>{feature.title}</b>
                               {feature.availableNow
-                                ? " · available now"
-                                : feature.unlock
-                                  ? ` · unlock: ${feature.unlock}`
-                                  : " · not yet"}
+                                ? " — available now"
+                                : feature.communityLocal
+                                  ? " — included in Community"
+                                  : feature.status === "planned"
+                                    ? " — planned"
+                                    : " — after Cloud link"}
                             </li>
                           ))}
                         </ul>
@@ -4086,18 +4127,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               {!commercial.cloud?.easyConnectReady &&
               commercial.cloud?.easyConnectBlockedReason ? (
                 <p className="detail">
-                  Easy Connect blocked: {commercial.cloud.easyConnectBlockedReason}
+                  Easy Connect not ready: {commercial.cloud.easyConnectBlockedReason}
                 </p>
               ) : null}
-              <p className="detail">
-                Catalog{" "}
-                <code className="mono">GET /v1/cloud/catalog</code> · Comparison{" "}
-                <code className="mono">GET /v1/cloud/comparison</code> · Spec{" "}
-                <span className="mono">docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md</span>
-              </p>
             </article>
             <article className="stack-card">
-              <h3>Edition and Account Connect</h3>
+              <h3>Edition detail</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
                   {commercial.blockedReason ?? "Commercial API is unavailable."}
@@ -4217,6 +4252,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                       </span>
                     </div>
                   ) : (
+                    <details className="detail">
+                      <summary>
+                        Advanced: paste hosted org ID (prefer Easy Connect above)
+                      </summary>
                     <form action={linkAccountConnectAction} className="composer">
                       <input type="hidden" name="project_id" value={activeProjectId} />
                       <input type="hidden" name="actor" value={activeActorId} />
@@ -4279,6 +4318,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         Link Account Connect
                       </SubmitButton>
                     </form>
+                    </details>
                   )}
                 </div>
               )}

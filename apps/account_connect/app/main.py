@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import html
 import json
+import secrets
 import uuid
 from typing import Any, Optional
+from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -12,6 +16,91 @@ from .config import Settings, get_settings
 from .db import begin, ensure_schema, ensure_seed_org, get_engine
 
 app = FastAPI(title="BOSS Account Connect", version="0.1.0")
+
+
+def _page(title: str, body: str) -> HTMLResponse:
+    """Minimal operator-facing shell for Easy Connect (no SPA required)."""
+    markup = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{html.escape(title)} · BOSS Cloud</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: ui-sans-serif, system-ui, sans-serif; }}
+    body {{ margin: 0; min-height: 100vh; background: #0b1020; color: #e8eefc;
+           display: grid; place-items: center; padding: 1.5rem; }}
+    main {{ width: min(28rem, 100%); background: #121a33; border: 1px solid #243056;
+           border-radius: 16px; padding: 1.5rem; box-shadow: 0 20px 50px rgba(0,0,0,.35); }}
+    h1 {{ font-size: 1.25rem; margin: 0 0 .35rem; }}
+    p {{ color: #a9b6d3; line-height: 1.45; }}
+    label {{ display: block; font-size: .85rem; color: #c5d0ea; margin: 1rem 0 .35rem; }}
+    input {{ width: 100%; box-sizing: border-box; border-radius: 10px; border: 1px solid #31406b;
+            background: #0b1020; color: #fff; padding: .75rem .9rem; font-size: 1.05rem;
+            letter-spacing: .08em; text-transform: uppercase; }}
+    button {{ margin-top: 1.1rem; width: 100%; border: 0; border-radius: 10px;
+             background: #5b8cff; color: #041028; font-weight: 700; padding: .85rem 1rem;
+             cursor: pointer; font-size: 1rem; }}
+    button.secondary {{ background: transparent; color: #c5d0ea; border: 1px solid #31406b; }}
+    .ok {{ color: #7dffa8; }}
+    .err {{ color: #ff9b9b; }}
+    code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; }}
+    .eyebrow {{ text-transform: uppercase; letter-spacing: .12em; font-size: .7rem; color: #7f92c2; }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">BOSS Cloud · Easy Connect</div>
+    {body}
+  </main>
+</body>
+</html>"""
+    return HTMLResponse(markup)
+
+
+def _normalize_user_code(raw: str) -> str:
+    return raw.strip().upper().replace(" ", "").replace("–", "-")
+
+
+def _authorize_device_code(
+    *,
+    user_code: str,
+    hosted_org_id: str,
+    settings: Settings,
+) -> dict[str, str]:
+    code = _normalize_user_code(user_code)
+    if len(code) < 6:
+        raise HTTPException(status_code=422, detail="user_code is required")
+    hosted = (hosted_org_id or settings.default_org_id).strip()
+    engine = get_engine(settings)
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO ac_device_authorizations (
+                    id, user_code, hosted_org_id, status, created_at
+                )
+                VALUES (
+                    :id, :user_code, :hosted_org_id, 'authorized', now()
+                )
+                ON CONFLICT (user_code) DO UPDATE
+                SET hosted_org_id = EXCLUDED.hosted_org_id,
+                    status = 'authorized',
+                    created_at = now()
+                """
+            ),
+            {
+                "id": f"devauth_{uuid.uuid4().hex[:12]}",
+                "user_code": code,
+                "hosted_org_id": hosted,
+            },
+        )
+    return {
+        "status": "authorized",
+        "user_code": code,
+        "hosted_org_id": hosted,
+        "message": "Device authorized. Return to Mission Control; linking completes on the next poll.",
+    }
 
 
 class HealthResponse(BaseModel):
@@ -192,52 +281,78 @@ class DeviceAuthorizeResponse(BaseModel):
     message: str
 
 
+@app.get("/device", response_class=HTMLResponse)
+def device_connect_page(
+    user_code: Optional[str] = None,
+    error: Optional[str] = None,
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    """Public Easy Connect page: enter the short code from Mission Control."""
+    prefill = html.escape(_normalize_user_code(user_code or ""))
+    err = (
+        f'<p class="err">{html.escape(error)}</p>'
+        if error
+        else ""
+    )
+    body = f"""
+    <h1>Connect your self-hosted BOSS</h1>
+    <p>Enter the device code shown in Mission Control. This links your project to
+    <b>{html.escape(settings.default_org_name)}</b> without pasting API secrets.</p>
+    {err}
+    <form method="post" action="/device">
+      <label for="user_code">Device code</label>
+      <input id="user_code" name="user_code" value="{prefill}"
+             placeholder="ABCD-EFGH" autocomplete="one-time-code" required autofocus />
+      <button type="submit">Authorize connection</button>
+    </form>
+    <p style="margin-top:1.25rem;font-size:.85rem">Community stays fully usable without Cloud.
+    This only unlocks hosted team, marketplace, and managed capacity features.</p>
+    """
+    return _page("Device connect", body)
+
+
+@app.post("/device", response_class=HTMLResponse)
+def device_connect_submit(
+    user_code: str = Form(...),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    """Operator-facing authorize (no service token — the short code is the secret)."""
+    try:
+        result = _authorize_device_code(
+            user_code=user_code,
+            hosted_org_id=settings.default_org_id,
+            settings=settings,
+        )
+    except HTTPException as exc:
+        return device_connect_page(
+            user_code=user_code,
+            error=str(exc.detail),
+            settings=settings,
+        )
+    body = f"""
+    <h1 class="ok">Connected</h1>
+    <p>Code <code>{html.escape(result['user_code'])}</code> is authorized for
+    <code>{html.escape(result['hosted_org_id'])}</code>.</p>
+    <p>Return to Mission Control and click <b>Check link status</b> (or wait for auto-poll).
+    Your Community install keeps local control; Cloud features unlock after link.</p>
+    """
+    return _page("Device authorized", body)
+
+
 @app.post("/v1/device/authorize", response_model=DeviceAuthorizeResponse)
 def device_authorize(
     payload: DeviceAuthorizeRequest,
     request: Request,
     settings: Settings = Depends(get_settings),
 ) -> DeviceAuthorizeResponse:
-    """Mark a device Easy Connect user_code as authorized for a hosted org.
-
-    Control planes poll their local auth session; once metadata carries
-    authorized_hosted_org_id they complete the Account Connect link.
-    """
+    """Service API: mark a device Easy Connect user_code as authorized."""
     _require_service_auth(request, settings)
-    code = payload.user_code.strip().upper().replace(" ", "")
-    if len(code) < 6:
-        raise HTTPException(status_code=422, detail="user_code is required")
-    hosted = (payload.hosted_org_id or settings.default_org_id).strip()
-    engine = get_engine(settings)
-    with begin(engine) as connection:
-        # Persist authorization so control-plane adapters can fetch it
-        connection.execute(
-            text(
-                """
-                INSERT INTO ac_device_authorizations (
-                    id, user_code, hosted_org_id, status, created_at
-                )
-                VALUES (
-                    :id, :user_code, :hosted_org_id, 'authorized', now()
-                )
-                ON CONFLICT (user_code) DO UPDATE
-                SET hosted_org_id = EXCLUDED.hosted_org_id,
-                    status = 'authorized',
-                    created_at = now()
-                """
-            ),
-            {
-                "id": f"devauth_{uuid.uuid4().hex[:12]}",
-                "user_code": code,
-                "hosted_org_id": hosted,
-            },
-        )
-    return DeviceAuthorizeResponse(
-        status="authorized",
-        user_code=code,
-        hosted_org_id=hosted,
-        message="Device authorized. Return to Mission Control; linking will complete on poll.",
+    result = _authorize_device_code(
+        user_code=payload.user_code,
+        hosted_org_id=payload.hosted_org_id or settings.default_org_id,
+        settings=settings,
     )
+    return DeviceAuthorizeResponse(**result)
 
 
 @app.get("/v1/device/authorizations/{user_code}")
@@ -247,7 +362,7 @@ def get_device_authorization(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     _require_service_auth(request, settings)
-    code = user_code.strip().upper().replace(" ", "")
+    code = _normalize_user_code(user_code)
     engine = get_engine(settings)
     with begin(engine) as connection:
         row = connection.execute(
@@ -272,6 +387,95 @@ def get_device_authorization(
         if hasattr(row["created_at"], "isoformat")
         else row["created_at"],
     }
+
+
+@app.get("/v1/demo/authorize", response_class=HTMLResponse)
+def browser_authorize_page(
+    session_id: str,
+    state: str,
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    """One-click browser Easy Connect (dogfood / beta hosted login surface)."""
+    sid = html.escape(session_id)
+    st = html.escape(state)
+    body = f"""
+    <h1>Link Mission Control to BOSS Cloud</h1>
+    <p>Approve to attach this self-hosted project to
+    <b>{html.escape(settings.default_org_name)}</b>. No long-lived Cloud secrets are
+    pasted into Mission Control.</p>
+    <form method="post" action="/v1/demo/authorize">
+      <input type="hidden" name="session_id" value="{sid}" />
+      <input type="hidden" name="state" value="{st}" />
+      <button type="submit">Approve and connect</button>
+    </form>
+    <form method="get" action="/device" style="margin-top:.5rem">
+      <button class="secondary" type="submit">Use device code instead</button>
+    </form>
+    """
+    return _page("Authorize", body)
+
+
+@app.post("/v1/demo/authorize")
+def browser_authorize_submit(
+    session_id: str = Form(...),
+    state: str = Form(...),
+    settings: Settings = Depends(get_settings),
+):
+    """Issue a one-time code and redirect back to Mission Control return_url."""
+    engine = get_engine(settings)
+    code = secrets.token_urlsafe(18)
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, org_id, project_id, state, status, return_url, metadata
+                FROM ac_auth_sessions
+                WHERE id = :session_id
+                """
+            ),
+            {"session_id": session_id},
+        ).mappings().first()
+        if not row:
+            return _page(
+                "Session missing",
+                "<h1 class='err'>Session not found</h1><p>Start Easy Connect again from Mission Control.</p>",
+            )
+        if row["state"] != state:
+            return _page(
+                "State mismatch",
+                "<h1 class='err'>State mismatch</h1><p>Denied without linking.</p>",
+            )
+        metadata = row["metadata"] or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["auth_code"] = code
+        metadata["approved"] = True
+        connection.execute(
+            text(
+                """
+                UPDATE ac_auth_sessions
+                SET status = 'authorized',
+                    metadata = CAST(:metadata AS JSONB),
+                    updated_at = now()
+                WHERE id = :session_id
+                """
+            ),
+            {"session_id": session_id, "metadata": json.dumps(metadata)},
+        )
+        return_url = row["return_url"]
+    if return_url:
+        sep = "&" if "?" in return_url else "?"
+        target = (
+            f"{return_url}{sep}"
+            f"{urlencode({'code': code, 'state': state, 'ac_session': session_id})}"
+        )
+        return RedirectResponse(url=target, status_code=303)
+    body = f"""
+    <h1 class="ok">Authorized</h1>
+    <p>Copy this one-time code back to Mission Control if needed:</p>
+    <p><code>{html.escape(code)}</code></p>
+    """
+    return _page("Authorized", body)
 
 
 @app.get("/v1/orgs/{org_id}/health", response_model=HealthResponse)

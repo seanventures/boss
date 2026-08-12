@@ -562,28 +562,50 @@ class CloudProductService:
         connection: Connection,
         *,
         project_id: str,
-        session_id: str,
         actor: str,
+        session_id: Optional[str] = None,
         code: Optional[str] = None,
         state: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Complete browser Easy Connect after hosted Account Connect callback."""
-        row = connection.execute(
-            text(
-                """
-                SELECT id, project_id, status, provider_ref, state,
-                       authorization_url, return_url, hosted_org_id, metadata,
-                       created_at, updated_at, expires_at
-                FROM account_connect_auth_sessions
-                WHERE project_id = :project_id AND id = :session_id
-                """
-            ),
-            {"project_id": project_id, "session_id": session_id},
-        ).mappings().first()
+        """Complete browser Easy Connect after hosted Account Connect callback.
+
+        Accepts either local ``session_id`` or ``state`` (from the hosted redirect).
+        """
+        if session_id:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, status, provider_ref, state,
+                           authorization_url, return_url, hosted_org_id, metadata,
+                           created_at, updated_at, expires_at
+                    FROM account_connect_auth_sessions
+                    WHERE project_id = :project_id AND id = :session_id
+                    """
+                ),
+                {"project_id": project_id, "session_id": session_id},
+            ).mappings().first()
+        elif state:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, status, provider_ref, state,
+                           authorization_url, return_url, hosted_org_id, metadata,
+                           created_at, updated_at, expires_at
+                    FROM account_connect_auth_sessions
+                    WHERE project_id = :project_id AND state = :state
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"project_id": project_id, "state": state},
+            ).mappings().first()
+        else:
+            raise ValueError("session_id or state is required to complete Easy Connect.")
         if row is None:
             raise AccountConnectAuthSessionNotFoundError(
                 "Cloud Easy Connect session not found."
             )
+        session_id = row["id"]
         metadata = row["metadata"] or {}
         if not isinstance(metadata, dict):
             metadata = {}

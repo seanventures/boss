@@ -444,6 +444,8 @@ export async function fetchCommercialFeed(
   try {
     // Community-safe core: edition + entitlements + /v1/cloud/* always mount.
     // Paid Account Connect list routes are optional (404 on community edition).
+    // Edition + entitlements are the Community-safe core. Cloud routes are optional
+    // so older APIs / Community-only deploys still load Editions like the site describes.
     const [
       edition,
       entitlementList,
@@ -459,8 +461,8 @@ export async function fetchCommercialFeed(
     ] = await Promise.all([
       client.getEdition(resolvedProjectId),
       client.listLicenseEntitlements(resolvedProjectId, true),
-      client.getCloudCatalog(resolvedProjectId),
-      client.getCloudStatus(resolvedProjectId),
+      settleOptional(client.getCloudCatalog(resolvedProjectId)),
+      settleOptional(client.getCloudStatus(resolvedProjectId)),
       settleOptional(client.getCloudComparison(resolvedProjectId)),
       settleOptional(client.getCloudCapabilities(resolvedProjectId)),
       settleOptional(client.getCloudWorkers(resolvedProjectId)),
@@ -471,6 +473,60 @@ export async function fetchCommercialFeed(
         client.listAccountConnectBillingPortalSessions(resolvedProjectId),
       ),
     ]);
+    const cloud =
+      catalog && cloudStatus
+        ? mapCloudSnapshot(
+            catalog,
+            cloudStatus,
+            comparison,
+            capabilities,
+            workers,
+          )
+        : {
+            // Fallback when /v1/cloud/* is not deployed yet — still match website claims.
+            independent:
+              !edition.account_connect_required ||
+              edition.account_connect_status === "linked" ||
+              edition.account_connect_status === "not_required",
+            linked: edition.account_connect_status === "linked",
+            message:
+              edition.edition_id === "community"
+                ? "This install runs independently. Connect to BOSS Cloud only when you want hosted team, marketplace, or managed capacity."
+                : edition.blocked_reason || "Edition status from control plane.",
+            easyConnectReady: false,
+            easyConnectBlockedReason:
+              "Cloud Easy Connect APIs not available on this control plane yet — redeploy API with /v1/cloud/*.",
+            pendingSessions: [],
+            features: [
+              {
+                key: "durable_control_plane",
+                title: "Durable task & decision state",
+                status: "shipped",
+                availableNow: true,
+                communityLocal: true,
+              },
+              {
+                key: "approvals_policy",
+                title: "Approvals & policy management",
+                status: "shipped",
+                availableNow: true,
+                communityLocal: true,
+              },
+              {
+                key: "managed_workers",
+                title: "Managed workers & elastic infra",
+                status: "planned",
+                availableNow: false,
+                unlock: "connect_cloud",
+              },
+            ],
+            comparisonRows: [],
+            managedWorkers: {
+              status: "planned",
+              availableNow: false,
+              message: "Use local Community runners until Cloud fleets ship.",
+            },
+          };
     return {
       projectId: resolvedProjectId,
       apiReachable: true,
@@ -482,13 +538,7 @@ export async function fetchCommercialFeed(
       billingPortalSessions: (billingPortalSessions?.items ?? []).map(
         mapBillingPortalSession,
       ),
-      cloud: mapCloudSnapshot(
-        catalog,
-        cloudStatus,
-        comparison,
-        capabilities,
-        workers,
-      ),
+      cloud,
     };
   } catch (error) {
     if (error instanceof BossApiError) {

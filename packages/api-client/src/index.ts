@@ -6100,6 +6100,19 @@ export function createBossApiClient(config: BossApiClientConfig) {
         { body: payload },
       );
     },
+    completeCloudEasyConnectByState(payload: {
+      project_id: string;
+      actor?: string;
+      code?: string;
+      state?: string;
+      session_id?: string;
+    }) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/cloud/easy-connect/complete",
+        { body: payload },
+      );
+    },
     unlinkCloud(payload: {
       project_id: string;
       actor?: string;

@@ -19,6 +19,17 @@ export BOSS_ACCOUNT_CONNECT_TOKEN=dev-account-connect-token
 export BOSS_EDITION=cloud
 ```
 
+## Easy Connect (operator-facing)
+
+Self-hosted Community Mission Control links here without pasting long-lived secrets:
+
+| Path | Who | Purpose |
+|---|---|---|
+| `GET/POST /device` | Operator browser | Enter short device code from Mission Control |
+| `GET/POST /v1/demo/authorize` | Operator browser | One-click browser approve; redirects to `return_url` with `code` + `state` |
+| `POST /v1/device/authorize` | Control plane (service token) | Programmatic authorize |
+| `GET /v1/device/authorizations/{user_code}` | Control plane (service token) | Poll authorization |
+
 ## Contract
 
 Implements the HTTP surface expected by `apps/api/app/services/commercial.py`:
@@ -33,4 +44,4 @@ Implements the HTTP surface expected by `apps/api/app/services/commercial.py`:
 - `POST /v1/orgs/{org_id}/team-invites/{id}/revoke`
 - `POST /v1/orgs/{org_id}/billing-portal-sessions`
 
-Bearer auth is enforced when `AC_SERVICE_TOKEN` is set.
+Bearer auth is enforced on service APIs when `AC_SERVICE_TOKEN` is set. Operator Easy Connect pages (`/device`, `/v1/demo/authorize`) are public — the short device code / session state is the secret.

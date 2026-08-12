@@ -243,6 +243,29 @@ paths:
           description: Session not found
         '409':
           description: State mismatch or session not completable
+  /v1/cloud/easy-connect/complete:
+    post:
+      summary: Complete browser Easy Connect from hosted redirect (code + state)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                actor: { type: string, default: ceo }
+                code: { type: string }
+                state: { type: string }
+                session_id: { type: string }
+      responses:
+        '200':
+          description: Link completed
+        '404':
+          description: Session not found
+        '409':
+          description: State mismatch or session not completable
   /v1/cloud/unlink:
     post:
       summary: Disconnect project from BOSS Cloud (Community remains independent)

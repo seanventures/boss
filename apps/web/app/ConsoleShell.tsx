@@ -138,7 +138,13 @@ const AREAS: AreaDef[] = [
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
   { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
-  { id: "enterprise", label: "Enterprise", sub: "Editions, identity, and account connect", group: "Platform", icon: ICONS.enterprise },
+  {
+    id: "enterprise",
+    label: "Editions",
+    sub: "Community · Cloud Easy Connect · Enterprise",
+    group: "Platform",
+    icon: ICONS.enterprise,
+  },
 ];
 
 const GROUP_ORDER: AreaDef["group"][] = ["Platform", "Run", "Govern"];

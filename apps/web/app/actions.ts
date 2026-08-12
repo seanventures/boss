@@ -819,11 +819,24 @@ export async function startCloudEasyConnectAction(
   formData: FormData,
 ): Promise<void> {
   const method = String(formData.get("method") ?? "device").trim() || "device";
+  const projectId = getProjectId(formData);
+  const actor = getActor(formData);
+  // Browser return lands on /cloud/callback which finishes the link without pasting secrets.
+  let returnUrl = getOptionalString(formData, "return_url");
+  if (!returnUrl && method === "browser") {
+    const { headers } = await import("next/headers");
+    const h = await headers();
+    const host = h.get("x-forwarded-host") || h.get("host");
+    const proto = h.get("x-forwarded-proto") || "https";
+    if (host) {
+      returnUrl = `${proto}://${host}/cloud/callback?project_id=${encodeURIComponent(projectId)}&actor=${encodeURIComponent(actor)}`;
+    }
+  }
   const result = await client.startCloudEasyConnect({
-    project_id: getProjectId(formData),
+    project_id: projectId,
     method: method === "browser" ? "browser" : "device",
-    return_url: getOptionalString(formData, "return_url"),
-    actor: getActor(formData),
+    return_url: returnUrl,
+    actor,
   });
   // Browser flow: open hosted authorization when available.
   if (
