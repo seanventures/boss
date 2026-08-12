@@ -442,6 +442,8 @@ from .schemas import (
     RoleAutonomyCheckResponse,
     RoleGovernanceDetail,
     RoleReviewRequest,
+    RoleTrustEvidenceRequest,
+    RoleTrustEvidenceResponse,
     RoleDetail,
     RoleListResponse,
     RoleScopeCheckRequest,
@@ -9605,6 +9607,39 @@ def evaluate_role_autonomy(
         response = role_governance_detail_from_service(detail)
         response.evidence = detail.get("evidence")
         return response
+
+
+@app.post(
+    "/v1/roles/{role_key}/trust-evidence",
+    response_model=RoleTrustEvidenceResponse,
+    status_code=201,
+)
+def record_role_trust_evidence(
+    role_key: str, request: RoleTrustEvidenceRequest
+) -> RoleTrustEvidenceResponse:
+    """Append an idempotent, attributable trust observation for a later autonomy review."""
+    with begin(engine) as connection:
+        try:
+            require_project_actor(
+                connection,
+                request.project_id,
+                request.actor,
+                "role_review",
+            )
+            result = autonomy_engine.record_trust_evidence(
+                connection,
+                project_id=request.project_id,
+                role_key=role_key,
+                evidence_type=request.evidence_type,
+                evidence_ref=request.evidence_ref,
+                actor=request.actor,
+                detail=request.detail,
+            )
+        except RoleNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return RoleTrustEvidenceResponse(**result)
 
 
 @app.get("/v1/packs", response_model=PackListResponse)
