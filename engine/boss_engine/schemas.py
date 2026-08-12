@@ -2156,6 +2156,14 @@ class WorkerPollRequest(BaseModel):
     lease_ttl_seconds: int = Field(default=60, ge=5, le=3600)
 
 
+class WorkerRegistrationRequest(BaseModel):
+    project_id: str
+    worker_id: str
+    capabilities: list[str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "chief_operator"
+
+
 class WorkerPollResponse(BaseModel):
     status: str
     job: Optional[LeasedJob] = None
