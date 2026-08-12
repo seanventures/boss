@@ -47,7 +47,7 @@ Evidence docs:
 | Issue | Title |
 |---|---|
 | **BOSS-347** | Agent Studio empty on dogfood — seed/setup |
-| **BOSS-349** | OpenAPI parity for code-tasks, delivery, sandboxes |
+| **BOSS-349** | OpenAPI 0.11.0: lifecycle schemas + factory/previews/orchestration; openapi-live-qa-parity 79 routes OK |
 
 ## Related existing (not re-created)
 
