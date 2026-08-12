@@ -183,7 +183,9 @@ describe("empty API feeds", () => {
     const feed = emptySelfImprovementFeed("self improvement api down");
 
     expect(feed.apiReachable).toBe(false);
+    expect(feed.surfaceAvailable).toBe(false);
     expect(feed.items).toEqual([]);
+    expect(feed.improvementPrograms).toEqual([]);
     expect(feed.blockedReason).toBe("self improvement api down");
   });
 
@@ -192,6 +194,7 @@ describe("empty API feeds", () => {
     const feed = {
       projectId: "boss-dogfood",
       apiReachable: true,
+      surfaceAvailable: true,
       items: [
         {
           id: "imp1",
@@ -207,9 +210,12 @@ describe("empty API feeds", () => {
           updatedAt: "t",
         },
       ],
+      improvementPrograms: [],
+      programsApiReachable: false,
     };
     expect(feed.items[0].status).toBe("rolled_out");
     expect(feed.apiReachable).toBe(true);
+    expect(feed.surfaceAvailable).toBe(true);
   });
 });
 
