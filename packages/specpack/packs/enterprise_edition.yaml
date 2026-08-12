@@ -30,5 +30,5 @@ installs:
   workflows: [budget_governed_scale_plan, model_entitlement_routing, open_core_cloud_upgrade]
   policies: [enterprise_governance_policy, resource_plane_policy, budget_governor_policy]
   skills: [providerops, deployment, model_providers]
-status: planned
+status: partial  # SSO/SCIM routes + governance packs; HA/cluster still planned
 

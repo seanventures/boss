@@ -76,3 +76,14 @@ CREATE TABLE IF NOT EXISTS ac_billing_portal_sessions (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Device Easy Connect: short user codes authorized from any browser.
+CREATE TABLE IF NOT EXISTS ac_device_authorizations (
+  id TEXT PRIMARY KEY,
+  user_code TEXT NOT NULL UNIQUE,
+  hosted_org_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'authorized',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ac_device_authorizations_code
+  ON ac_device_authorizations(user_code, status);

@@ -21,6 +21,7 @@ import {
   installAgentModuleAction,
   installPackAction,
   linkAccountConnectAction,
+  startCloudEasyConnectAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
@@ -3924,13 +3925,46 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Edition, Account Connect, Enterprise, and SCIM governance.</h2>
             </div>
             <p className="status-meta">
-              Community stays local-first. Cloud fails closed until Account Connect is
-              linked, and Enterprise trust controls are tracked as auditable runtime
-              records.
+              Community runs fully independently (BYOK, local control plane). Connect
+              to BOSS Cloud only when you want hosted team, marketplace, or managed
+              capacity — Easy Connect never requires pasting Cloud secrets here.
             </p>
           </div>
 
           <div className="stack-grid">
+            <article className="stack-card" data-testid="cloud-easy-connect">
+              <h3>BOSS Cloud — Easy Connect</h3>
+              <p className="detail">
+                Self-host Community forever, or link this project to BOSS Cloud for
+                hosted Mission Control collaboration, team invites, and managed
+                routing. Device flow: start connect → open verification URI → enter
+                short code.
+              </p>
+              <div className="composer compact">
+                <form action={startCloudEasyConnectAction}>
+                  <input type="hidden" name="project_id" value={activeProjectId} />
+                  <input type="hidden" name="actor" value={activeActorId} />
+                  <input type="hidden" name="method" value="device" />
+                  <SubmitButton className="button" type="submit">
+                    Connect with device code
+                  </SubmitButton>
+                </form>
+                <form action={startCloudEasyConnectAction}>
+                  <input type="hidden" name="project_id" value={activeProjectId} />
+                  <input type="hidden" name="actor" value={activeActorId} />
+                  <input type="hidden" name="method" value="browser" />
+                  <SubmitButton className="button secondary" type="submit">
+                    Connect in browser
+                  </SubmitButton>
+                </form>
+              </div>
+              <p className="detail">
+                Catalog:{" "}
+                <code className="mono">GET /v1/cloud/catalog</code> · Status:{" "}
+                <code className="mono">GET /v1/cloud/status</code>. Spec:{" "}
+                <span className="mono">docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md</span>
+              </p>
+            </article>
             <article className="stack-card">
               <h3>Edition and Account Connect</h3>
               {!commercial.apiReachable ? (

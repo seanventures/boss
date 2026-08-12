@@ -214,6 +214,11 @@ class AccountConnectAdapter:
             )
         return payload
 
+    def get_device_authorization(self, user_code: str) -> dict[str, Any]:
+        """Fetch device Easy Connect authorization for a short user_code."""
+        code = user_code.strip().upper().replace(" ", "")
+        return self._get_json(f"/v1/device/authorizations/{quote(code, safe='')}")
+
     def complete_auth_session(
         self,
         *,

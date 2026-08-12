@@ -1,0 +1,168 @@
+{
+  "gate": "live_dogfood_gate",
+  "version": "1.0.0",
+  "plane": "BOSS-351",
+  "api_url": "https://boss-api.local.sean.network",
+  "project_id": "boss-dogfood",
+  "started_at": "2026-08-12T13:59:19.002676+00:00",
+  "finished_at": "2026-08-12T13:59:21.519067+00:00",
+  "duration_ms": 2516,
+  "summary": {
+    "total": 11,
+    "required_total": 10,
+    "required_passed": 10,
+    "required_failed": 0,
+    "optional_total": 1,
+    "optional_passed": 1,
+    "optional_failed": 0,
+    "failed_required_names": [],
+    "failed_optional_names": [],
+    "passed": true
+  },
+  "checks": [
+    {
+      "name": "health",
+      "ok": true,
+      "required": true,
+      "detail": "status=ok database_connected=True",
+      "status_code": 200,
+      "duration_ms": 201,
+      "evidence": {
+        "payload": {
+          "status": "ok",
+          "database_connected": true,
+          "github_configured": true,
+          "openai_configured": true
+        }
+      }
+    },
+    {
+      "name": "auth.unauthenticated_rejected",
+      "ok": true,
+      "required": true,
+      "detail": "unauthenticated /v1 correctly rejected (401)",
+      "status_code": 401,
+      "duration_ms": 182,
+      "evidence": {}
+    },
+    {
+      "name": "auth.projects",
+      "ok": true,
+      "required": true,
+      "detail": "project boss-dogfood present (count=1)",
+      "status_code": 200,
+      "duration_ms": 191,
+      "evidence": {}
+    },
+    {
+      "name": "providers.definitions",
+      "ok": true,
+      "required": true,
+      "detail": "provider-definitions: 200 count=5",
+      "status_code": 200,
+      "duration_ms": 185,
+      "evidence": {
+        "count": 5
+      }
+    },
+    {
+      "name": "providers.list",
+      "ok": true,
+      "required": true,
+      "detail": "providers: 200 count=4",
+      "status_code": 200,
+      "duration_ms": 192,
+      "evidence": {
+        "count": 4
+      }
+    },
+    {
+      "name": "budget.quote",
+      "ok": true,
+      "required": true,
+      "detail": "allowed=True state=green available=89772838",
+      "status_code": 200,
+      "duration_ms": 193,
+      "evidence": {
+        "allowed": true,
+        "budget_state": "green",
+        "requested_usd_micros": 50000,
+        "available_usd_micros": 89772838
+      }
+    },
+    {
+      "name": "command.propose",
+      "ok": true,
+      "required": true,
+      "detail": "task_id=tsk_7b6e48a147df482abf41 status=accepted",
+      "status_code": 201,
+      "duration_ms": 208,
+      "evidence": {
+        "task_id": "tsk_7b6e48a147df482abf41",
+        "job_id": "job_3038b9ccc5604632b26b",
+        "status": "accepted",
+        "plan_id": "plan_90b1581134c34f2382c7"
+      }
+    },
+    {
+      "name": "command.task_exists",
+      "ok": true,
+      "required": true,
+      "detail": "task tsk_7b6e48a147df482abf41 exists",
+      "status_code": 200,
+      "duration_ms": 190,
+      "evidence": {
+        "task_id": "tsk_7b6e48a147df482abf41"
+      }
+    },
+    {
+      "name": "decisions.inbox",
+      "ok": true,
+      "required": true,
+      "detail": "decisions/inbox: 200 count=59",
+      "status_code": 200,
+      "duration_ms": 504,
+      "evidence": {
+        "count": 59
+      }
+    },
+    {
+      "name": "deadletters.list",
+      "ok": true,
+      "required": true,
+      "detail": "deadletters: 200 count=41",
+      "status_code": 200,
+      "duration_ms": 251,
+      "evidence": {
+        "count": 41
+      }
+    },
+    {
+      "name": "metatron.query",
+      "ok": true,
+      "required": false,
+      "detail": "answer='BOSS dogfood bootstrap budget is green. Available: $88.27, reserved: $1.50, actual: $39.23, committed: $40.73. Top cost driver: github.pull_request.create at $3'",
+      "status_code": 200,
+      "duration_ms": 213,
+      "evidence": {
+        "has_answer": true,
+        "keys": [
+          "answer",
+          "category",
+          "freshness_at",
+          "project_id",
+          "question",
+          "references",
+          "suggested_actions",
+          "top_risks"
+        ]
+      }
+    }
+  ],
+  "meta": {
+    "actor": "executive_console",
+    "skip_metatron": false,
+    "skip_command": false,
+    "budget_category": "model_api"
+  }
+}

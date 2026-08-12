@@ -178,6 +178,102 @@ def health() -> HealthResponse:
     return HealthResponse(status="healthy")
 
 
+class DeviceAuthorizeRequest(BaseModel):
+    """User completes device Easy Connect by entering the short user_code."""
+
+    user_code: str
+    hosted_org_id: Optional[str] = None
+
+
+class DeviceAuthorizeResponse(BaseModel):
+    status: str
+    user_code: str
+    hosted_org_id: Optional[str] = None
+    message: str
+
+
+@app.post("/v1/device/authorize", response_model=DeviceAuthorizeResponse)
+def device_authorize(
+    payload: DeviceAuthorizeRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> DeviceAuthorizeResponse:
+    """Mark a device Easy Connect user_code as authorized for a hosted org.
+
+    Control planes poll their local auth session; once metadata carries
+    authorized_hosted_org_id they complete the Account Connect link.
+    """
+    _require_service_auth(request, settings)
+    code = payload.user_code.strip().upper().replace(" ", "")
+    if len(code) < 6:
+        raise HTTPException(status_code=422, detail="user_code is required")
+    hosted = (payload.hosted_org_id or settings.default_org_id).strip()
+    engine = get_engine(settings)
+    with begin(engine) as connection:
+        # Persist authorization so control-plane adapters can fetch it
+        connection.execute(
+            text(
+                """
+                INSERT INTO ac_device_authorizations (
+                    id, user_code, hosted_org_id, status, created_at
+                )
+                VALUES (
+                    :id, :user_code, :hosted_org_id, 'authorized', now()
+                )
+                ON CONFLICT (user_code) DO UPDATE
+                SET hosted_org_id = EXCLUDED.hosted_org_id,
+                    status = 'authorized',
+                    created_at = now()
+                """
+            ),
+            {
+                "id": f"devauth_{uuid.uuid4().hex[:12]}",
+                "user_code": code,
+                "hosted_org_id": hosted,
+            },
+        )
+    return DeviceAuthorizeResponse(
+        status="authorized",
+        user_code=code,
+        hosted_org_id=hosted,
+        message="Device authorized. Return to Mission Control; linking will complete on poll.",
+    )
+
+
+@app.get("/v1/device/authorizations/{user_code}")
+def get_device_authorization(
+    user_code: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _require_service_auth(request, settings)
+    code = user_code.strip().upper().replace(" ", "")
+    engine = get_engine(settings)
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT user_code, hosted_org_id, status, created_at
+                FROM ac_device_authorizations
+                WHERE user_code = :user_code
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"user_code": code},
+        ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="user_code not authorized yet")
+    return {
+        "user_code": row["user_code"],
+        "hosted_org_id": row["hosted_org_id"],
+        "status": row["status"],
+        "created_at": row["created_at"].isoformat()
+        if hasattr(row["created_at"], "isoformat")
+        else row["created_at"],
+    }
+
+
 @app.get("/v1/orgs/{org_id}/health", response_model=HealthResponse)
 def org_health(org_id: str) -> HealthResponse:
     return HealthResponse(status="healthy")

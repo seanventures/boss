@@ -116,6 +116,73 @@ paths:
       responses:
         '200':
           description: Edition status plus active or requested inactive license entitlements
+  /v1/cloud/catalog:
+    get:
+      summary: BOSS Cloud/Enterprise feature catalog and Community independence contract
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Feature matrix with available_now flags and packaging copy
+  /v1/cloud/status:
+    get:
+      summary: Cloud link status and Easy Connect readiness
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Independence flag, edition status, easy-connect readiness
+  /v1/cloud/easy-connect:
+    post:
+      summary: Start Easy Connect from self-hosted Community to BOSS Cloud
+      description: >
+        Browser or device OAuth-style link. Community remains fully independent when
+        BOSS_ACCOUNT_CONNECT_URL is unset (returns blocked with clear reason). Never
+        accepts raw Cloud credentials in the control plane.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                method: { type: string, enum: [browser, device], default: browser }
+                return_url: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '201':
+          description: Easy Connect session started or blocked with visible reason
+        '422':
+          description: Invalid method or project
+  /v1/cloud/easy-connect/{session_id}:
+    get:
+      summary: Poll Easy Connect session (device flow)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: actor
+          in: query
+          required: false
+          schema: { type: string, default: ceo }
+      responses:
+        '200':
+          description: Session status pending, completed, or blocked
+        '404':
+          description: Session not found
   /v1/account-connect/link:
     post:
       summary: Link a local project to a hosted BOSS Account Connect org

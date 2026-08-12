@@ -814,6 +814,19 @@ export async function rollbackAgentModuleAction(
   revalidatePath("/");
 }
 
+export async function startCloudEasyConnectAction(
+  formData: FormData,
+): Promise<void> {
+  const method = String(formData.get("method") ?? "device").trim() || "device";
+  await client.startCloudEasyConnect({
+    project_id: getProjectId(formData),
+    method: method === "browser" ? "browser" : "device",
+    return_url: getOptionalString(formData, "return_url"),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
 export async function linkAccountConnectAction(
   formData: FormData,
 ): Promise<void> {

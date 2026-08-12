@@ -1,0 +1,21 @@
+=== LIVE PROBE 2026-08-12T13:59Z ===
+200 /health :: 
+200 /v1/providers?project_id=boss-dogfood :: 
+200 /v1/secret-refs?project_id=boss-dogfood :: 
+200 /v1/changesets?project_id=boss-dogfood :: 
+200 /v1/worker-pools?project_id=boss-dogfood :: 
+200 /v1/github/connections?project_id=boss-dogfood :: 
+200 /v1/github/repository-bindings?project_id=boss-dogfood :: 
+200 /v1/sandboxes?project_id=boss-dogfood :: 
+200 /v1/previews?project_id=boss-dogfood :: 
+200 /v1/deployment-targets?project_id=boss-dogfood :: 
+200 /v1/deadletters?project_id=boss-dogfood&limit=5 :: 
+404 /v1/decisions?project_id=boss-dogfood&limit=5 :: 
+404 /v1/account-connect/health-checks?project_id=boss-dogfood :: 
+404 /v1/self-improvement/proposals?project_id=boss-dogfood :: 
+405 /v1/github/easy-connect :: 
+(eval):57: command not found: head
+200 budget/status :: 
+(eval):59: command not found: ssh
+deadletters_sample 41
+top [('unknown', 41)]

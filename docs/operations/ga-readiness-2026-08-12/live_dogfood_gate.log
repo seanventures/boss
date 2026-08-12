@@ -1,0 +1,15 @@
+gate=live_dogfood_gate version=1.0.0 plane=BOSS-351
+api=https://boss-api.local.sean.network project=boss-dogfood
+  [PASS] health (200) 201ms — status=ok database_connected=True
+  [PASS] auth.unauthenticated_rejected (401) 182ms — unauthenticated /v1 correctly rejected (401)
+  [PASS] auth.projects (200) 191ms — project boss-dogfood present (count=1)
+  [PASS] providers.definitions (200) 185ms — provider-definitions: 200 count=5
+  [PASS] providers.list (200) 192ms — providers: 200 count=4
+  [PASS] budget.quote (200) 193ms — allowed=True state=green available=89772838
+  [PASS] command.propose (201) 208ms — task_id=tsk_7b6e48a147df482abf41 status=accepted
+  [PASS] command.task_exists (200) 190ms — task tsk_7b6e48a147df482abf41 exists
+  [PASS] decisions.inbox (200) 504ms — decisions/inbox: 200 count=59
+  [PASS] deadletters.list (200) 251ms — deadletters: 200 count=41
+  [PASS] metatron.query (200) 213ms — answer='BOSS dogfood bootstrap budget is green. Available: $88.27, reserved: $1.50, actual: $39.23, committed: $40.73. Top cost driver: github.pull_request.create at $3'
+summary: required 10/10 passed; optional 1/1 passed; overall=PASS
+report=docs/operations/ga-readiness-2026-08-12/live_dogfood_gate.json

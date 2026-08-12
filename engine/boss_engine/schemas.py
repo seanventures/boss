@@ -112,6 +112,56 @@ class EditionStatusResponse(BaseModel):
     source_pack: str
 
 
+class CloudCatalogResponse(BaseModel):
+    project_id: str
+    edition_id: str
+    independence: dict[str, Any]
+    cloud_features: list[dict[str, Any]]
+    enterprise_features: list[dict[str, Any]]
+    packaging: dict[str, str]
+
+
+class CloudStatusResponse(BaseModel):
+    project_id: str
+    edition: EditionStatusResponse
+    independent: bool
+    linked: bool
+    easy_connect: dict[str, Any]
+    message: str
+
+
+class CloudEasyConnectRequest(BaseModel):
+    project_id: str
+    method: str = "browser"
+    return_url: Optional[str] = None
+    actor: str = "ceo"
+
+    @model_validator(mode="after")
+    def validate_easy_connect(self) -> "CloudEasyConnectRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.method = _require_text(self.method, "method").lower()
+        self.actor = _require_text(self.actor, "actor")
+        if self.method not in {"browser", "device"}:
+            raise ValueError("method must be browser or device")
+        return self
+
+
+class CloudEasyConnectResponse(BaseModel):
+    session_id: str
+    status: str
+    method: str
+    authorization_url: Optional[str] = None
+    user_code: Optional[str] = None
+    verification_uri: Optional[str] = None
+    device_code: Optional[str] = None
+    poll_interval_seconds: int = 5
+    expires_at: Optional[str] = None
+    message: Optional[str] = None
+    receipt_id: Optional[str] = None
+    hosted_org_id: Optional[str] = None
+    linked: Optional[bool] = None
+
+
 class LicenseEntitlementSummary(BaseModel):
     id: str
     project_id: str

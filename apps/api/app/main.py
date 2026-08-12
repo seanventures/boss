@@ -587,6 +587,7 @@ from .services.commercial import (
     AccountConnectSyncError,
     CommercialService,
 )
+from boss_engine.services.cloud_product import CloudProductService
 from .services.core import emit_event, make_id
 from .services.deadletters import DeadletterRemediationService
 from .services.docs_agent import DocsUpdateService
@@ -816,6 +817,7 @@ entitlements = EntitlementBrokerService(settings)
 model_gateway = ModelGatewayService(settings)
 capability_bundles = CapabilityBundleService(settings)
 commercial = CommercialService(settings)
+cloud_product = CloudProductService(settings, commercial)
 enterprise = EnterpriseService(settings)
 audit = AuditTrailService(settings)
 comms = CommsService(settings)
@@ -2553,6 +2555,74 @@ def get_edition(project_id: str) -> EditionStatusResponse:
         return edition_status_from_service(
             commercial.edition_status(connection, project_id)
         )
+
+
+@app.get("/v1/cloud/catalog")
+def get_cloud_catalog(project_id: str) -> dict:
+    """Community-callable Cloud/Enterprise feature catalog and independence contract."""
+    with begin(engine) as connection:
+        return cloud_product.catalog(connection, project_id)
+
+
+@app.get("/v1/cloud/status")
+def get_cloud_status(project_id: str) -> dict:
+    """Independence + Account Connect link state for this project."""
+    with begin(engine) as connection:
+        return cloud_product.status(connection, project_id)
+
+
+@app.post("/v1/cloud/easy-connect", status_code=201)
+def start_cloud_easy_connect(payload: dict) -> dict:
+    """Start Easy Connect from self-hosted Community (or any edition) to BOSS Cloud.
+
+    Community remains fully independent when Cloud is unconfigured. Browser or device
+    methods never accept raw Cloud passwords in this control plane — hosted Account
+    Connect completes auth and returns an org link.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    method = str(payload.get("method") or "browser").strip().lower()
+    actor = str(payload.get("actor") or "ceo").strip()
+    return_url = payload.get("return_url")
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "providerops_manage")
+        try:
+            return cloud_product.easy_connect(
+                connection,
+                project_id=project_id,
+                method=method,
+                actor=actor,
+                return_url=return_url if isinstance(return_url, str) else None,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except AccountConnectAuthSessionStateError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/v1/cloud/easy-connect/{session_id}")
+def poll_cloud_easy_connect(
+    session_id: str, project_id: str, actor: str = "ceo"
+) -> dict:
+    """Poll Easy Connect session (device flow) until completed or expired."""
+    with begin(engine) as connection:
+        try:
+            return cloud_product.poll_easy_connect(
+                connection,
+                project_id=project_id,
+                session_id=session_id,
+                actor=actor,
+            )
+        except AccountConnectAuthSessionNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (
+            AccountConnectAuthSessionStateError,
+            AccountConnectLinkNotFoundError,
+            AccountConnectSyncError,
+            ValueError,
+        ) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/v1/diag/sandbox-roundtrip")

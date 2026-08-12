@@ -24,5 +24,5 @@ installs:
   workflows: [providerops_readonly_sync, model_entitlement_routing, open_core_cloud_upgrade]
   policies: [commercial_packaging_policy, resource_plane_policy, model_entitlement_policy]
   skills: [providerops, model_providers, deployment]
-status: planned
+status: partial  # Account Connect + Easy Connect + catalog shipped; elastic workers planned
 

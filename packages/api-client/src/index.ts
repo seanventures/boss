@@ -5988,6 +5988,61 @@ export function createBossApiClient(config: BossApiClientConfig) {
         query: { project_id: projectId },
       });
     },
+    getCloudCatalog(projectId: string) {
+      return request<{
+        project_id: string;
+        edition_id: string;
+        independence: Record<string, unknown>;
+        cloud_features: Array<Record<string, unknown>>;
+        enterprise_features: Array<Record<string, unknown>>;
+        packaging: Record<string, string>;
+      }>("GET", "/v1/cloud/catalog", {
+        query: { project_id: projectId },
+      });
+    },
+    getCloudStatus(projectId: string) {
+      return request<{
+        project_id: string;
+        edition: EditionStatusResponse;
+        independent: boolean;
+        linked: boolean;
+        easy_connect: Record<string, unknown>;
+        message: string;
+      }>("GET", "/v1/cloud/status", {
+        query: { project_id: projectId },
+      });
+    },
+    startCloudEasyConnect(payload: {
+      project_id: string;
+      method?: "browser" | "device";
+      return_url?: string;
+      actor?: string;
+    }) {
+      return request<{
+        session_id: string;
+        status: string;
+        method: string;
+        authorization_url?: string | null;
+        user_code?: string | null;
+        verification_uri?: string | null;
+        device_code?: string | null;
+        poll_interval_seconds?: number;
+        expires_at?: string | null;
+        message?: string | null;
+        receipt_id?: string | null;
+      }>("POST", "/v1/cloud/easy-connect", { body: payload });
+    },
+    pollCloudEasyConnect(
+      sessionId: string,
+      projectId: string,
+      actor = "ceo",
+    ) {
+      return request<Record<string, unknown>>(
+        "GET",
+        `/v1/cloud/easy-connect/${encodeURIComponent(sessionId)}`,
+        { query: { project_id: projectId, actor } },
+      );
+    },
     listLicenseEntitlements(projectId: string, includeInactive = false) {
       return request<LicenseEntitlementListResponse>("GET", "/v1/entitlements", {
         query: {
