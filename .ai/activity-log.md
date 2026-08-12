@@ -1540,3 +1540,11 @@ PR: https://github.com/seanheiney/boss/pull/3
   advisory. The external readiness checker correctly holds hosted identity,
   support, provider writes, and live-cluster rollout closed while reporting
   Community/local and self-hosted packaging ready.
+
+## 2026-08-12 BOSS-340 sandbox host connectivity restored
+
+- Root cause: host `sandbox-service` disabled and `/srv/sandbox` runtime tree missing; api → `http://10.100.9.1:8077` got Connection refused.
+- Fix on goldeneye: restored runtime, enabled systemd unit, Firecracker v1.16.1 + kernel; no boss-app .env change.
+- Live proof: `GET /v1/sandboxes` → `host.connected: true`.
+- Residual: `guest-base.ext4` missing (registry `boss-sandbox-guest` has no tags) — task execution still blocked.
+- Report: `docs/operations/BOSS-340_SANDBOX_HOST_DIAGNOSIS.md` on branch `ai/grok/boss-340-sandbox-host`.
