@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BossApiError } from "@boss/api-client";
 
@@ -6,6 +6,7 @@ vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
   client: {
+    getEdition: vi.fn(),
     listProviderDefinitions: vi.fn(),
     listProviderAccounts: vi.fn(),
     listExternalResources: vi.fn(),
@@ -29,7 +30,107 @@ describe("ProviderOps feed", async () => {
   const { client } = await import("../lib/client");
   const { fetchProviderOpsFeed } = await import("../lib/providerops");
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockPaidEdition() {
+    vi.mocked(client.getEdition).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "enterprise",
+      display_name: "Enterprise",
+      status: "active",
+      account_connect_required: false,
+      account_connect_status: "not_linked",
+      local_auth_allowed: true,
+      hosted_auth_required: false,
+      connection_mode: "local",
+      legal_review_required: false,
+      included_capabilities: [],
+      commercial_capabilities: [],
+      source_pack: "enterprise_edition.yaml",
+    } as never);
+  }
+
+  function mockCommunityEdition() {
+    vi.mocked(client.getEdition).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      edition_id: "community",
+      display_name: "Community",
+      status: "active",
+      account_connect_required: false,
+      account_connect_status: "not_linked",
+      local_auth_allowed: true,
+      hosted_auth_required: false,
+      connection_mode: "local",
+      legal_review_required: false,
+      included_capabilities: [],
+      commercial_capabilities: [],
+      source_pack: "community_edition.yaml",
+    } as never);
+  }
+
+  function mockEmptySecondaryEndpoints() {
+    vi.mocked(client.listExternalResources).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+      limit: 50,
+      offset: 0,
+    });
+    vi.mocked(client.listProviderCosts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+      limit: 50,
+      offset: 0,
+    });
+    vi.mocked(client.listProviderCostAnomalies).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+      limit: 25,
+      offset: 0,
+    });
+    vi.mocked(client.listResourceReceipts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+      limit: 25,
+      offset: 0,
+    });
+    vi.mocked(client.listDeploymentTargets).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+      limit: 25,
+      offset: 0,
+    });
+    vi.mocked(client.listDeploymentEnvironmentPolicies).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+      limit: 25,
+      offset: 0,
+    });
+    vi.mocked(client.listDeploymentRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listDeploymentPromotions).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listProviderHealth).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listDriftReports).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listReconciliationRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+  }
+
   it("maps ProviderOps API payloads into dashboard summary data", async () => {
+    mockPaidEdition();
     vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({
       items: [
         {
@@ -412,6 +513,9 @@ describe("ProviderOps feed", async () => {
 
     expect(feed.apiReachable).toBe(true);
     expect(feed.partialFailures).toEqual([]);
+    expect(feed.editionLimitations).toEqual([]);
+    expect(feed.paidWriteAutomationAvailable).toBe(true);
+    expect(feed.editionId).toBe("enterprise");
     expect(feed.providerDefinitions).toEqual([
       expect.objectContaining({
         provider: "aws",
@@ -483,6 +587,7 @@ describe("ProviderOps feed", async () => {
   });
 
   it("preserves a partial provider workspace when a secondary endpoint fails", async () => {
+    mockPaidEdition();
     vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({ items: [] });
     vi.mocked(client.listProviderAccounts).mockRejectedValueOnce(
       new BossApiError("request failed", 503, {}),
@@ -533,14 +638,27 @@ describe("ProviderOps feed", async () => {
     expect(feed.summary.connectedProviders).toBe(0);
     expect(feed.partialFailures).toContain("Provider accounts: HTTP 503");
     expect(feed.partialFailures).toContain("Cloud costs: costs down");
+    expect(feed.partialFailures).toContain("ChangeSets: changes down");
+    expect(feed.partialFailures).toContain("Worker pools: pools down");
   });
 
   it("returns unavailable only when both configuration endpoints fail", async () => {
+    mockPaidEdition();
     vi.mocked(client.listProviderDefinitions).mockRejectedValueOnce(
       new BossApiError("request failed", 503, {}),
     );
     vi.mocked(client.listProviderAccounts).mockRejectedValueOnce(
       new BossApiError("request failed", 503, {}),
+    );
+    mockEmptySecondaryEndpoints();
+    vi.mocked(client.listChangeSets).mockRejectedValueOnce(
+      new BossApiError("not found", 404, {}),
+    );
+    vi.mocked(client.listWorkerPools).mockRejectedValueOnce(
+      new BossApiError("not found", 404, {}),
+    );
+    vi.mocked(client.listScalePlans).mockRejectedValueOnce(
+      new BossApiError("not found", 404, {}),
     );
 
     const feed = await fetchProviderOpsFeed();
@@ -548,5 +666,128 @@ describe("ProviderOps feed", async () => {
     expect(feed.apiReachable).toBe(false);
     expect(feed.blockedReason).toContain("Provider catalog: HTTP 503");
     expect(feed.blockedReason).toContain("Provider accounts: HTTP 503");
+  });
+
+  it("keeps community catalog reachable and skips paid write-automation endpoints", async () => {
+    mockCommunityEdition();
+    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({
+      items: [
+        {
+          provider: "openai",
+          display_name: "OpenAI",
+          category: "model",
+          adapter_status: "available",
+          default_auth_method: "api_key",
+          auth_methods: [
+            {
+              key: "api_key",
+              runtime_status: "available",
+              credential_slots: [
+                { key: "api_key", secret_kind: "api_key", required: true },
+              ],
+            },
+          ],
+          capabilities: ["model.invoke"],
+        },
+      ],
+    });
+    vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    mockEmptySecondaryEndpoints();
+
+    const feed = await fetchProviderOpsFeed();
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.editionId).toBe("community");
+    expect(feed.paidWriteAutomationAvailable).toBe(false);
+    expect(feed.partialFailures).toEqual([]);
+    expect(feed.editionLimitations).toContain(
+      "ChangeSets, worker pools, and scale automation require Cloud/Enterprise",
+    );
+    expect(feed.providerDefinitions).toHaveLength(1);
+    expect(feed.changeSets).toEqual([]);
+    expect(feed.workerPools).toEqual([]);
+    expect(feed.scalePlans).toEqual([]);
+    expect(client.listChangeSets).not.toHaveBeenCalled();
+    expect(client.listWorkerPools).not.toHaveBeenCalled();
+    expect(client.listScalePlans).not.toHaveBeenCalled();
+  });
+
+  it("classifies paid-route 404s as edition limitations, not outages", async () => {
+    // Edition probe failed — still try paid routes; 404 must not hard-fail feed.
+    vi.mocked(client.getEdition).mockRejectedValueOnce(new Error("edition down"));
+    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({
+      items: [
+        {
+          provider: "aws",
+          display_name: "Amazon Web Services",
+          category: "infrastructure",
+          adapter_status: "available",
+          default_auth_method: "access_key",
+          auth_methods: [],
+          capabilities: [],
+        },
+      ],
+    });
+    vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    mockEmptySecondaryEndpoints();
+    vi.mocked(client.listChangeSets).mockRejectedValueOnce(
+      new BossApiError("not mounted", 404, {}),
+    );
+    vi.mocked(client.listWorkerPools).mockRejectedValueOnce(
+      new BossApiError("not mounted", 404, {}),
+    );
+    vi.mocked(client.listScalePlans).mockRejectedValueOnce(
+      new BossApiError("not mounted", 404, {}),
+    );
+
+    const feed = await fetchProviderOpsFeed();
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.paidWriteAutomationAvailable).toBe(false);
+    expect(feed.partialFailures).toEqual([]);
+    expect(feed.editionLimitations.some((item) => item.includes("ChangeSets"))).toBe(
+      true,
+    );
+    expect(feed.editionLimitations.some((item) => item.includes("Worker pools"))).toBe(
+      true,
+    );
+    expect(feed.editionLimitations.some((item) => item.includes("Scale plans"))).toBe(
+      true,
+    );
+    expect(feed.providerDefinitions[0]?.provider).toBe("aws");
+  });
+
+  it("treats non-404 paid failures as partialFailures when edition is paid", async () => {
+    mockPaidEdition();
+    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({ items: [] });
+    vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    mockEmptySecondaryEndpoints();
+    vi.mocked(client.listChangeSets).mockRejectedValueOnce(
+      new BossApiError("upstream", 503, {}),
+    );
+    vi.mocked(client.listWorkerPools).mockRejectedValueOnce(
+      new BossApiError("upstream", 503, {}),
+    );
+    vi.mocked(client.listScalePlans).mockRejectedValueOnce(
+      new BossApiError("upstream", 503, {}),
+    );
+
+    const feed = await fetchProviderOpsFeed();
+
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.paidWriteAutomationAvailable).toBe(true);
+    expect(feed.editionLimitations).toEqual([]);
+    expect(feed.partialFailures).toContain("ChangeSets: HTTP 503");
+    expect(feed.partialFailures).toContain("Worker pools: HTTP 503");
+    expect(feed.partialFailures).toContain("Scale plans: HTTP 503");
   });
 });

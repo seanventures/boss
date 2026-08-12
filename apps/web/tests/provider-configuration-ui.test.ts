@@ -146,7 +146,10 @@ describe("provider configuration workspace", () => {
     expect(source).toContain("•••••• configured");
     expect(source).not.toContain("{account.credentialRef}");
     expect(source).not.toContain("{account.credentialRefs[");
-    expect(source).toContain("Partial data:");
+    expect(source).toContain("Partial data (secondary APIs):");
+    expect(source).toContain("Paid write-automation unavailable on");
+    expect(source).toContain("this is not a control-plane outage");
+    expect(source).toContain("Cloud/Enterprise write-automation features");
     expect(source).toContain("Read-only view.");
     expect(source).toContain('status === "revoked"');
     expect(source).toContain('status === "disabled"');
@@ -158,5 +161,7 @@ describe("provider configuration workspace", () => {
     expect(source).toContain("Scaling & Health");
     expect(source).toContain("Cloud FinOps");
     expect(source).toContain("ResourceReceipt");
+    expect(source).toContain("paidWriteAutomationAvailable");
+    expect(source).toContain("editionLimitations");
   });
 });
