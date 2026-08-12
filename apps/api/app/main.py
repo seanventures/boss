@@ -86,6 +86,7 @@ from .schemas import (
     KnowledgeGraphKnownCausesResponse,
     KnowledgeGraphSeedFromInfraRequest,
     KnowledgeGraphSeedFromInfraResponse,
+    KnowledgeRetrievalEvalResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -10995,38 +10996,44 @@ def knowledge_graph_list_nodes(
     project_id: str,
     kind: Optional[str] = None,
     node_key: Optional[str] = None,
+    source: Optional[str] = None,
+    layer: Optional[str] = None,
+    min_confidence: Optional[float] = Query(default=None, ge=0.0, le=1.0),
+    max_confidence: Optional[float] = Query(default=None, ge=0.0, le=1.0),
+    valid_at: Optional[str] = None,
+    include_expired: bool = Query(default=False),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> KnowledgeGraphNodeListResponse:
-    """List or fetch knowledge-graph nodes for a project (optional kind / node_key filters)."""
+    """List knowledge-graph nodes (filters: kind, node_key, source, layer, confidence, valid_at)."""
     with begin(engine) as connection:
-        if kind and node_key:
-            node = knowledge_graph.get_node(connection, project_id, kind, node_key)
-            items = [node] if node else []
-        else:
-            clauses = ["project_id = :p"]
-            params: dict[str, Any] = {"p": project_id, "limit": limit}
-            if kind:
-                clauses.append("kind = :k")
-                params["k"] = kind
-            if node_key:
-                clauses.append("node_key = :nk")
-                params["nk"] = node_key
-            rows = connection.execute(
-                text(
-                    f"SELECT * FROM kg_nodes WHERE {' AND '.join(clauses)} "
-                    "ORDER BY last_seen DESC LIMIT :limit"
-                ),
-                params,
-            ).mappings().all()
-            items = [dict(r) for r in rows]
-        return KnowledgeGraphNodeListResponse(project_id=project_id, items=items)
+        try:
+            items = knowledge_graph.list_nodes(
+                connection,
+                project_id,
+                kind=kind,
+                node_key=node_key,
+                source=source,
+                layer=layer,
+                min_confidence=min_confidence,
+                max_confidence=max_confidence,
+                valid_at=valid_at,
+                include_expired=include_expired,
+                limit=limit,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return KnowledgeGraphNodeListResponse(
+            project_id=project_id, items=items, count=len(items)
+        )
 
 
 @app.post("/v1/knowledge/graph/nodes", response_model=KnowledgeGraphNodeUpsertResponse)
 def knowledge_graph_upsert_node(
     payload: KnowledgeGraphNodeUpsertRequest,
 ) -> KnowledgeGraphNodeUpsertResponse:
-    """Idempotent create-or-merge of a knowledge-graph node."""
+    """Idempotent create-or-merge of a knowledge-graph node (provenance + temporal validity)."""
     with begin(engine) as connection:
         require_project_actor(
             connection, payload.project_id, payload.actor, "providerops_manage"
@@ -11042,7 +11049,11 @@ def knowledge_graph_upsert_node(
                 layer=payload.layer,
                 source=payload.source,
                 confidence=payload.confidence,
+                valid_from=payload.valid_from,
+                valid_to=payload.valid_to,
             )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return KnowledgeGraphNodeUpsertResponse(
@@ -11050,6 +11061,10 @@ def knowledge_graph_upsert_node(
             project_id=payload.project_id,
             kind=payload.kind,
             node_key=payload.node_key,
+            source=payload.source,
+            confidence=payload.confidence,
+            valid_from=payload.valid_from,
+            valid_to=payload.valid_to,
         )
 
 
@@ -11073,7 +11088,13 @@ def knowledge_graph_upsert_edge(
                 layer=payload.layer,
                 source=payload.source,
                 confidence=payload.confidence,
+                valid_from=payload.valid_from,
+                valid_to=payload.valid_to,
             )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return KnowledgeGraphEdgeUpsertResponse(
@@ -11082,6 +11103,10 @@ def knowledge_graph_upsert_edge(
             src_id=payload.src_id,
             dst_id=payload.dst_id,
             kind=payload.kind,
+            source=payload.source,
+            confidence=payload.confidence,
+            valid_from=payload.valid_from,
+            valid_to=payload.valid_to,
         )
 
 
@@ -11114,7 +11139,7 @@ def knowledge_graph_neighbors(
     node_key: Optional[str] = None,
     direction: str = Query(default="both", pattern="^(out|in|both)$"),
 ) -> KnowledgeGraphNeighborsResponse:
-    """Adjacent nodes for a node_id or (kind + node_key) natural key."""
+    """Adjacent nodes for a node_id or (kind + node_key); tenant-scoped to project_id."""
     if not node_id and not (kind and node_key):
         raise HTTPException(
             status_code=400,
@@ -11127,9 +11152,17 @@ def knowledge_graph_neighbors(
             if not node:
                 raise HTTPException(status_code=404, detail="node not found")
             resolved = node["id"]
-        items = knowledge_graph.neighbors(
-            connection, resolved, direction=direction
-        )
+        try:
+            items = knowledge_graph.neighbors(
+                connection,
+                resolved,
+                project_id=project_id,
+                direction=direction,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
         return KnowledgeGraphNeighborsResponse(
             project_id=project_id, node_id=resolved, items=items
         )
@@ -11158,6 +11191,8 @@ def knowledge_graph_record_root_cause(
                 confidence=payload.confidence,
                 evidence=payload.evidence,
             )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return KnowledgeGraphRootCauseResponse(**result)
@@ -11194,12 +11229,37 @@ def knowledge_graph_seed_from_infra(
         require_project_actor(
             connection, payload.project_id, payload.actor, "providerops_manage"
         )
-        counts = knowledge_graph.seed_from_infra_resources(
-            connection, payload.project_id
-        )
+        try:
+            counts = knowledge_graph.seed_from_infra_resources(
+                connection, payload.project_id
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
         return KnowledgeGraphSeedFromInfraResponse(
             project_id=payload.project_id, resources=counts.get("resources", 0)
         )
+
+
+@app.get("/v1/knowledge/eval", response_model=KnowledgeRetrievalEvalResponse)
+def knowledge_retrieval_eval(
+    project_id: str,
+    threshold: float = Query(default=0.35, ge=0.0, le=1.0),
+    persist: bool = Query(default=True),
+) -> KnowledgeRetrievalEvalResponse:
+    """BOSS-357: coverage metrics over the knowledge graph + regression/threshold alarm."""
+    with begin(engine) as connection:
+        try:
+            result = knowledge_graph.compute_retrieval_eval(
+                connection,
+                project_id,
+                coverage_threshold=threshold,
+                persist=persist,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return KnowledgeRetrievalEvalResponse(**result)
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)

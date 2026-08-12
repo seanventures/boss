@@ -7475,7 +7475,11 @@ class KnowledgePackContextRequest(BaseModel):
 
 
 class KnowledgeGraphNodeUpsertRequest(BaseModel):
-    """Create-or-merge a knowledge-graph node keyed by (project, kind, node_key)."""
+    """Create-or-merge a knowledge-graph node keyed by (project, kind, node_key).
+
+    BOSS-355: carries provenance ``source``, ``confidence``, and temporal
+    validity ``valid_from`` / ``valid_to`` (ISO-8601 or null for unbounded).
+    """
 
     project_id: str
     actor: str = "system"
@@ -7486,6 +7490,8 @@ class KnowledgeGraphNodeUpsertRequest(BaseModel):
     layer: str = "deterministic"
     source: str = "manual"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate(self) -> "KnowledgeGraphNodeUpsertRequest":
@@ -7505,6 +7511,10 @@ class KnowledgeGraphNodeUpsertResponse(BaseModel):
     project_id: str
     kind: str
     node_key: str
+    source: Optional[str] = None
+    confidence: Optional[float] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
 
 
 class KnowledgeGraphEdgeUpsertRequest(BaseModel):
@@ -7519,6 +7529,8 @@ class KnowledgeGraphEdgeUpsertRequest(BaseModel):
     layer: str = "deterministic"
     source: str = "manual"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
 
     @model_validator(mode="after")
     def _validate(self) -> "KnowledgeGraphEdgeUpsertRequest":
@@ -7540,11 +7552,32 @@ class KnowledgeGraphEdgeUpsertResponse(BaseModel):
     src_id: str
     dst_id: str
     kind: str
+    source: Optional[str] = None
+    confidence: Optional[float] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
 
 
 class KnowledgeGraphNodeListResponse(BaseModel):
     project_id: str
     items: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+
+
+class KnowledgeRetrievalEvalResponse(BaseModel):
+    """BOSS-357 coverage metrics + regression/threshold alarm."""
+
+    project_id: str
+    coverage_score: float
+    threshold: float
+    alarm: bool
+    alarm_reasons: list[str] = Field(default_factory=list)
+    prior_coverage_score: Optional[float] = None
+    regression: bool = False
+    below_threshold: bool = False
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    snapshot_id: Optional[str] = None
+    evaluated_at: Optional[str] = None
 
 
 class KnowledgeGraphSubgraphResponse(BaseModel):

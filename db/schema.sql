@@ -4001,14 +4001,22 @@ CREATE TABLE IF NOT EXISTS kg_nodes (
   attrs JSONB NOT NULL DEFAULT '{}'::jsonb,
   layer TEXT NOT NULL DEFAULT 'deterministic'
     CHECK (layer IN ('deterministic', 'inferred')),
-  source TEXT NOT NULL DEFAULT 'manual',
+  source TEXT NOT NULL DEFAULT 'manual',  -- provenance source (manual|infra_resources|investigation|walk|…)
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  valid_from TIMESTAMPTZ,           -- temporal validity window start (NULL = unbounded)
+  valid_to TIMESTAMPTZ,             -- temporal validity window end (NULL = unbounded)
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, kind, node_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_project
   ON kg_nodes(project_id, kind, last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_source
+  ON kg_nodes(project_id, source);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_confidence
+  ON kg_nodes(project_id, confidence);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_valid
+  ON kg_nodes(project_id, valid_from, valid_to);
 
 CREATE TABLE IF NOT EXISTS kg_edges (
   id TEXT PRIMARY KEY,
@@ -4021,12 +4029,27 @@ CREATE TABLE IF NOT EXISTS kg_edges (
     CHECK (layer IN ('deterministic', 'inferred')),
   source TEXT NOT NULL DEFAULT 'manual',
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  valid_from TIMESTAMPTZ,
+  valid_to TIMESTAMPTZ,
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, src_id, dst_id, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);
+
+-- BOSS-357: knowledge retrieval evaluation snapshots (coverage + regression alarms)
+CREATE TABLE IF NOT EXISTS kg_eval_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  coverage_score DOUBLE PRECISION NOT NULL,
+  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  alarm BOOLEAN NOT NULL DEFAULT FALSE,
+  threshold DOUBLE PRECISION NOT NULL DEFAULT 0.35,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kg_eval_snapshots_project
+  ON kg_eval_snapshots(project_id, created_at DESC);
 
 -- ── AI SRE reliability pipeline (RB-3/RB-4) ───────────────────────────────────
 -- A telemetry source (a connected observability tool). Scan can also run against an

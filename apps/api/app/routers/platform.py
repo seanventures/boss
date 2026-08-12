@@ -89,3 +89,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(safety_router)
     except ImportError:
         pass
+
+    # Native Work Plane — initiatives / modules / cycles / roadmaps (BOSS-331/358)
+    try:
+        from .work_plane import router as work_plane_router
+
+        app.include_router(work_plane_router)
+    except ImportError:
+        pass
