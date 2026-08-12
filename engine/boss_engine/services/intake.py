@@ -168,8 +168,21 @@ class CommandIntakeService:
             text("UPDATE plans SET status = 'dispatched', updated_at = now() WHERE id = :id"),
             {"id": plan_id},
         )
-        emit_event(connection, project_id, "plan.dispatched", actor, "plan", plan_id,
-                   {"phase_task_ids": created, "phase_count": len(created)})
+        emit_event(
+            connection,
+            project_id,
+            "plan.dispatched",
+            actor,
+            "plan",
+            plan_id,
+            {
+                "phase_task_ids": created,
+                "phase_count": len(created),
+                # So event_dispatch can attach the parent task to the
+                # agent.orchestrator.next_move job for operator timelines.
+                "task_id": plan["task_id"],
+            },
+        )
         return {"plan_id": plan_id, "status": "dispatched", "phase_task_ids": created}
 
     def _normalize_optional_text(self, value: Optional[str], field_name: str) -> Optional[str]:
