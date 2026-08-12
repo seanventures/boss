@@ -1,3 +1,4 @@
+import { ClientRelativeTime } from "./client-relative-time";
 import type { RepoActivity, RepoRecentRun } from "../lib/repo-activity";
 
 /** The GitHub area used to show only "is a connection configured", which tells a developer
@@ -9,16 +10,6 @@ function fmtDuration(minutes: number | null): string {
   if (minutes < 60) return `${Math.round(minutes)}m`;
   const hours = minutes / 60;
   return hours < 24 ? `${hours.toFixed(1)}h` : `${(hours / 24).toFixed(1)}d`;
-}
-
-function fmtWhen(iso: string | null): string {
-  if (!iso) return "—";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "—";
-  const mins = Math.max(0, Math.round((Date.now() - then) / 60000));
-  if (mins < 60) return `${mins}m ago`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
-  return `${Math.round(mins / 1440)}d ago`;
 }
 
 function statusTone(status: string): string {
@@ -74,7 +65,14 @@ function RepoCard({ repo }: { repo: RepoActivity }) {
           </h3>
         </div>
         <div className="ra-repo-meta">
-          <span>last activity {fmtWhen(repo.last_activity_at)}</span>
+          <span>
+            last activity{" "}
+            {repo.last_activity_at ? (
+              <ClientRelativeTime iso={repo.last_activity_at} empty="—" />
+            ) : (
+              "—"
+            )}
+          </span>
           <span className="ra-window">last {repo.window_days}d</span>
         </div>
       </header>

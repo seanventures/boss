@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SVGProps } from "react";
+import { formatTime } from "../lib/datetime";
 import { Markdown } from "./markdown";
 import { pushUrlParam, readUrlParam } from "./url-nav";
 
@@ -287,11 +288,8 @@ function fmtDuration(fromIso: string, toIso: string): string {
   return `${m}m ${Math.round(s % 60)}s`;
 }
 function fmtTime(iso: string): string {
-  try {
-    return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(iso));
-  } catch {
-    return iso;
-  }
+  // UTC clock — identical on Node SSR and every browser (avoids React #418).
+  return formatTime(iso, iso);
 }
 function Pill({ tone, children }: { tone: Tone; children: ReactNode }) {
   return <span className={`wf-pill tone-${tone}`}>{children}</span>;
@@ -637,7 +635,7 @@ export function WorkBoard({
                     <span className={`wf-ic tone-${m.tone}`}><m.Icon /></span>
                     <span className="wf-tl-body">
                       <span className="wf-tl-label">{m.label}</span>
-                      <span className="wf-tl-meta" suppressHydrationWarning>{e.actor} · {fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
+                      <span className="wf-tl-meta">{e.actor} · {fmtTime(e.createdAt)}{gap ? ` · +${gap}` : ""}</span>
                     </span>
                   </div>
                 );
@@ -755,7 +753,7 @@ export function WorkflowHealth({
                   <span className="wf-ic tone-red"><Ic.alert /></span>
                   <span className="wf-fail-body">
                     <span className="wf-fail-reason">{d.reason}</span>
-                    <span className="wf-tl-meta" suppressHydrationWarning>{d.sourceKind} · {d.status} · {fmtTime(d.createdAt)}</span>
+                    <span className="wf-tl-meta">{d.sourceKind} · {d.status} · {fmtTime(d.createdAt)}</span>
                   </span>
                 </div>
               ))}

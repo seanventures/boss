@@ -26,6 +26,7 @@ import {
   upsertResourceQuotaAction,
   upsertStatusChannelAction,
 } from "./work-orchestration-actions";
+import { ClientRelativeTime } from "./client-relative-time";
 import { SubmitButton } from "./submit-button";
 
 type Props = {
@@ -42,15 +43,7 @@ const SCORE_DRIVERS: Array<[keyof RankedWorkItem, string]> = [
   ["dependency_pressure", "Dependency"],
 ];
 
-function timeAgo(value?: string): string {
-  if (!value) return "not yet";
-  const delta = Date.now() - new Date(value).getTime();
-  const minutes = Math.max(0, Math.round(delta / 60_000));
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
+
 
 function tone(status: string): string {
   const value = status.toLowerCase();
@@ -221,7 +214,14 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   </div>
                   <div className="wo-job-state">
                     <span>{job.status}</span>
-                    <small suppressHydrationWarning>{job.lease_owner ?? `ready ${timeAgo(job.run_after)}`}</small>
+                    <small>
+                      {job.lease_owner ?? (
+                        <>
+                          ready{" "}
+                          <ClientRelativeTime iso={job.run_after} as="span" empty="now" />
+                        </>
+                      )}
+                    </small>
                   </div>
                 </div>
               ))
@@ -302,7 +302,10 @@ export function WorkOrchestration({ feed, actor }: Props) {
                   <span>{event.provider === "github" ? <GitBranch size={15} /> : <Broadcast size={15} />}</span>
                   <div>
                     <strong>{event.summary}</strong>
-                    <small suppressHydrationWarning>{event.bot_name ?? event.provider} · {timeAgo(event.created_at)}</small>
+                    <small>
+                      {event.bot_name ?? event.provider} ·{" "}
+                      <ClientRelativeTime iso={event.created_at} as="span" />
+                    </small>
                   </div>
                 </div>
               ))

@@ -62,6 +62,7 @@ import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
+import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
@@ -346,20 +347,12 @@ function formatDeadline(deadlineAt?: string): string {
   if (!deadlineAt) {
     return "No deadline";
   }
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(deadlineAt));
+  // Shared UTC formatter — same string the client islands use (no TZ drift).
+  return formatDateTimeShared(deadlineAt, "No deadline");
 }
 
 function formatDateTime(value?: string): string {
-  if (!value) {
-    return "Unknown time";
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+  return formatDateTimeShared(value, "Unknown time");
 }
 
 function formatDurationSeconds(value?: number | null): string {
