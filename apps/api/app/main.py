@@ -14235,6 +14235,11 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
         job_payload = {
             **payload.payload,
             **(
+                {"completion_contract": payload.completion_contract.model_dump()}
+                if payload.completion_contract
+                else {}
+            ),
+            **(
                 {"requires_reservation": True}
                 if payload.requires_reservation
                 else {}
