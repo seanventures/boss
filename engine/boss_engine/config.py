@@ -657,6 +657,31 @@ class Settings(BaseSettings):
     model_max_concurrency: int = Field(default=3, alias="BOSS_MODEL_MAX_CONCURRENCY")
     model_min_interval_ms: int = Field(default=0, alias="BOSS_MODEL_MIN_INTERVAL_MS")
     model_rate_backoff_seconds: int = Field(default=30, alias="BOSS_MODEL_RATE_BACKOFF_SECONDS")
+    # Concurrency & scheduling governance (BOSS-100): VM-pool density ceiling,
+    # queue backpressure thresholds, lease-contention ratio. Provider rate limits
+    # bind first when prefer_provider_rate_limits is true.
+    concurrency_max_vms_per_host: int = Field(
+        default=8, alias="BOSS_CONCURRENCY_MAX_VMS_PER_HOST"
+    )
+    concurrency_max_queue_depth_per_worker: int = Field(
+        default=5, alias="BOSS_CONCURRENCY_MAX_QUEUE_DEPTH_PER_WORKER"
+    )
+    concurrency_backpressure_queue_depth: int = Field(
+        default=20, alias="BOSS_CONCURRENCY_BACKPRESSURE_QUEUE_DEPTH"
+    )
+    concurrency_lease_contention_ratio: float = Field(
+        default=0.75, alias="BOSS_CONCURRENCY_LEASE_CONTENTION_RATIO"
+    )
+    concurrency_lease_expiry_soon_seconds: int = Field(
+        default=30, alias="BOSS_CONCURRENCY_LEASE_EXPIRY_SOON_SECONDS"
+    )
+    concurrency_prefer_provider_rate_limits: bool = Field(
+        default=True, alias="BOSS_CONCURRENCY_PREFER_PROVIDER_RATE_LIMITS"
+    )
+    concurrency_budget_governor_overrides_scale: bool = Field(
+        default=True, alias="BOSS_CONCURRENCY_BUDGET_GOVERNOR_OVERRIDES_SCALE"
+    )
+    concurrency_wip_limit: int = Field(default=5, alias="BOSS_CONCURRENCY_WIP_LIMIT")
     # Which CodeAgent implementation runs the edit/test loop:
     #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).

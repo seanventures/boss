@@ -73,3 +73,19 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(cicd_router)
     except ImportError:
         pass
+
+    # Concurrency & scheduling governance (BOSS-100)
+    try:
+        from .concurrency import router as concurrency_router
+
+        app.include_router(concurrency_router)
+    except ImportError:
+        pass
+
+    # Safety gates: branch protection / live-demo ready (BOSS-324)
+    try:
+        from .safety_gates import router as safety_router
+
+        app.include_router(safety_router)
+    except ImportError:
+        pass
