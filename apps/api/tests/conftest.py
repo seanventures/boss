@@ -76,6 +76,7 @@ def clean_tables(engine):
             "worker_autoscaling_history",
             "worker_autoscaling_policies",
             "token_budget_policies",
+            "preview_sandboxes",
             "agent_group_runs",
             "agent_group_versions",
             "agent_group_specs",

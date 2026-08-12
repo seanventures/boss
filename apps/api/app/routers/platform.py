@@ -97,3 +97,19 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(work_plane_router)
     except ImportError:
         pass
+
+    # BOSS-348 — earned autonomy score + value-based schedule preference
+    try:
+        from .earned_autonomy import router as earned_autonomy_router
+
+        app.include_router(earned_autonomy_router)
+    except ImportError:
+        pass
+
+    # BOSS-11 — persistent preview sandboxes (Workload B)
+    try:
+        from .preview_sandboxes import router as preview_sandbox_router
+
+        app.include_router(preview_sandbox_router)
+    except ImportError:
+        pass

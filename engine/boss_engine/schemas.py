@@ -3742,6 +3742,32 @@ class RoleAutonomyCheckResponse(BaseModel):
     required_level: Optional[int] = None
     allowed_capabilities: list[str] = Field(default_factory=list)
     trust_score: int
+    # G2 — trust_score → risk-tier gate (fail-closed). Present on all checks.
+    min_trust_required: Optional[int] = None
+    max_allowed_risk_tier: Optional[int] = None
+    trust_gate_passed: Optional[bool] = None
+
+
+class AutonomyScoreResponse(BaseModel):
+    """G1 — current earned-autonomy score for a role (read-only)."""
+
+    project_id: str
+    role_key: str
+    role_id: str
+    display_name: str
+    trust_score: int
+    autonomy_level: int
+    max_allowed_risk_tier: int
+    trust_risk_tier_floors: dict[str, int] = Field(default_factory=dict)
+    successful_runs: int = 0
+    policy_violation_count: int = 0
+    scope_violation_count: int = 0
+    duplicate_effect_attempt_count: int = 0
+    hidden_failure_count: int = 0
+    low_quality_output_count: int = 0
+    last_reviewed_at: Optional[str] = None
+    score_exists: bool = True
+    gate_mode: str = "fail_closed"
 
 
 class RoleScopeCheckRequest(BaseModel):

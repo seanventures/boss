@@ -380,6 +380,11 @@ class JobLeaseService:
         if not candidates:
             return None
 
+        # G3 — under budget pressure, re-rank claim candidates by value density.
+        candidates = self._prefer_value_under_budget_pressure(
+            connection, list(candidates)
+        )
+
         for candidate in candidates:
             payload = candidate["payload"] or {}
             allocated, allocation_reason = (
@@ -1591,6 +1596,95 @@ class JobLeaseService:
 
     def _hash_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _prefer_value_under_budget_pressure(
+        self,
+        connection: Connection,
+        candidates: list[Any],
+    ) -> list[Any]:
+        """G3 — when any candidate project is under yellow+ pressure, rank by value/$.
+
+        Stable within a claim batch: jobs from green projects keep relative order;
+        under pressure, value density wins. Lease still fails closed on budget
+        freezes via ``_budget_state_policy_for_job``.
+        """
+        if len(candidates) <= 1:
+            return candidates
+
+        # Budget state is project-scoped; compute once per distinct project.
+        state_by_project: dict[str, str] = {}
+        for row in candidates:
+            project_id = str(row["project_id"])
+            if project_id in state_by_project:
+                continue
+            try:
+                snapshot = self.budget.status_for_project(connection, project_id)
+                state_by_project[project_id] = str(
+                    snapshot.get("budget_state") or "green"
+                ).lower()
+            except Exception:  # noqa: BLE001 — never block claim on status read
+                state_by_project[project_id] = "green"
+
+        pressure_present = any(
+            state in {"yellow", "orange", "red"}
+            for state in state_by_project.values()
+        )
+        if not pressure_present:
+            return candidates
+
+        rank_input: list[dict[str, Any]] = []
+        for index, row in enumerate(candidates):
+            payload = row["payload"] or {}
+            if not isinstance(payload, dict):
+                payload = {}
+            score = row.get("priority_score")
+            if score is None:
+                score = 0
+            cost = payload.get("estimated_cost_usd_micros")
+            if cost is None:
+                # resource_units as a crude cost proxy (1 unit ≈ $0.01).
+                cost = max(1, int(row.get("resource_units") or 1)) * 10_000
+            rank_input.append(
+                {
+                    "id": row["id"],
+                    "_index": index,
+                    "priority_score": float(score),
+                    "estimated_cost_usd_micros": int(cost),
+                    "project_id": str(row["project_id"]),
+                    "budget_state": state_by_project.get(
+                        str(row["project_id"]), "green"
+                    ),
+                }
+            )
+
+        # Prefer value density for pressure projects; green projects trail them
+        # only when the batch mixes states (rare). Within mode, pure rank applies.
+        pressure_rows = [
+            item
+            for item in rank_input
+            if item["budget_state"] in {"yellow", "orange", "red"}
+        ]
+        green_rows = [
+            item for item in rank_input if item["budget_state"] not in {
+                "yellow", "orange", "red"
+            }
+        ]
+        ordered_ids: list[str] = []
+        if pressure_rows:
+            ranked = self.work_orchestration.schedule_preference(
+                pressure_rows,
+                budget_state="orange",
+            )
+            ordered_ids.extend(item["id"] for item in ranked["items"])
+        if green_rows:
+            ranked_green = self.work_orchestration.schedule_preference(
+                green_rows,
+                budget_state="green",
+            )
+            ordered_ids.extend(item["id"] for item in ranked_green["items"])
+
+        by_id = {row["id"]: row for row in candidates}
+        return [by_id[job_id] for job_id in ordered_ids if job_id in by_id]
 
     def _requires_reservation(self, kind: str, payload: dict[str, Any]) -> bool:
         spendy_kinds = {

@@ -35,11 +35,103 @@ HIDDEN_FAILURE_EVENTS = ("role.hidden_failure_detected",)
 LOW_QUALITY_OUTPUT_EVENTS = ("role.low_quality_output_detected",)
 EVIDENCE_SAMPLE_LIMIT = 25
 
+# Default trust floors for risk tiers when policy omits trust_risk_tiers.
+# Fail-closed: higher tiers always require strictly higher floors.
+DEFAULT_TRUST_RISK_TIERS: dict[int, int] = {
+    0: 0,
+    1: 40,
+    2: 60,
+    3: 80,
+}
+
 
 class AutonomyEngine:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.governance = RoleGovernanceService(settings)
+
+    def get_score(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        role_key: str,
+    ) -> dict[str, Any]:
+        """G1 — read the current earned-autonomy score for a role (no side effects).
+
+        Surfaces trust_score, autonomy_level, max risk tier the score currently
+        unlocks, and the trust floors used for fail-closed gating (G2).
+        """
+        role = self.governance.get_role(connection, project_id, role_key)
+        policy = self.governance._load_autonomy_policy()
+        trust_floors = self.trust_risk_tier_floors(policy)
+        trust_score = int(role.get("trust_score") or 50)
+        autonomy_level = int(role.get("autonomy_level") or 0)
+        max_allowed_risk_tier = self.max_allowed_risk_tier(trust_score, trust_floors)
+        return {
+            "project_id": project_id,
+            "role_key": role_key,
+            "role_id": role["id"],
+            "display_name": role.get("display_name") or role_key,
+            "trust_score": trust_score,
+            "autonomy_level": autonomy_level,
+            "max_allowed_risk_tier": max_allowed_risk_tier,
+            "trust_risk_tier_floors": {
+                str(tier): floor for tier, floor in sorted(trust_floors.items())
+            },
+            "successful_runs": int(role.get("successful_runs") or 0),
+            "policy_violation_count": int(role.get("policy_violation_count") or 0),
+            "scope_violation_count": int(role.get("scope_violation_count") or 0),
+            "duplicate_effect_attempt_count": int(
+                role.get("duplicate_effect_attempt_count") or 0
+            ),
+            "hidden_failure_count": int(role.get("hidden_failure_count") or 0),
+            "low_quality_output_count": int(role.get("low_quality_output_count") or 0),
+            "last_reviewed_at": role.get("last_reviewed_at"),
+            "score_exists": True,
+            "gate_mode": "fail_closed",
+        }
+
+    @staticmethod
+    def trust_risk_tier_floors(policy: dict[str, Any]) -> dict[int, int]:
+        """Resolve min trust_score required per risk_tier (0–3). Fail-closed defaults."""
+        raw = policy.get("trust_risk_tiers") or {}
+        floors = dict(DEFAULT_TRUST_RISK_TIERS)
+        for key, value in raw.items():
+            try:
+                tier = int(key)
+                floor = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= tier <= 3 and 0 <= floor <= 100:
+                floors[tier] = floor
+        # Enforce monotonic floors so a higher tier never requires less trust.
+        running = 0
+        for tier in range(0, 4):
+            running = max(running, floors.get(tier, 0))
+            floors[tier] = running
+        return floors
+
+    @staticmethod
+    def max_allowed_risk_tier(
+        trust_score: int, floors: dict[int, int]
+    ) -> int:
+        """Highest risk tier unlocked by the current trust score."""
+        allowed = 0
+        for tier in range(0, 4):
+            if trust_score >= int(floors.get(tier, 0)):
+                allowed = tier
+        return allowed
+
+    @staticmethod
+    def trust_allows_risk_tier(
+        trust_score: int, risk_tier: int, floors: dict[int, int]
+    ) -> tuple[bool, int]:
+        """Return (allowed, min_trust_required) for a risk tier. Fail-closed."""
+        if risk_tier < 0 or risk_tier > 3:
+            return False, 100
+        required = int(floors.get(risk_tier, DEFAULT_TRUST_RISK_TIERS.get(risk_tier, 100)))
+        return trust_score >= required, required
 
     def evaluate(
         self,

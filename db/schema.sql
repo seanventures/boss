@@ -5146,3 +5146,32 @@ CREATE TABLE IF NOT EXISTS token_budget_policies (
 CREATE INDEX IF NOT EXISTS idx_token_budget_policies_project
   ON token_budget_policies (project_id, stage);
 
+
+-- BOSS-11: durable persistent preview sandbox reservations (Workload B)
+CREATE TABLE IF NOT EXISTS preview_sandboxes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  run_id TEXT,
+  repo TEXT,
+  branch TEXT,
+  image_or_build TEXT,
+  run_cmd TEXT,
+  env_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  port INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  host_ref TEXT,
+  url TEXT,
+  internal_url TEXT,
+  error TEXT,
+  simulate BOOLEAN NOT NULL DEFAULT false,
+  ttl_seconds INTEGER NOT NULL DEFAULT 3600,
+  expires_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  reserved_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, app_id)
+);
+CREATE INDEX IF NOT EXISTS idx_preview_sandboxes_project
+  ON preview_sandboxes (project_id, created_at DESC);
