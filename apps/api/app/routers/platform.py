@@ -119,3 +119,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(preview_sandbox_router)
     except ImportError:
         pass
+
+    # Agent-wide OSS key management (KMS)
+    try:
+        from .agent_kms import router as agent_kms_router
+
+        app.include_router(agent_kms_router)
+    except ImportError:
+        pass

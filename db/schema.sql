@@ -5175,3 +5175,52 @@ CREATE TABLE IF NOT EXISTS preview_sandboxes (
 );
 CREATE INDEX IF NOT EXISTS idx_preview_sandboxes_project
   ON preview_sandboxes (project_id, created_at DESC);
+
+-- Agent KMS (agent ownership, grants, leases)
+CREATE TABLE IF NOT EXISTS agent_key_entries (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  secret_ref_id TEXT NOT NULL,
+  owner_agent TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'general',
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_key_entries_project
+  ON agent_key_entries(project_id, owner_agent, status);
+
+CREATE TABLE IF NOT EXISTS agent_key_grants (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  key_entry_id TEXT NOT NULL REFERENCES agent_key_entries(id) ON DELETE CASCADE,
+  grantee_agent TEXT NOT NULL,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  granted_by TEXT NOT NULL,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (key_entry_id, grantee_agent)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_key_grants_grantee
+  ON agent_key_grants(project_id, grantee_agent);
+
+CREATE TABLE IF NOT EXISTS agent_key_leases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  key_entry_id TEXT NOT NULL,
+  secret_ref_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  reveal_count INT NOT NULL DEFAULT 0,
+  max_reveals INT NOT NULL DEFAULT 1,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_key_leases_agent
+  ON agent_key_leases(project_id, agent_id, expires_at);

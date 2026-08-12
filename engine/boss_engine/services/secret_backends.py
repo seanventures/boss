@@ -217,6 +217,221 @@ def _platform_token(settings: Settings) -> str:
     return ""
 
 
+class LocalVaultBackend:
+    """AES-256-GCM encrypted files under BOSS_SECRETS_DIR/vault/ (OSS cryptography).
+
+    Master key: ``BOSS_KMS_MASTER_KEY`` (urlsafe base64 32 bytes) or
+    ``BOSS_KMS_MASTER_KEY_FILE``. When neither is set and BOSS is in test mode
+    (``BOSS_KMS_ALLOW_EPHEMERAL_MASTER=true``), a process-local key is used — never
+    for production.
+    """
+
+    kind = "local_vault"
+
+    def __init__(self, root: Optional[str] = None, master_key: Optional[bytes] = None):
+        self._root = os.path.expanduser(
+            root
+            or os.environ.get("BOSS_KMS_VAULT_DIR")
+            or os.path.join(SECRETS_DIR, "vault")
+        )
+        self._key = master_key or _load_kms_master_key()
+
+    def _path(self, key: str) -> str:
+        safe = "".join(c if c.isalnum() or c in "._-@" else "_" for c in key)[:200]
+        return os.path.join(self._root, f"{safe}.enc")
+
+    def get(self, key: str) -> str:
+        path = self._path(key)
+        if not os.path.isfile(path):
+            raise SecretUnavailable(f"{key} is not present in local_vault")
+        if os.stat(path).st_mode & 0o077:
+            raise SecretUnavailable(f"{key} vault file is group/world readable")
+        with open(path, "rb") as handle:
+            blob = handle.read()
+        try:
+            return _aes_gcm_decrypt(self._key, blob).decode("utf-8")
+        except Exception as exc:  # noqa: BLE001
+            raise SecretUnavailable(f"local_vault decrypt failed for {key}") from None
+
+    def put(self, key: str, value: str) -> None:
+        os.makedirs(self._root, mode=0o700, exist_ok=True)
+        path = self._path(key)
+        blob = _aes_gcm_encrypt(self._key, (value or "").encode("utf-8"))
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(blob)
+
+    def list_keys(self) -> list[str]:
+        if not os.path.isdir(self._root):
+            return []
+        out = []
+        for name in os.listdir(self._root):
+            if name.endswith(".enc"):
+                out.append(name[: -len(".enc")])
+        return sorted(out)
+
+    def delete(self, key: str) -> None:
+        try:
+            os.unlink(self._path(key))
+        except FileNotFoundError:
+            pass
+
+    def health(self) -> dict[str, Any]:
+        try:
+            os.makedirs(self._root, mode=0o700, exist_ok=True)
+            return {
+                "ok": True,
+                "kind": self.kind,
+                "writable": True,
+                "path": self._root,
+            }
+        except OSError as exc:
+            return {"ok": False, "kind": self.kind, "error": str(exc)}
+
+
+class VaultKvBackend:
+    """HashiCorp Vault / OpenBao KV v2 HTTP client (open source).
+
+    Env: ``BOSS_VAULT_ADDR`` (or OPENBAO_ADDR), ``BOSS_VAULT_TOKEN``,
+    optional ``BOSS_VAULT_KV_MOUNT`` (default ``secret``), ``BOSS_VAULT_NAMESPACE``.
+    """
+
+    kind = "vault"
+
+    def __init__(
+        self,
+        addr: str,
+        token: str,
+        *,
+        mount: str = "secret",
+        namespace: str = "",
+        timeout: int = 15,
+    ):
+        self._addr = addr.rstrip("/")
+        self._token = token
+        self._mount = (mount or "secret").strip("/")
+        self._namespace = namespace or ""
+        self._timeout = timeout
+
+    def _headers(self) -> dict[str, str]:
+        h = {"X-Vault-Token": self._token, "Content-Type": "application/json"}
+        if self._namespace:
+            h["X-Vault-Namespace"] = self._namespace
+        return h
+
+    def _call(self, method: str, path: str, payload: Optional[dict] = None) -> Any:
+        req = urllib.request.Request(
+            f"{self._addr}{path}",
+            method=method,
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers=self._headers(),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                body = resp.read().decode() or "{}"
+        except urllib.error.HTTPError as exc:
+            raise SecretUnavailable(
+                f"vault returned {exc.code} for {method} {path}"
+            ) from None
+        except Exception as exc:  # noqa: BLE001
+            raise SecretUnavailable(
+                f"vault unreachable: {type(exc).__name__}"
+            ) from None
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            return {}
+
+    def get(self, key: str) -> str:
+        # KV v2: GET /v1/{mount}/data/{path}
+        data = self._call("GET", f"/v1/{self._mount}/data/{urllib.parse.quote(key)}")
+        payload = (data.get("data") or {}).get("data") or {}
+        value = payload.get("value") or payload.get("data")
+        if not value:
+            raise SecretUnavailable(f"{key} is not present in vault")
+        return str(value)
+
+    def put(self, key: str, value: str) -> None:
+        self._call(
+            "POST",
+            f"/v1/{self._mount}/data/{urllib.parse.quote(key)}",
+            {"data": {"value": value}},
+        )
+
+    def list_keys(self) -> list[str]:
+        # LIST via ?list=true
+        try:
+            data = self._call(
+                "GET", f"/v1/{self._mount}/metadata?list=true"
+            )
+        except SecretUnavailable:
+            return []
+        keys = ((data.get("data") or {}).get("keys")) or []
+        return sorted(str(k).rstrip("/") for k in keys)
+
+    def delete(self, key: str) -> None:
+        self._call("DELETE", f"/v1/{self._mount}/metadata/{urllib.parse.quote(key)}")
+
+    def health(self) -> dict[str, Any]:
+        try:
+            self._call("GET", "/v1/sys/health")
+            return {"ok": True, "kind": self.kind, "writable": True, "addr": self._addr}
+        except SecretUnavailable as exc:
+            return {"ok": False, "kind": self.kind, "error": str(exc)}
+
+
+_EPHEMERAL_MASTER: Optional[bytes] = None
+
+
+def _load_kms_master_key() -> bytes:
+    global _EPHEMERAL_MASTER
+    import base64
+
+    raw = (os.environ.get("BOSS_KMS_MASTER_KEY") or "").strip()
+    if not raw:
+        path = (os.environ.get("BOSS_KMS_MASTER_KEY_FILE") or "").strip()
+        if path and os.path.isfile(os.path.expanduser(path)):
+            with open(os.path.expanduser(path), "r", encoding="utf-8") as handle:
+                raw = handle.read().strip()
+    if raw:
+        try:
+            key = base64.urlsafe_b64decode(raw.encode("ascii"))
+        except Exception:
+            key = raw.encode("utf-8")
+        if len(key) < 32:
+            key = key.ljust(32, b"\0")
+        return key[:32]
+    if (os.environ.get("BOSS_KMS_ALLOW_EPHEMERAL_MASTER") or "").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        if _EPHEMERAL_MASTER is None:
+            _EPHEMERAL_MASTER = os.urandom(32)
+        return _EPHEMERAL_MASTER
+    raise SecretUnavailable(
+        "local_vault requires BOSS_KMS_MASTER_KEY or BOSS_KMS_MASTER_KEY_FILE "
+        "(or BOSS_KMS_ALLOW_EPHEMERAL_MASTER=true for tests only)"
+    )
+
+
+def _aes_gcm_encrypt(key: bytes, plaintext: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce = os.urandom(12)
+    ct = AESGCM(key).encrypt(nonce, plaintext, None)
+    return nonce + ct
+
+
+def _aes_gcm_decrypt(key: bytes, blob: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    if len(blob) < 13:
+        raise ValueError("ciphertext too short")
+    nonce, ct = blob[:12], blob[12:]
+    return AESGCM(key).decrypt(nonce, ct, None)
+
+
 def backend_for(kind: str, settings: Settings) -> SecretBackend:
     """Map a stored `ref_kind`/`storage_backend` onto an implementation."""
     normalised = (kind or "").strip().lower()
@@ -224,6 +439,37 @@ def backend_for(kind: str, settings: Settings) -> SecretBackend:
         return EnvBackend()
     if normalised in ("file", "local_runner"):
         return FileBackend()
+    if normalised in ("local_vault", "kms_local", "boss_vault"):
+        return LocalVaultBackend()
+    if normalised in ("vault", "hashicorp_vault", "openbao"):
+        addr = (
+            getattr(settings, "vault_addr", None)
+            or os.environ.get("BOSS_VAULT_ADDR")
+            or os.environ.get("VAULT_ADDR")
+            or os.environ.get("OPENBAO_ADDR")
+            or ""
+        ).strip()
+        token = (
+            getattr(settings, "vault_token", None)
+            or os.environ.get("BOSS_VAULT_TOKEN")
+            or os.environ.get("VAULT_TOKEN")
+            or ""
+        ).strip()
+        mount = (
+            getattr(settings, "vault_kv_mount", None)
+            or os.environ.get("BOSS_VAULT_KV_MOUNT")
+            or "secret"
+        )
+        namespace = (
+            getattr(settings, "vault_namespace", None)
+            or os.environ.get("BOSS_VAULT_NAMESPACE")
+            or ""
+        )
+        if not addr or not token:
+            raise SecretUnavailable(
+                "vault backend requires BOSS_VAULT_ADDR and BOSS_VAULT_TOKEN"
+            )
+        return VaultKvBackend(addr, token, mount=str(mount), namespace=str(namespace))
     if normalised == "platform_secret_store":
         base = (getattr(settings, "platform_secret_store_url", "") or "").strip()
         token = _platform_token(settings)

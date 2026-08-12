@@ -171,6 +171,9 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/observability",
             "/v1/security-scan",
             "/v1/worker-autoscaling",
+            "/v1/kms",
+            "/v1/secrets",
+            "/v1/secret-refs",
         ],
     },
     "identity": {
