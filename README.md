@@ -4,6 +4,23 @@ BOSS, the Business Operating System Sentinel, is a financially controlled autono
 
 Current release: `v0.11.0`
 
+## BOSS Community (open source)
+
+**Community is a fully functional self-hosted product** — not a crippled trial of BOSS Cloud.
+
+| | |
+|---|---|
+| **Story** | [boss.sean.network/community/](https://boss.sean.network/community/) |
+| **Spec** | [`docs/product/BOSS_COMMUNITY_EDITION_SPEC.md`](docs/product/BOSS_COMMUNITY_EDITION_SPEC.md) |
+| **Features** | [`docs/community/FEATURES.md`](docs/community/FEATURES.md) |
+| **Quickstart** | [`docs/community/QUICKSTART.md`](docs/community/QUICKSTART.md) |
+
+You run the control plane (API + worker + Postgres), bring your own model and infrastructure keys, and use CLI, MCP, or Mission Control. Cloud is an optional Easy Connect path when you want BOSS to operate hosted team, marketplace, or managed capacity.
+
+```text
+Outcome → Plan → Work → Evidence → Decision
+```
+
 ## Operating invariants
 
 - No external effect without a `Receipt`.
@@ -33,6 +50,9 @@ If a required credential is missing, the API must fail closed and create visible
 ## Repo layout
 
 - `AGENTS.md`: active repository rules
+- `docs/community/`: open-source Community hub (features, quickstart)
+- `docs/product/BOSS_COMMUNITY_EDITION_SPEC.md`: Community product + feature contract
+- `docs/product/BOSS_CLOUD_ENTERPRISE_SPEC.md`: Cloud / Enterprise path
 - `docs/product/PRD-v2.0.md`: governing product intent
 - `docs/product/TECHNICAL_SPEC-v2.0.md`: active technical architecture companion
 - `docs/product/ROADMAP-v2.0.md`: product maturity roadmap
