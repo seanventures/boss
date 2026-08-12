@@ -668,7 +668,7 @@ describe("ProviderOps feed", async () => {
     expect(feed.blockedReason).toContain("Provider accounts: HTTP 503");
   });
 
-  it("keeps community catalog reachable and skips paid write-automation endpoints", async () => {
+  it("loads full ProviderOps kernel on community (BYOK + self-managed infra)", async () => {
     mockCommunityEdition();
     vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({
       items: [
@@ -696,28 +696,34 @@ describe("ProviderOps feed", async () => {
       items: [],
     });
     mockEmptySecondaryEndpoints();
+    vi.mocked(client.listChangeSets).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listWorkerPools).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listScalePlans).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
 
     const feed = await fetchProviderOpsFeed();
 
     expect(feed.apiReachable).toBe(true);
     expect(feed.editionId).toBe("community");
-    expect(feed.paidWriteAutomationAvailable).toBe(false);
+    expect(feed.paidWriteAutomationAvailable).toBe(true);
     expect(feed.partialFailures).toEqual([]);
-    expect(feed.editionLimitations).toContain(
-      "ChangeSets, worker pools, and scale automation require Cloud/Enterprise",
-    );
+    expect(feed.editionLimitations).toEqual([]);
     expect(feed.providerDefinitions).toHaveLength(1);
-    expect(feed.changeSets).toEqual([]);
-    expect(feed.workerPools).toEqual([]);
-    expect(feed.scalePlans).toEqual([]);
-    expect(client.listChangeSets).not.toHaveBeenCalled();
-    expect(client.listWorkerPools).not.toHaveBeenCalled();
-    expect(client.listScalePlans).not.toHaveBeenCalled();
+    expect(client.listChangeSets).toHaveBeenCalled();
+    expect(client.listWorkerPools).toHaveBeenCalled();
+    expect(client.listScalePlans).toHaveBeenCalled();
   });
 
-  it("classifies paid-route 404s as edition limitations, not outages", async () => {
-    // Edition probe failed — still try paid routes; 404 must not hard-fail feed.
-    vi.mocked(client.getEdition).mockRejectedValueOnce(new Error("edition down"));
+  it("treats ChangeSet/pool/scale failures as partialFailures, not edition blocks", async () => {
+    mockCommunityEdition();
     vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({
       items: [
         {
@@ -731,41 +737,6 @@ describe("ProviderOps feed", async () => {
         },
       ],
     });
-    vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
-      project_id: "boss-dogfood",
-      items: [],
-    });
-    mockEmptySecondaryEndpoints();
-    vi.mocked(client.listChangeSets).mockRejectedValueOnce(
-      new BossApiError("not mounted", 404, {}),
-    );
-    vi.mocked(client.listWorkerPools).mockRejectedValueOnce(
-      new BossApiError("not mounted", 404, {}),
-    );
-    vi.mocked(client.listScalePlans).mockRejectedValueOnce(
-      new BossApiError("not mounted", 404, {}),
-    );
-
-    const feed = await fetchProviderOpsFeed();
-
-    expect(feed.apiReachable).toBe(true);
-    expect(feed.paidWriteAutomationAvailable).toBe(false);
-    expect(feed.partialFailures).toEqual([]);
-    expect(feed.editionLimitations.some((item) => item.includes("ChangeSets"))).toBe(
-      true,
-    );
-    expect(feed.editionLimitations.some((item) => item.includes("Worker pools"))).toBe(
-      true,
-    );
-    expect(feed.editionLimitations.some((item) => item.includes("Scale plans"))).toBe(
-      true,
-    );
-    expect(feed.providerDefinitions[0]?.provider).toBe("aws");
-  });
-
-  it("treats non-404 paid failures as partialFailures when edition is paid", async () => {
-    mockPaidEdition();
-    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({ items: [] });
     vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
       project_id: "boss-dogfood",
       items: [],
@@ -789,5 +760,6 @@ describe("ProviderOps feed", async () => {
     expect(feed.partialFailures).toContain("ChangeSets: HTTP 503");
     expect(feed.partialFailures).toContain("Worker pools: HTTP 503");
     expect(feed.partialFailures).toContain("Scale plans: HTTP 503");
+    expect(feed.providerDefinitions[0]?.provider).toBe("aws");
   });
 });

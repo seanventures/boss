@@ -59,11 +59,6 @@ def test_paid_editions_mount_both_router_sets(edition):
         "/v1/marketplace/listings",
         "/v1/account-connect/link",
         "/v1/self-improvement/proposals",
-        # Write-automation / fleet scale stay paid; credentials do not.
-        "/v1/changesets",
-        "/v1/worker-pools",
-        "/v1/autoscaler/plans",
-        "/v1/resource-janitor/run",
     ],
 )
 def test_paid_surface_classification(path):
@@ -91,9 +86,8 @@ def test_paid_surface_classification(path):
         "/v1/deployment-runs",
         "/v1/deployment-promotions",
         "/v1/deployment-environment-policies",
-        # Community must accept third-party model keys and infra API keys, plus
-        # basic ProviderOps read inventory (PRD Community). Catalog + accounts +
-        # resources were paid and left System Configuration 404ing on dogfood.
+        # Community is fully functional for BYOK + self-managed infra: keys, inventory,
+        # ChangeSets (actuate your own cloud), local worker pools / autoscaler / janitor.
         "/v1/provider-definitions",
         "/v1/providers",
         "/v1/providers/pa_1/test",
@@ -101,20 +95,30 @@ def test_paid_surface_classification(path):
         "/v1/resources",
         "/v1/resources/sync",
         "/v1/resource-receipts",
+        "/v1/changesets",
+        "/v1/changesets/cs_x/approve",
+        "/v1/changesets/cs_x/apply",
+        "/v1/worker-pools",
+        "/v1/autoscaler/plans",
+        "/v1/resource-janitor/run",
         "/v1/entitlements/sources",
         "/v1/secret-refs",
+        "/v1/provider-health",
+        "/v1/costs",
+        "/v1/drift-reports",
+        "/v1/reconciliation-runs",
     ],
 )
 def test_community_surface_classification(path):
     assert not is_enterprise_path(path)
 
 
-def test_community_provider_keys_and_inventory_are_one_edition():
-    """Credential setup must not land on the opposite side of the licence from inventory.
+def test_community_byok_self_infra_is_one_edition():
+    """BYOK + self-managed infra must not split keys from actuation.
 
-    Mission Control System Configuration fans out catalog + accounts + resources together.
-    When only deploy was free and connections were paid, the console looked broken rather
-    than edition-gated. Keys without a catalog/test path are the same class of bug.
+    Community self-hosters bring their own model and infra API keys and manage their own
+    cloud. Catalog, accounts, inventory, ChangeSets, and local fleets are one workflow.
+    Gating only ChangeSets left keys stored but unusable through BOSS.
     """
     workflow = [
         "/v1/provider-definitions",
@@ -122,6 +126,11 @@ def test_community_provider_keys_and_inventory_are_one_edition():
         "/v1/providers/pa_x/test",
         "/v1/resources",
         "/v1/resource-receipts",
+        "/v1/changesets",
+        "/v1/changesets/cs_x/apply",
+        "/v1/worker-pools",
+        "/v1/autoscaler/plans",
+        "/v1/resource-janitor/run",
         "/v1/provider-health",
     ]
     assert {is_enterprise_path(p) for p in workflow} == {False}
@@ -187,20 +196,20 @@ def test_real_community_app_omits_paid_routes():
                 "assert '/v1/mcp/servers' in paths; "
                 "assert '/v1/skills' in paths; "
                 "assert '/v1/events' in paths; "
-                # Community: third-party + infra API key surfaces (catalog, accounts, inventory).
+                # Community BYOK + self-managed infra (full ProviderOps kernel).
                 "assert '/v1/provider-definitions' in paths; "
                 "assert '/v1/providers' in paths; "
                 "assert '/v1/resources' in paths; "
                 "assert '/v1/resource-receipts' in paths; "
-                # Paid: identity, marketplace, write-automation / fleet scale.
+                "assert '/v1/changesets' in paths; "
+                "assert '/v1/worker-pools' in paths; "
+                "assert '/v1/autoscaler/plans' in paths; "
+                "assert '/v1/resource-janitor/run' in paths; "
+                # Paid: hosted identity, marketplace, self-improvement automation.
                 "assert '/v1/account-connect/link' not in paths; "
                 "assert '/v1/enterprise/clusters' not in paths; "
                 "assert '/v1/marketplace/listings' not in paths; "
-                "assert '/v1/self-improvement/proposals' not in paths; "
-                "assert '/v1/changesets' not in paths; "
-                "assert '/v1/worker-pools' not in paths; "
-                "assert '/v1/autoscaler/plans' not in paths; "
-                "assert '/v1/resource-janitor/run' not in paths"
+                "assert '/v1/self-improvement/proposals' not in paths"
             ),
         ],
         cwd=ROOT,

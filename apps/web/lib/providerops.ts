@@ -319,10 +319,10 @@ export type ProviderOpsSummary = {
 };
 
 /**
- * Paid ProviderOps write-automation surface (enterprise router prefixes).
- * Community mounts catalog/accounts/inventory; ChangeSets, worker-pools, and
- * autoscaler remain Cloud/Enterprise. HTTP 404 on those routes is an edition
- * limitation, not a control-plane outage.
+ * Community is fully functional for BYOK + self-managed infra: ChangeSets,
+ * worker pools, and scale plans are available on community (not Cloud-only).
+ * These helpers remain for feed metadata / older UI copy; they no longer skip
+ * ProviderOps kernel calls by edition.
  */
 export const PAID_WRITE_AUTOMATION_LABELS = [
   "ChangeSets",
@@ -330,15 +330,9 @@ export const PAID_WRITE_AUTOMATION_LABELS = [
   "Scale plans",
 ] as const;
 
-const PAID_EDITIONS = new Set([
-  "cloud",
-  "enterprise",
-  "enterprise_cloud",
-  "enterprise_self_hosted",
-]);
-
-export function isPaidWriteAutomationEdition(editionId?: string | null): boolean {
-  return PAID_EDITIONS.has(String(editionId ?? "").trim().toLowerCase());
+/** @deprecated ProviderOps write kernel is community; always true. */
+export function isPaidWriteAutomationEdition(_editionId?: string | null): boolean {
+  return true;
 }
 
 export function isPaidWriteAutomationLabel(label: string): boolean {
@@ -762,9 +756,6 @@ function summarizeProviderOps(
   };
 }
 
-const COMMUNITY_PAID_LIMITATION_COPY =
-  "ChangeSets, worker pools, and scale automation require Cloud/Enterprise";
-
 export function emptyProviderOpsFeed(
   reason?: string,
   projectId = PROJECT_ID,
@@ -776,7 +767,8 @@ export function emptyProviderOpsFeed(
     blockedReason: reason,
     partialFailures: [],
     editionLimitations: [],
-    paidWriteAutomationAvailable: false,
+    // BYOK community mounts the full ProviderOps kernel; only a total outage is false.
+    paidWriteAutomationAvailable: true,
     refreshedAt: new Date().toISOString(),
     providerDefinitions: [],
     providerAccounts: [],
@@ -829,25 +821,24 @@ export async function fetchProviderOpsFeed(
 ): Promise<ProviderOpsFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
 
-  // Best-effort edition probe: on community, skip paid write-automation calls so
-  // System Configuration does not look like a 404 outage when catalog/accounts work.
+  // Edition is informational only — community mounts the full BYOK ProviderOps kernel.
   let editionId: string | undefined;
-  let paidWriteAutomationAvailable = true;
   try {
     const edition = await client.getEdition(resolvedProjectId);
     editionId = String(edition.edition_id ?? "").trim().toLowerCase() || undefined;
-    paidWriteAutomationAvailable = isPaidWriteAutomationEdition(editionId);
   } catch {
-    // Edition probe failed — still attempt paid routes; classify 404s as limitations.
-    paidWriteAutomationAvailable = true;
+    // Optional probe; feed still loads kernel surfaces.
   }
+  const paidWriteAutomationAvailable = true;
+  const editionLimitations: string[] = [];
 
-  const communityResults = await Promise.allSettled([
+  const results = await Promise.allSettled([
     client.listProviderDefinitions(),
     client.listProviderAccounts(resolvedProjectId),
     client.listExternalResources(resolvedProjectId, { limit: 50 }),
     client.listProviderCosts(resolvedProjectId, 50),
     client.listProviderCostAnomalies(resolvedProjectId, 25),
+    client.listChangeSets(resolvedProjectId, undefined, 25),
     client.listResourceReceipts(resolvedProjectId, 25),
     client.listDeploymentTargets(resolvedProjectId),
     client.listDeploymentEnvironmentPolicies(resolvedProjectId),
@@ -856,6 +847,8 @@ export async function fetchProviderOpsFeed(
     client.listProviderHealth(resolvedProjectId, { limit: 25 }),
     client.listDriftReports(resolvedProjectId, 25),
     client.listReconciliationRuns(resolvedProjectId, 25),
+    client.listWorkerPools(resolvedProjectId),
+    client.listScalePlans(resolvedProjectId, 25),
   ] as const);
 
   const [
@@ -864,6 +857,7 @@ export async function fetchProviderOpsFeed(
     resourcesResult,
     costsResult,
     costAnomaliesResult,
+    changeSetsResult,
     resourceReceiptsResult,
     deploymentTargetsResult,
     deploymentPoliciesResult,
@@ -872,39 +866,9 @@ export async function fetchProviderOpsFeed(
     providerHealthResult,
     driftReportsResult,
     reconciliationRunsResult,
-  ] = communityResults;
-
-  let changeSetsResult: PromiseSettledResult<{
-    project_id: string;
-    items: ChangeSetSummary[];
-  }>;
-  let workerPoolsResult: PromiseSettledResult<{
-    project_id: string;
-    items: WorkerPoolSummary[];
-  }>;
-  let scalePlansResult: PromiseSettledResult<{
-    project_id: string;
-    items: ScalePlanSummary[];
-  }>;
-
-  const editionLimitations: string[] = [];
-  if (paidWriteAutomationAvailable) {
-    const paidResults = await Promise.allSettled([
-      client.listChangeSets(resolvedProjectId, undefined, 25),
-      client.listWorkerPools(resolvedProjectId),
-      client.listScalePlans(resolvedProjectId, 25),
-    ] as const);
-    [changeSetsResult, workerPoolsResult, scalePlansResult] = paidResults;
-  } else {
-    editionLimitations.push(COMMUNITY_PAID_LIMITATION_COPY);
-    const skipped = {
-      status: "fulfilled" as const,
-      value: { project_id: resolvedProjectId, items: [] as never[] },
-    };
-    changeSetsResult = skipped;
-    workerPoolsResult = skipped;
-    scalePlansResult = skipped;
-  }
+    workerPoolsResult,
+    scalePlansResult,
+  ] = results;
 
   const partialFailures: string[] = [];
   const read = <T>(
@@ -916,15 +880,6 @@ export async function fetchProviderOpsFeed(
       return result.value;
     }
     const reason = failureReason(result.reason);
-    // Paid write-automation 404s are SKU limits, not control-plane breakage.
-    if (isPaidWriteAutomationLabel(label) && isNotFoundFailure(result.reason)) {
-      paidWriteAutomationAvailable = false;
-      const note = `${label}: paid write-automation (Cloud/Enterprise)`;
-      if (!editionLimitations.includes(note) && !editionLimitations.includes(COMMUNITY_PAID_LIMITATION_COPY)) {
-        editionLimitations.push(note);
-      }
-      return fallback;
-    }
     partialFailures.push(`${label}: ${reason}`);
     return fallback;
   };

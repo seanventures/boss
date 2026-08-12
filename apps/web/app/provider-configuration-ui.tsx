@@ -1336,9 +1336,9 @@ function HealthView({ feed }: { feed: ProviderOpsFeed }) {
             <div className="provider-empty compact">
               <Gauge size={22} aria-hidden />
               <p>
-                {feed.paidWriteAutomationAvailable === false
-                  ? "Worker pools and scale automation are Cloud/Enterprise write-automation features. Community keeps connections and inventory; fleet scale stays on paid editions."
-                  : "No worker pools or scale plans are recorded."}
+                No worker pools or scale plans are recorded. On community you can
+                still register local pools and scale plans against your own infra
+                once keys and targets are connected.
               </p>
             </div>
           ) : null}
@@ -1529,24 +1529,37 @@ export function ProviderConfigurationSuite({
 
   const editionLabel = feed.editionId
     ? titleCase(feed.editionId)
-    : "this";
+    : "Community";
   const hasEditionLimits = (feed.editionLimitations?.length ?? 0) > 0;
   const hasPartialFailures = feed.partialFailures.length > 0;
+  const isCommunity =
+    !feed.editionId || String(feed.editionId).toLowerCase() === "community";
 
   return (
     <div className="provider-suite" id="provider-connections">
+      {isCommunity ? (
+        <div className="provider-notice" role="status">
+          <Lock size={17} aria-hidden />
+          <span>
+            {editionLabel} is fully functional when operators bring their own
+            keys: attach model and infra API keys, sync inventory,
+            plan/approve/apply ChangeSets, and run local worker pools against
+            infrastructure you manage. Hosted SSO, marketplace, and managed
+            fleets stay on Cloud / Enterprise.
+          </span>
+        </div>
+      ) : null}
       {hasEditionLimits ? (
         <div className="provider-notice" role="status">
           <Lock size={17} aria-hidden />
           <span>
-            Paid write-automation unavailable on {editionLabel} edition
+            Edition note
             {feed.editionLimitations.length === 1
               ? `: ${feed.editionLimitations[0]}`
               : feed.editionLimitations.length > 1
                 ? `: ${feed.editionLimitations.join("; ")}`
                 : ""}
-            . Provider catalog, connections, and inventory remain available —
-            this is not a control-plane outage.
+            .
           </span>
         </div>
       ) : null}
