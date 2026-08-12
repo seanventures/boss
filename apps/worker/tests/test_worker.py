@@ -111,6 +111,25 @@ class FakeControlPlaneClient:
             },
         }
 
+    def run_orchestrator_next_move(self, payload):
+        self.calls.append(("run_orchestrator_next_move", payload))
+        return {
+            "status": "succeeded",
+            "summary": "Orchestrator advanced plan plan_test: 1 phase action(s).",
+            "plan_id": (payload.get("entity_id") or "plan_test"),
+            "receipt_id": "rcpt_next_move",
+            "actions": [
+                {
+                    "task_id": "tsk_phase_1",
+                    "status": "started",
+                    "classification": "implement",
+                    "job_kind": "code.task",
+                }
+            ],
+            "ready_task_ids": ["tsk_phase_1"],
+            "blocked_task_ids": [],
+        }
+
     def merge_pull_request(self, payload):
         self.calls.append(("merge_pull_request", payload))
         return {
@@ -322,6 +341,7 @@ def test_worker_capabilities_include_infra_job_kinds():
     assert "agent.pm.scope_brief" in supported
     assert "agent.infra_steward.infra_review" in supported
     assert "agent.model_spend_analyst.model_spend_brief" in supported
+    assert "agent.orchestrator.next_move" in supported
     assert "enterprise.marketplace.validate" in supported
     assert "providerops.sync.readonly" in supported
     assert "work_tracker.issue.sync" in supported
@@ -406,6 +426,108 @@ def test_run_worker_cycle_syncs_tracker_through_fenced_control_plane():
         },
     )
     assert client.calls[-1][0] == "complete"
+
+
+def test_run_worker_cycle_executes_orchestrator_next_move_via_control_plane():
+    leased_job = LeasedJob(
+        id="job_next_move",
+        project_id="boss-dogfood",
+        task_id="tsk_parent",
+        kind="agent.orchestrator.next_move",
+        payload={
+            "event_id": "evt_plan_dispatched",
+            "event_type": "plan.dispatched",
+            "entity_type": "plan",
+            "entity_id": "plan_test",
+            "event_data": {
+                "phase_task_ids": ["tsk_phase_1"],
+                "phase_count": 1,
+                "task_id": "tsk_parent",
+            },
+            "data_boundary": "internal",
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_next_move",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+    settings = SimpleNamespace(worker_id="worker-orch", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "run_orchestrator_next_move",
+        "complete",
+    ]
+    assert client.calls[2] == (
+        "run_orchestrator_next_move",
+        {
+            "project_id": "boss-dogfood",
+            "event_id": "evt_plan_dispatched",
+            "event_type": "plan.dispatched",
+            "entity_type": "plan",
+            "entity_id": "plan_test",
+            "event_data": {
+                "phase_task_ids": ["tsk_phase_1"],
+                "phase_count": 1,
+                "task_id": "tsk_parent",
+            },
+            "task_id": "tsk_parent",
+            "data_boundary": "internal",
+            "created_by_job_id": "job_next_move",
+            "worker_id": "worker-orch",
+            "lease_token": "lease_next_move",
+        },
+    )
+    complete = client.calls[-1]
+    assert complete[0] == "complete"
+    assert complete[4]["plan_id"] == "plan_test"
+    assert complete[4]["receipt_id"] == "rcpt_next_move"
+
+
+def test_orchestrator_next_move_failure_is_visible_not_silent():
+    leased_job = LeasedJob(
+        id="job_next_move_fail",
+        project_id="boss-dogfood",
+        task_id=None,
+        kind="agent.orchestrator.next_move",
+        payload={
+            "event_id": "evt_missing_plan",
+            "event_type": "plan.dispatched",
+            "entity_type": "plan",
+            "entity_id": "plan_missing",
+            "event_data": {},
+        },
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_fail",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(leased_job)
+
+    def fail_next_move(payload):
+        client.calls.append(("run_orchestrator_next_move", payload))
+        return {
+            "status": "failed",
+            "retryable": False,
+            "message": "orchestrator.next_move could not resolve a plan",
+        }
+
+    client.run_orchestrator_next_move = fail_next_move
+    settings = SimpleNamespace(worker_id="worker-orch", lease_ttl_seconds=60)
+
+    assert run_worker_cycle(client, settings) is True
+    assert [call[0] for call in client.calls] == [
+        "poll",
+        "heartbeat",
+        "run_orchestrator_next_move",
+        "fail",
+    ]
+    failure = client.calls[-1]
+    assert "could not resolve a plan" in failure[4]["message"]
+    assert failure[5] is False
 
 
 def test_run_worker_cycle_executes_budgeted_docs_update_job():
@@ -548,12 +670,16 @@ def test_worker_executes_reconciliation_and_does_not_double_finalize_lease():
 
 
 def test_agent_work_product_strategies_cover_initial_agent_capabilities():
-    # "agent.resume" is a control capability (resume a suspended agent run), not a
-    # work-product-producing agent kind, so it has no AGENT_WORK_PRODUCT_STRATEGIES entry.
+    # Control capabilities (resume, orchestrator next_move) are not work-product
+    # brief producers, so they have no AGENT_WORK_PRODUCT_STRATEGIES entry.
+    control_agent_kinds = {
+        "agent.resume",
+        "agent.orchestrator.next_move",
+    }
     agent_capabilities = [
         item
         for item in capabilities()
-        if item.startswith("agent.") and item != "agent.resume"
+        if item.startswith("agent.") and item not in control_agent_kinds
     ]
 
     assert len(agent_capabilities) == len(set(agent_capabilities))

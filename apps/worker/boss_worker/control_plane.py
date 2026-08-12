@@ -311,6 +311,14 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_orchestrator_next_move(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._client.post(
+            "/v1/orchestration/next-move/execute",
+            json=payload,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def fail(
         self,
         worker_id: str,

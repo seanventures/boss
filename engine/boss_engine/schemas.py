@@ -2045,6 +2045,22 @@ class DocsUpdateExecuteRequest(DocsUpdateRequest):
     created_by_job_id: Optional[str] = None
 
 
+class OrchestratorNextMoveExecuteRequest(BaseModel):
+    """Worker-only execution boundary for agent.orchestrator.next_move jobs."""
+
+    project_id: str
+    event_id: Optional[str] = None
+    event_type: Optional[str] = None
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    event_data: dict[str, Any] = Field(default_factory=dict)
+    task_id: Optional[str] = None
+    data_boundary: DataBoundary = "internal"
+    created_by_job_id: Optional[str] = None
+    worker_id: Optional[str] = None
+    lease_token: Optional[str] = None
+
+
 class OpsQueueJobItem(BaseModel):
     id: str
     project_id: str

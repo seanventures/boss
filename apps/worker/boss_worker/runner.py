@@ -294,6 +294,9 @@ def capabilities() -> list[str]:
         "agent.secrets_steward.secret_boundary_review",
         "agent.vp_agents.role_review",
         "agent.studio.execute",
+        # Control capability: advances a dispatched plan's ready phase tasks.
+        # Not a work-product brief (see AGENT_WORK_PRODUCT_STRATEGIES exclusion).
+        "agent.orchestrator.next_move",
         "a2a.dispatch",
         "enterprise.marketplace.validate",
         "providerops.sync.readonly",
@@ -669,6 +672,31 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
             raise RetryableJobError(
                 result.get("reason") or "Work-tracker sync failed."
             )
+        return result
+    if job.kind == "agent.orchestrator.next_move":
+        event_data = job.payload.get("event_data")
+        if not isinstance(event_data, dict):
+            event_data = {}
+        result = client.run_orchestrator_next_move(
+            {
+                "project_id": job.project_id,
+                "event_id": job.payload.get("event_id"),
+                "event_type": job.payload.get("event_type"),
+                "entity_type": job.payload.get("entity_type"),
+                "entity_id": job.payload.get("entity_id"),
+                "event_data": event_data,
+                "task_id": job.task_id or event_data.get("task_id"),
+                "data_boundary": job.payload.get("data_boundary", job.data_boundary),
+                "created_by_job_id": job.id,
+                "worker_id": client.worker_id,
+                "lease_token": job.lease_token,
+            }
+        )
+        if result.get("status") in {"failed", "blocked"}:
+            error = result.get("message") or "Orchestrator next_move failed."
+            if result.get("retryable"):
+                raise RetryableJobError(error)
+            raise RuntimeError(error)
         return result
     if job.kind.startswith("agent.") and job.kind != "agent.resume":
         return build_agent_brief_result(job)

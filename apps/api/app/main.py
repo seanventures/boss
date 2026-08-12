@@ -185,6 +185,7 @@ from .schemas import (
     CIConfigProposalResponse,
     DocsUpdateExecuteRequest,
     DocsUpdateRequest,
+    OrchestratorNextMoveExecuteRequest,
     EntitlementSourceConnectRequest,
     EntitlementSourceDisconnectRequest,
     EntitlementSourceListResponse,
@@ -585,6 +586,7 @@ from .services.commercial import (
 from .services.core import emit_event, make_id
 from .services.deadletters import DeadletterRemediationService
 from .services.docs_agent import DocsUpdateService
+from .services.orchestrator_next_move import OrchestratorNextMoveService
 from .services.decisions import (
     DecisionNotFoundError,
     DecisionService,
@@ -773,6 +775,7 @@ intake = CommandIntakeService(settings)
 orchestration_agent = AgentService(settings)
 jobs = JobLeaseService(settings)
 docs_updates = DocsUpdateService(settings)
+orchestrator_next_move = OrchestratorNextMoveService(settings)
 secret_refs = SecretRefService()
 receipts = ReceiptService()
 webhooks = WebhookService(settings)
@@ -8686,6 +8689,35 @@ def dispatch_plan(plan_id: str, payload: PlanDispatchRequest) -> dict:
             )
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/v1/orchestration/next-move/execute")
+def execute_orchestrator_next_move(
+    payload: OrchestratorNextMoveExecuteRequest,
+) -> dict[str, Any]:
+    """Worker-only boundary for leased agent.orchestrator.next_move jobs (BOSS-345)."""
+    with begin(engine) as connection:
+        try:
+            return orchestrator_next_move.execute(
+                connection,
+                project_id=payload.project_id,
+                event_id=payload.event_id,
+                event_type=payload.event_type,
+                entity_type=payload.entity_type,
+                entity_id=payload.entity_id,
+                event_data=payload.event_data,
+                task_id=payload.task_id,
+                data_boundary=payload.data_boundary,
+                created_by_job_id=payload.created_by_job_id,
+                worker_id=payload.worker_id,
+                lease_token=payload.lease_token,
+            )
+        except ValueError as error:
+            return {
+                "status": "failed",
+                "retryable": False,
+                "message": str(error),
+            }
 
 
 @app.get("/v1/meetings", response_model=MeetingListResponse)

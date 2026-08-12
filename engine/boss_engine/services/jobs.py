@@ -1083,6 +1083,16 @@ class JobLeaseService:
                 "provider_ref": result.get("provider_ref"),
             }
 
+        if job_row["kind"] == "agent.orchestrator.next_move":
+            # Control-plane already created a receipt + orchestration events.
+            return {
+                "receipt_id": result.get("receipt_id"),
+                "plan_id": result.get("plan_id"),
+                "actions": result.get("actions") or [],
+                "ready_task_ids": result.get("ready_task_ids") or [],
+                "blocked_task_ids": result.get("blocked_task_ids") or [],
+            }
+
         if str(job_row["kind"]).startswith("agent."):
             payload = job_row["payload"] or {}
             agent_module = result.get("agent_module") or payload.get("agent_module") or {}
