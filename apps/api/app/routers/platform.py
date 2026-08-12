@@ -74,6 +74,12 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    try:
+        from .provider_conformance import router as provider_conf_router
+        app.include_router(provider_conf_router)
+    except ImportError:
+        pass
+
     # Concurrency & scheduling governance (BOSS-100)
     try:
         from .concurrency import router as concurrency_router
