@@ -3196,10 +3196,94 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Change BOSS only through governed rollout steps.</h2>
             </div>
             <p className="status-meta">
-              Every self-improvement now becomes a task, proposal artifact, approval gate, canary report, rollout record, and rollback record.
+              {selfImprovement.surfaceAvailable
+                ? "Every self-improvement becomes a task, proposal artifact, approval gate, canary report, rollout record, and rollback record."
+                : selfImprovement.enterpriseOnly
+                  ? "Proposal create / canary / rollout are Enterprise-only on this control plane. Community surfaces improvement programs only when that API is mounted."
+                  : "Self-improvement surface is not available on this control plane."}
             </p>
           </div>
 
+          {!selfImprovement.surfaceAvailable ? (
+            <div className="stack-grid">
+              <article className="stack-card" data-testid="self-improvement-unavailable">
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <h3 style={{ margin: 0 }}>Self-improvement proposals</h3>
+                  <span
+                    style={{
+                      fontSize: 10.5,
+                      color: "#d29922",
+                      border: "1px solid #d29922",
+                      padding: "1px 8px",
+                      borderRadius: 999,
+                    }}
+                  >
+                    {selfImprovement.enterpriseOnly ? "Enterprise only" : "Unavailable"}
+                  </span>
+                </div>
+                <p className="detail">
+                  {selfImprovement.blockedReason ??
+                    "Self-improvement proposal API is unavailable."}
+                </p>
+                {selfImprovement.editionId ? (
+                  <p className="detail">
+                    Detected edition:{" "}
+                    <b style={{ color: "var(--ink-soft)" }}>{selfImprovement.editionId}</b>
+                    {selfImprovement.enterpriseOnly
+                      ? " — set BOSS_EDITION to an enterprise/cloud edition to mount /v1/self-improvement/*."
+                      : null}
+                  </p>
+                ) : null}
+                <p className="detail">
+                  Create, canary, staged rollout, and rollback CTAs are hidden so community
+                  dogfood does not present buttons that 404.
+                </p>
+              </article>
+
+              <article className="stack-card" data-testid="improvement-programs-panel">
+                <h3>Improvement programs</h3>
+                <p className="detail">
+                  Community-class trial ledger at{" "}
+                  <code className="mono">/v1/improvement-programs</code>. Promote into SIM
+                  proposals only when the enterprise surface is mounted.
+                </p>
+                {!selfImprovement.programsApiReachable ? (
+                  <p className="detail">
+                    {selfImprovement.programsBlockedReason ??
+                      "Improvement programs API is unavailable."}
+                  </p>
+                ) : selfImprovement.improvementPrograms.length === 0 ? (
+                  <p className="detail">
+                    No improvement programs recorded yet. Programs pin QA baselines and
+                    deterministic trial policy without requiring enterprise SIM routes.
+                  </p>
+                ) : (
+                  <div className="feed-list">
+                    {selfImprovement.improvementPrograms.map((program) => (
+                      <div className="feed-row" key={program.id}>
+                        <div>
+                          <h4>{program.name}</h4>
+                          <p className="detail">
+                            {program.status}
+                            {program.updatedAt
+                              ? ` / ${formatDateTime(program.updatedAt)}`
+                              : ""}
+                          </p>
+                          <p className="detail">{program.objective}</p>
+                          {program.baselineEvaluationId ? (
+                            <p className="detail">
+                              Baseline: {program.baselineEvaluationId}
+                            </p>
+                          ) : null}
+                        </div>
+                        <code className="mono">{program.id}</code>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </article>
+            </div>
+          ) : (
           <div className="stack-grid">
             <article className="stack-card">
               <h3>Propose an improvement</h3>
@@ -3480,6 +3564,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
+          )}
         </section>
 
         <section className="panel-stack">
