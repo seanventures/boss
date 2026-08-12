@@ -163,6 +163,9 @@ paths:
   /v1/cloud/workers:
     get:
       summary: Managed worker fabric status (honest planned until fleets ship)
+      description: >
+        Includes local hybrid enrollments when present. Never claims
+        managed available_now=true. Elastic fleets remain planned.
       parameters:
         - name: project_id
           in: query
@@ -170,7 +173,139 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Managed workers availability and enrollment honesty
+          description: Managed workers availability, local enrollments, honesty flags
+  /v1/cloud/workers/enroll:
+    post:
+      summary: Enroll a local worker node for hybrid attach (receipted)
+      description: >
+        Requires Cloud link via Easy Connect. Enrolls a local worker for hybrid
+        attach only — does not provision elastic managed fleets.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, worker_node_id]
+              properties:
+                project_id: { type: string }
+                worker_node_id: { type: string }
+                display_name: { type: string }
+                capabilities:
+                  type: array
+                  items: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201':
+          description: Local worker enrolled with receipt
+        '404':
+          description: Not linked to BOSS Cloud
+        '422':
+          description: Missing project_id or worker_node_id
+  /v1/cloud/sync:
+    post:
+      summary: Sync hosted Account Connect entitlements after Cloud link
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string }
+                hosted_org_id: { type: string }
+                actor: { type: string, default: ceo }
+      responses:
+        '200':
+          description: Entitlements synced from hosted Account Connect
+        '404':
+          description: Not linked (blocked_reason cloud_not_linked)
+        '409':
+          description: Account Connect URL missing or misconfigured
+        '502':
+          description: Hosted Account Connect sync failed
+  /v1/cloud/entitlements:
+    get:
+      summary: List effective entitlements (local + hosted when linked)
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: include_inactive
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Local and hosted entitlement grants
+  /v1/cloud/team-invites:
+    get:
+      summary: List local team invite records when Cloud-linked
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Team invite records
+        '404':
+          description: Not linked to BOSS Cloud
+    post:
+      summary: Create hosted team invite via Account Connect when linked
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, email]
+              properties:
+                project_id: { type: string }
+                email: { type: string }
+                display_name: { type: string }
+                role_keys:
+                  type: array
+                  items: { type: string }
+                permissions:
+                  type: array
+                  items: { type: string }
+                metadata: { type: object }
+                actor: { type: string, default: ceo }
+      responses:
+        '201':
+          description: Team invite created or blocked with receipt
+        '404':
+          description: Not linked to BOSS Cloud
+  /v1/cloud/marketplace:
+    get:
+      summary: List hosted marketplace packs when linked
+      description: >
+        When unlinked returns 200 with empty items and blocked_reason=cloud_not_linked.
+        Does not require paid edition mount — always available under /v1/cloud/*.
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: include_inactive
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 50 }
+      responses:
+        '200':
+          description: Marketplace listings or empty+blocked when unlinked
   /v1/cloud/easy-connect:
     post:
       summary: Start Easy Connect from self-hosted Community to BOSS Cloud

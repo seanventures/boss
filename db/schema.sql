@@ -2294,6 +2294,25 @@ CREATE TABLE IF NOT EXISTS worker_pools (
 CREATE INDEX IF NOT EXISTS idx_worker_pools_project
   ON worker_pools(project_id, status, kind);
 
+-- Local hybrid worker enrollments after Cloud Easy Connect (not managed fleets).
+CREATE TABLE IF NOT EXISTS cloud_worker_enrollments (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  account_connect_org_id TEXT REFERENCES account_connect_orgs(id) ON DELETE SET NULL,
+  worker_node_id TEXT NOT NULL,
+  display_name TEXT,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'enrolled',
+  receipt_id TEXT,
+  enrolled_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, worker_node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cloud_worker_enrollments_project
+  ON cloud_worker_enrollments(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS scale_plans (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),

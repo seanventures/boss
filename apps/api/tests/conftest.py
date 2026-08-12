@@ -128,6 +128,7 @@ def clean_tables(engine):
             "account_connect_team_invites",
             "hosted_marketplace_pack_listings",
             "hosted_marketplace_sync_runs",
+            "cloud_worker_enrollments",
             "license_entitlements",
             "account_connect_orgs",
             "enterprise_scim_users",

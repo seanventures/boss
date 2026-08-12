@@ -6048,10 +6048,104 @@ export function createBossApiClient(config: BossApiClientConfig) {
         available_now: boolean;
         cloud_eligible: boolean;
         linked: boolean;
+        local_enrollments?: Array<Record<string, unknown>>;
         managed_capacity: Record<string, unknown>;
+        hybrid?: Record<string, unknown>;
         enrollment: Record<string, unknown>;
       }>("GET", "/v1/cloud/workers", {
         query: { project_id: projectId },
+      });
+    },
+    enrollCloudWorker(payload: {
+      project_id: string;
+      worker_node_id: string;
+      display_name?: string;
+      capabilities?: string[];
+      metadata?: Record<string, unknown>;
+      actor?: string;
+    }) {
+      return request<{
+        id: string;
+        project_id: string;
+        worker_node_id: string;
+        status: string;
+        receipt_id?: string | null;
+        managed_fleets_available: boolean;
+        managed_fleet?: boolean;
+        message?: string;
+      }>("POST", "/v1/cloud/workers/enroll", { body: payload });
+    },
+    syncCloudEntitlements(payload: {
+      project_id: string;
+      hosted_org_id?: string;
+      actor?: string;
+    }) {
+      return request<{
+        project_id: string;
+        synced_entitlement_count: number;
+        edition: EditionStatusResponse;
+        linked: boolean;
+        blocked_reason?: string | null;
+      }>("POST", "/v1/cloud/sync", { body: payload });
+    },
+    listCloudEntitlements(projectId: string, includeInactive = false) {
+      return request<{
+        project_id: string;
+        linked: boolean;
+        edition_id: string;
+        items: Array<Record<string, unknown>>;
+        local_count: number;
+        hosted_count: number;
+        blocked_reason?: string | null;
+        message?: string;
+      }>("GET", "/v1/cloud/entitlements", {
+        query: {
+          project_id: projectId,
+          include_inactive: String(includeInactive),
+        },
+      });
+    },
+    createCloudTeamInvite(payload: {
+      project_id: string;
+      email: string;
+      display_name?: string;
+      role_keys?: string[];
+      permissions?: string[];
+      metadata?: Record<string, unknown>;
+      actor?: string;
+    }) {
+      return request<Record<string, unknown>>(
+        "POST",
+        "/v1/cloud/team-invites",
+        { body: payload },
+      );
+    },
+    listCloudTeamInvites(projectId: string, limit = 50) {
+      return request<{
+        project_id: string;
+        linked: boolean;
+        items: Array<Record<string, unknown>>;
+        blocked_reason?: string | null;
+      }>("GET", "/v1/cloud/team-invites", {
+        query: { project_id: projectId, limit: String(limit) },
+      });
+    },
+    listCloudMarketplace(
+      projectId: string,
+      options?: { includeInactive?: boolean; limit?: number },
+    ) {
+      return request<{
+        project_id: string;
+        linked: boolean;
+        items: Array<Record<string, unknown>>;
+        blocked_reason?: string | null;
+        message?: string | null;
+      }>("GET", "/v1/cloud/marketplace", {
+        query: {
+          project_id: projectId,
+          include_inactive: String(options?.includeInactive ?? false),
+          limit: String(options?.limit ?? 50),
+        },
       });
     },
     startCloudEasyConnect(payload: {
