@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -71,9 +72,37 @@ def _attr_name(node: ast.AST) -> str:
     return ""
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Compare FastAPI routes with api/openapi.yaml paths and methods."
+    )
+    parser.add_argument(
+        "--prefix",
+        action="append",
+        default=[],
+        help="Validate only routes beginning with this path prefix. Repeatable.",
+    )
+    return parser.parse_args()
+
+
+def within_prefixes(
+    routes: set[tuple[str, str]], prefixes: list[str]
+) -> set[tuple[str, str]]:
+    if not prefixes:
+        return routes
+    return {
+        route
+        for route in routes
+        if any(route[1].startswith(prefix.rstrip("/")) for prefix in prefixes)
+    }
+
+
 def main() -> int:
+    args = parse_args()
     impl = fastapi_routes()
     documented = openapi_routes()
+    impl = within_prefixes(impl, args.prefix)
+    documented = within_prefixes(documented, args.prefix)
     missing_in_openapi = sorted(impl - documented)
     extra_in_openapi = sorted(documented - impl)
     failed = False

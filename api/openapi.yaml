@@ -7375,6 +7375,285 @@ paths:
         '200': { description: Program baseline advanced and trial marked adopted }
         '403': { description: Actor lacks self-improvement management authority }
         '422': { description: Linked proposal has not completed rollout }
+  /v1/code-tasks:
+    get:
+      summary: List durable governed code-task runs for a project
+      responses:
+        '200': { description: Code-task runs with current phase, evidence, and delivery state }
+    post:
+      summary: Queue a budgeted, leased governed code task
+      responses:
+        '200': { description: Code-task run queued }
+        '422': { description: Invalid or unsafe task preflight }
+  /v1/code-tasks/{run_id}:
+    get:
+      summary: Read a durable code-task run and its governed evidence
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Code-task run detail }
+        '404': { description: Code task not found }
+  /v1/code-tasks/{run_id}/follow-up:
+    post:
+      summary: Queue a governed follow-up on an existing code-task lineage
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Follow-up code-task run queued }
+        '403': { description: Actor lacks task-create authority }
+        '422': { description: Instructions or lineage are invalid }
+  /v1/code-tasks/step:
+    post:
+      summary: Advance one leased code-task attempt from the worker boundary
+      responses:
+        '200': { description: Durable code-task state after one worker step }
+        '422': { description: Run or fencing input is invalid }
+  /v1/code-tasks/{run_id}/steer:
+    post:
+      summary: Record operator guidance for the next safe code-task stage boundary
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Guidance queued without restarting the run }
+        '403': { description: Actor lacks task-create authority }
+        '409': { description: Run is terminal }
+  /v1/code-tasks/{run_id}/live:
+    get:
+      summary: Read live, read-only tool activity for a code-task run
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Live transcript/activity snapshot or text stream }
+  /v1/code-tasks/{run_id}/activity:
+    get:
+      summary: Read persisted per-stage model activity and cost evidence
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Durable stage activity, latency, usage, and errors }
+  /v1/code-tasks/{run_id}/retry:
+    post:
+      summary: Retry an eligible governed code-task attempt
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retry recorded or explicitly blocked }
+  /v1/code-tasks/{run_id}/override:
+    post:
+      summary: Apply a governed operator override to a code-task gate
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Override decision and audit evidence }
+        '403': { description: Actor lacks approval authority }
+  /v1/code-tasks/{run_id}/deploy:
+    post:
+      summary: Propose deployment of a completed code-task output through the delivery boundary
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Governed deployment proposal or explicit block }
+  /v1/delivery/defaults:
+    get:
+      summary: Read project delivery defaults and configured safety posture
+      responses:
+        '200': { description: Delivery defaults }
+  /v1/delivery/repos:
+    get:
+      summary: List repositories available to the governed delivery boundary
+      responses:
+        '200': { description: Repository inventory }
+  /v1/delivery/repos/{owner}/{repo}/refs:
+    get:
+      summary: List visible refs for a repository through the delivery adapter
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string } }
+        - { name: repo, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Repository refs }
+  /v1/delivery/repos/{owner}/{repo}/apps:
+    get:
+      summary: List deployable apps discovered for a repository
+      parameters:
+        - { name: owner, in: path, required: true, schema: { type: string } }
+        - { name: repo, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deployable application inventory }
+  /v1/delivery/health:
+    get:
+      summary: Read delivery target health and current deployment readiness
+      responses:
+        '200': { description: Delivery health summary }
+  /v1/delivery/health/sweep:
+    post:
+      summary: Queue or run a bounded delivery-health sweep
+      responses:
+        '200': { description: Delivery-health observations and failures }
+  /v1/delivery/deploy:
+    post:
+      summary: Propose a policy-gated deployment from the delivery boundary
+      responses:
+        '200': { description: Deployment run or explicit policy block }
+        '403': { description: Actor lacks delivery authority }
+  /v1/delivery/deployments:
+    get:
+      summary: List durable deployment runs and their receipt-backed state
+      responses:
+        '200': { description: Deployment runs }
+  /v1/delivery/deployments/{deployment_run_id}:
+    get:
+      summary: Read one durable deployment run
+      parameters:
+        - { name: deployment_run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deployment run detail }
+        '404': { description: Deployment run not found }
+  /v1/delivery/deployments/{deployment_run_id}/execute:
+    post:
+      summary: Execute an approved deployment through its typed adapter boundary
+      parameters:
+        - { name: deployment_run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Receipted deployment execution result }
+        '403': { description: Actor lacks deployment authority }
+  /v1/delivery/deployments/{deployment_run_id}/redeploy:
+    post:
+      summary: Propose a governed redeploy using the recorded deployment lineage
+      parameters:
+        - { name: deployment_run_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Redeploy run or policy block }
+  /v1/delivery/targets/{target_id}/preflight:
+    get:
+      summary: Read a non-mutating deployment-target preflight
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Preflight readiness and required evidence }
+  /v1/delivery/pipeline:
+    get:
+      summary: Read the project delivery pipeline and current stage states
+      responses:
+        '200': { description: Delivery pipeline }
+  /v1/deployment-targets:
+    get:
+      summary: List project-scoped deployment targets
+      responses:
+        '200': { description: Deployment target inventory }
+    post:
+      summary: Create a typed deployment target with secret references only
+      responses:
+        '201': { description: Deployment target created }
+        '403': { description: Actor lacks deployment-target authority }
+  /v1/deployment-targets/{target_id}:
+    patch:
+      summary: Update a project-scoped deployment target
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deployment target updated }
+    delete:
+      summary: Retire a deployment target without bypassing its governance history
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Deployment target retired }
+  /v1/deployment-targets/{target_id}/teardown:
+    post:
+      summary: Propose typed teardown for a deployment target
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Teardown proposal or explicit block }
+  /v1/deployment-targets/{target_id}/purge:
+    post:
+      summary: Request governed purge of a retired deployment target
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Purge result or approval hold }
+  /v1/deployment-targets/{target_id}/bootstrap:
+    post:
+      summary: Bootstrap a deployment target through the typed provider boundary
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Bootstrap result or explicit block }
+  /v1/deployment-targets/{target_id}/secrets:
+    post:
+      summary: Attach write-only secret references to a deployment target
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Secret reference binding result }
+  /v1/deployment-targets/{target_id}/auto-deploy:
+    post:
+      summary: Configure or invoke policy-gated automatic deployment for a target
+      parameters:
+        - { name: target_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Auto-deploy state or explicit policy block }
+  /v1/sandboxes:
+    get:
+      summary: List sandbox host availability and project-scoped sandbox inventory
+      responses:
+        '200': { description: Sandbox host status and inventory }
+  /v1/sandboxes/helpers:
+    get:
+      summary: List sandbox helper capabilities and their availability
+      responses:
+        '200': { description: Sandbox helper inventory }
+  /v1/sandboxes/{sandbox_id}/tree:
+    get:
+      summary: Read a sandbox filesystem tree through the sandbox boundary
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox tree }
+  /v1/sandboxes/{sandbox_id}/file:
+    get:
+      summary: Read an authorized sandbox file through the sandbox boundary
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox file content }
+  /v1/sandboxes/{sandbox_id}/exec:
+    post:
+      summary: Execute an allowlisted sandbox operation through the governed boundary
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox execution result }
+        '403': { description: Actor or operation is not authorized }
+  /v1/sandboxes/{sandbox_id}/stats:
+    get:
+      summary: Read sandbox resource and process statistics
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox statistics }
+  /v1/sandboxes/{sandbox_id}/logs:
+    get:
+      summary: Read sandbox logs through the sandbox boundary
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox logs }
+  /v1/sandboxes/{sandbox_id}/preserve:
+    post:
+      summary: Preserve a sandbox for governed review or evidence retention
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox retention result }
+  /v1/sandboxes/{sandbox_id}:
+    delete:
+      summary: Destroy a sandbox through the governed sandbox boundary
+      parameters:
+        - { name: sandbox_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sandbox destruction result }
+        '403': { description: Actor lacks sandbox authority }
   /v1/code-tasks/{run_id}/feedback:
     get:
       summary: Read the durable feedback thread for a code-task lineage

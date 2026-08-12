@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live openapi-live-qa-parity
 
 install: install-node install-python
 
@@ -137,6 +137,13 @@ qa-live:
 		$(if $(BOSS_LIVE_GATE_OUTPUT),--output "$(BOSS_LIVE_GATE_OUTPUT)") \
 		$(if $(SKIP_METATRON),--skip-metatron) \
 		$(if $(SKIP_COMMAND),--skip-command)
+
+openapi-live-qa-parity: install-python
+	PYTHONPATH=.:engine $(PYTHON) scripts/validate_openapi_route_parity.py \
+		--prefix /v1/code-tasks \
+		--prefix /v1/delivery \
+		--prefix /v1/deployment-targets \
+		--prefix /v1/sandboxes
 
 sandbox-template:
 	mkdir -p tmp
