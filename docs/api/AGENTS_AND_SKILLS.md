@@ -10,7 +10,11 @@ Surfaces for defining agents, invoking skills, leasing models, and agent-to-agen
 | `/v1/agent-modules`, `/v1/packs` | Installable modules & packs |
 | `/v1/skills/*` | Skill registry, import/export, invoke |
 | `/v1/toolchain/*` | Model-agnostic toolchain intake |
-| `/v1/model-gateway/*` | Credentials, leases, invocations, usage |
+| `/v1/model-gateway/*` | Credentials, leases, invocations, usage, rate-limits |
+| `/v1/pipeline-adapters/*` | Pipeline adapter catalog |
+| `/v1/features/*`, `/v1/capability-manifest*` | Feature catalog & truthful capability manifest |
+| `/v1/learning/*`, `/v1/intent/*` | Learning loop corpus + intent classify/route |
+| `/v1/telemetry/*`, `/v1/change-correlation/*` | Telemetry query connectors + change correlation |
 | `/v1/a2a/*` | Channels, messages, poll, audit |
 | `/v1/shepherd/*` | Task shepherd overview / propose / sweep |
 | `/v1/agent-groups/*` | Governed multi-agent groups (also in governance) |
@@ -171,6 +175,111 @@ silently truncated; if they exceed the budget the pack returns
 `budget_status=blocked_authoritative_overflow`. Low-level packing remains at
 `POST /v1/toolchain/context/pack`.
 
+### Knowledge graph (RB-15)
+
+Service/infra topology substrate for RCA and learning write-back. Mutations
+require `providerops_manage`. Wraps `KnowledgeGraphService` (also used by
+`/v1/reliability/graph`).
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/v1/knowledge/graph/nodes?project_id=&kind=&node_key=` | List / fetch nodes (optional filters) |
+| `POST` | `/v1/knowledge/graph/nodes` | Upsert node (`kind`, `node_key`, optional `name`/`attrs`/`layer`) |
+| `POST` | `/v1/knowledge/graph/edges` | Upsert edge (`src_id`, `dst_id`, `kind`) |
+| `GET` | `/v1/knowledge/graph/subgraph?project_id=&kind=&node_key=&depth=` | BFS RCA context bundle |
+| `GET` | `/v1/knowledge/graph/neighbors?project_id=&node_id=` *or* `kind`+`node_key` | Adjacent nodes |
+| `POST` | `/v1/knowledge/graph/root-causes` | Record confirmed cause (`caused_by` edge) |
+| `GET` | `/v1/knowledge/graph/known-causes?project_id=&service=` | Prior causes ranked by confidence |
+| `POST` | `/v1/knowledge/graph/seed-from-infra` | Seed `resource` nodes from active `infra_resources` |
+
+```bash
+# Upsert a service + dependency, then read the subgraph
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\", \"actor\": \"ceo\",
+  \"kind\": \"service\", \"node_key\": \"checkout\", \"name\": \"Checkout API\"
+}" "$BOSS_API/v1/knowledge/graph/nodes" | jq .
+
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/knowledge/graph/subgraph?project_id=$PROJECT&kind=service&node_key=checkout&depth=2" | jq .
+
+# Learning write-back after a confirmed RCA
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\", \"actor\": \"ceo\",
+  \"service\": \"checkout\",
+  \"cause_kind\": \"deployment\", \"cause_key\": \"deploy-a5cb\",
+  \"cause_name\": \"deploy a5cb\", \"confidence\": 0.9
+}" "$BOSS_API/v1/knowledge/graph/root-causes" | jq .
+
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/knowledge/graph/known-causes?project_id=$PROJECT&service=checkout" | jq .
+```
+
+---
+
+## Feature catalog & capability manifest
+
+Truthful per-project feature inventory and the capability list agents should trust
+(instead of inventing tools that are not enabled).
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/v1/features?project_id=` | List catalog entries |
+| `POST` | `/v1/features` | Upsert entry by label |
+| `GET` | `/v1/features/{label}?project_id=` | Fetch one entry |
+| `POST` | `/v1/features/{label}/documented` | Mark documented (idempotent via `event_id`) |
+| `POST` | `/v1/features/seed` | Seed defaults for a project |
+| `GET` | `/v1/capability-manifest?project_id=` | JSON capability items (`enabled` + reason) |
+| `GET` | `/v1/capability-manifest/table` | Plain-text table (or JSON when `Accept: application/json`) |
+
+```bash
+curl -sS -H "Authorization: Bearer $BOSS_KEY" \
+  "$BOSS_API/v1/capability-manifest?project_id=$PROJECT" | jq .
+
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\", \"actor\": \"ceo\"
+}" "$BOSS_API/v1/features/seed" | jq .
+```
+
+---
+
+## Learning loop & intent routing
+
+Operator-facing write-back for agent examples and deterministic intent classify/route.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `POST` | `/v1/learning/examples` | Record a labeled example |
+| `GET` | `/v1/learning/corpus?project_id=&agent=` | List corpus rows |
+| `POST` | `/v1/learning/evaluate` | Score recent outcomes |
+| `POST` | `/v1/learning/suggest-tuning` | Propose tuning diffs (no auto-apply) |
+| `POST` | `/v1/intent/classify` | Classify free-text intent |
+| `POST` | `/v1/intent/route` | Classify + route to handler/skill |
+
+```bash
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\", \"actor\": \"ceo\",
+  \"agent\": \"docs-agent\", \"kind\": \"success\",
+  \"label\": \"api-docs-green\", \"outcome\": \"passed\"
+}" "$BOSS_API/v1/learning/examples" | jq .
+
+curl -sS "${AUTH[@]}" -d "{
+  \"project_id\": \"$PROJECT\", \"actor\": \"ceo\",
+  \"text\": \"open a PR for the budget forecast fix\"
+}" "$BOSS_API/v1/intent/route" | jq .
+```
+
+---
+
+## Telemetry query & change correlation
+
+Read-path connectors for logs/metrics/traces plus correlating incidents to recent changes.
+
+| Method | Path | Notes |
+|--------|------|--------|
+| `GET` | `/v1/telemetry/connectors/catalog` | Available connector kinds |
+| `POST` | `/v1/telemetry/query` | Query via a registered connector |
+| `POST` | `/v1/change-correlation/correlate` | Correlate signal window → changes |
+
 ---
 
 ## Model gateway
@@ -199,6 +308,9 @@ Concrete lease paths (see ROUTE_INDEX / OpenAPI for exact payloads):
 - `POST /v1/model-gateway/leases/{lease_id}/invocations`
 - `POST /v1/model-gateway/leases/{lease_id}/invocations/{invocation_id}/settle`
 - `POST /v1/model-gateway/leases/{lease_id}/release`
+- `GET` `/v1/model-gateway/rate-limits?project_id=` — current rate-limit windows
+- `POST` `/v1/model-gateway/rate-limits/report` — report provider throttle telemetry
+- `GET` `/v1/pipeline-adapters/catalog` — registered pipeline adapters
 
 Also: model route simulation via `/v1/model-route-decisions` and `/v1/model-route-decisions/simulate`.
 

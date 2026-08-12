@@ -359,3 +359,238 @@ class PagerDutySource:
         return []
     def comment_back(self, ref, body):
         return False
+
+
+# --- catalog + readiness (HTTP surface helpers) -------------------------------
+# Static inventory of connector kinds the control plane can construct. Distinct from
+# project-registered sources at GET /v1/reliability/sources.
+CONNECTOR_CATALOG: list[dict[str, Any]] = [
+    {
+        "kind": "prometheus",
+        "title": "Prometheus",
+        "capabilities": ["metrics", "alerts"],
+        "auth": "bearer_env",
+        "required_config": ["base_url"],
+        "optional_config": ["bearer_env", "step_seconds"],
+    },
+    {
+        "kind": "loki",
+        "title": "Loki",
+        "capabilities": ["logs"],
+        "auth": "bearer_env",
+        "required_config": ["base_url"],
+        "optional_config": ["bearer_env"],
+    },
+    {
+        "kind": "grafana",
+        "title": "Grafana (datasource proxy)",
+        "capabilities": ["metrics", "logs", "alerts"],
+        "auth": "bearer_env",
+        "required_config": ["base_url"],
+        "optional_config": ["prometheus_uid", "loki_uid", "bearer_env", "step_seconds"],
+    },
+    {
+        "kind": "splunk",
+        "title": "Splunk",
+        "capabilities": ["logs"],
+        "auth": "bearer_env",
+        "required_config": ["base_url"],
+        "optional_config": ["bearer_env", "index"],
+    },
+    {
+        "kind": "datadog",
+        "title": "Datadog",
+        "capabilities": ["logs", "metrics"],
+        "auth": "api_key_env+app_key_env",
+        "required_config": [],
+        "optional_config": ["base_url", "api_key_env", "app_key_env"],
+        "required_env_present": True,
+    },
+    {
+        "kind": "cloudwatch",
+        "title": "AWS CloudWatch",
+        "capabilities": ["logs"],
+        "auth": "aws_credential_chain",
+        "required_config": ["log_group"],
+        "optional_config": ["region"],
+    },
+    {
+        "kind": "pagerduty",
+        "title": "PagerDuty",
+        "capabilities": ["alerts"],
+        "auth": "token_env",
+        "required_config": [],
+        "optional_config": ["base_url", "token_env"],
+        "required_env_present": True,
+    },
+    {
+        "kind": "memory",
+        "title": "In-memory (tests / dogfood)",
+        "capabilities": ["logs", "metrics", "traces", "alerts"],
+        "auth": "none",
+        "required_config": [],
+        "optional_config": ["logs", "metrics", "traces", "alerts"],
+    },
+    {
+        "kind": "log_export",
+        "title": "Log export file",
+        "capabilities": ["logs"],
+        "auth": "none",
+        "required_config": ["path"],
+        "optional_config": [],
+    },
+]
+
+_QUERY_KINDS = frozenset({"metrics", "logs", "traces", "alerts"})
+
+
+class ConnectorNotReady(Exception):
+    """Fail-closed: connector config or required credentials are missing.
+
+    `status_code` is a hint for the HTTP layer (422 misconfig, 503 unavailable).
+    """
+
+    def __init__(self, message: str, *, status_code: int = 422):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
+def list_connector_catalog() -> list[dict[str, Any]]:
+    """Return the static catalog of connector kinds BOSS can construct."""
+    return [dict(item) for item in CONNECTOR_CATALOG]
+
+
+def ensure_connector_ready(spec: dict[str, Any]) -> None:
+    """Fail closed when a connector cannot be used safely — no silent empty/fake data.
+
+    Rules:
+    * unknown kind → 422
+    * missing required config fields (base_url, log_group, path, …) → 422
+    * bearer_env / token_env / api_key_env named but empty in the process env → 422
+    * connectors that always require credentials (Datadog, PagerDuty) with empty keys → 422
+    """
+    if not isinstance(spec, dict):
+        raise ConnectorNotReady("source spec must be an object", status_code=422)
+    kind = (spec.get("kind") or "").strip()
+    if not kind:
+        raise ConnectorNotReady("source.kind is required", status_code=422)
+
+    catalog = {c["kind"]: c for c in CONNECTOR_CATALOG}
+    if kind not in catalog:
+        raise ConnectorNotReady(f"unsupported connector kind {kind!r}", status_code=422)
+    meta = catalog[kind]
+
+    for field in meta.get("required_config") or []:
+        if not str(spec.get(field) or "").strip():
+            raise ConnectorNotReady(
+                f"connector {kind!r} requires config field {field!r}",
+                status_code=422,
+            )
+
+    # Optional named env-var auth: if the operator declared the name, the value must resolve.
+    for env_key in ("bearer_env", "token_env"):
+        env_name = (spec.get(env_key) or "").strip()
+        if env_name and not os.environ.get(env_name, "").strip():
+            raise ConnectorNotReady(
+                f"connector {kind!r}: env var {env_name!r} ({env_key}) is not set",
+                status_code=422,
+            )
+
+    if kind == "datadog":
+        api_env = (spec.get("api_key_env") or "DD_API_KEY").strip()
+        app_env = (spec.get("app_key_env") or "DD_APP_KEY").strip()
+        missing = [n for n in (api_env, app_env) if not os.environ.get(n, "").strip()]
+        if missing:
+            raise ConnectorNotReady(
+                f"connector 'datadog' requires credentials in env: {', '.join(missing)}",
+                status_code=422,
+            )
+
+    if kind == "pagerduty":
+        token_env = (spec.get("token_env") or "PAGERDUTY_TOKEN").strip()
+        if not os.environ.get(token_env, "").strip():
+            raise ConnectorNotReady(
+                f"connector 'pagerduty' requires credentials in env: {token_env}",
+                status_code=422,
+            )
+
+    if kind == "grafana":
+        if not (spec.get("prometheus_uid") or spec.get("loki_uid")):
+            raise ConnectorNotReady(
+                "connector 'grafana' requires prometheus_uid and/or loki_uid",
+                status_code=422,
+            )
+
+
+def serialize_query_result(kind: str, rows: list[Any]) -> list[dict[str, Any]]:
+    """Canonical shapes → JSON-friendly dicts for the HTTP response."""
+    out: list[dict[str, Any]] = []
+    if kind == "metrics":
+        for series in rows:
+            out.append({
+                "name": series.name,
+                "labels": dict(series.labels or {}),
+                "points": [{"ts": p.ts, "value": p.value} for p in (series.points or [])],
+            })
+    elif kind == "logs":
+        for event in rows:
+            out.append({
+                "ts": event.ts,
+                "message": event.message,
+                "service": event.service,
+                "level": event.level,
+                "fields": dict(getattr(event, "fields", None) or {}),
+            })
+    elif kind == "traces":
+        for span in rows:
+            out.append({
+                "trace_id": span.trace_id,
+                "name": span.name,
+                "service": span.service,
+                "duration_ms": span.duration_ms,
+                "status": span.status,
+            })
+    elif kind == "alerts":
+        for alert in rows:
+            out.append({
+                "id": alert.id,
+                "title": alert.title,
+                "service": alert.service,
+                "ts": alert.ts,
+                "severity": alert.severity,
+            })
+    else:
+        raise ConnectorNotReady(
+            f"query kind must be one of {sorted(_QUERY_KINDS)}",
+            status_code=422,
+        )
+    return out
+
+
+def run_source_query(source: Any, kind: str, query: str, window: TimeWindow, *,
+                     limit: int = 5000) -> list[dict[str, Any]]:
+    """Dispatch a single kind query against a constructed TelemetrySource."""
+    kind = (kind or "").strip().lower()
+    if kind not in _QUERY_KINDS:
+        raise ConnectorNotReady(
+            f"query kind must be one of {sorted(_QUERY_KINDS)}",
+            status_code=422,
+        )
+    try:
+        if kind == "metrics":
+            rows = source.query_metrics(query or "", window)
+        elif kind == "logs":
+            rows = source.query_logs(query or "", window, limit=limit)
+        elif kind == "traces":
+            rows = source.query_traces(query or "", window, limit=limit)
+        else:
+            rows = source.list_alerts(window)
+    except ConnectorNotReady:
+        raise
+    except Exception as error:  # noqa: BLE001 — map wire failures to 503 at the edge
+        raise ConnectorNotReady(
+            f"telemetry source {getattr(source, 'kind', '?')!r} query failed: {error}",
+            status_code=503,
+        ) from error
+    return serialize_query_result(kind, rows or [])

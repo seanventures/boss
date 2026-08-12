@@ -9,7 +9,7 @@ are additive adapters behind the same surface.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -70,6 +70,95 @@ class ChangeCorrelationService:
 
         changes.sort(key=lambda c: c["evidence"]["proximity_minutes"])   # closest to onset first
         return changes[:limit]
+
+    def correlate_request(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        incident_ref: str | None = None,
+        service: str | None = None,
+        window: dict[str, Any] | None = None,
+        lookback_minutes: int | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """HTTP-facing entry: resolve onset from an incident or a window, then rank changes.
+
+        Requires ``incident_ref`` and/or ``service``. Onset is the incident's ``first_seen`` when
+        ``incident_ref`` is set; otherwise ``window.end`` (epoch seconds or ISO datetime).
+        """
+        if not (incident_ref or service):
+            raise ValueError("incident_ref or service is required")
+
+        onset: datetime | None = None
+        resolved_service = (service or "").strip() or None
+        if incident_ref:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT id, service, first_seen
+                    FROM incidents
+                    WHERE project_id = :p AND id = :id
+                    """
+                ),
+                {"p": project_id, "id": incident_ref},
+            ).mappings().first()
+            if not row:
+                raise LookupError(f"incident {incident_ref!r} not found")
+            onset = row["first_seen"]
+            if not resolved_service:
+                resolved_service = row["service"] or None
+
+        if onset is None:
+            if not window or window.get("end") is None:
+                raise ValueError("window.end is required when incident_ref is omitted")
+            onset = self._as_datetime(window["end"])
+
+        if lookback_minutes is None:
+            if window and window.get("start") is not None and window.get("end") is not None:
+                start_dt = self._as_datetime(window["start"])
+                end_dt = self._as_datetime(window["end"])
+                span = max(0.0, (end_dt - start_dt).total_seconds() / 60.0)
+                lookback_minutes = int(span) if span > 0 else 60
+            else:
+                lookback_minutes = 60
+
+        lookback_minutes = max(1, int(lookback_minutes))
+        limit = max(1, min(int(limit), 100))
+        changes = self.correlate(
+            connection, project_id, onset,
+            lookback_minutes=lookback_minutes, limit=limit,
+        )
+        return {
+            "project_id": project_id,
+            "service": resolved_service,
+            "incident_ref": incident_ref,
+            "onset": onset.isoformat() if hasattr(onset, "isoformat") else str(onset),
+            "lookback_minutes": lookback_minutes,
+            "changes": changes,
+            "count": len(changes),
+        }
+
+    @staticmethod
+    def _as_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        if isinstance(value, str):
+            text_v = value.strip()
+            if text_v.endswith("Z"):
+                text_v = text_v[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(text_v)
+            except ValueError:
+                return datetime.fromtimestamp(float(text_v), tz=timezone.utc)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        raise ValueError(f"cannot parse datetime from {value!r}")
 
     @staticmethod
     def _mk(*, kind: str, key: str, name: str, ts: datetime, onset: datetime,

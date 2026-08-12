@@ -73,6 +73,18 @@ from .schemas import (
     ReliabilityPolicyRequest,
     ReliabilityPolicyResponse,
     ReliabilityDecisionResponse,
+    KnowledgeGraphNodeUpsertRequest,
+    KnowledgeGraphNodeUpsertResponse,
+    KnowledgeGraphEdgeUpsertRequest,
+    KnowledgeGraphEdgeUpsertResponse,
+    KnowledgeGraphNodeListResponse,
+    KnowledgeGraphSubgraphResponse,
+    KnowledgeGraphNeighborsResponse,
+    KnowledgeGraphRootCauseRequest,
+    KnowledgeGraphRootCauseResponse,
+    KnowledgeGraphKnownCausesResponse,
+    KnowledgeGraphSeedFromInfraRequest,
+    KnowledgeGraphSeedFromInfraResponse,
     AccountConnectSyncResponse,
     AccountConnectTeamInviteCreateRequest,
     AccountConnectTeamInviteListResponse,
@@ -581,7 +593,55 @@ from .schemas import (
     ToolchainCandidateReviewRequest,
     ToolchainCommandGuardRequest,
     ToolchainContextPackRequest,
+    FeatureUpsertRequest,
+    FeatureDocumentedRequest,
+    CapabilityItem,
+    CapabilityManifestResponse,
+    CapabilityManifestTableResponse,
+    ChangeCorrelateRequest,
+    ChangeCorrelateResponse,
+    FeatureCatalogEntrySummary,
+    FeatureCatalogListResponse,
+    FeatureSeedRequest,
+    FeatureSeedResponse,
+    IntentClassifyRequest,
+    IntentClassifyResponse,
+    IntentRouteRequest,
+    IntentRouteResponse,
+    LearningCorpusResponse,
+    LearningExampleItem,
+    LearningEvaluateResponse,
+    LearningExampleRecordRequest,
+    LearningExampleRecordResponse,
+    LearningSuggestTuningRequest,
+    LearningSuggestTuningResponse,
+    ModelRateLimitReportRequest,
+    ModelRateLimitReportResponse,
+    ModelRateLimitsResponse,
+    PipelineAdapterCatalogResponse,
+    TelemetryConnectorCatalogItem,
+    TelemetryConnectorCatalogResponse,
+    TelemetryQueryRequest,
+    TelemetryQueryResponse,
     KnowledgePackContextRequest,
+    CIConfigGenerateRequest,
+    CIConfigGenerateResponse,
+    RedactRequest,
+    RedactResponse,
+    PlatformStandardsCatalogResponse,
+    PlatformStandardsApplyRequest,
+    PlatformStandardsApplyResponse,
+    TelemetryMineRequest,
+    TelemetryMineResponse,
+    VerificationTargetProfileRequest,
+    VerificationTargetProfileResponse,
+    AwsMetalTypesResponse,
+    AwsMetalClassifyRequest,
+    AwsMetalClassifyResponse,
+    VerifierDebateRequest,
+    VerifierDebateResponse,
+    DesignPromptRequest,
+    DesignPromptResponse,
 )
 from .services.a2a import (
     A2ANotFoundError,
@@ -695,6 +755,7 @@ from .services.infrastructure import (
     InfrastructureService,
 )
 from .services.reliability import ReliabilityService
+from .services.knowledge_graph import KnowledgeGraphService
 from .services.intake import CommandIntakeService
 from .services.agent_service import (
     AgentService,
@@ -861,6 +922,7 @@ audit = AuditTrailService(settings)
 comms = CommsService(settings)
 infrastructure = InfrastructureService(settings)
 reliability = ReliabilityService(settings)
+knowledge_graph = KnowledgeGraphService(settings)
 self_improvement = SelfImprovementService(settings)
 health_snapshots = HealthSnapshotService(settings)
 metatron = MetatronService(settings)
@@ -885,6 +947,10 @@ resource_plane = ResourcePlaneService(settings)
 resource_topology = ResourceTopologyService(settings)
 from boss_engine.services.elastic_fabric import ElasticFabricService
 from boss_engine.services.goldeneye_paas import GoldeneyePaasService
+from boss_engine.services.feature_catalog import FeatureCatalog
+from boss_engine.services.capability_manifest import build_manifest
+from boss_engine.services.learning_loop import LearningLoopService
+from boss_engine.services.intent_router import IntentRouter
 from boss_engine.services.provider_slo import ProviderSloService
 from boss_engine.services.multi_cloud_catalog import (
     multi_cloud_catalog,
@@ -894,6 +960,9 @@ from boss_engine.services.multi_cloud_catalog import (
 
 elastic_fabric = ElasticFabricService(settings, resource_plane=resource_plane)
 goldeneye_paas = GoldeneyePaasService(settings)
+feature_catalog = FeatureCatalog(settings)
+learning_loop = LearningLoopService(settings)
+intent_router = IntentRouter(settings)
 provider_slo = ProviderSloService(settings)
 agent_studio = AgentStudioService(settings)
 a2a = A2AService(settings)
@@ -9232,7 +9301,14 @@ def create_task(payload: TaskCreateRequest) -> TaskSummary:
                 due_at=payload.due_at,
             )
         except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+            # Duplicate dedupe_key is a client conflict; other validation stays 400.
+            detail = str(error)
+            status = (
+                409
+                if "dedupe_key already exists" in detail
+                else 400
+            )
+            raise HTTPException(status_code=status, detail=detail) from error
         row = connection.execute(
             text(
                 """
@@ -10904,6 +10980,221 @@ def knowledge_pack_context(payload: KnowledgePackContextRequest) -> dict:
             return result
         except ToolchainImportError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+# ── Knowledge graph (RB-15) — Community-safe topology + RCA learning substrate ─
+
+
+@app.get("/v1/knowledge/graph/nodes", response_model=KnowledgeGraphNodeListResponse)
+def knowledge_graph_list_nodes(
+    project_id: str,
+    kind: Optional[str] = None,
+    node_key: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> KnowledgeGraphNodeListResponse:
+    """List or fetch knowledge-graph nodes for a project (optional kind / node_key filters)."""
+    with begin(engine) as connection:
+        if kind and node_key:
+            node = knowledge_graph.get_node(connection, project_id, kind, node_key)
+            items = [node] if node else []
+        else:
+            clauses = ["project_id = :p"]
+            params: dict[str, Any] = {"p": project_id, "limit": limit}
+            if kind:
+                clauses.append("kind = :k")
+                params["k"] = kind
+            if node_key:
+                clauses.append("node_key = :nk")
+                params["nk"] = node_key
+            rows = connection.execute(
+                text(
+                    f"SELECT * FROM kg_nodes WHERE {' AND '.join(clauses)} "
+                    "ORDER BY last_seen DESC LIMIT :limit"
+                ),
+                params,
+            ).mappings().all()
+            items = [dict(r) for r in rows]
+        return KnowledgeGraphNodeListResponse(project_id=project_id, items=items)
+
+
+@app.post("/v1/knowledge/graph/nodes", response_model=KnowledgeGraphNodeUpsertResponse)
+def knowledge_graph_upsert_node(
+    payload: KnowledgeGraphNodeUpsertRequest,
+) -> KnowledgeGraphNodeUpsertResponse:
+    """Idempotent create-or-merge of a knowledge-graph node."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "providerops_manage"
+        )
+        try:
+            node_id = knowledge_graph.upsert_node(
+                connection,
+                payload.project_id,
+                payload.kind,
+                payload.node_key,
+                payload.name,
+                attrs=payload.attrs,
+                layer=payload.layer,
+                source=payload.source,
+                confidence=payload.confidence,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return KnowledgeGraphNodeUpsertResponse(
+            id=node_id,
+            project_id=payload.project_id,
+            kind=payload.kind,
+            node_key=payload.node_key,
+        )
+
+
+@app.post("/v1/knowledge/graph/edges", response_model=KnowledgeGraphEdgeUpsertResponse)
+def knowledge_graph_upsert_edge(
+    payload: KnowledgeGraphEdgeUpsertRequest,
+) -> KnowledgeGraphEdgeUpsertResponse:
+    """Idempotent create-or-merge of a directed knowledge-graph edge."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "providerops_manage"
+        )
+        try:
+            edge_id = knowledge_graph.upsert_edge(
+                connection,
+                payload.project_id,
+                payload.src_id,
+                payload.dst_id,
+                payload.kind,
+                attrs=payload.attrs,
+                layer=payload.layer,
+                source=payload.source,
+                confidence=payload.confidence,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return KnowledgeGraphEdgeUpsertResponse(
+            id=edge_id,
+            project_id=payload.project_id,
+            src_id=payload.src_id,
+            dst_id=payload.dst_id,
+            kind=payload.kind,
+        )
+
+
+@app.get("/v1/knowledge/graph/subgraph", response_model=KnowledgeGraphSubgraphResponse)
+def knowledge_graph_subgraph(
+    project_id: str,
+    kind: str,
+    node_key: str,
+    depth: int = Query(default=2, ge=0, le=10),
+) -> KnowledgeGraphSubgraphResponse:
+    """BFS neighborhood around a root node — the RCA context bundle."""
+    with begin(engine) as connection:
+        sub = knowledge_graph.subgraph(
+            connection, project_id, kind, node_key, depth=depth
+        )
+        return KnowledgeGraphSubgraphResponse(
+            project_id=project_id,
+            root=sub["root"],
+            nodes=sub["nodes"],
+            edges=sub["edges"],
+            depth=depth,
+        )
+
+
+@app.get("/v1/knowledge/graph/neighbors", response_model=KnowledgeGraphNeighborsResponse)
+def knowledge_graph_neighbors(
+    project_id: str,
+    node_id: Optional[str] = None,
+    kind: Optional[str] = None,
+    node_key: Optional[str] = None,
+    direction: str = Query(default="both", pattern="^(out|in|both)$"),
+) -> KnowledgeGraphNeighborsResponse:
+    """Adjacent nodes for a node_id or (kind + node_key) natural key."""
+    if not node_id and not (kind and node_key):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide node_id or both kind and node_key.",
+        )
+    with begin(engine) as connection:
+        resolved = node_id
+        if not resolved:
+            node = knowledge_graph.get_node(connection, project_id, kind, node_key)
+            if not node:
+                raise HTTPException(status_code=404, detail="node not found")
+            resolved = node["id"]
+        items = knowledge_graph.neighbors(
+            connection, resolved, direction=direction
+        )
+        return KnowledgeGraphNeighborsResponse(
+            project_id=project_id, node_id=resolved, items=items
+        )
+
+
+@app.post(
+    "/v1/knowledge/graph/root-causes",
+    response_model=KnowledgeGraphRootCauseResponse,
+)
+def knowledge_graph_record_root_cause(
+    payload: KnowledgeGraphRootCauseRequest,
+) -> KnowledgeGraphRootCauseResponse:
+    """Learning write-back: record a confirmed root cause as a caused_by edge."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "providerops_manage"
+        )
+        try:
+            result = knowledge_graph.record_root_cause(
+                connection,
+                payload.project_id,
+                payload.service,
+                payload.cause_kind,
+                payload.cause_key,
+                payload.cause_name,
+                confidence=payload.confidence,
+                evidence=payload.evidence,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return KnowledgeGraphRootCauseResponse(**result)
+
+
+@app.get(
+    "/v1/knowledge/graph/known-causes",
+    response_model=KnowledgeGraphKnownCausesResponse,
+)
+def knowledge_graph_known_causes(
+    project_id: str,
+    service: str,
+    limit: int = Query(default=10, ge=1, le=100),
+) -> KnowledgeGraphKnownCausesResponse:
+    """Prior confirmed causes for a service, ranked by confidence."""
+    with begin(engine) as connection:
+        items = knowledge_graph.known_causes(
+            connection, project_id, service, limit=limit
+        )
+        return KnowledgeGraphKnownCausesResponse(
+            project_id=project_id, service=service, items=items
+        )
+
+
+@app.post(
+    "/v1/knowledge/graph/seed-from-infra",
+    response_model=KnowledgeGraphSeedFromInfraResponse,
+)
+def knowledge_graph_seed_from_infra(
+    payload: KnowledgeGraphSeedFromInfraRequest,
+) -> KnowledgeGraphSeedFromInfraResponse:
+    """Walk active infra_resources into deterministic resource nodes."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "providerops_manage"
+        )
+        counts = knowledge_graph.seed_from_infra_resources(
+            connection, payload.project_id
+        )
+        return KnowledgeGraphSeedFromInfraResponse(
+            project_id=payload.project_id, resources=counts.get("resources", 0)
+        )
 
 
 @app.get("/v1/skills", response_model=SkillListResponse)
@@ -17817,8 +18108,17 @@ def _raise_work_orchestration_error(error: Exception) -> None:
 def get_work_orchestration_overview(
     project_id: str = Query(...),
 ) -> dict[str, Any]:
-    with begin(engine) as connection:
-        return work_orchestration.overview(connection, project_id)
+    from sqlalchemy.exc import OperationalError
+
+    try:
+        with begin(engine) as connection:
+            return work_orchestration.overview(connection, project_id)
+    except OperationalError as error:
+        # Deadlock / admin shutdown under concurrent cleaners must not 500.
+        raise HTTPException(
+            status_code=503,
+            detail="Work orchestration overview temporarily unavailable.",
+        ) from error
 
 
 @app.post("/v1/work-orchestration/items")
@@ -19071,6 +19371,805 @@ def evaluate_provider_slos(payload: ProviderSloEvaluateRequest) -> ProviderSloEv
         )
 
 
+
+
+
+
+
+
+def _feature_entry_summary(row: dict[str, Any]) -> FeatureCatalogEntrySummary:
+    return FeatureCatalogEntrySummary(
+        id=row["id"],
+        project_id=row["project_id"],
+        label=row.get("label"),
+        slug=row["slug"],
+        title=row["title"],
+        doc_path=row["doc_path"],
+        status=row["status"],
+        source=row.get("source"),
+        implementation_files=row.get("implementation_files") or [],
+        test_coverage=row.get("test_coverage") or [],
+        source_refs=row.get("source_refs") or [],
+        needs_label=bool(row.get("needs_label")),
+        last_documented_event_id=row.get("last_documented_event_id"),
+        last_documented_at=row.get("last_documented_at"),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        idempotent=bool(row.get("idempotent", False)),
+    )
+
+
+def _find_feature_entry(
+    connection, project_id: str, label: str
+) -> Optional[dict[str, Any]]:
+    """Resolve a feature catalog entry by label, then slug, then id."""
+    entries = feature_catalog.list_entries(connection, project_id)
+    for entry in entries:
+        if entry.get("label") == label:
+            return entry
+    for entry in entries:
+        if entry.get("slug") == label or entry.get("id") == label:
+            return entry
+    return None
+
+
+@app.get("/v1/features", response_model=FeatureCatalogListResponse)
+def list_features(project_id: str = Query(...)) -> FeatureCatalogListResponse:
+    """List project-scoped feature catalog entries (TRACEABILITY + emergent)."""
+    with begin(engine) as connection:
+        items = feature_catalog.list_entries(connection, project_id)
+        return FeatureCatalogListResponse(
+            project_id=project_id,
+            items=[_feature_entry_summary(item) for item in items],
+            count=len(items),
+        )
+
+
+@app.post("/v1/features/seed", response_model=FeatureSeedResponse)
+def seed_features(payload: FeatureSeedRequest) -> FeatureSeedResponse:
+    """Seed the feature catalog from ``docs/product/TRACEABILITY.md`` when present."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "pack_manage"
+        )
+        source_path = feature_catalog.traceability_path
+        if not source_path.exists():
+            return FeatureSeedResponse(
+                project_id=payload.project_id,
+                items=[],
+                entry_count=0,
+                seeded=False,
+                source=None,
+                reason="Traceability file not present.",
+            )
+        try:
+            items = feature_catalog.seed_from_traceability(
+                connection, payload.project_id, path=source_path
+            )
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            source_ref = str(source_path.relative_to(settings.repo_root))
+        except ValueError:
+            source_ref = str(source_path)
+        return FeatureSeedResponse(
+            project_id=payload.project_id,
+            items=[_feature_entry_summary(item) for item in items],
+            entry_count=len(items),
+            seeded=True,
+            source=source_ref,
+        )
+
+
+@app.post(
+    "/v1/features",
+    response_model=FeatureCatalogEntrySummary,
+    status_code=201,
+)
+def upsert_feature(payload: FeatureUpsertRequest) -> FeatureCatalogEntrySummary:
+    """Create or update a feature catalog entry. Mutations require an actor."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "pack_manage"
+        )
+        entry: dict[str, Any] = {
+            "title": payload.title,
+            "label": payload.label,
+            "slug": payload.slug,
+            "doc_path": payload.doc_path,
+            "status": payload.status,
+            "source": payload.source,
+            "implementation_files": payload.implementation_files,
+            "test_coverage": payload.test_coverage,
+            "source_refs": payload.source_refs,
+        }
+        if payload.needs_label is not None:
+            entry["needs_label"] = payload.needs_label
+        try:
+            result = feature_catalog.upsert_entry(
+                connection,
+                payload.project_id,
+                entry,
+                actor=payload.actor,
+            )
+        except (ValueError, KeyError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return _feature_entry_summary(result)
+
+
+@app.get("/v1/features/{label}", response_model=FeatureCatalogEntrySummary)
+def get_feature(label: str, project_id: str = Query(...)) -> FeatureCatalogEntrySummary:
+    """Fetch one feature catalog entry by requirement label (or slug/id fallback)."""
+    with begin(engine) as connection:
+        entry = _find_feature_entry(connection, project_id, label)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Feature catalog entry '{label}' not found in project.",
+            )
+        return _feature_entry_summary(entry)
+
+
+@app.post(
+    "/v1/features/{label}/documented",
+    response_model=FeatureCatalogEntrySummary,
+)
+def mark_feature_documented(
+    label: str, payload: FeatureDocumentedRequest
+) -> FeatureCatalogEntrySummary:
+    """Mark a feature as documented for a given event (idempotent via event_id)."""
+    with begin(engine) as connection:
+        require_project_actor(
+            connection, payload.project_id, payload.actor, "pack_manage"
+        )
+        entry = _find_feature_entry(connection, payload.project_id, label)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Feature catalog entry '{label}' not found in project.",
+            )
+        try:
+            result = feature_catalog.mark_documented(
+                connection,
+                payload.project_id,
+                entry["id"],
+                payload.event_id,
+                status=payload.status,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return _feature_entry_summary(result)
+
+
+
+
+@app.get("/v1/capability-manifest", response_model=CapabilityManifestResponse)
+def get_capability_manifest(
+    project_id: Optional[str] = None,
+) -> CapabilityManifestResponse:
+    """Truthful per-turn capability manifest (core initiators + feature catalog)."""
+    resolved_project = project_id or settings.default_project_id
+    with begin(engine) as connection:
+        manifest = build_manifest(connection, settings, resolved_project)
+        items = [
+            CapabilityItem(
+                id=item["id"],
+                title=item["title"],
+                summary=item["summary"],
+                initiator_tool=item.get("initiator_tool"),
+                enabled=bool(item["enabled"]),
+                reason=item.get("reason"),
+            )
+            for item in manifest.as_dict()
+        ]
+        return CapabilityManifestResponse(
+            project_id=resolved_project,
+            capabilities=items,
+            count=len(items),
+        )
+
+
+
+
+
+
+
+
+@app.get("/v1/capability-manifest/table")
+def get_capability_manifest_table(
+    request: Request,
+    project_id: Optional[str] = None,
+):
+    """Render the capability manifest as a plain-text table (or JSON ``{table}``)."""
+    resolved_project = project_id or settings.default_project_id
+    with begin(engine) as connection:
+        manifest = build_manifest(connection, settings, resolved_project)
+        table = manifest.render_table()
+    accept = (request.headers.get("accept") or "").lower()
+    # Default text/plain; JSON when the client asks for application/json.
+    if "application/json" in accept:
+        return CapabilityManifestTableResponse(
+            project_id=resolved_project, table=table
+        )
+    return PlainTextResponse(table)
+
+
+
+
+
+
+
+
+
+def _learning_example_item(row: dict) -> LearningExampleItem:
+    return LearningExampleItem(
+        id=str(row.get("id") or ""),
+        agent=str(row.get("agent") or ""),
+        kind=str(row.get("kind") or ""),
+        label=str(row.get("label") or ""),
+        outcome=str(row.get("outcome") or ""),
+        ref=str(row.get("ref") or ""),
+        source=str(row.get("source") or ""),
+        payload=row.get("payload") if isinstance(row.get("payload"), dict) else {},
+        created_at=str(row["created_at"]) if row.get("created_at") is not None else None,
+    )
+
+
+
+@app.post("/v1/learning/examples", response_model=LearningExampleRecordResponse, status_code=201)
+def learning_record_example(payload: LearningExampleRecordRequest) -> LearningExampleRecordResponse:
+    """Append one labeled example into the LearningLoop corpus for an agent."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
+        example_id = learning_loop.record(
+            connection,
+            payload.project_id,
+            payload.agent,
+            payload.kind,
+            label=payload.label,
+            outcome=payload.outcome,
+            ref=payload.ref,
+            source=payload.source,
+            payload=payload.payload,
+        )
+        return LearningExampleRecordResponse(
+            id=example_id,
+            project_id=payload.project_id,
+            agent=payload.agent,
+            kind=payload.kind,
+        )
+
+
+
+
+
+
+
+
+@app.get("/v1/learning/corpus", response_model=LearningCorpusResponse)
+def learning_corpus(
+    project_id: str = Query(..., min_length=1),
+    agent: str = Query(..., min_length=1),
+    kind: Optional[str] = Query(None),
+    limit: int = Query(500, ge=1, le=5000),
+) -> LearningCorpusResponse:
+    """Load accumulated LearningLoop examples for a project agent."""
+    with begin(engine) as connection:
+        rows = learning_loop.corpus(
+            connection,
+            project_id.strip(),
+            agent.strip(),
+            kind=kind.strip() if kind else None,
+            limit=limit,
+        )
+        items = [_learning_example_item(dict(r)) for r in rows]
+        return LearningCorpusResponse(
+            project_id=project_id.strip(),
+            agent=agent.strip(),
+            kind=kind.strip() if kind else None,
+            items=items,
+            count=len(items),
+        )
+
+
+
+
+
+
+
+
+@app.get("/v1/learning/evaluate", response_model=LearningEvaluateResponse)
+def learning_evaluate(
+    project_id: str = Query(..., min_length=1),
+    agent: str = Query(..., min_length=1),
+) -> LearningEvaluateResponse:
+    """Roll the LearningLoop corpus into metrics for a project agent."""
+    with begin(engine) as connection:
+        metrics = learning_loop.evaluate(connection, project_id.strip(), agent.strip())
+        return LearningEvaluateResponse(
+            project_id=project_id.strip(),
+            agent=metrics.get("agent") or agent.strip(),
+            total=int(metrics.get("total") or 0),
+            by_outcome=dict(metrics.get("by_outcome") or {}),
+            by_label=dict(metrics.get("by_label") or {}),
+            false_alarm_rate=metrics.get("false_alarm_rate"),
+            fix_success_rate=metrics.get("fix_success_rate"),
+        )
+
+
+
+
+
+
+
+
+@app.post("/v1/learning/suggest-tuning", response_model=LearningSuggestTuningResponse)
+def learning_suggest_tuning(payload: LearningSuggestTuningRequest) -> LearningSuggestTuningResponse:
+    """Propose threshold raises and few-shot candidates from the LearningLoop corpus."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "command_submit")
+        tuning = learning_loop.suggest_tuning(connection, payload.project_id, payload.agent)
+        return LearningSuggestTuningResponse(
+            project_id=payload.project_id,
+            agent=tuning.get("agent") or payload.agent,
+            raise_threshold=list(tuning.get("raise_threshold") or []),
+            few_shot_candidates=list(tuning.get("few_shot_candidates") or []),
+        )
+
+
+# ── IntentRouter (classify + route) ──────────────────────────────────────────
+
+
+
+
+
+
+# ── IntentRouter (classify + route) ──────────────────────────────────────────
+@app.post("/v1/intent/classify", response_model=IntentClassifyResponse)
+def intent_classify(payload: IntentClassifyRequest) -> IntentClassifyResponse:
+    """Deterministic intent classification without actuating any capability."""
+    name, arguments = intent_router.classify_message(payload.message)
+    return IntentClassifyResponse(intent=name, arguments=arguments or {})
+
+
+
+
+
+
+
+
+@app.post("/v1/intent/route", response_model=IntentRouteResponse)
+def intent_route(payload: IntentRouteRequest) -> IntentRouteResponse:
+    """Route one chat turn through IntentRouter (capability-gated, may actuate)."""
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "agent_chat")
+        manifest = build_manifest(connection, settings, payload.project_id)
+        turn = intent_router.route_turn(
+            connection,
+            project_id=payload.project_id,
+            actor=payload.actor,
+            messages=list(payload.messages or []),
+            manifest=manifest,
+            confirm_plan_id=payload.confirm_plan_id,
+            pending_plan_id=payload.pending_plan_id,
+            external_ref=payload.external_ref,
+        )
+        return IntentRouteResponse(
+            reply=turn.reply,
+            actions=list(turn.actions or []),
+            pending_confirmation=turn.pending_confirmation,
+            tool_calls=list(turn.tool_calls or []),
+        )
+
+
+
+
+
+
+
+
+# ── Telemetry connectors + change-correlation (direct HTTP, not reliability scan) ─
+@app.get("/v1/telemetry/connectors/catalog", response_model=TelemetryConnectorCatalogResponse)
+def telemetry_connectors_catalog() -> TelemetryConnectorCatalogResponse:
+    """List connector kinds BOSS can construct (prometheus/loki/grafana/…).
+
+    Distinct from project-registered sources at GET /v1/reliability/sources.
+    """
+    from .services.telemetry_connectors import list_connector_catalog
+    items = list_connector_catalog()
+    return TelemetryConnectorCatalogResponse(
+        items=[TelemetryConnectorCatalogItem(**item) for item in items],
+        count=len(items),
+    )
+
+
+
+
+
+
+
+
+@app.post("/v1/telemetry/query", response_model=TelemetryQueryResponse)
+def telemetry_query(payload: TelemetryQueryRequest) -> TelemetryQueryResponse:
+    """Query a telemetry connector for metrics|logs|traces|alerts.
+
+    Creds stay indirect (env-var names). Missing required config/credentials fail closed
+    with 422; unreachable backends return 503 — never silent fake data.
+    """
+    from .services.telemetry_connectors import ConnectorNotReady
+
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        try:
+            result = reliability.query_telemetry(
+                connection,
+                payload.project_id,
+                kind=payload.kind,
+                query=payload.query,
+                window={"start": payload.window.start, "end": payload.window.end},
+                source_id=payload.source_id,
+                source_spec=payload.source,
+                limit=payload.limit,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ConnectorNotReady as error:
+            raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        except (ValueError, KeyError, TypeError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return TelemetryQueryResponse(**result)
+
+
+
+
+
+
+
+
+@app.post("/v1/change-correlation/correlate", response_model=ChangeCorrelateResponse)
+def change_correlation_correlate(payload: ChangeCorrelateRequest) -> ChangeCorrelateResponse:
+    """Rank recent deploys/PRs near an incident onset or service window (RB-17).
+
+    Requires ``incident_ref`` and/or ``service``. Uses BOSS-owned change timeline only
+    (code_task_runs + deployment_runs) — no external fake data.
+    """
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "providerops_manage")
+        window = None
+        if payload.window is not None:
+            window = {"start": payload.window.start, "end": payload.window.end}
+        try:
+            result = reliability.changes.correlate_request(
+                connection,
+                payload.project_id,
+                incident_ref=payload.incident_ref,
+                service=payload.service,
+                window=window,
+                lookback_minutes=payload.lookback_minutes,
+                limit=payload.limit,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return ChangeCorrelateResponse(**result)
+
+
+
+
+
+
+
+
+@app.get(
+    "/v1/model-gateway/rate-limits",
+    response_model=ModelRateLimitsResponse,
+)
+def get_model_gateway_rate_limits(
+    project_id: Optional[str] = None,
+) -> ModelRateLimitsResponse:
+    """Current model-call pacing limiter state (process-local).
+
+    Lanes are empty until this process has paced calls. Worker processes hold
+    independent limiter state and are not visible here.
+    """
+    from boss_engine.services.model_rate_limiter import rate_limiter_observability
+
+    return ModelRateLimitsResponse(
+        **rate_limiter_observability(settings, project_id=project_id)
+    )
+
+
+
+
+
+@app.post(
+    "/v1/model-gateway/rate-limits/report",
+    response_model=ModelRateLimitReportResponse,
+)
+def report_model_gateway_rate_limit(
+    payload: ModelRateLimitReportRequest,
+) -> ModelRateLimitReportResponse:
+    """Optional worker signal: rate_limited or ok for AIMD pacing in this process.
+
+    Applies only to the process that receives the request (typically the API).
+    Workers should prefer reporting into their own in-process limiter; this
+    endpoint exists for observability bridges and single-process deployments.
+    """
+    from boss_engine.services.model_rate_limiter import report_rate_limiter_outcome
+
+    try:
+        result = report_rate_limiter_outcome(
+            settings,
+            provider=payload.provider,
+            outcome=payload.outcome,
+            retry_after_s=payload.retry_after_s,
+            project_id=payload.project_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return ModelRateLimitReportResponse(**result)
+
+
+
+
+
+@app.get(
+    "/v1/pipeline-adapters/catalog",
+    response_model=PipelineAdapterCatalogResponse,
+)
+def get_pipeline_adapters_catalog() -> PipelineAdapterCatalogResponse:
+    """Read-only discovery of pipeline adapter kinds/capabilities (no secrets)."""
+    from boss_engine.services.pipeline_adapter import pipeline_adapter_catalog
+
+    return PipelineAdapterCatalogResponse(**pipeline_adapter_catalog(settings))
+
+
+# ── Operator utility APIs (pure / dry-run; no external credentials) ───────────
+
+
+@app.post("/v1/ci-config/generate", response_model=CIConfigGenerateResponse)
+def ci_config_generate(payload: CIConfigGenerateRequest) -> CIConfigGenerateResponse:
+    """Dry-run CI config generation — no PR, no provider write, no credentials.
+
+    Differs from POST /v1/pipeline-config/proposals which discovers a repo and
+    proposes a PR. This endpoint only materializes the deterministic template.
+    """
+    try:
+        generated = ci_config_generator.generate(
+            language=payload.language,
+            framework=payload.framework,
+            target=payload.target,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return CIConfigGenerateResponse(**generated)
+
+
+@app.post("/v1/redaction/redact", response_model=RedactResponse)
+def redaction_redact(payload: RedactRequest) -> RedactResponse:
+    """Deterministic PII/secret redaction for data-boundary crossings."""
+    from boss_engine.services.redaction import has_pii, redact
+
+    redacted, summary = redact(payload.text or "")
+    return RedactResponse(
+        text=payload.text or "",
+        redacted=redacted,
+        summary=summary,
+        has_pii=bool(summary) or has_pii(payload.text or ""),
+    )
+
+
+@app.get("/v1/platform-standards", response_model=PlatformStandardsCatalogResponse)
+def platform_standards_catalog() -> PlatformStandardsCatalogResponse:
+    """List BOSS platform standards that agents must apply when building apps."""
+    from boss_engine.services.platform_standards import STANDARDS
+
+    keys = sorted(STANDARDS.keys())
+    return PlatformStandardsCatalogResponse(
+        keys=keys,
+        standards={k: STANDARDS[k] for k in keys},
+        count=len(keys),
+    )
+
+
+@app.post(
+    "/v1/platform-standards/apply",
+    response_model=PlatformStandardsApplyResponse,
+)
+def platform_standards_apply(
+    payload: PlatformStandardsApplyRequest,
+) -> PlatformStandardsApplyResponse:
+    """Return the standards block for a task description (or empty when N/A)."""
+    from boss_engine.services.platform_standards import (
+        STANDARDS,
+        applies_to,
+        platform_standards,
+    )
+
+    applies = bool(payload.force or applies_to(payload.instructions or ""))
+    block = platform_standards(payload.instructions or "", force=payload.force)
+    keys = list(STANDARDS.keys()) if applies else []
+    return PlatformStandardsApplyResponse(
+        applies=applies,
+        force=payload.force,
+        block=block,
+        keys_applied=keys,
+    )
+
+
+@app.post("/v1/telemetry/mine", response_model=TelemetryMineResponse)
+def telemetry_mine(payload: TelemetryMineRequest) -> TelemetryMineResponse:
+    """Model-free log/metric distillation: templates + anomaly signals (RB-1/RB-3)."""
+    from boss_engine.services.telemetry_mining import mine
+    from boss_engine.services.telemetry_source import LogEvent, MetricPoint, MetricSeries
+
+    events = [
+        LogEvent(
+            ts=float(e.ts or 0.0),
+            message=e.message,
+            service=e.service or "",
+            level=e.level or "info",
+            fields=e.fields or {},
+        )
+        for e in payload.events
+    ]
+    metrics = None
+    if payload.metrics:
+        metrics = [
+            MetricSeries(
+                name=s.name,
+                points=[MetricPoint(ts=p.ts, value=p.value) for p in s.points],
+                labels=s.labels or {},
+            )
+            for s in payload.metrics
+        ]
+    result = mine(
+        events,
+        baseline=payload.baseline,
+        metrics=metrics,
+        top_n=payload.top_n,
+    )
+    return TelemetryMineResponse(**result)
+
+
+@app.post(
+    "/v1/verification-target/profile",
+    response_model=VerificationTargetProfileResponse,
+)
+def verification_target_profile(
+    payload: VerificationTargetProfileRequest,
+) -> VerificationTargetProfileResponse:
+    """Resolve web vs python verification command set for a task spec (APP-3)."""
+    from boss_engine.services.verification_target import (
+        default_test_commands,
+        verification_profile,
+    )
+
+    profile = verification_profile(payload.spec or {}, payload.title or "")
+    commands = default_test_commands(payload.spec or {}, payload.title or "")
+    return VerificationTargetProfileResponse(
+        kind=profile["kind"],
+        steps=list(profile.get("steps") or []),
+        command=str(profile.get("command") or ""),
+        test_commands=list(commands),
+    )
+
+
+@app.get("/v1/aws/metal/types", response_model=AwsMetalTypesResponse)
+def aws_metal_types(
+    region: Optional[str] = Query(default=None),
+) -> AwsMetalTypesResponse:
+    """Advisory shortlist of AWS EC2 bare-metal instance types (no AWS API call)."""
+    from boss_engine.services.aws_metal import recommend_metal_types
+
+    region_hint = (region or "").strip() or None
+    items = recommend_metal_types(region_hint)
+    return AwsMetalTypesResponse(
+        region=region_hint,
+        items=items,
+        count=len(items),
+    )
+
+
+@app.post("/v1/aws/metal/classify", response_model=AwsMetalClassifyResponse)
+def aws_metal_classify(
+    payload: AwsMetalClassifyRequest,
+) -> AwsMetalClassifyResponse:
+    """Classify whether an instance type string denotes AWS bare metal."""
+    from boss_engine.services.aws_metal import is_bare_metal_instance_type
+
+    name = payload.instance_type.strip()
+    return AwsMetalClassifyResponse(
+        instance_type=name,
+        is_bare_metal=is_bare_metal_instance_type(name),
+    )
+
+
+@app.post("/v1/verifier-debate/run", response_model=VerifierDebateResponse)
+def verifier_debate_run(payload: VerifierDebateRequest) -> VerifierDebateResponse:
+    """Bounded generator↔verifier debate with scripted turns (zero model cost).
+
+    Live model debaters remain internal (opt-in, paid). This HTTP surface is the
+    pure orchestration path used for contested-panel resolution smoke and tools.
+    """
+    from boss_engine.services.verifier_debate import run_debate
+
+    defend_idx = {"i": 0}
+    challenge_idx = {"i": 0}
+    judge_idx = {"i": 0}
+
+    def defend_fn(claim: str, transcript: list) -> dict:
+        turns = payload.defend_turns
+        if defend_idx["i"] >= len(turns):
+            return {"argument": "", "concede": False}
+        turn = turns[defend_idx["i"]]
+        defend_idx["i"] += 1
+        return {"argument": turn.argument, "concede": bool(turn.concede)}
+
+    def challenge_fn(claim: str, transcript: list) -> dict:
+        turns = payload.challenge_turns
+        if challenge_idx["i"] >= len(turns):
+            return {"argument": "", "withdraw": False}
+        turn = turns[challenge_idx["i"]]
+        challenge_idx["i"] += 1
+        return {"argument": turn.argument, "withdraw": bool(turn.withdraw)}
+
+    judge_fn = None
+    if payload.judge_turns:
+
+        def _judge(claim: str, transcript: list) -> dict:
+            turns = payload.judge_turns
+            if judge_idx["i"] >= len(turns):
+                return {"verdict": "refuted", "rationale": "no judge turn"}
+            turn = turns[judge_idx["i"]]
+            judge_idx["i"] += 1
+            return {
+                "verdict": turn.verdict or "refuted",
+                "rationale": turn.rationale or turn.argument,
+            }
+
+        judge_fn = _judge
+
+    result = run_debate(
+        payload.claim,
+        defend_fn,
+        challenge_fn,
+        judge_fn,
+        max_rounds=payload.max_rounds,
+    )
+    return VerifierDebateResponse(**result)
+
+
+@app.post("/v1/design-prompts/product", response_model=DesignPromptResponse)
+def design_prompts_product(payload: DesignPromptRequest) -> DesignPromptResponse:
+    """Build product_design / design-axis prompt clauses for UI-bearing tasks."""
+    from boss_engine.services.design_prompts import (
+        design_impl_clause,
+        design_review_clause,
+        is_ui_bearing,
+        product_design_prompt,
+    )
+
+    ui = is_ui_bearing(
+        payload.spec or {},
+        payload.title or "",
+        test_files=payload.test_files or None,
+    )
+    if not ui:
+        return DesignPromptResponse(ui_bearing=False)
+    return DesignPromptResponse(
+        ui_bearing=True,
+        product_design_prompt=product_design_prompt(
+            payload.title or "",
+            payload.instructions or "",
+            list(payload.criteria or []),
+            design_system=payload.design_system,
+        ),
+        design_impl_clause=design_impl_clause(),
+        design_review_clause=design_review_clause(),
+    )
 
 
 app.include_router(

@@ -80,6 +80,25 @@ def enqueue_job(
     )
     job_id = make_id("job")
     run_after = now_utc() + timedelta(seconds=run_after_seconds)
+    # Fail closed on bad FK refs (avoid IntegrityError → 500)
+    for table, column, value in (
+        ("tasks", "task_id", task_id),
+        ("work_items", "work_item_id", work_item_id),
+        ("work_tracker_bindings", "tracker_binding_id", tracker_binding_id),
+        ("resource_allocations", "allocation_id", allocation_id),
+    ):
+        if value:
+            exists = connection.execute(
+                text(
+                    f"SELECT 1 FROM {table} WHERE id = :id AND project_id = :project_id LIMIT 1"
+                ),
+                {"id": value, "project_id": project_id},
+            ).first()
+            if not exists:
+                raise ValueError(
+                    f"{column} references an unknown record in this project."
+                )
+
     row = connection.execute(
         text(
             """

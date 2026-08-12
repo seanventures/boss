@@ -1,6 +1,36 @@
 # BOSS Autonomous Activity Log
 
+
+## 2026-08-12 — Grok — API E2E completeness (ai/grok/api-e2e-completeness)
+
+- **Mission:** E2E-test every BOSS API; expose missing operator surfaces as HTTP; fix 5xx/NameError paths.
+- **Harness:** `apps/api/tests/test_api_e2e_smoke.py` — universal GET smoke + domain POSTs; OpenAPI/catalog checks.
+- **New APIs (services that lacked HTTP):**
+  - Knowledge graph, feature catalog, capability-manifest, learning loop, intent classify/route
+  - Telemetry query + connectors catalog, change-correlation
+  - Model rate-limits report/list, pipeline-adapters catalog
+  - Operator utilities: ci-config/generate, redaction/redact, platform-standards, telemetry/mine,
+    verification-target/profile, aws/metal types+classify, verifier-debate/run, design-prompts/product
+- **Domain E2E packs:** core control plane, providers/changesets, work/deploy, goldeneye, reliability, finops/value
+- **Bugs fixed:** `CapabilityItem` import; jobs enqueue FK fail-closed; task duplicate `dedupe_key` → **409**;
+  work-orchestration overview DB deadlock → **503**
+- **Evidence:** **95 passed** full E2E suite (~198s) against local Postgres; ~715 routes in ROUTE_INDEX; OpenAPI synced
+- **Docs:** `docs/api/AGENTS_AND_SKILLS.md`, `docs/api/ROUTE_INDEX.md`, `api/openapi.yaml`
+- **Plane:** `OPS_BASE_URL` unset this session — issue not filed; track on branch + activity log
+
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
+
+---
+## 2026-08-12 18:54 UTC — domain E2E API packs (ai/grok/api-e2e-completeness)
+
+- Added focused live-Postgres E2E packs:
+  - `apps/api/tests/test_e2e_core_control_plane.py` (5)
+  - `apps/api/tests/test_e2e_providers_and_changesets.py` (7)
+  - `apps/api/tests/test_e2e_work_and_deploy.py` (7)
+- Result: **19 passed** against local Postgres TestClient.
+- Bug fix: duplicate task `dedupe_key` no longer 500s — intake fail-closed + API returns **409**.
+- Hardening: `GET /v1/work-orchestration/overview` maps DB `OperationalError` to **503**.
+- Plane: ops secret store unavailable this session (`OPS_BASE_URL` unset); no issue filed.
 
 ---
 ## 2026-08-12 — Grok — BOSS-244 FinOps charts/summary API
