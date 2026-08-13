@@ -23148,6 +23148,335 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/assurance/seed-demo:
+    post:
+      tags:
+      - Assurance
+      summary: POST /v1/assurance/seed-demo
+      operationId: post_v1_assurance_seed_demo
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/comms/outbox/{message_id}/dry-run:
+    post:
+      tags:
+      - Comms
+      summary: POST /v1/comms/outbox/{message_id}/dry-run
+      operationId: post_v1_comms_outbox_message_id_dry_run
+      parameters:
+      - name: message_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/entitlements/sources/{source_id}/openai-compatible:
+    post:
+      tags:
+      - Entitlements
+      summary: POST /v1/entitlements/sources/{source_id}/openai-compatible
+      operationId: post_v1_entitlements_sources_source_id_openai_compatible
+      parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/simulated-run:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/simulated-run
+      operationId: post_v1_meetings_simulated_run
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/standup:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/standup
+      operationId: post_v1_meetings_standup
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/{meeting_id}/evidence:
+    get:
+      tags:
+      - Meetings
+      summary: GET /v1/meetings/{meeting_id}/evidence
+      operationId: get_v1_meetings_meeting_id_evidence
+      parameters:
+      - name: meeting_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+  /v1/meetings/{meeting_id}/simulated-run:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/{meeting_id}/simulated-run
+      operationId: post_v1_meetings_meeting_id_simulated_run
+      parameters:
+      - name: meeting_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/meetings/{meeting_id}/tally:
+    post:
+      tags:
+      - Meetings
+      summary: POST /v1/meetings/{meeting_id}/tally
+      operationId: post_v1_meetings_meeting_id_tally
+      parameters:
+      - name: meeting_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/previews/fixture:
+    post:
+      tags:
+      - Previews
+      summary: POST /v1/previews/fixture
+      operationId: post_v1_previews_fixture
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+  /v1/providers/easy-connect:
+    post:
+      tags:
+      - Providers
+      summary: POST /v1/providers/easy-connect
+      operationId: post_v1_providers_easy_connect
+      parameters: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '422':
+          description: Validation error
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+
 components:
   securitySchemes:
     BossBearerAuth:
@@ -49110,3 +49439,11 @@ tags:
   description: Verification Target API surface
 - name: Verifier Debate
   description: Verifier Debate API surface
+- name: Assurance
+  description: Assurance API surface
+- name: Entitlements
+  description: Entitlements API surface
+- name: Previews
+  description: Previews API surface
+- name: Providers
+  description: Providers API surface
