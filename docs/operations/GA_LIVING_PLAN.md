@@ -1,7 +1,7 @@
 # BOSS GA living plan
 
-**Status date:** 2026-08-12  
-**Overall GA:** **NOT READY** (public). **CONDITIONAL** private Community preview only.  
+**Status date:** 2026-08-13  
+**Overall GA:** **NOT READY** (public). **CONDITIONAL** private Community preview — **workflow gate live PASS**; factory/substrate still live-blocked.  
 **System of record:** Plane `goldeneye` / BOSS · umbrella **BOSS-337**  
 **Scorecard:** [`ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md`](ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md)  
 **E2E plan (detail):** [`E2E_COMPLETION_PLAN.md`](E2E_COMPLETION_PLAN.md)  
@@ -16,7 +16,7 @@
 | # | Criterion | Status | Evidence / notes | Next action |
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Partial** | Community ProviderOps kernel live 200; env SecretRefs; paste-UX incomplete | One-shot key UX; docs runbook |
-| 2 | CEO command → task + budget path | **Mostly** | `qa-live` command+budget PASS | Seal plan→job path if claimed |
+| 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
 | 3 | Code → evidence → PR reliable | **Open** | ~41 open DLQ; substrate flaky | Phase A P0-2/3 |
 | 4 | Previews reachable | **Open** | Host ok; View not proven; rootfs gap | P0-3/4 |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (code)** | `ai/grok/community-ga`: hide/badge Account Connect, marketplace, clusters, SIM; **SSO/IdP kept visible** (Community includes self-hosted SSO). Tests: `apps/web/tests/edition-visibility.test.ts`. Live web image may lag until shared-tag redeploy (A1). | Redeploy web; visual dogfood on `boss.local` |
@@ -84,15 +84,18 @@
 | Field | Value | As of |
 |---|---|---|
 | Edition | community | 2026-08-12 |
-| api image | `boss-api:968bc47` | live |
-| web image | `boss-web:968bc47` | live |
-| worker image | `boss-worker:91faf6d` | live (skew) |
-| main HEAD | `4727de7` | git |
-| `qa-live` | **10/10 PASS** | 2026-08-12 |
-| Open DLQ sample | ~41 | 2026-08-12 |
+| api image | `boss-api:90e9206` (SSO cut) | 2026-08-13; `ccafa13` rebuild in flight |
+| web image | `boss-web:968bc47` | **lag** — PUT typefix + rebuild |
+| worker image | `boss-worker:90e9206` | 2026-08-13; shared with api |
+| main HEAD | `5f2c5d8` | git; GA cut `ai/grok/community-ga` |
+| `qa-live` | last 10/10 on 968bc47 | re-run after ccafa13 |
+| `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
+| `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
+| Open DLQ | 41 open: 18 missing DO creds, 21 claude-143, 1 sandbox 404, 1 missing-git | 2026-08-13 |
 | GitHub MC | 2 connections, 2 bindings | live |
-| Agent Studio | 0 agents; seed 404 on live tag | live |
-| Sandbox host | connected; rootfs gap | live |
+| Agent Studio | 0 agents/panels/workflows | live |
+| Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
+| Previews | 50 expired; `internal_url` 127.0.0.1; `open_url` gateway path | live |
 
 ---
 
