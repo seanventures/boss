@@ -93,7 +93,8 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Full Community product without Cloud | ✅ |
 | Optional Easy Connect to BOSS Cloud | ✅ |
 | Hosted Account Connect & seats | ✦ Cloud |
-| SSO / SCIM | ✦ Enterprise |
+| Self-hosted SSO (OIDC / SAML / SCIM) | ✅ Community |
+| IdP catalog + registry (Okta, Entra, …) | ✅ Community |
 | HA / multi-region clustering | ✦ planned Enterprise |
 | Premium support SLAs | ✦ Enterprise |
 

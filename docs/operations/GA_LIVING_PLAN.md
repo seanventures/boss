@@ -131,6 +131,7 @@
 - Self-hosted governed control plane (tasks, budgets, decisions, receipts)
 - Community BYOK ProviderOps kernel (env SecretRefs)
 - Project GitHub connect + link + test receipts
+- **Self-hosted SSO** (OIDC bearer, SAML SP, SCIM 2.0, IdP registry) on Community
 - Metatron status Q&A
 - Honest empty CI/CD / monitoring when undeployed
 - Automated `qa-live` gate
@@ -141,7 +142,7 @@
 - Agent Studio workforce out of the box
 - Earned autonomy economy (G1–G3 complete)
 - Sandboxes/previews always work
-- Enterprise SSO/SCIM/marketplace in Community
+- **Hosted** multi-tenant IdP / Account Connect / marketplace as Community features
 - Zero DLQ / private main protection + Actions green
 
 ---

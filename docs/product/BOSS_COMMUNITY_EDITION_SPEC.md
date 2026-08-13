@@ -59,7 +59,7 @@ Community **must not**:
 
 - Block CEO commands, code tasks, budgets, GitHub, or ProviderOps because Cloud is unlinked  
 - Mount broken Enterprise forms as required settings  
-- Soft-depend on Account Connect, marketplace, SAML/SCIM, or managed fleets  
+- Soft-depend on Account Connect, marketplace, or managed fleets (self-hosted SSO is Community)  
 
 Community **may** opt into Cloud later via **Easy Connect** (`/v1/cloud/*`) without losing the local runtime.
 
@@ -152,7 +152,8 @@ Status legend: **shipped** · **partial** · **planned** · **Cloud/Enterprise**
 | Self-host Docker / Compose / k8s paths | shipped | Deploy docs |
 | Edition router (Community vs paid mounts) | shipped | Paid paths absent → 404 |
 | Optional Easy Connect to BOSS Cloud | shipped | Community-mounted `/v1/cloud/*` |
-| SSO / SCIM / HA fleets | Enterprise / planned | Not required for Community |
+| Self-hosted SSO / SCIM | Community (shipped) | OIDC + SAML SP + SCIM 2.0; opt-in flags |
+| HA fleets | Enterprise / planned | Not required for Community |
 
 ---
 
@@ -166,7 +167,7 @@ These remain Cloud or Enterprise so Community stays honest and sharp:
 | Managed elastic worker fabric | Cloud (planned) | Capacity as a service |
 | Hosted Account Connect + marketplace | Cloud | Org identity & catalog |
 | Seat billing / commercial portal | Cloud | Commercial ops |
-| SSO / SCIM / enterprise IdP | Enterprise | Identity at scale |
+| Hosted multi-tenant IdP / Account Connect | Cloud / Enterprise | Self-hosted SSO is Community |
 | HA clustering / multi-region | Enterprise / planned | Ops profiles |
 | Premium support SLAs | Enterprise | Design partnership |
 
@@ -231,7 +232,7 @@ Detailed operator docs: `docs/operations/`, `Makefile` targets (`make dev`, `mak
 5. **ProviderOps:** Inventory + ChangeSet gates work for configured providers.  
 6. **Fail closed:** Missing keys create visible decisions/events, not silent mocks.  
 7. **Easy Connect optional:** `/v1/cloud/catalog` and `/status` work; start without AC URL returns blocked with clear reason; core paths still 200.  
-8. **Edition honesty:** Paid routes (marketplace, SAML/SCIM, self-improvement) are unmounted (404), not half-gated.
+8. **Edition honesty:** Paid routes (marketplace, Account Connect, self-improvement, cluster packs) are unmounted (404), not half-gated. Self-hosted SSO (SAML/SCIM/IdP registry) is Community.
 
 ---
 
@@ -261,7 +262,7 @@ Use this language publicly:
 Avoid:
 
 - “Free tier / trial of Cloud”  
-- Claiming managed fleets or SSO as Community features  
+- Claiming managed fleets or **hosted** multi-tenant IdP as Community features (self-hosted SSO is Community)  
 - Claiming unattended production autonomy  
 
 ---

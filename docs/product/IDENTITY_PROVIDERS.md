@@ -2,6 +2,34 @@
 
 BOSS ships **first-class product packs** for the top enterprise identity providers on top of the generic OIDC / SAML / SCIM runtime (`boss_engine.services.oidc`, `saml`, `enterprise`). Packs provide catalog metadata, setup blueprints, claim maps, and dry-run enterprise config materialization. They do **not** reimplement protocol crypto.
 
+**Edition:** Self-hosted SSO (SAML SP, SCIM 2.0, IdP registry/rollout, IdP packs) is available on **Community** and paid editions. Hosted Account Connect / multi-tenant IdP remains Cloud/Enterprise.
+
+### Enable (Community or paid)
+
+```bash
+# OIDC bearer validation (API transport)
+export BOSS_OIDC_ENABLED=true
+export BOSS_OIDC_ISSUER=https://your-idp.example/oauth2/default
+export BOSS_OIDC_AUDIENCE=your-client-id
+# optional JWKS override
+# export BOSS_OIDC_JWKS_URL=...
+
+# SAML SP sessions
+export BOSS_ENTERPRISE_SAML_ENABLED=true
+```
+
+Routes (mounted on Community, not 404):
+
+| Path | Role |
+|------|------|
+| `/saml/v2/{project_id}/metadata` | SP metadata |
+| `/saml/v2/{project_id}/acs` | Assertion consumer |
+| `/scim/v2/{project_id}/Users|Groups` | SCIM 2.0 |
+| `/v1/enterprise/identity-providers` | IdP registry |
+| `/v1/enterprise/identity-rollout-policies` | Rollout policy |
+| `/v1/enterprise/scim/*` | SCIM admin helpers |
+| `/v1/identity-providers` | Top-10 IdP packs + blueprints |
+
 ## Open standards
 
 | Standard | Role in BOSS |

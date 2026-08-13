@@ -53,9 +53,9 @@ def test_paid_editions_mount_both_router_sets(edition):
 @pytest.mark.parametrize(
     "path",
     [
-        "/saml/v2/project/metadata",
-        "/scim/v2/project/Users",
         "/v1/enterprise/clusters",
+        "/v1/enterprise/support-cases",
+        "/v1/enterprise/soc2-evidence",
         "/v1/marketplace/listings",
         "/v1/account-connect/link",
         "/v1/self-improvement/proposals",
@@ -109,10 +109,36 @@ def test_paid_surface_classification(path):
         "/v1/costs",
         "/v1/drift-reports",
         "/v1/reconciliation-runs",
+        # Self-hosted SSO is Community (SAML SP, SCIM, IdP registry/rollout).
+        "/saml/v2/project/metadata",
+        "/saml/v2/project/acs",
+        "/scim/v2/project/Users",
+        "/scim/v2/project/Groups",
+        "/v1/enterprise/identity-providers",
+        "/v1/enterprise/identity-rollout-policies",
+        "/v1/enterprise/scim/users",
+        "/v1/enterprise/scim/groups",
+        "/v1/identity-providers",
+        "/v1/kms/keys",
     ],
 )
 def test_community_surface_classification(path):
     assert not is_enterprise_path(path)
+
+
+def test_community_sso_workflow_is_one_edition():
+    """SAML + SCIM + IdP registry must not split across paid/community mounts."""
+    workflow = [
+        "/saml/v2/boss-dogfood/metadata",
+        "/saml/v2/boss-dogfood/acs",
+        "/scim/v2/boss-dogfood/Users",
+        "/v1/enterprise/identity-providers",
+        "/v1/enterprise/identity-rollout-policies",
+        "/v1/enterprise/scim/users",
+        "/v1/identity-providers",
+        "/v1/identity-providers/okta/blueprint",
+    ]
+    assert {is_enterprise_path(p) for p in workflow} == {False}
 
 
 def test_community_byok_self_infra_is_one_edition():
@@ -207,7 +233,13 @@ def test_real_community_app_omits_paid_routes():
                 "assert '/v1/worker-pools' in paths; "
                 "assert '/v1/autoscaler/plans' in paths; "
                 "assert '/v1/resource-janitor/run' in paths; "
-                # Paid: hosted identity, marketplace, self-improvement automation.
+                # Community self-hosted SSO (must be mounted, not 404).
+                "assert any(p.startswith('/saml/') for p in paths); "
+                "assert any(p.startswith('/scim/') for p in paths); "
+                "assert '/v1/enterprise/identity-providers' in paths; "
+                "assert '/v1/enterprise/identity-rollout-policies' in paths; "
+                "assert '/v1/enterprise/scim/users' in paths; "
+                # Paid: hosted Account Connect, marketplace, cluster packs, self-improvement.
                 "assert '/v1/account-connect/link' not in paths; "
                 "assert '/v1/enterprise/clusters' not in paths; "
                 "assert '/v1/marketplace/listings' not in paths; "

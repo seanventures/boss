@@ -140,8 +140,8 @@ const AREAS: AreaDef[] = [
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   {
     id: "enterprise",
-    label: "Editions",
-    sub: "Community · Cloud · Enterprise · identity providers",
+    label: "Editions & SSO",
+    sub: "Self-hosted SSO (OIDC/SAML/SCIM) · IdP packs · Community / Cloud / Enterprise",
     group: "Platform",
     icon: ICONS.enterprise,
   },
