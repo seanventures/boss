@@ -6855,13 +6855,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <MeetingsHome
             projectId={activeProjectId}
             orgId={activeOrgId}
+            actor={activeActorId}
             meetings={meetingRooms.items}
             roles={meetingRooms.roles}
             tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
             apiReachable={meetingRooms.apiReachable}
           />
           <div className="stack-grid" style={{ marginTop: 14 }}>
-            <MeetingConsensusCard projectId={activeProjectId} actor={activeActorId} />
+            <MeetingConsensusCard
+              projectId={activeProjectId}
+              actor={activeActorId}
+              meetings={meetingRooms.items.map((item) => ({ id: item.id, title: item.title }))}
+            />
           </div>
         </section>
 

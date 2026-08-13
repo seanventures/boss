@@ -83,7 +83,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
 | Work orchestration / portfolio | ✅ |
-| Meetings / multi-agent panels | ◐ |
+| Meetings / multi-agent panels | ✅ |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 

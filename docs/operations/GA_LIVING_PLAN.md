@@ -202,6 +202,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | Typed `standup` meeting: persist type, no-spend fixture → minutes + actions + Decision; duplicate convene refused. FEATURES meetings ✅. | grok |
 | 2026-08-13 | PRD P1 glue: pack YAML import/export in MC; comms **Dry-run deliver** Receipt (no Slack/email); improvement-program create form (promote stays enterprise-badged). Catalog `built` only when reportable. Code Tasks shows GitHub plane. Deploy SOP (B6) requires `qa-live` after shared-tag bump. | grok |
 | 2026-08-13 | Unified E2E QA harness: `make qa-harness` (preflight + 44-probe settings/features + control + BugBox/HookWatch/ApproveIt). Live catalog **55/55**. Launch gated by `BOSS_QA_ALLOW_CANARIES`. Docs `QA_HARNESS.md`. | grok |
 | 2026-08-13 | PRD completeness audit vs current code (not Aug 12 stale): `docs/operations/qa-2026-08-13-prd-audit.md`. Top Community holes: BYOK paste, local base URL, factory plane on factory surfaces, pack import UI, typed meetings, assurance seed, comms dry-run, improvement-program writes. | grok |

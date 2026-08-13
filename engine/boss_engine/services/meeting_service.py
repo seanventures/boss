@@ -114,6 +114,9 @@ ROLE_CATALOG: dict[str, dict] = {
 }
 DEFAULT_ROLE_KEYS = ["product_manager", "engineer", "ux_designer", "privacy_safety"]
 FACILITATOR_TITLE = "Facilitator / Chief of Staff"
+MEETING_TYPES = ("prd_panel", "standup")
+DEFAULT_MEETING_TYPE = "prd_panel"
+STANDUP_DEFAULT_DIRECTIVE = "Daily standup — blockers, commitments, and today's plan."
 # ROLE_CATALOG above is the BASELINE seed every org/project starts with; orgs can
 # then add/edit/disable their own roles in the meeting_roles table.
 
@@ -360,15 +363,40 @@ def load_meeting_run(connection: Connection, run_id: str) -> Optional[dict]:
     return _row_to_run(r) if r else None
 
 
-def meeting_fingerprint(project_id: str, directive: str, url: str = "") -> str:
+def normalize_meeting_type(value: Optional[str]) -> str:
+    meeting_type = (value or DEFAULT_MEETING_TYPE).strip().lower() or DEFAULT_MEETING_TYPE
+    if meeting_type not in MEETING_TYPES:
+        raise ValueError(f"unsupported meeting_type {meeting_type!r}; expected one of {MEETING_TYPES}")
+    return meeting_type
+
+
+def meeting_type_of(run_or_constraints) -> str:
+    """Read persisted type from a run dict or constraints JSON. Defaults to prd_panel."""
+    if isinstance(run_or_constraints, dict) and "constraints" in run_or_constraints:
+        constraints = run_or_constraints.get("constraints") or {}
+    else:
+        constraints = run_or_constraints or {}
+    if not isinstance(constraints, dict):
+        return DEFAULT_MEETING_TYPE
+    try:
+        return normalize_meeting_type(constraints.get("meeting_type"))
+    except ValueError:
+        return DEFAULT_MEETING_TYPE
+
+
+def meeting_fingerprint(project_id: str, directive: str, url: str = "", meeting_type: str = DEFAULT_MEETING_TYPE) -> str:
     """A stable identity for "this meeting, about this thing, in this project".
 
     Whitespace-normalised: a directive pasted twice differs by a trailing newline and means
-    the same meeting.
+    the same meeting. Non-PRD types are part of the identity so a standup and a PRD panel on
+    the same subject can coexist, while two running standups cannot.
     """
     import hashlib
 
     parts = [project_id, " ".join((directive or "").split()), (url or "").strip()]
+    normalized_type = normalize_meeting_type(meeting_type)
+    if normalized_type != DEFAULT_MEETING_TYPE:
+        parts.append(normalized_type)
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
 
 
@@ -482,6 +510,9 @@ def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
 def start_meeting_run(connection, *, project_id, task_id, directive, url, constraints, role_keys, finalize_ctx) -> str:
     run_id = make_id("mrun")
     personas = resolve_roles(role_keys, load_role_map(connection, project_id))
+    constraints = dict(constraints or {})
+    constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
+    constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
     connection.execute(
         text("""
             INSERT INTO meeting_runs (id, project_id, task_id, status, phase, directive, url,
@@ -508,7 +539,9 @@ def convene_prd_meeting_core(
     task (if needed), reserve budget, start the run, enqueue the first step.
     Used by the /v1/meetings/prd endpoint and the Plane ``boss:design`` intake so
     both routes are governed identically."""
-    constraints = constraints or {}
+    constraints = dict(constraints or {})
+    constraints.setdefault("meeting_type", DEFAULT_MEETING_TYPE)
+    constraints["meeting_type"] = normalize_meeting_type(constraints.get("meeting_type"))
 
     # Refuse to convene a meeting that is ALREADY being held.
     #
@@ -520,7 +553,9 @@ def convene_prd_meeting_core(
     # the Plane intake both call this.
     #
     # Idempotent, not an error: the caller wanted a meeting on this subject and there is one.
-    fingerprint = meeting_fingerprint(project_id, directive, url)
+    fingerprint = meeting_fingerprint(
+        project_id, directive, url, meeting_type=constraints["meeting_type"]
+    )
     if not constraints.get("allow_duplicate"):
         existing_run, existing_task = active_duplicate_meeting(connection, project_id, fingerprint)
         if existing_run:
@@ -804,11 +839,63 @@ def _is_simulated_run(run: dict) -> bool:
     )
 
 
-def _fixture_state(directive: str, personas: list[dict]) -> dict:
+def _fixture_state(directive: str, personas: list[dict], meeting_type: str = DEFAULT_MEETING_TYPE) -> dict:
     titles = [p["title"] for p in personas]
+    meeting_type = normalize_meeting_type(meeting_type)
+    if meeting_type == "standup":
+        return {
+            "simulated": True,
+            "llm_called": False,
+            "meeting_type": "standup",
+            "research": {
+                "note": "simulated standup check-in; no crawl and no model",
+                "pages": [],
+                "sitemap": [],
+            },
+            "round1": {
+                title: f"[standup] {title}: yesterday shipped, today focused on: {directive[:80]}"
+                for title in titles
+            },
+            "round2": {
+                title: f"[standup] {title}: no live model; blocker called if any."
+                for title in titles
+            },
+            "synthesis": (
+                "[standup] Facilitator recap: commitments captured, one optional dissent recorded."
+            ),
+            "prd_markdown": (
+                "# Simulated standup minutes\n\n"
+                "This run used `simulated=true`. No model was invoked.\n\n"
+                f"Directive: {directive}\n"
+            ),
+            "action_items": [
+                {
+                    "title": "Unblock CI flake on payments",
+                    "description": "Fixture action from standup — owner follows up today.",
+                    "priority": "p1",
+                    "risk_tier": 1,
+                }
+            ],
+            "dissent_records": [
+                {
+                    "role": "QA / Test",
+                    "position": "caution",
+                    "reason": "Flake still open; do not treat the build as green.",
+                }
+            ],
+            "decision_items": [
+                {
+                    "question": "Accept today's standup plan and proceed?",
+                    "recommendation": {"summary": "Proceed with listed actions; hold if flake worsens."},
+                    "risk_tier": 1,
+                    "default_action": "hold",
+                }
+            ],
+        }
     return {
         "simulated": True,
         "llm_called": False,
+        "meeting_type": "prd_panel",
         "research": {
             "note": "simulated research; no crawl and no model",
             "pages": [],
@@ -928,6 +1015,23 @@ def _advance_simulated_phase(connection, settings: Settings, jobs, run: dict) ->
     return {"status": "running", "done": False, "phase": next_phase, "simulated": True}
 
 
+def _first_meeting_decision_id(meeting) -> Optional[str]:
+    if not meeting:
+        return None
+    decisions = meeting.get("decisions") or []
+    if isinstance(decisions, str):
+        try:
+            decisions = json.loads(decisions)
+        except Exception:
+            return None
+    if not decisions:
+        return None
+    first = decisions[0]
+    if isinstance(first, dict):
+        return first.get("decision_id")
+    return str(first) if first else None
+
+
 def meeting_evidence(connection, meeting_or_run_id: str) -> Optional[dict]:
     """Operator-visible phase timeline + artifact links for a run or meeting."""
     run = load_meeting_run(connection, meeting_or_run_id)
@@ -985,6 +1089,12 @@ def meeting_evidence(connection, meeting_or_run_id: str) -> Optional[dict]:
             continue
         seen.add(key)
         unique_links.append(item)
+    meeting_type = meeting_type_of(run) if run else DEFAULT_MEETING_TYPE
+    if meeting_type == DEFAULT_MEETING_TYPE and state.get("meeting_type"):
+        try:
+            meeting_type = normalize_meeting_type(state.get("meeting_type"))
+        except ValueError:
+            meeting_type = DEFAULT_MEETING_TYPE
     return {
         "id": (run or {}).get("id") or meeting["id"],
         "project_id": (run or {}).get("project_id")
@@ -993,13 +1103,86 @@ def meeting_evidence(connection, meeting_or_run_id: str) -> Optional[dict]:
         "run_id": (run or {}).get("id"),
         "status": (run or {}).get("status") or meeting["status"],
         "phase": (run or {}).get("phase"),
+        "meeting_type": meeting_type,
         "simulated": bool(state.get("simulated") or (run and _is_simulated_run(run))),
         "phase_timeline": timeline,
         "artifact_links": unique_links,
         "receipt_id": ((run or {}).get("finalize_ctx") or {}).get("receipt_id"),
         "minutes_artifact_id": (run or {}).get("minutes_artifact_id")
         or (meeting["minutes_artifact_id"] if meeting else None),
+        "decision_id": (run or {}).get("decision_id")
+        or _first_meeting_decision_id(meeting),
+        "action_task_ids": list((meeting or {}).get("action_task_ids") or []),
+        "dissent_records": list((meeting or {}).get("dissent_records") or []),
         "llm_called": bool(state.get("llm_called")),
+    }
+
+
+def _materialize_standup_outputs(
+    connection,
+    *,
+    project_id: str,
+    meeting_id: str,
+    actor: str,
+    minutes_artifact_id: str,
+    state: dict,
+) -> dict:
+    """Turn standup fixture lists into action tasks + a Decision. No model."""
+    from .canonical import CanonicalObjectService
+
+    canonical = CanonicalObjectService()
+    action_items = list(state.get("action_items") or [])
+    decision_items = list(state.get("decision_items") or [])
+    dissent_records = list(state.get("dissent_records") or [])
+    action_task_ids = [
+        canonical._create_meeting_action_task(
+            connection,
+            project_id,
+            meeting_id,
+            index,
+            item,
+            actor,
+            minutes_artifact_id,
+        )
+        for index, item in enumerate(action_items, start=1)
+    ]
+    decisions = [
+        canonical._create_meeting_decision(
+            connection,
+            project_id,
+            meeting_id,
+            index,
+            item,
+            actor,
+            minutes_artifact_id,
+        )
+        for index, item in enumerate(decision_items, start=1)
+    ]
+    connection.execute(
+        text(
+            """
+            UPDATE meetings
+            SET action_task_ids = CAST(:actions AS JSONB),
+                decisions = CAST(:decisions AS JSONB),
+                dissent_records = CAST(:dissent AS JSONB),
+                updated_at = now()
+            WHERE id = :id
+            """
+        ),
+        {
+            "actions": json.dumps(action_task_ids),
+            "decisions": json.dumps(decisions),
+            "dissent": json.dumps(dissent_records),
+            "id": meeting_id,
+        },
+    )
+    decision_id = decisions[0]["decision_id"] if decisions else None
+    return {
+        "action_task_ids": action_task_ids,
+        "action_items": action_items,
+        "decisions": decisions,
+        "decision_id": decision_id,
+        "dissent_records": dissent_records,
     }
 
 
@@ -1013,12 +1196,18 @@ def run_simulated_meeting(
     directive: Optional[str] = None,
     url: str = "",
     role_keys: Optional[list] = None,
+    meeting_type: str = DEFAULT_MEETING_TYPE,
 ) -> dict:
     """Persist a full research→finalize fixture without calling a model or reserving budget.
 
     Side effects (artifacts, receipt) are receipted with a unique dedupe_key.
-    Does not enqueue a worker job and does not open a publish Decision.
+    Does not enqueue a worker job. Standup also materializes action items, optional
+    dissent, and a Decision — still with no live model.
     """
+    meeting_type = normalize_meeting_type(meeting_type)
+    default_directive = (
+        STANDUP_DEFAULT_DIRECTIVE if meeting_type == "standup" else "Community simulated panel fixture"
+    )
     meeting = None
     if meeting_id:
         meeting = connection.execute(
@@ -1042,17 +1231,60 @@ def run_simulated_meeting(
                 **evidence,
                 "already": True,
                 "simulated": True,
+                "meeting_type": meeting_type_of(existing_run),
                 "project_id": project_id,
             }
+        if existing_run and existing_run.get("status") == "running":
+            evidence = meeting_evidence(connection, existing_run["id"]) or {}
+            return {
+                **evidence,
+                "already": True,
+                "duplicate_of": existing_run["id"],
+                "meeting_type": meeting_type_of(existing_run),
+                "project_id": project_id,
+            }
+
+    resolved_directive = directive or (meeting["purpose"] if meeting else None) or default_directive
+    fingerprint = meeting_fingerprint(
+        project_id, resolved_directive, url, meeting_type=meeting_type
+    )
+    existing_run_id, _existing_task = active_duplicate_meeting(connection, project_id, fingerprint)
+    if existing_run_id:
+        emit_event(
+            connection,
+            project_id,
+            "meeting.duplicate_suppressed",
+            actor,
+            "meeting_run",
+            existing_run_id,
+            {"directive": resolved_directive[:200], "fingerprint": fingerprint, "meeting_type": meeting_type},
+        )
+        evidence = meeting_evidence(connection, existing_run_id) or {}
+        return {
+            **evidence,
+            "already": True,
+            "duplicate_of": existing_run_id,
+            "simulated": True,
+            "meeting_type": meeting_type,
+            "project_id": project_id,
+            "llm_called": False,
+        }
+
     if meeting is None:
-        title = f"Simulated meeting: {(directive or 'Community fixture')[:80]}"
+        title_prefix = "Standup" if meeting_type == "standup" else "Simulated meeting"
+        title = f"{title_prefix}: {resolved_directive[:80]}"
+        purpose = (
+            "No-spend simulated daily standup"
+            if meeting_type == "standup"
+            else "No-spend simulated multi-agent panel fixture"
+        )
         from .canonical import CanonicalObjectService
 
         meeting_dict = CanonicalObjectService().create_meeting(
             connection,
             project_id=project_id,
             title=title,
-            purpose="No-spend simulated multi-agent panel fixture",
+            purpose=purpose,
             actor=actor,
             participants=[],
             agenda=list(SIMULATED_PHASES),
@@ -1062,9 +1294,9 @@ def run_simulated_meeting(
             text("SELECT * FROM meetings WHERE id = :id"),
             {"id": meeting_id},
         ).mappings().first()
-    directive = directive or meeting["purpose"] or meeting["title"]
+    directive = resolved_directive
     personas = resolve_roles(role_keys, load_role_map(connection, project_id))
-    state = _fixture_state(directive, personas)
+    state = _fixture_state(directive, personas, meeting_type=meeting_type)
     artifacts = {}
     for phase in SIMULATED_PHASES:
         key = "prd_markdown" if phase == "draft" else phase
@@ -1079,6 +1311,7 @@ def run_simulated_meeting(
         )
     state["artifacts"] = artifacts
     state["phase_timeline"] = _phase_timeline_from_state(state)
+    state["meeting_type"] = meeting_type
     scope = _project_scope(connection, project_id)
     from .receipts import ReceiptService
 
@@ -1089,12 +1322,13 @@ def run_simulated_meeting(
         project_id,
         f"meeting.simulated:{project_id}:{meeting['id']}",
         "meeting.simulated_run",
-        {"meeting_id": meeting["id"], "phases": list(SIMULATED_PHASES)},
-        {"actor": actor, "llm_called": False, "cost_usd_micros": 0},
+        {"meeting_id": meeting["id"], "phases": list(SIMULATED_PHASES), "meeting_type": meeting_type},
+        {"actor": actor, "llm_called": False, "cost_usd_micros": 0, "meeting_type": meeting_type},
     )
     minutes = {
         "directive": directive,
         "url": url,
+        "meeting_type": meeting_type,
         "simulated": True,
         "llm_called": False,
         "participants": [p["title"] for p in personas] + [FACILITATOR_TITLE],
@@ -1108,6 +1342,8 @@ def run_simulated_meeting(
         "round2_debate": state["round2"],
         "synthesis": state["synthesis"],
         "prd_markdown": state["prd_markdown"],
+        "action_items": list(state.get("action_items") or []),
+        "dissent_records": list(state.get("dissent_records") or []),
         "phase_timeline": state["phase_timeline"],
         "artifacts": artifacts,
         "cost_usd_micros": 0,
@@ -1131,6 +1367,7 @@ def run_simulated_meeting(
         f"{meeting['title']} simulated transcript",
         {
             "simulated": True,
+            "meeting_type": meeting_type,
             "transcript": [
                 {
                     "speaker": "fixture",
@@ -1161,6 +1398,22 @@ def run_simulated_meeting(
             "id": meeting["id"],
         },
     )
+    standup_outputs: dict = {
+        "action_task_ids": [],
+        "action_items": [],
+        "decisions": [],
+        "decision_id": None,
+        "dissent_records": [],
+    }
+    if meeting_type == "standup":
+        standup_outputs = _materialize_standup_outputs(
+            connection,
+            project_id=project_id,
+            meeting_id=meeting["id"],
+            actor=actor,
+            minutes_artifact_id=minutes_artifact_id,
+            state=state,
+        )
     run_id = make_id("mrun")
     connection.execute(
         text(
@@ -1168,13 +1421,13 @@ def run_simulated_meeting(
             INSERT INTO meeting_runs (
               id, project_id, task_id, status, phase, directive, url,
               role_keys, constraints, state, usage, finalize_ctx,
-              meeting_id, minutes_artifact_id
+              meeting_id, minutes_artifact_id, decision_id
             )
             VALUES (
               :id, :p, NULL, 'simulated', 'done', :d, :url,
               CAST(:rk AS JSONB), CAST(:c AS JSONB), CAST(:state AS JSONB),
               CAST(:usage AS JSONB), CAST(:fc AS JSONB),
-              :meeting_id, :minutes
+              :meeting_id, :minutes, :decision_id
             )
             """
         ),
@@ -1184,14 +1437,22 @@ def run_simulated_meeting(
             "d": directive,
             "url": url,
             "rk": json.dumps([p["key"] for p in personas]),
-            "c": json.dumps({"simulated": True}),
+            "c": json.dumps({"simulated": True, "meeting_type": meeting_type}),
             "state": json.dumps(state),
             "usage": json.dumps(
                 {"cost_usd_micros": 0, "model": "simulated-fixture", "simulated": True}
             ),
-            "fc": json.dumps({"simulated": True, "receipt_id": receipt["id"]}),
+            "fc": json.dumps(
+                {
+                    "simulated": True,
+                    "receipt_id": receipt["id"],
+                    "meeting_fingerprint": fingerprint,
+                    "meeting_type": meeting_type,
+                }
+            ),
             "meeting_id": meeting["id"],
             "minutes": minutes_artifact_id,
+            "decision_id": standup_outputs.get("decision_id"),
         },
     )
     emit_event(
@@ -1205,6 +1466,8 @@ def run_simulated_meeting(
             "run_id": run_id,
             "receipt_id": receipt["id"],
             "minutes_artifact_id": minutes_artifact_id,
+            "meeting_type": meeting_type,
+            "decision_id": standup_outputs.get("decision_id"),
             "llm_called": False,
             "duplicate": not created,
         },
@@ -1216,6 +1479,7 @@ def run_simulated_meeting(
         "project_id": project_id,
         "status": "simulated",
         "phase": "done",
+        "meeting_type": meeting_type,
         "simulated": True,
         "llm_called": False,
         "phase_timeline": state["phase_timeline"],
@@ -1230,5 +1494,10 @@ def run_simulated_meeting(
         "receipt_id": receipt["id"],
         "minutes_artifact_id": minutes_artifact_id,
         "transcript_artifact_id": transcript_artifact_id,
+        "decision_id": standup_outputs.get("decision_id"),
+        "action_task_ids": standup_outputs.get("action_task_ids") or [],
+        "action_items": standup_outputs.get("action_items") or [],
+        "decisions": standup_outputs.get("decisions") or [],
+        "dissent_records": standup_outputs.get("dissent_records") or [],
         "already": not created,
     }

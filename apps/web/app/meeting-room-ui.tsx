@@ -14,6 +14,7 @@ import {
   runSimulatedMeetingAction,
   loadMeetingEvidenceAction,
 } from "./actions";
+import { MeetingConsensusCard } from "./phase3-ui";
 import { SubmitButton } from "./submit-button";
 
 const ROLE_META: Record<string, { initials: string; tone: string }> = {
@@ -120,10 +121,22 @@ function NewMeetingForm({
   // The server now refuses a duplicate while one is running; this stops the clicks reaching
   // it, and says what is happening either way.
   const [convening, setConvening] = useState(false);
+  const [meetingType, setMeetingType] = useState<"prd_panel" | "standup">("prd_panel");
   return (
     <form action={conveneMeetingAction} className="mr-convene"
           onSubmit={() => setConvening(true)}>
       <input type="hidden" name="project_id" value={projectId} />
+      <label className="mr-field-label" htmlFor="mr-type">Meeting type</label>
+      <select
+        id="mr-type"
+        name="meeting_type"
+        className="mr-select"
+        value={meetingType}
+        onChange={(event) => setMeetingType(event.target.value === "standup" ? "standup" : "prd_panel")}
+      >
+        <option value="prd_panel">PRD panel (live model)</option>
+        <option value="standup">Standup (no-spend fixture)</option>
+      </select>
       <label className="mr-field-label" htmlFor="mr-directive">Directive</label>
       <textarea
         id="mr-directive"
@@ -132,49 +145,66 @@ function NewMeetingForm({
         rows={8}
         required
         placeholder={
-          "Describe the goal in detail. e.g.\n" +
-          "Produce a PRD to redesign our website (study the URL below).\n" +
-          "• Preserve 100% of current features — list them.\n" +
-          "• Make accessibility the priority.\n" +
-          "• Add online donations and a volunteer-hours portal.\n" +
-          "Publish the final PRD as a PDF pull request."
+          meetingType === "standup"
+            ? "Daily standup — blockers, commitments, and today's plan."
+            : (
+              "Describe the goal in detail. e.g.\n" +
+              "Produce a PRD to redesign our website (study the URL below).\n" +
+              "• Preserve 100% of current features — list them.\n" +
+              "• Make accessibility the priority.\n" +
+              "• Add online donations and a volunteer-hours portal.\n" +
+              "Publish the final PRD as a PDF pull request."
+            )
         }
       />
-      <label className="mr-field-label" htmlFor="mr-url">Website to study (optional)</label>
-      <input id="mr-url" name="url" className="mr-url-input" placeholder="https://example.com" />
+      {meetingType === "prd_panel" ? (
+        <>
+          <label className="mr-field-label" htmlFor="mr-url">Website to study (optional)</label>
+          <input id="mr-url" name="url" className="mr-url-input" placeholder="https://example.com" />
 
-      <label className="mr-field-label">Attach to a task (optional — otherwise a new task is created)</label>
-      <select name="task_id" className="mr-select" defaultValue="">
-        <option value="">＋ Create a new task for this meeting</option>
-        {tasks.map((t) => (
-          <option key={t.id} value={t.id}>{t.title.replace(/^CEO command:\s*/, "").slice(0, 70)}</option>
-        ))}
-      </select>
+          <label className="mr-field-label">Attach to a task (optional — otherwise a new task is created)</label>
+          <select name="task_id" className="mr-select" defaultValue="">
+            <option value="">＋ Create a new task for this meeting</option>
+            {tasks.map((t) => (
+              <option key={t.id} value={t.id}>{t.title.replace(/^CEO command:\s*/, "").slice(0, 70)}</option>
+            ))}
+          </select>
 
-      <label className="mr-field-label">Staff the panel (the meeting template)</label>
-      <div className="mr-roles">
-        {roles.filter((r) => r.enabled !== false).map((r) => (
-          <label key={r.key} className="mr-role-pick" title={r.lens}>
-            <input type="checkbox" name="roles" value={r.key} defaultChecked={r.default} />
-            <Avatar role={r.title} />
-            <span className="mr-role-pick-title">{r.title}</span>
-          </label>
-        ))}
-      </div>
-      <span className="mr-convene-note">
-        A Facilitator is always added. The panel studies the site, debates over two rounds, synthesizes, and drafts a
-        PRD — then it goes to your approval gate before publishing. Runs ~3–5 min.
-      </span>
+          <label className="mr-field-label">Staff the panel (the meeting template)</label>
+          <div className="mr-roles">
+            {roles.filter((r) => r.enabled !== false).map((r) => (
+              <label key={r.key} className="mr-role-pick" title={r.lens}>
+                <input type="checkbox" name="roles" value={r.key} defaultChecked={r.default} />
+                <Avatar role={r.title} />
+                <span className="mr-role-pick-title">{r.title}</span>
+              </label>
+            ))}
+          </div>
+          <span className="mr-convene-note">
+            A Facilitator is always added. The panel studies the site, debates over two rounds, synthesizes, and drafts a
+            PRD — then it goes to your approval gate before publishing. Runs ~3–5 min.
+          </span>
+        </>
+      ) : (
+        <span className="mr-convene-note">
+          Standup uses the no-spend fixture by default: minutes, action items, optional dissent, and a Decision.
+          No live model is called.
+        </span>
+      )}
       <div className="mr-form-actions">
         <SubmitButton type="submit" className="cap-btn primary" disabled={convening}>
-          {convening ? "Convening the panel…" : "Convene the panel"}
+          {convening
+            ? (meetingType === "standup" ? "Running standup fixture…" : "Convening the panel…")
+            : (meetingType === "standup" ? "Run standup fixture" : "Convene the panel")}
         </SubmitButton>
         <button type="button" className="cap-btn" onClick={onCancel} disabled={convening}>
           Cancel
         </button>
         {convening ? (
           <span className="detail">
-            the panel is being staffed — this takes 3–5 minutes and appears in the list below
+            {meetingType === "standup"
+              ? "standup fixture is completing — minutes and a Decision appear below"
+              : "the panel is being staffed — this takes 3–5 minutes and appears in the list below"}
           </span>
         ) : null}
       </div>
@@ -195,6 +225,8 @@ function MeetingEvidence({
     artifact_links: Array<{ kind: string; artifact_id: string }>;
     receipt_id?: string | null;
     simulated?: boolean;
+    meeting_type?: string;
+    decision_id?: string | null;
   } | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -213,8 +245,14 @@ function MeetingEvidence({
   return (
     <div className="mr-evidence" data-testid="meeting-evidence">
       <div className="mr-section-title">Phase timeline &amp; artifacts</div>
+      {evidence.meeting_type ? (
+        <p className="detail" data-testid="meeting-type">Type <code>{evidence.meeting_type}</code></p>
+      ) : null}
       {evidence.simulated ? (
         <p className="detail">Simulated fixture — no live model was called.</p>
+      ) : null}
+      {evidence.decision_id ? (
+        <p className="detail">Decision <code>{evidence.decision_id}</code></p>
       ) : null}
       {evidence.phase_timeline.length > 0 ? (
         <ol className="mr-phase-timeline">
@@ -250,11 +288,13 @@ function MeetingDetail({
   onBack,
   orgId,
   projectId,
+  actor,
 }: {
   meeting: Meeting;
   onBack: () => void;
   orgId?: string;
   projectId: string;
+  actor: string;
 }) {
   const orgQuery = orgId ? `org=${encodeURIComponent(orgId)}&` : "";
   return (
@@ -333,6 +373,7 @@ function MeetingDetail({
         <p className="mr-running-note">⏳ Meeting in progress — {PHASE_LABEL[meeting.phase ?? ""] ?? meeting.phase}. This view updates live; the panel survives restarts.</p>
       ) : null}
       <MeetingEvidence meetingId={meeting.id} projectId={projectId} />
+      <MeetingConsensusCard projectId={projectId} actor={actor} meetingId={meeting.id} />
 
       <div className="mr-section-title">Round 1 — opening perspectives</div>
       <div className="mr-grid">
@@ -439,6 +480,7 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
 export function MeetingsHome({
   projectId,
   orgId,
+  actor,
   meetings,
   roles,
   tasks,
@@ -446,6 +488,7 @@ export function MeetingsHome({
 }: {
   projectId: string;
   orgId?: string;
+  actor: string;
   meetings: Meeting[];
   roles: MeetingRole[];
   tasks: { id: string; title: string }[];
@@ -480,6 +523,7 @@ export function MeetingsHome({
         onBack={() => selectMeeting(null)}
         orgId={orgId}
         projectId={projectId}
+        actor={actor}
       />
     );
   }

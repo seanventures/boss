@@ -1,6 +1,14 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — Typed standup meeting (ai/grok/community-ga)
+
+- `meeting_type` persisted in constraints: `prd_panel` | `standup`.
+- `POST /v1/meetings/standup` simulated fixture: minutes artifact, action items, dissent, Decision. No LLM/job/budget.
+- Duplicate running standup refused (`already` + `duplicate_of`).
+- Meeting Room type select; MeetingConsensusCard bound to a real meeting_id.
+- Tests: 6 meeting simulated/standup passed. FEATURES meetings ✅ (go/no-go still future type).
+
 ## 2026-08-13 — Grok — GA loop: catalog honesty + Code Tasks plane + B6 SOP (ai/grok/community-ga)
 
 - Catalog `built` only when `matched_on` is `benchmark_id` or `launched_as_benchmark`; name matches become `related` (stops stale report 404 reuse).

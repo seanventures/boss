@@ -104,6 +104,127 @@ def test_simulated_run_walks_all_phases_without_llm(client, engine):
         ).scalar_one()
     assert int(jobs) == 0
     assert int((usage or {}).get("cost_usd_micros") or 0) == 0
+    assert payload.get("meeting_type") == "prd_panel"
+    with begin(engine) as connection:
+        constraints = connection.execute(
+            text("SELECT constraints FROM meeting_runs WHERE id = :id"),
+            {"id": payload["run_id"]},
+        ).scalar_one()
+    assert (constraints or {}).get("meeting_type") == "prd_panel"
+
+
+def test_standup_type_persists_and_fixture_yields_minutes_decision(client, engine):
+    created = client.post(
+        "/v1/meetings/standup",
+        json={
+            "project_id": PROJECT_ID,
+            "actor": "ceo",
+            "directive": "Standup fixture — typed meeting ship.",
+            "simulated": True,
+        },
+    )
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    assert payload["meeting_type"] == "standup"
+    assert payload["simulated"] is True
+    assert payload["llm_called"] is False
+    assert payload["status"] == "simulated"
+    assert payload["minutes_artifact_id"]
+    assert payload["decision_id"]
+    assert payload["decision_id"].startswith("dec_")
+    assert payload["action_task_ids"]
+    assert payload["action_items"]
+    assert payload["dissent_records"]
+    assert payload["receipt_id"]
+
+    minutes = client.get(f"/v1/artifacts/{payload['minutes_artifact_id']}")
+    assert minutes.status_code == 200, minutes.text
+    content = minutes.json()["content"]
+    assert content["meeting_type"] == "standup"
+    assert content["llm_called"] is False
+    assert content["action_items"]
+
+    evidence = client.get(
+        f"/v1/meetings/{payload['meeting_id']}/evidence",
+        params={"project_id": PROJECT_ID},
+    )
+    assert evidence.status_code == 200, evidence.text
+    assert evidence.json()["meeting_type"] == "standup"
+    assert evidence.json()["decision_id"] == payload["decision_id"]
+
+    inbox = client.get("/v1/decisions/inbox", params={"project_id": PROJECT_ID})
+    assert inbox.status_code == 200, inbox.text
+    assert any(item["id"] == payload["decision_id"] for item in inbox.json()["items"])
+
+    with begin(engine) as connection:
+        constraints = connection.execute(
+            text("SELECT constraints FROM meeting_runs WHERE id = :id"),
+            {"id": payload["run_id"]},
+        ).scalar_one()
+        jobs = connection.execute(
+            text("SELECT count(*) FROM jobs WHERE payload->>'run_id' = :id"),
+            {"id": payload["run_id"]},
+        ).scalar_one()
+        usage = connection.execute(
+            text("SELECT usage FROM meeting_runs WHERE id = :id"),
+            {"id": payload["run_id"]},
+        ).scalar_one()
+    assert (constraints or {}).get("meeting_type") == "standup"
+    assert (constraints or {}).get("simulated") is True
+    assert int(jobs) == 0
+    assert int((usage or {}).get("cost_usd_micros") or 0) == 0
+
+
+def test_standup_refuses_duplicate_running_convene(client, engine):
+    from boss_engine.services.meeting_service import (
+        meeting_fingerprint,
+        start_meeting_run,
+    )
+
+    directive = "Standup duplicate-running probe"
+    fingerprint = meeting_fingerprint(PROJECT_ID, directive, "", meeting_type="standup")
+    with begin(engine) as connection:
+        run_id = start_meeting_run(
+            connection,
+            project_id=PROJECT_ID,
+            task_id=None,
+            directive=directive,
+            url="",
+            constraints={"meeting_type": "standup", "simulated": True},
+            role_keys=[],
+            finalize_ctx={"meeting_fingerprint": fingerprint, "simulated": True},
+        )
+    again = client.post(
+        "/v1/meetings/standup",
+        json={
+            "project_id": PROJECT_ID,
+            "actor": "ceo",
+            "directive": directive,
+            "simulated": True,
+        },
+    )
+    assert again.status_code == 201, again.text
+    body = again.json()
+    assert body["already"] is True
+    assert body["duplicate_of"] == run_id
+    assert body["llm_called"] is False
+    with begin(engine) as connection:
+        count = connection.execute(
+            text(
+                "SELECT count(*) FROM meeting_runs "
+                "WHERE project_id = :p AND finalize_ctx->>'meeting_fingerprint' = :fp"
+            ),
+            {"p": PROJECT_ID, "fp": fingerprint},
+        ).scalar_one()
+    assert int(count) == 1
+
+
+def test_standup_rejects_live_flag(client):
+    response = client.post(
+        "/v1/meetings/standup",
+        json={"project_id": PROJECT_ID, "actor": "ceo", "simulated": False},
+    )
+    assert response.status_code == 422
 
 
 def test_simulated_run_rejects_live_flag(client):

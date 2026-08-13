@@ -211,6 +211,10 @@ export async function loadTaskContextAction(taskId: string, projectId: string): 
 }
 
 export async function tallyVotesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const meetingId = String(formData.get("meeting_id") ?? "").trim();
+  if (!meetingId) {
+    return { ok: false, error: "requires meeting_id — open a meeting or paste a run/meeting id." };
+  }
   const approve = Math.max(0, Number(formData.get("approve") ?? 0));
   const reject = Math.max(0, Number(formData.get("reject") ?? 0));
   const abstain = Math.max(0, Number(formData.get("abstain") ?? 0));
@@ -222,7 +226,8 @@ export async function tallyVotesAction(_prev: ActionResult | null, formData: For
     ...Array.from({ length: abstain }, (_v, i) => ({ voter: `x${i}`, vote: "abstain" })),
   ];
   if (!votes.length) return { ok: false, error: "Enter at least one vote." };
-  return postJsonReturn(`/v1/meetings/tally`, {
+  return postJsonReturn(`/v1/meetings/${encodeURIComponent(meetingId)}/tally`, {
+    actor: getActor(formData),
     votes,
     eligible_count: eligibleRaw ? Number(eligibleRaw) : undefined,
     quorum: quorumRaw ? Number(quorumRaw) : undefined,
@@ -2713,8 +2718,25 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
   const directive = String(formData.get("directive") ?? "").trim();
   const url = String(formData.get("url") ?? "").trim();
   const taskId = String(formData.get("task_id") ?? "").trim();
+  const meetingType = String(formData.get("meeting_type") ?? "prd_panel").trim() || "prd_panel";
   const roles = formData.getAll("roles").map((r) => String(r)).filter(Boolean);
   if (!directive) {
+    return;
+  }
+  if (meetingType === "standup") {
+    await fetch(`${API_URL}/v1/meetings/standup`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        project_id: projectId,
+        actor: getActor(formData),
+        directive,
+        url: url || undefined,
+        roles: roles.length ? roles : undefined,
+        simulated: true,
+      }),
+    });
+    revalidatePath("/");
     return;
   }
   await client.conveneMeeting({
@@ -2724,6 +2746,7 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
     roles: roles.length ? roles : undefined,
     task_id: taskId || undefined,
     actor: getActor(formData),
+    constraints: { meeting_type: "prd_panel" },
   });
   revalidatePath("/");
 }
@@ -2743,6 +2766,7 @@ export async function runSimulatedMeetingAction(formData: FormData): Promise<voi
       actor: getActor(formData),
       directive: directive || "Community simulated panel fixture",
       simulated: true,
+      meeting_type: String(formData.get("meeting_type") ?? "prd_panel").trim() || "prd_panel",
     }),
   });
   revalidatePath("/");
@@ -2757,6 +2781,8 @@ export async function loadMeetingEvidenceAction(
   artifact_links: Array<{ kind: string; artifact_id: string }>;
   receipt_id?: string | null;
   simulated?: boolean;
+  meeting_type?: string;
+  decision_id?: string | null;
 }> {
   const p = encodeURIComponent(projectId);
   const id = encodeURIComponent(meetingId);
@@ -2772,6 +2798,8 @@ export async function loadMeetingEvidenceAction(
     artifact_links?: Array<{ kind: string; artifact_id: string }>;
     receipt_id?: string | null;
     simulated?: boolean;
+    meeting_type?: string;
+    decision_id?: string | null;
   };
   return {
     ok: true,
@@ -2779,6 +2807,8 @@ export async function loadMeetingEvidenceAction(
     artifact_links: data.artifact_links ?? [],
     receipt_id: data.receipt_id,
     simulated: data.simulated,
+    meeting_type: data.meeting_type,
+    decision_id: data.decision_id,
   };
 }
 

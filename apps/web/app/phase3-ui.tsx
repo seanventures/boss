@@ -117,15 +117,55 @@ export function SlackToolsCard({ projectId }: { projectId: string }) {
   );
 }
 
-// --- Meeting consensus: vote tally + stall sweep ---
-export function MeetingConsensusCard({ projectId, actor }: { projectId: string; actor: string }) {
+// --- Meeting consensus: vote tally bound to a real meeting + stall sweep ---
+export function MeetingConsensusCard({
+  projectId,
+  actor,
+  meetingId,
+  meetings,
+}: {
+  projectId: string;
+  actor: string;
+  meetingId?: string;
+  meetings?: Array<{ id: string; title: string }>;
+}) {
   const [tallyState, tallyAction, tallyPending] = useActionState(tallyVotesAction, null);
   const [sweepState, sweepAction, sweepPending] = useActionState(sweepStalledMeetingsAction, null);
+  const bound = Boolean(meetingId);
   return (
-    <article className="stack-card">
+    <article className="stack-card" data-testid="meeting-consensus-card">
       <h3 style={{ margin: 0 }}>Meeting consensus</h3>
-      <p className="detail">Tally a panel vote under quorum/threshold rules, and sweep stalled meeting runs.</p>
+      {bound ? (
+        <p className="detail">Tally a panel vote for meeting <code>{meetingId}</code> under quorum/threshold rules.</p>
+      ) : (
+        <p className="detail" data-testid="meeting-consensus-requires-id">
+          requires meeting_id — open a meeting or pick one below to bind this tally to a real run.
+        </p>
+      )}
       <form action={tallyAction} className="composer compact">
+        <input type="hidden" name="actor" value={actor} />
+        {meetingId ? (
+          <input type="hidden" name="meeting_id" value={meetingId} />
+        ) : (
+          <label className="field">
+            <span>Meeting</span>
+            {meetings && meetings.length > 0 ? (
+              <select name="meeting_id" className="input" required defaultValue="">
+                <option value="" disabled>Select a meeting…</option>
+                {meetings.map((item) => (
+                  <option key={item.id} value={item.id}>{item.title.slice(0, 80)}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                name="meeting_id"
+                className="input"
+                placeholder="mtg_… or mrun_…"
+                required
+              />
+            )}
+          </label>
+        )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <label className="field" style={{ flex: 1 }}><span>Approve</span><input name="approve" className="input" type="number" min={0} defaultValue={2} /></label>
           <label className="field" style={{ flex: 1 }}><span>Reject</span><input name="reject" className="input" type="number" min={0} defaultValue={1} /></label>
