@@ -129,6 +129,9 @@ class AgentStudioService:
             "path": str(source.relative_to(self.settings.specpack_root)),
             "trusted": True,
         }
+        version_payload["requested_skills"] = self._seed_strip_unusable_skills(
+            connection, project_id, version_payload
+        )
         version = self.create_agent_version(
             connection,
             definition["id"],
@@ -2376,6 +2379,47 @@ class AgentStudioService:
             key: json.dumps(value) if isinstance(value, (dict, list)) else value
             for key, value in content.items()
         }
+
+    def _seed_strip_unusable_skills(
+        self,
+        connection: Connection,
+        project_id: str,
+        version_payload: dict[str, Any],
+    ) -> list[str]:
+        """Drop requested skills that are not installed or not on the RoleSpec.
+
+        Community seed must not fail the whole catalog because one pack file
+        names a skill the live RoleSpec has not been refreshed to include.
+        """
+        requested = [
+            str(item)
+            for item in (version_payload.get("requested_skills") or [])
+            if str(item).strip()
+        ]
+        if not requested:
+            return []
+        catalog = self._project_skill_ids(connection, project_id)
+        role_key = str((version_payload.get("role_key") or "")).strip()
+        allowed: Optional[set[str]] = None
+        if role_key:
+            row = connection.execute(
+                text(
+                    "SELECT spec FROM roles WHERE project_id=:p AND role_key=:r "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"p": project_id, "r": role_key},
+            ).mappings().first()
+            if row and row.get("spec"):
+                allowed = self._role_allowed_skill_ids(row["spec"] or {}, catalog)
+        keep: list[str] = []
+        for skill in requested:
+            matches = matching_skill_ids(skill, catalog)
+            if not matches:
+                continue
+            if allowed is not None and not any(m in allowed for m in matches):
+                continue
+            keep.append(skill)
+        return keep
 
     def _project_skill_ids(
         self, connection: Connection, project_id: str
