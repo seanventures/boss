@@ -11,6 +11,8 @@ from apps.worker.boss_worker.runner import (
     build_marketplace_validation_result,
     build_plan_result,
     capabilities,
+    execute_job,
+    is_sandbox_fail_closed,
     run_worker_cycle,
 )
 
@@ -110,6 +112,18 @@ class FakeControlPlaneClient:
                 "external_key": "BOSS-31",
             },
         }
+
+    def run_code_task(self, payload):
+        self.calls.append(("run_code_task", payload))
+        return getattr(
+            self,
+            "code_task_result",
+            {
+                "status": "completed",
+                "done": True,
+                "pull_request_url": "https://github.com/example/boss/pull/1",
+            },
+        )
 
     def run_orchestrator_next_move(self, payload):
         self.calls.append(("run_orchestrator_next_move", payload))
@@ -1407,3 +1421,75 @@ def test_run_worker_cycle_heartbeats_before_any_pack_derived_agent_execute():
     assert ran_job is True
     assert [call[0] for call in client.calls] == ["poll", "heartbeat", "complete"]
     # heartbeat happened before execute (which for agent. builds result without client call)
+
+
+def test_sandbox_fail_closed_classifier():
+    assert is_sandbox_fail_closed({"reason_code": "sandbox_task_missing", "status": "failed"})
+    assert is_sandbox_fail_closed({"reason_code": "microvm_claims_frozen"})
+    assert is_sandbox_fail_closed({"error": "sandbox host task missing (HTTP 404) for sbx_1"})
+    assert is_sandbox_fail_closed({"error": "sandbox host 404 for task"})
+    assert not is_sandbox_fail_closed({"status": "failed", "error": "tests failed"})
+    assert not is_sandbox_fail_closed(None)
+
+
+def test_code_task_sandbox_404_completes_without_dlq():
+    """Host 404 / claims frozen must complete the job, not fail() into the DLQ."""
+    job = LeasedJob(
+        id="job_sbx_404",
+        project_id="boss-dogfood",
+        task_id="tsk_code",
+        kind="code.task",
+        payload={"run_id": "crun_missing"},
+        attempt=1,
+        max_attempts=3,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(job)
+    client.code_task_result = {
+        "status": "failed",
+        "done": True,
+        "error": "sandbox host task missing (HTTP 404) for sbx_gone",
+        "reason_code": "sandbox_task_missing",
+        "failure_class": "needs_human",
+    }
+    settings = SimpleNamespace(
+        worker_id="worker-test-sbx",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+        job_max_runtime_seconds=60,
+    )
+    ran = run_worker_cycle(client, settings)
+    assert ran is True
+    names = [c[0] for c in client.calls]
+    assert "complete" in names
+    assert "fail" not in names
+    result = execute_job(job, client)
+    assert result["reason_code"] == "sandbox_task_missing"
+
+
+def test_code_task_generic_failure_still_deadletters():
+    job = LeasedJob(
+        id="job_code_fail",
+        project_id="boss-dogfood",
+        task_id="tsk_code",
+        kind="code.task",
+        payload={"run_id": "crun_tests"},
+        attempt=1,
+        max_attempts=1,
+        lease_token="lease_token",
+        lease_expires_at="future",
+    )
+    client = FakeControlPlaneClient(job)
+    client.code_task_result = {"status": "failed", "error": "tests failed"}
+    settings = SimpleNamespace(
+        worker_id="worker-test-code-fail",
+        lease_ttl_seconds=60,
+        poll_interval_seconds=1,
+        job_max_runtime_seconds=60,
+    )
+    ran = run_worker_cycle(client, settings)
+    assert ran is True
+    names = [c[0] for c in client.calls]
+    assert "fail" in names
+    assert "complete" not in names

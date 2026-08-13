@@ -76,6 +76,16 @@ def test_is_model_capacity_exhaustion():
         ("budget reservation denied", "needs_human", "budget_exhausted"),
         ("No such file or directory: 'git'", "infra", "missing_git"),
         ("sandbox not allowlisted", "infra", "sandbox_error"),
+        (
+            "sandbox host task missing (HTTP 404) for sbx_1",
+            "needs_human",
+            "sandbox_task_missing",
+        ),
+        (
+            "microVM execution is not claimed for Community GA (BOSS_MICROVM_CLAIMS_FROZEN=true)",
+            "needs_human",
+            "microvm_claims_frozen",
+        ),
         ("GitHub pull request failed", "infra", "github_error"),
         ("something totally unexpected", "infra", "pipeline_exception"),
     ],

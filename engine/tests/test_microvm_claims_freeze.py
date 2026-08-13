@@ -18,8 +18,10 @@ from boss_engine.services.sandbox_provider import (
     MicroVMClaimsFrozen,
     MicroVMProvider,
     SandboxHostUnavailable,
+    SandboxTaskMissing,
     ensure_microvm_execution_allowed,
     make_sandbox_provider,
+    map_sandbox_http_error,
     microvm_claims_are_frozen,
 )
 from boss_engine.services import sandbox_console
@@ -138,4 +140,75 @@ def test_exec_command_frozen_raises_422_class():
     s = _settings(microvm_claims_frozen=True)
     with pytest.raises(MicroVMClaimsFrozen) as ei:
         sandbox_console.exec_command(MagicMock(), s, "sbx_1", "ls")
+    assert ei.value.status_code == 422
+
+
+def test_map_sandbox_http_404_is_422_not_503():
+    import httpx
+
+    request = httpx.Request("GET", "http://sandbox-host:8077/v1/sandbox/tasks/sbx_gone")
+    response = httpx.Response(404, request=request, text="sandbox not found")
+    exc = httpx.HTTPStatusError("404", request=request, response=response)
+    mapped = map_sandbox_http_error(
+        exc, base="http://sandbox-host:8077", sandbox_task_id="sbx_gone", action="poll"
+    )
+    assert isinstance(mapped, SandboxTaskMissing)
+    assert mapped.status_code == 422
+    assert mapped.code == "sandbox_task_missing"
+    assert "sbx_gone" in mapped.message
+
+
+def test_run_code_task_host_404_is_422_class():
+    """Missing host task must fail closed 422, not SandboxHostUnavailable → DLQ."""
+    p = MicroVMProvider(_settings(microvm_claims_frozen=False))
+
+    class _Missing:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            import httpx
+
+            request = httpx.Request("POST", "http://sandbox-host:8077/v1/sandbox/tasks")
+            response = httpx.Response(202, request=request, json={"sandbox_task_id": "sbx_x"})
+            return response
+
+        def get(self, *a, **k):
+            import httpx
+
+            request = httpx.Request("GET", "http://sandbox-host:8077/v1/sandbox/tasks/sbx_x")
+            response = httpx.Response(404, request=request, text="sandbox not found")
+            raise httpx.HTTPStatusError("404 Not Found", request=request, response=response)
+
+    with patch("httpx.Client", return_value=_Missing()):
+        with patch("time.sleep", return_value=None):
+            with pytest.raises(SandboxTaskMissing) as ei:
+                p.run_code_task({"owner": "o", "repo": "r", "task_id": "crun_x"})
+    assert ei.value.status_code == 422
+    assert "not retryable" in ei.value.message
+
+
+def test_get_tree_missing_task_raises_422_class():
+    s = _settings(sandbox_agent_url="http://sandbox-host:8077")
+
+    class _Missing:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, *a, **k):
+            import httpx
+
+            request = httpx.Request("GET", "http://sandbox-host:8077/v1/sandbox/tasks/sbx_gone/fs")
+            response = httpx.Response(404, request=request, text="sandbox not found")
+            raise httpx.HTTPStatusError("404", request=request, response=response)
+
+    with patch("httpx.Client", return_value=_Missing()):
+        with pytest.raises(SandboxTaskMissing) as ei:
+            sandbox_console.get_tree(s, "sbx_gone")
     assert ei.value.status_code == 422

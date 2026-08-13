@@ -888,6 +888,27 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
         )
     ):
         return "infra", "missing_git"
+    if any(
+        sig in r
+        for sig in (
+            "claims_frozen",
+            "not claimed for community ga",
+            "boss_microvm_claims_frozen",
+        )
+    ):
+        return "needs_human", "microvm_claims_frozen"
+    if any(
+        sig in r
+        for sig in (
+            "sandbox host task missing",
+            "sandbox task missing",
+            "sandbox not found",
+            "sandbox task 404",
+            "sandbox host 404",
+        )
+    ) or ("404" in r and "sandbox" in r):
+        # Host task is gone — retry/DLQ cannot recreate it. Fail closed.
+        return "needs_human", "sandbox_task_missing"
     if any(sig in r for sig in ("sandbox", "microvm", "not allowlisted", "rootfs")):
         return "infra", "sandbox_error"
     if any(

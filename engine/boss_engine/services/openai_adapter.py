@@ -12,6 +12,64 @@ from .redaction import redact as _redact
 
 _RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
 
+# Groq free-tier TPM is 6k. Default native_max_output_tokens=8192 plus a packed
+# repo context routinely *requests* ~12k and 429s before any token is generated.
+# Cap request size (not just completion) when the model class is groq/qwen.
+GROQ_QWEN_MAX_OUTPUT_TOKENS = 1024
+GROQ_QWEN_CONTEXT_FILES = 4
+GROQ_QWEN_CONTEXT_HEAD_BYTES = 3000
+GROQ_QWEN_CONTEXT_MAX_BYTES = 12_000
+
+
+def is_groq_qwen_model_class(
+    model: Optional[str] = None,
+    *,
+    base_url: str = "",
+    engine: str = "",
+) -> bool:
+    """True when the request will hit Groq or a Qwen model (incl. groq:qwen/…)."""
+    blob = " ".join(str(part or "") for part in (model, base_url, engine)).lower()
+    return "groq" in blob or "qwen" in blob
+
+
+def capped_max_output_tokens(
+    requested: int,
+    model: Optional[str] = None,
+    *,
+    base_url: str = "",
+    engine: str = "",
+) -> int:
+    """Shrink max_tokens so a Groq 6k TPM lane cannot ask for 8k+ output."""
+    requested = int(requested or 0)
+    if requested <= 0:
+        return requested
+    if is_groq_qwen_model_class(model, base_url=base_url, engine=engine):
+        return min(requested, GROQ_QWEN_MAX_OUTPUT_TOKENS)
+    return requested
+
+
+def groq_qwen_context_limits(
+    model: Optional[str] = None,
+    *,
+    base_url: str = "",
+    engine: str = "",
+    file_limit: int = 14,
+) -> tuple[int, int, int]:
+    """(file_limit, max_bytes, head_bytes) for the code-task context packer.
+
+    ``file_limit <= 0`` means packing is disabled and must stay disabled.
+    """
+    requested = int(file_limit or 0)
+    if is_groq_qwen_model_class(model, base_url=base_url, engine=engine):
+        if requested <= 0:
+            return (0, GROQ_QWEN_CONTEXT_MAX_BYTES, GROQ_QWEN_CONTEXT_HEAD_BYTES)
+        return (
+            min(requested, GROQ_QWEN_CONTEXT_FILES),
+            GROQ_QWEN_CONTEXT_MAX_BYTES,
+            GROQ_QWEN_CONTEXT_HEAD_BYTES,
+        )
+    return (requested, 400_000, 20_000)
+
 
 def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict] = None):
     """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
@@ -256,7 +314,14 @@ class OpenAIAdapter:
         kwargs: dict = {"model": model, "messages": messages}
         # Cap the completion size: metered gateways (OpenRouter) reserve credits for the
         # requested MAXIMUM, so an uncapped request can 402 on reservation alone.
+        # Groq/Qwen is additionally capped well below the 6k TPM window.
         max_out = int(getattr(self.settings, "native_max_output_tokens", 0) or 0)
+        max_out = capped_max_output_tokens(
+            max_out,
+            model,
+            base_url=str(getattr(self.settings, "openai_base_url", "") or ""),
+            engine=str(getattr(self.settings, "code_agent_engine", "") or ""),
+        )
         if max_out > 0:
             kwargs["max_tokens"] = max_out
         if tools:

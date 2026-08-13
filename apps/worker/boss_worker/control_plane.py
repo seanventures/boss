@@ -129,6 +129,32 @@ class ControlPlaneClient:
 
     def run_code_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/code-tasks/step", json=payload)
+        # Operator/host 422 (claims frozen, missing sandbox task) is fail-closed:
+        # return a terminal payload so execute_job can complete instead of DLQ.
+        if response.status_code == 422:
+            try:
+                body = response.json()
+            except Exception:  # noqa: BLE001
+                body = {"detail": (response.text or "")[:400]}
+            detail = ""
+            if isinstance(body, dict):
+                detail = str(body.get("detail") or body.get("error") or body)
+            else:
+                detail = str(body)
+            blob = detail.lower()
+            reason = (
+                "microvm_claims_frozen"
+                if "claim" in blob or "frozen" in blob
+                else "sandbox_task_missing"
+            )
+            return {
+                "status": "failed",
+                "done": True,
+                "error": detail or "sandbox request rejected (422)",
+                "reason_code": reason,
+                "failure_class": "needs_human",
+                "http_status": 422,
+            }
         response.raise_for_status()
         return response.json()
 

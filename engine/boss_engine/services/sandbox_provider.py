@@ -66,6 +66,46 @@ class SandboxHostUnavailable(SandboxPlaneError):
         super().__init__(message, status_code=503, code="sandbox_host_unavailable")
 
 
+class SandboxTaskMissing(SandboxPlaneError):
+    """Host returned 404 for a sandbox/task id — gone or never created.
+
+    Retrying lands in the DLQ. Fail closed with 422 so the job completes as a
+    visible blocked failure instead of a transient host error.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=422, code="sandbox_task_missing")
+
+
+def map_sandbox_http_error(
+    exc: Exception,
+    *,
+    base: str,
+    sandbox_task_id: Optional[str] = None,
+    action: str = "contact",
+) -> SandboxPlaneError:
+    """Classify host HTTP failures: 404 / missing task → 422; connectivity → 503."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    body = ""
+    if response is not None:
+        try:
+            body = (getattr(response, "text", None) or "")[:200]
+        except Exception:  # noqa: BLE001
+            body = ""
+    blob = f"{exc} {body}".lower()
+    missing = status == 404 or "sandbox not found" in blob or "task not found" in blob
+    if missing:
+        sid = sandbox_task_id or "unknown"
+        return SandboxTaskMissing(
+            f"sandbox host task missing (HTTP 404) for {sid} at {base}; "
+            "task is gone or never created — fail closed, not retryable."
+        )
+    return SandboxHostUnavailable(
+        f"cannot {action} sandbox-service at {base}: {type(exc).__name__}: {exc}"
+    )
+
+
 def microvm_claims_are_frozen(settings) -> bool:
     return bool(getattr(settings, "microvm_claims_frozen", False))
 
@@ -208,8 +248,8 @@ class MicroVMProvider:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPError as exc:
-            raise SandboxHostUnavailable(
-                f"retained-rootfs preview unavailable at {base}: {type(exc).__name__}: {exc}"
+            raise map_sandbox_http_error(
+                exc, base=base, sandbox_task_id=sandbox_task_id, action="preview"
             ) from exc
 
     def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox:
@@ -257,10 +297,9 @@ class MicroVMProvider:
                 r = client.post(f"{base}/v1/sandbox/tasks", json=body, headers=headers)
                 r.raise_for_status()
             except httpx.HTTPError as exc:
-                # Fail fast + loud: control plane can't reach sandbox-service.
-                # SandboxHostUnavailable maps to HTTP 503 (not 500) at the API boundary.
-                raise SandboxHostUnavailable(
-                    f"cannot reach sandbox-service at {base}: {type(exc).__name__}: {exc}"
+                # 404 = host has no such task/route (fail-closed 422). Connectivity → 503.
+                raise map_sandbox_http_error(
+                    exc, base=base, action="reach"
                 ) from exc
             sid = r.json().get("sandbox_task_id")
             if not sid:
@@ -275,9 +314,8 @@ class MicroVMProvider:
                     pr = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
                     pr.raise_for_status()
                 except httpx.HTTPError as exc:
-                    raise SandboxHostUnavailable(
-                        f"lost contact with sandbox-service at {base}: "
-                        f"{type(exc).__name__}: {exc}"
+                    raise map_sandbox_http_error(
+                        exc, base=base, sandbox_task_id=sid, action="poll"
                     ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")

@@ -1,6 +1,14 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-12 — Grok — Community GA DLQ hardening (ai/grok/community-ga)
+
+- Worker Dockerfile: pytest `test_worker_dockerfile_run_line_includes_git` asserts the worker RUN `apt-get install` line lists `git` (BOSS-342 regression).
+- Groq/Qwen: cap `max_tokens` at 1024 and shrink context pack to 4 files / 3k head so a 6k TPM lane cannot request ~12k.
+- Sandbox 404 / claims frozen: `SandboxTaskMissing` 422 fail-closed; worker `complete`s instead of `fail`/DLQ. Classify `sandbox_task_missing` / `microvm_claims_frozen`.
+- Tests: 52 passed (image contract, microvm freeze/404, deadletter classify, groq caps, worker no-DLQ).
+- Plane: `OPS_BASE_URL` unset this session — no issue filed; track on branch.
+
 ## 2026-08-12 — Grok — Community GA automated gates (ai/grok/community-ga)
 
 - Added `scripts/qa/workflow_e2e_gate.py` — health → command propose → tasks → budget status|quote → jobs; `--dry-run` structure check; exit 0 only if critical steps 2xx.

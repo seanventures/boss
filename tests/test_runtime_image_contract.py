@@ -181,5 +181,25 @@ def main() -> int:
     return 0
 
 
+def test_worker_dockerfile_run_line_includes_git() -> None:
+    """Regression (BOSS-342): worker target must apt-install git, not only mention it.
+
+    Live DLQ `No such file or directory: 'git'` happened when the multi-target
+    consolidation dropped git from `FROM python-base AS worker` while api kept it.
+    Comments and COPY lines are not enough — the RUN install line must list git.
+    """
+    stage = stage_body("worker")
+    assert "FROM python-base AS worker" in stage
+    assert re.search(r"apt-get install[^\n]*\bgit\b", stage), (
+        "worker Dockerfile RUN must apt-get install git "
+        f"(stage excerpt):\n{stage[:800]}"
+    )
+
+
+def test_api_dockerfile_run_line_includes_git() -> None:
+    stage = stage_body("api")
+    assert re.search(r"apt-get install[^\n]*\bgit\b", stage)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

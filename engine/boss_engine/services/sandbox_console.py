@@ -20,6 +20,7 @@ from .sandbox_provider import (
     SandboxHostUnavailable,
     SandboxPlaneError,
     ensure_microvm_execution_allowed,
+    map_sandbox_http_error,
     microvm_claims_are_frozen,
     sandbox_host_base,
 )
@@ -43,10 +44,15 @@ def _require_host(settings: Settings) -> str:
     return base
 
 
-def _map_host_error(settings: Settings, exc: Exception) -> SandboxHostUnavailable:
-    base = _base(settings) or "(unset)"
-    return SandboxHostUnavailable(
-        f"sandbox host unavailable at {base}: {type(exc).__name__}: {exc}"[:300]
+def _map_host_error(
+    settings: Settings, exc: Exception, *, sandbox_id: Optional[str] = None
+) -> SandboxPlaneError:
+    """404 / missing host task → 422; other host failures → 503."""
+    return map_sandbox_http_error(
+        exc,
+        base=_base(settings) or "(unset)",
+        sandbox_task_id=sandbox_id,
+        action="reach",
     )
 
 
@@ -131,7 +137,7 @@ def _fs(settings: Settings, sandbox_id: str, path: str) -> dict:
     except SandboxPlaneError:
         raise
     except Exception as e:  # noqa: BLE001
-        raise _map_host_error(settings, e) from e
+        raise _map_host_error(settings, e, sandbox_id=sandbox_id) from e
 
 
 def get_tree(settings: Settings, sandbox_id: str, *, limit: int = 400) -> dict:
@@ -145,7 +151,7 @@ def get_tree(settings: Settings, sandbox_id: str, *, limit: int = 400) -> dict:
         d = stack.pop(0)
         try:
             data = _fs(settings, sandbox_id, d)
-        except SandboxHostUnavailable:
+        except SandboxPlaneError:
             raise
         except Exception:  # noqa: BLE001
             continue
@@ -185,7 +191,7 @@ def get_logs(settings: Settings, sandbox_id: str) -> dict:
     except SandboxPlaneError:
         raise
     except Exception as e:  # noqa: BLE001
-        raise _map_host_error(settings, e) from e
+        raise _map_host_error(settings, e, sandbox_id=sandbox_id) from e
 
 
 def hold(connection: Connection, settings: Settings, sandbox_id: str, *,
@@ -207,7 +213,7 @@ def hold(connection: Connection, settings: Settings, sandbox_id: str, *,
     except SandboxPlaneError:
         raise
     except Exception as e:  # noqa: BLE001
-        raise _map_host_error(settings, e) from e
+        raise _map_host_error(settings, e, sandbox_id=sandbox_id) from e
 
 
 def exec_command(connection: Connection, settings: Settings, sandbox_id: str, command: str,
@@ -242,4 +248,4 @@ def destroy(settings: Settings, sandbox_id: str) -> dict:
     except SandboxPlaneError:
         raise
     except Exception as e:  # noqa: BLE001
-        raise _map_host_error(settings, e) from e
+        raise _map_host_error(settings, e, sandbox_id=sandbox_id) from e
