@@ -1165,6 +1165,30 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     _owner = spec.get("owner") or settings.target_github_owner
     _repo = spec.get("repo") or settings.target_github_repo
     sf = SoftwareFactoryService(settings, owner=_owner, repo=_repo, ports=ports)
+    # Prefer Mission Control primary binding credentials when present (P0-6 dual-plane).
+    try:
+        with _transaction(engine) as c:
+            plane = sf.bind_project_github(
+                c, project_id, owner=_owner, repo=_repo,
+                selector=spec.get("repository") or (
+                    f"{_owner}/{_repo}" if _owner and _repo else None
+                ),
+            )
+            if plane.get("owner") and plane.get("repo"):
+                _owner = plane["owner"]
+                _repo = plane["repo"]
+            emit_event(
+                c, project_id, "code_task.github_plane", "boss", "code_task_run",
+                run_id,
+                {
+                    "github_plane": plane.get("github_plane"),
+                    "github_binding_id": plane.get("github_binding_id"),
+                    "full_name": plane.get("full_name"),
+                    "source": plane.get("source"),
+                },
+            )
+    except Exception:  # noqa: BLE001 — never block a run on plane bookkeeping
+        pass
     title = run["title"]
     # APP-3 (#93): when the task didn't specify tests, resolve the target from the project type —
     # web/TS gets build/typecheck/lint/e2e (the scaffold's scripts) so the repair loop optimizes a
@@ -1254,10 +1278,18 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     if root_run != run_id and sf.github.branch_exists(work_branch):
         base_branch = work_branch  # prior attempt's code is present in the clone
     app = GitHubAppAdapter(settings)
-    # Shared decision — see repo_token.
+    # Shared decision — see repo_token. Prefer the bound MC adapter's token when the
+    # factory plane is mission_control_binding so clone and PR use the same credentials.
     from .github_app_adapter import repo_token
 
-    token = repo_token(settings, owner, repo)
+    token = None
+    if getattr(sf, "github_plane", None) == "mission_control_binding":
+        try:
+            token = sf.github._auth_token()  # noqa: SLF001 — intentional dual-plane share
+        except Exception:  # noqa: BLE001
+            token = None
+    if not token:
+        token = repo_token(settings, owner, repo)
 
     provider = LocalSubprocessProvider(settings)
     # Lane defaults: builder engine for design/tests/implement, adversary engine for
@@ -3340,8 +3372,47 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               "WHERE id=:id AND pull_request_url IS NULL"),
                           {"u": _partial_pr, "id": run_id})
                 reason = f"{reason} — partial work shipped as {_partial_pr}"
-            return _fail(c, run_id, project_id, reason,
-                         failure_class=fclass, reason_code=rcode)
+            # Model TPM/credits/budget exhaustion: escalate to a Decision so capacity
+            # failures are visible in the inbox rather than silent DLQ churn (W2.5).
+            decision_id = None
+            if fclass == "needs_human" and rcode in {
+                "model_rate_limit", "budget_exhausted",
+            }:
+                try:
+                    decision_id = create_blocking_decision(
+                        c, project_id, task_id,
+                        (
+                            "Model capacity exhausted (TPM / rate limit / credits / budget). "
+                            "Code task stopped — raise limits, wait for quota reset, or "
+                            "requeue after capacity is available."
+                        ),
+                        {
+                            "action": "restore_model_capacity_or_raise_budget",
+                            "run_id": run_id,
+                            "reason_code": rcode,
+                            "failure_class": fclass,
+                            "failure_reason": reason[:500],
+                        },
+                        {},
+                        "model_capacity_exhausted",
+                    )
+                    c.execute(
+                        sql("UPDATE code_task_runs SET decision_id=:d, updated_at=now() "
+                            "WHERE id=:id AND decision_id IS NULL"),
+                        {"d": decision_id, "id": run_id},
+                    )
+                    emit_event(
+                        c, project_id, "code_task.model_capacity_escalated", "boss",
+                        "code_task_run", run_id,
+                        {"decision_id": decision_id, "reason_code": rcode},
+                    )
+                except Exception:  # noqa: BLE001 — never mask the original failure
+                    pass
+            result = _fail(c, run_id, project_id, reason,
+                           failure_class=fclass, reason_code=rcode)
+            if decision_id:
+                result = {**result, "decision_id": decision_id}
+            return result
     finally:
         # Request/worker threads are pooled — a stale run_id here would mis-attribute
         # the next job's (or run_research's) llm_calls rows.

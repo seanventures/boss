@@ -838,9 +838,69 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
     failure: retrying with more turns / on the existing branch is the fix, and it must NOT trigger
-    the infra substrate-fallback or circuit breaker."""
-    if "error_max_turns" in reason:
+    the infra substrate-fallback or circuit breaker.
+
+    Model TPM / rate-limit / credits / budget exhaustion is needs_human: escalate to a Decision
+    rather than retrying forever into the DLQ (W2.5 / W-REL-03).
+    """
+    r = (reason or "").lower()
+    if "error_max_turns" in r or "max turns" in r or "max_turns" in r:
         return "recoverable", "max_turns_exhausted"
+    # Model capacity / economics — human or capacity change required; not silent requeue.
+    if any(
+        sig in r
+        for sig in (
+            "tpm",
+            "tokens per minute",
+            "rate limit",
+            "rate_limit",
+            "ratelimit",
+            "too many requests",
+            "429",
+            "usage limit",
+            "spend limit",
+            "credit",
+            "quota",
+            "resource exhausted",
+            "overloaded",
+            "throttl",
+        )
+    ):
+        return "needs_human", "model_rate_limit"
+    if any(
+        sig in r
+        for sig in (
+            "budget reservation denied",
+            "budget denied",
+            "budget exhaust",
+            "reservation denied",
+            "insufficient budget",
+        )
+    ):
+        return "needs_human", "budget_exhausted"
+    if any(
+        sig in r
+        for sig in (
+            "no such file or directory: 'git'",
+            'no such file or directory: "git"',
+            "missing git",
+            "not a git repository",
+        )
+    ):
+        return "infra", "missing_git"
+    if any(sig in r for sig in ("sandbox", "microvm", "not allowlisted", "rootfs")):
+        return "infra", "sandbox_error"
+    if any(
+        sig in r
+        for sig in (
+            "github",
+            "pull request",
+            "installation token",
+            "bad credentials",
+            "api.github",
+        )
+    ):
+        return "infra", "github_error"
     return "infra", "pipeline_exception"
 
 

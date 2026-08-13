@@ -1734,6 +1734,10 @@ class PullRequestProposalResponse(BaseModel):
     validation_sources: list[str] = Field(default_factory=list)
     local_validation_receipt_id: Optional[str] = None
     message: Optional[str] = None
+    # Honesty field for dual GitHub planes (MC binding vs legacy env PAT/App).
+    github_plane: Optional[str] = None
+    github_binding_id: Optional[str] = None
+    github_connection_id: Optional[str] = None
 
 
 class CIConfigProposalRequest(BaseModel):
@@ -3076,6 +3080,41 @@ class DeadletterRequeueResponse(BaseModel):
     status: str
     deadletter: DeadletterItem
     requeued_job_id: str
+
+
+class DeadletterClassifyItem(BaseModel):
+    id: str
+    source_kind: str
+    source_id: str
+    reason: str
+    error_class: str
+    status: str = "open"
+    job_kind: Optional[str] = None
+    remediation_decision_id: Optional[str] = None
+    escalated_to_decision: bool = False
+    created_at: Optional[str] = None
+
+
+class DeadletterClassifyEscalation(BaseModel):
+    deadletter_id: str
+    decision_id: str
+    reason: Optional[str] = None
+
+
+class DeadletterClassifyRequest(BaseModel):
+    project_id: str
+    limit: int = Field(default=200, ge=1, le=500)
+    escalate_model: bool = True
+    actor: str = "system"
+
+
+class DeadletterClassifyResponse(BaseModel):
+    project_id: str
+    total_open: int
+    by_class: dict[str, int]
+    items: list[DeadletterClassifyItem] = Field(default_factory=list)
+    escalations: list[DeadletterClassifyEscalation] = Field(default_factory=list)
+    error_classes: list[str] = Field(default_factory=list)
 
 
 class BudgetReservationSummary(BaseModel):

@@ -41,6 +41,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/events",
             "/v1/budget",
             "/v1/deadletters",
+            "/v1/deadletters/classify",
         ],
     },
     "agents": {

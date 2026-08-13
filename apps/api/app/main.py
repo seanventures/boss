@@ -197,6 +197,8 @@ from .schemas import (
     DecisionDigestRequest,
     DecisionDigestResponse,
     DecisionInboxResponse,
+    DeadletterClassifyRequest,
+    DeadletterClassifyResponse,
     DeadletterIncidentRequest,
     DeadletterIncidentResponse,
     DeadletterItem,
@@ -17466,6 +17468,32 @@ def list_deadletters(project_id: str, limit: int = 50) -> DeadletterListResponse
             project_id=project_id,
             items=[deadletter_item_from_row(row) for row in rows],
         )
+
+
+@app.post(
+    "/v1/deadletters/classify",
+    response_model=DeadletterClassifyResponse,
+)
+def classify_open_deadletters(
+    payload: DeadletterClassifyRequest,
+) -> DeadletterClassifyResponse:
+    """Classify open deadletters by error class (git/sandbox/model/github/other).
+
+    Model TPM/budget exhaustion rows without a remediation Decision are escalated
+    when ``escalate_model`` is true (default).
+    """
+    with begin(engine) as connection:
+        try:
+            result = deadletter_remediation.classify_open_deadletters(
+                connection,
+                project_id=payload.project_id,
+                limit=payload.limit,
+                escalate_model=payload.escalate_model,
+                actor=payload.actor,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return DeadletterClassifyResponse(**result)
 
 
 @app.post(
