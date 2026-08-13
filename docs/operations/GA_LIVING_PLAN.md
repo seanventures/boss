@@ -84,9 +84,9 @@
 | Field | Value | As of |
 |---|---|---|
 | Edition | community | 2026-08-12 |
-| api image | `boss-api:90e9206` (SSO cut) | 2026-08-13; `ccafa13` rebuild in flight |
-| web image | `boss-web:968bc47` | **lag** — PUT typefix + rebuild |
-| worker image | `boss-worker:90e9206` | 2026-08-13; shared with api |
+| api image | `boss-api:ccafa13` | **shared tag live** 2026-08-13 |
+| web image | `boss-web:ccafa13` | **shared tag live** 2026-08-13 |
+| worker image | `boss-worker:ccafa13` | **shared tag live** 2026-08-13 |
 | main HEAD | `5f2c5d8` | git; GA cut `ai/grok/community-ga` |
 | `qa-live` | last 10/10 on 968bc47 | re-run after ccafa13 |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
