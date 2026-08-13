@@ -18,7 +18,7 @@
 | 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `cd13067` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted (401 unauth / 422 empty). Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
 | 3 | Code → evidence → PR reliable | **Partial** | Live `cd13067`: WIP `github_plane=mission_control_binding` (`seanheiney/boss`); `POST /v1/code-tasks` `simulated=true` → `status=simulated`, `job_enqueued=false`. 41 hist DLQ. | Live PR success rate still required for the claim |
-| 4 | Previews reachable | **Partial** | List contract live. **Fixture View** (`POST /v1/previews/fixture` → `/web/` 200 honest HTML) in this slice — not a sandboxed app. | Redeploy this SHA; curl fixture View 200. Real app View still needs a running sandbox |
+| 4 | Previews reachable | **Partial (fixture View live)** | List contract live. Fixture View **200 HTML** on `1d5c081` (`prev_8a4947e073c547aab6d9`, public-base URL, honest “not a sandboxed app”). Real app View still 0 running / claims frozen. | Unfreeze only after a real running sandbox View |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `cd13067` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane` on `cd13067` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
@@ -49,7 +49,7 @@
 | ID | Work | Plane | State |
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List PASS.** Fixture View implemented (code). Real-app View still 0 running / claims frozen |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Fixture View PASS live** (200 HTML, public-base). Real-app View still 0 running / claims frozen |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | **Done (code)** |
@@ -84,10 +84,10 @@
 | Field | Value | As of |
 |---|---|---|
 | Edition | community | 2026-08-13 |
-| api image | `boss-api:cd13067` | **shared tag live** 2026-08-13 |
-| web image | `boss-web:cd13067` | **shared tag live** 2026-08-13 |
-| worker image | `boss-worker:cd13067` | **shared tag live** 2026-08-13 |
-| branch HEAD | `cd13067` | `ai/grok/community-ga` |
+| api image | `boss-api:1d5c081` | **shared tag live** 2026-08-13 |
+| web image | `boss-web:1d5c081` | **shared tag live** 2026-08-13 |
+| worker image | `boss-worker:1d5c081` | **shared tag live** 2026-08-13 |
+| branch HEAD | `1d5c081` | `ai/grok/community-ga` |
 | `qa-live` | **10/10 PASS + Metatron** on `cd13067` | 2026-08-13T14:14Z |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
