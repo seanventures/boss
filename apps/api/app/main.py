@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket,
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 
 from boss_engine.ports import configure_engine_ports
 
@@ -1159,6 +1160,27 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="BOSS Control Plane", version="0.2.1", lifespan=lifespan)
+
+
+def undefined_table_response(exc: BaseException) -> Optional[JSONResponse]:
+    """Fail closed on missing relations instead of leaking a 500."""
+    orig = getattr(exc, "orig", None)
+    name = type(orig).__name__ if orig is not None else type(exc).__name__
+    blob = str(orig or exc).lower()
+    if name != "UndefinedTable" and "does not exist" not in blob:
+        return None
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Required database relation is not applied on this runtime."},
+    )
+
+
+@app.exception_handler(ProgrammingError)
+async def programming_error_fail_closed(_request: Request, exc: ProgrammingError):
+    response = undefined_table_response(exc)
+    if response is not None:
+        return response
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 def extract_api_token(request: Request) -> Optional[str]:

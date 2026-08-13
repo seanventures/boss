@@ -134,12 +134,16 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
     sql = resolved.schema_path.read_text(encoding="utf-8")
     raw_connection = engine.raw_connection()
     try:
+        # Column reconcile MUST run before the full schema script.
+        # CREATE TABLE IF NOT EXISTS will not add new columns to an existing
+        # table; a later CREATE INDEX on those columns (e.g. kg_nodes.valid_from)
+        # would abort the entire apply and skip new tables — live dogfood then
+        # 500s on token_budget_policies / worker_instances / autoscaling.
         with raw_connection.cursor() as cursor:
-            cursor.execute(sql)  # new tables/indexes (IF NOT EXISTS) + any explicit ALTERs
-            # Drift guard: CREATE TABLE IF NOT EXISTS won't add NEW columns to a table that
-            # already exists, so reconcile every column declared in schema.sql onto the live
-            # table. Additive + savepoint-isolated — safe to run on every deploy.
             attempted, skipped = _reconcile_columns(cursor, sql)
+        raw_connection.commit()
+        with raw_connection.cursor() as cursor:
+            cursor.execute(sql)  # new tables/indexes (IF NOT EXISTS) + explicit ALTERs
         raw_connection.commit()
         if skipped:
             print(f"[ensure_schema] column reconcile: {attempted} checked, "
