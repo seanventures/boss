@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e openapi-live-qa-parity
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness openapi-live-qa-parity
 
 install: install-node install-python
 
@@ -181,6 +181,25 @@ else
 		$(if $(filter 1,$(CREATE_FIXTURE)),--create-fixture,) \
 		$(if $(filter 1,$(CREATE_CODE_TASK)),--create-code-task,) \
 		$(if $(BOSS_FACTORY_GATE_OUTPUT),--output "$(BOSS_FACTORY_GATE_OUTPUT)")
+endif
+
+# Unified E2E harness: settings/features + 3 canary apps.
+# DRY_RUN=1 structure only.
+# CANARY_MODE=catalog|reuse|fixture|launch (launch needs BOSS_QA_ALLOW_CANARIES=1)
+qa-harness:
+ifeq ($(DRY_RUN),1)
+	$(PYTHON_BOOTSTRAP) scripts/qa/harness.py --dry-run \
+		--api-url "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		--canary-mode "$(or $(CANARY_MODE),catalog)" \
+		$(if $(BOSS_HARNESS_OUTPUT),--output "$(BOSS_HARNESS_OUTPUT)")
+else
+	@test -n "$$BOSS_API_KEY" || (echo "BOSS_API_KEY is required (never commit it). Or: make qa-harness DRY_RUN=1"; exit 2)
+	$(PYTHON_BOOTSTRAP) scripts/qa/harness.py \
+		--api-url "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		--canary-mode "$(or $(CANARY_MODE),catalog)" \
+		$(if $(BOSS_HARNESS_OUTPUT),--output "$(BOSS_HARNESS_OUTPUT)")
 endif
 
 openapi-live-qa-parity: install-python

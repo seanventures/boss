@@ -18,6 +18,7 @@ runnable commands. Use this before claiming Community GA or private preview read
 | Factory E2E (WIP + code-tasks list) | `make qa-factory-e2e` | `BOSS_API_KEY` for live; dry-run if missing |
 | Factory structure only | `make qa-factory-e2e DRY_RUN=1` | none |
 | Factory no-spend fixture | `make qa-factory-e2e CREATE_FIXTURE=1` | `BOSS_API_KEY`; live must advertise `fixture_supported` |
+| Unified E2E harness (settings/features + 3 canaries) | `make qa-harness` | `BOSS_API_KEY` for live; `DRY_RUN=1` structure; `CANARY_MODE=catalog/reuse/fixture/launch` (`launch` needs `BOSS_QA_ALLOW_CANARIES=1`) |
 | Full live dogfood (broader) | `make qa-live` | `BOSS_API_KEY` |
 | OpenAPI factory slice parity | `make openapi-live-qa-parity` | local Python env |
 

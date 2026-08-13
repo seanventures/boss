@@ -6362,6 +6362,19 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     actor = str((payload or {}).get("actor") or "executive_console").strip()
+    simulated = bool((payload or {}).get("simulated"))
+    # simulated=true is a no-spend fixture and must never convene the panel.
+    # Default the route to direct when simulated; do not change the meeting path
+    # for ordinary launches.
+    if simulated:
+        route = "direct"
+    else:
+        route = str((payload or {}).get("route") or "meeting").lower()
+    if simulated and (payload or {}).get("open_pr") is True:
+        raise HTTPException(
+            status_code=422,
+            detail="simulated=true cannot open a PR (fail-closed; fixture has no sandbox or model)",
+        )
 
     # Launch convenes the panel first, and the panel's PRD becomes the build.
     #
@@ -6373,7 +6386,7 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     # The PRD gate auto-approves (BOSS_MEETING_PRD_AUTO_APPROVE), so this is one press, not a
     # press and a later approval. `route=direct` still goes straight to a code task for
     # comparing the two paths.
-    if str((payload or {}).get("route") or "meeting").lower() == "meeting":
+    if route == "meeting":
         from boss_engine.services.meeting_service import (
             completed_benchmark_build, convene_prd_meeting_core, meeting_fingerprint,
         )
@@ -6434,8 +6447,12 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 instructions=task["instructions"],
                 acceptance_criteria=task["acceptance_criteria"],
                 test_commands=task["test_commands"],
-                owner=(payload or {}).get("owner") or settings.target_github_owner,
-                repo=(payload or {}).get("repo") or settings.target_github_repo,
+                owner=(payload or {}).get("owner") or (
+                    "_fixture" if simulated else settings.target_github_owner
+                ),
+                repo=(payload or {}).get("repo") or (
+                    "_fixture" if simulated else settings.target_github_repo
+                ),
                 base_branch=(payload or {}).get("base_branch") or "main",
                 finalize_ctx=task["finalize_ctx"],
                 jobs=jobs,
@@ -6445,11 +6462,25 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 # pass an explicit profile, and `usable_profile` has the final say either way.
                 profile=(payload or {}).get("profile") or "balanced",
                 risk_tier=int((payload or {}).get("risk_tier") or 1),
+                simulated=simulated,
             )
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    if simulated:
+        return {
+            "status": "simulated",
+            "run_id": run_id,
+            "simulated": True,
+            "job_enqueued": False,
+            "passed": False,
+            "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
+            "note": (
+                "Simulated fixture — no model, no budget reservation, no PR. "
+                "This is not a certified benchmark pass."
+            ),
+        }
     return {
         "status": "queued",
         "run_id": run_id,

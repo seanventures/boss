@@ -1,6 +1,34 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — Unified E2E QA harness (ai/grok/community-ga)
+
+- One command: `make qa-harness` — preflight + 44-probe settings/features sweep + control-plane reads + 3 canaries.
+- Canary modes: catalog (default) / reuse / fixture (`simulated=true`) / launch (`BOSS_QA_ALLOW_CANARIES=1`).
+- Live dogfood catalog: 54/55 then fixed `GET /v1/edition` to send `project_id`; stale catalog `built.run_id` is optional honesty, not a false red.
+- Tests: harness + feature_sweep + canary_apps + benchmark catalog/simulated (no spend).
+- Docs: `docs/operations/QA_HARNESS.md`. 14-day `qa-live` remains separate. Launch of real BugBox/HookWatch/ApproveIt still needs worker+model+flag.
+
+## 2026-08-13 — Grok — QA harness phase 3 canaries (ai/grok/community-ga)
+
+- `scripts/qa/canary_apps.py`: catalog / reuse / fixture / launch for bugbox, hookwatch, approveit.
+- Catalog asserts pinned contracts (`npm run healthcheck` present, `npm run verify` not listed).
+- Reuse: missing `built` is `canary.{id}.not_built` required=False. 409 preview is honesty.
+- Fixture: POST `route=direct&simulated=true`, never `open_pr`. Report `passed=true` is an honesty fail. 422 old image skips.
+- Launch refuses without `BOSS_QA_ALLOW_CANARIES`. `already_built` reuses the report. Poll 5s / default 1800s.
+- API: `POST /v1/qa/benchmark-apps/{id}/runs` `simulated=true` forces direct, wires `start_code_task(simulated=True)`, never certifies pass.
+- Tests: 8 harness (no network) + 28 API/launch/benchmark green.
+- Plane: `OPS_BASE_URL` unset — no issue comment.
+
+## 2026-08-13 — Grok — Unified QA harness glue (ai/grok/community-ga)
+- Tests: `scripts/tests/test_qa_harness.py` (parse_args, launch-guard exit 2, summarize required-fail, redact API key, dry-run).
+- Makefile: `qa-harness` beside `qa-factory-e2e`; `DRY_RUN=1`; `CANARY_MODE=catalog|reuse|fixture|launch`; never echoes `BOSS_API_KEY`.
+- Docs: `docs/operations/QA_HARNESS.md` — local + dogfood, modes, canary pass = `npm run verify` evidence not model prose.
+- No-false-reds: optional/missing sibling modules skip; required fail only fails the gate.
+- 14-day `qa-live` remains separate (`docs/operations/QA_LIVE_14DAY.md`); this harness does not replace it.
+- DoD checklist: appended `make qa-harness` row. Plane: `OPS_BASE_URL` unset — track on branch.
+- No live canary success invented; no spend; engine services untouched.
+
 ## 2026-08-13 — Grok — Community PRD-partials: meetings/assurance/local models (ai/grok/community-ga)
 
 Inventory then closed three Community ◐ holes without touching other-agent files (`main.py`, resource_plane, provider-configuration-ui, factory_scale).
