@@ -17,8 +17,8 @@
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `cd13067` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted (401 unauth / 422 empty). Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Partial** | Dual-plane advertised on `GET /v1/factory/wip`; fixture create (no spend); 41 hist DLQ | Need live PR success rate |
-| 4 | Previews reachable | **Partial** | List `open_url` absolute public-base; View shown only when URL exists; verified-test without URL is honest (no invented 409) | Start a running preview; curl 200 HTML |
+| 3 | Code → evidence → PR reliable | **Partial** | Live `cd13067`: WIP `github_plane=mission_control_binding` (`seanheiney/boss`); `POST /v1/code-tasks` `simulated=true` → `status=simulated`, `job_enqueued=false`. 41 hist DLQ. | Live PR success rate still required for the claim |
+| 4 | Previews reachable | **Partial** | List contract live. **Fixture View** (`POST /v1/previews/fixture` → `/web/` 200 honest HTML) in this slice — not a sandboxed app. | Redeploy this SHA; curl fixture View 200. Real app View still needs a running sandbox |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `cd13067` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane` on `cd13067` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
@@ -49,7 +49,7 @@
 | ID | Work | Plane | State |
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List contract PASS live** (absolute `open_url`); View for verified-test only if `open_url` exists (else honesty, no 409). View HTML still required (0 running) |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List PASS.** Fixture View implemented (code). Real-app View still 0 running / claims frozen |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | **Done (code)** |
@@ -202,6 +202,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | Factory live: WIP `github_plane=mission_control_binding` + simulated code-task no job. Preview fixture: `POST /v1/previews/fixture` serves honest `/web/` HTML (no microVM). | grok |
 | 2026-08-13 | A1/A2 live: shared-tag `cd13067` api+worker+web (no `--env-template`; rollback `.env.bak.3e6c906`). `qa-live` **10/10 + Metatron**. Harness catalog **55/55**, optional schema 500s gone. Provider catalog 11. | grok |
 | 2026-08-13 | Typed `standup` meeting: persist type, no-spend fixture → minutes + actions + Decision; duplicate convene refused. FEATURES meetings ✅. | grok |
 | 2026-08-13 | PRD P1 glue: pack YAML import/export in MC; comms **Dry-run deliver** Receipt (no Slack/email); improvement-program create form (promote stays enterprise-badged). Catalog `built` only when reportable. Code Tasks shows GitHub plane. Deploy SOP (B6) requires `qa-live` after shared-tag bump. | grok |

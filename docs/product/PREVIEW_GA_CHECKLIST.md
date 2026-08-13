@@ -2,7 +2,7 @@
 
 **Status date:** 2026-08-13  
 **Plane:** BOSS-341 (code), Phase B2 live View  
-**Live image:** `boss-api:3e6c906` (api/worker/web shared tag)  
+**Live image:** `boss-api:cd13067` (api/worker/web shared tag) · fixture View lands on next shared tag after this commit  
 **Code:** `engine/boss_engine/services/preview_service.py` (`publicize_preview`, gateway proxy)
 
 ---
@@ -54,7 +54,8 @@ internal_url: http://127.0.0.1:41635
 ```
 
 **List contract: PASS.**  
-**View HTML (running preview → 200 app body): NOT PROVEN** — no running preview this window. Expired View correctly fail-closes 409.
+**View HTML (real app): NOT PROVEN** — 0 running sandboxed previews; microVM claims frozen.  
+**View HTML (fixture):** `POST /v1/previews/fixture` creates `mode=fixture` `status=running` and `/web/` serves honest fixture HTML (no sandbox). Live proof after the SHA that includes this route.
 
 ---
 

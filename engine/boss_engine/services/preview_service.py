@@ -154,6 +154,91 @@ def publicize_preview(
     return out
 
 
+FIXTURE_MODE = "fixture"
+
+FIXTURE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>BOSS preview fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; }
+    .badge { display: inline-block; border: 1px solid #888; border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <p class="badge">fixture — not a sandboxed app</p>
+  <h1>Preview View path is live</h1>
+  <p>This page is served by the BOSS API gateway at <code>/v1/previews/{preview_id}/web/</code>.
+     It is a no-spend fixture so operators can prove View HTML without a microVM rootfs.</p>
+  <p data-testid="preview-fixture">ok</p>
+</body>
+</html>
+"""
+
+
+def create_fixture_preview(
+    engine,
+    settings: Settings,
+    *,
+    project_id: str,
+    actor: str,
+    ttl_minutes: int = 60,
+) -> dict:
+    """No-spend running preview that serves fixture HTML through the gateway.
+
+    Does not clone a repo, start a process, or claim a microVM. Status is
+    ``running`` with ``mode=fixture`` so View HTML can be proven while sandbox
+    claims stay frozen. Never advertised as a real app preview.
+    """
+    preview_id = make_id("prev")
+    ttl = max(5, min(int(ttl_minutes), 180))
+    expires = datetime.now(timezone.utc) + timedelta(minutes=ttl)
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO app_previews (
+                    id, project_id, run_id, repo, branch, command, port, url,
+                    mode, substrate, status, error, expires_at
+                )
+                VALUES (
+                    :id, :project_id, NULL, NULL, NULL, 'fixture', NULL, NULL,
+                    :mode, 'preview_host', 'running',
+                    'fixture — not a sandboxed app', :expires
+                )
+                """
+            ),
+            {
+                "id": preview_id,
+                "project_id": project_id,
+                "mode": FIXTURE_MODE,
+                "expires": expires,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "preview.fixture_started",
+            actor,
+            "app_preview",
+            preview_id,
+            {"mode": FIXTURE_MODE, "ttl_minutes": ttl, "simulated": True},
+        )
+        row = connection.execute(
+            text("SELECT * FROM app_previews WHERE id = :id"),
+            {"id": preview_id},
+        ).mappings().first()
+    record = publicize_preview(dict(row), settings=settings)
+    record["fixture"] = True
+    record["simulated"] = True
+    return record
+
+
+def fixture_html(preview_id: str) -> bytes:
+    return FIXTURE_HTML.replace("{preview_id}", preview_id).encode("utf-8")
+
+
 def _free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
@@ -1302,7 +1387,13 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                         {"id": preview_id}).mappings().first()
     if row is None:
         return 404, "text/plain", b"preview not found", {}
-    if row["status"] != "running" or not row["url"]:
+    if row["status"] != "running":
+        return 409, "text/plain", f"preview not running (status={row['status']})".encode(), {}
+    if str(row.get("mode") or "") == FIXTURE_MODE:
+        if subpath and subpath not in {"", "/"}:
+            return 404, "text/plain", b"fixture preview has no extra paths", {}
+        return 200, "text/html; charset=utf-8", fixture_html(preview_id), {}
+    if not row["url"]:
         return 409, "text/plain", f"preview not running (status={row['status']})".encode(), {}
     target = row["url"].rstrip("/") + "/" + (subpath or "")
     if query_string:

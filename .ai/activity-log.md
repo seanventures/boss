@@ -1,6 +1,13 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — Factory + preview fixture slice (ai/grok/community-ga)
+
+- Live factory: `GET /v1/factory/wip` `github_plane=mission_control_binding` `seanheiney/boss`; `POST /v1/code-tasks` `simulated=true` → simulated, no job.
+- Preview fixture: `POST /v1/previews/fixture` creates `mode=fixture` running row; `/v1/previews/{id}/web/` returns 200 honest HTML. No sandbox, no loopback operator URL.
+- Tests: `test_preview_fixture.py` + URL contract 14 passed.
+- Real app View / factory PR success rate still open.
+
 ## 2026-08-13 — Grok — A1/A2 shared-tag live cd13067 (ai/grok/community-ga)
 
 - Built/pushed `boss-api|worker|web:cd13067` natively on goldeneye. Bumped only `BOSS_*_IMAGE` (no `--env-template`). Rollback copy `.env.bak.3e6c906`.

@@ -160,6 +160,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # No-spend preview fixture (View HTML without microVM)
+    try:
+        from .preview_fixture import router as preview_fixture_router
+
+        app.include_router(preview_fixture_router)
+    except ImportError:
+        pass
+
     # Community comms dry-run close-the-loop (no Slack/email send)
     try:
         from .comms_dry_run import router as comms_dry_run_router
