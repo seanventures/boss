@@ -704,20 +704,52 @@ class PreviewNotReady(Exception):
         }
 
 
+def _verify_green(run: dict) -> bool:
+    state = run.get("state") or {}
+    if state.get("tests_passed") is True:
+        return True
+    cmd = str(state.get("test_command") or "").lower()
+    return state.get("test_exit_code") == 0 and "verify" in cmd
+
+
+def find_local_run_workspace(run_id: str) -> Optional[Path]:
+    """Retained local-subprocess sandbox for a verify-green run (no PR required)."""
+    roots = [
+        Path(tempfile.gettempdir()) / "boss-sandboxes",
+        Path("/app"),
+        Path("/var/lib/boss"),
+        Path("/tmp"),
+        PREVIEW_ROOT.parent,
+    ]
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = str(root.resolve())
+        except OSError:
+            continue
+        if resolved in seen or not root.is_dir():
+            continue
+        seen.add(resolved)
+        for cand in root.glob(f"{run_id}*"):
+            if not cand.is_dir():
+                continue
+            if (cand / "package.json").is_file() or (cand / "bugbox" / "package.json").is_file():
+                return cand
+    return None
+
+
 def assert_previewable(run: dict, run_id: str) -> None:
-    """A preview is only meaningful once the work exists as a PR.
+    """A preview is meaningful once the work exists as a PR *or* verify-green files.
 
-    Enforced HERE, in the one place every caller already passes through, rather than in each
-    entrypoint. The console gated its button and the API gated its endpoint, but the MCP tool
-    called the service directly and bypassed both — the same "fix the host path, miss the
-    container path" mistake that once launched Sudoku as the preview for an N-Queens build.
-    Share the decision, not just the data.
-
-    Gated on the PR, deliberately not on gates passing: an advisory run legitimately opens a
-    PR with failing checks and IS previewable.
+    Gated on the PR for GitHub-backed runs. A local-subprocess run that already
+    passed ``npm run verify`` is also previewable from its retained workspace —
+    review-timeout / no-PR must not hide working software.
     """
-    if not (run.get("pull_request_url") or ""):
-        raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
+    if run.get("pull_request_url"):
+        return
+    if _verify_green(run) and find_local_run_workspace(run_id) is not None:
+        return
+    raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
 
 
 def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
@@ -758,14 +790,24 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         return {"id": preview_id, "status": "failed", "error": msg,
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
-    token = settings.github_token
-    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
-    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
-                              owner, repo, token or "")
-    clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                           capture_output=True, text=True, timeout=120)
-    if clone.returncode != 0:
-        return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
+    local_ws = None if (run.get("pull_request_url") or "") else find_local_run_workspace(run_id)
+    if local_ws is not None:
+        src = local_ws / "bugbox" if (local_ws / "bugbox" / "package.json").is_file() else local_ws
+        try:
+            shutil.copytree(
+                src, workdir, dirs_exist_ok=True, ignore=shutil.ignore_patterns("node_modules")
+            )
+        except OSError as exc:
+            return _fail(f"copy local workspace failed: {exc}")
+    else:
+        token = settings.github_token
+        from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+        clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                                  owner, repo, token or "")
+        clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+                               capture_output=True, text=True, timeout=120)
+        if clone.returncode != 0:
+            return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
     def _verify(cmd_str: str) -> dict:
         """Library/CLI/module build — there is no web server to serve. 'Run it' means run its
