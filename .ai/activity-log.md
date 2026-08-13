@@ -1,6 +1,20 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — QA-2 API/settings/functions panel (ai/grok/community-ga)
+
+- Live probe 114 paths on `boss-api:3e6c906`: 90 PASS / 17 WARN prefix-404 / **7 FAIL 500**.
+- 500s: token-efficiency policies+consumption, elastic status+instances, worker-autoscaling status/policies/history. Cause: `ensure_schema` aborted on `kg_nodes.valid_from` so later tables never created.
+- Fix (519ba85): reconcile columns before schema.sql; `UndefinedTable` → 503. Tests 4 passed. Live still 500 until redeploy.
+- Doc: `docs/operations/qa-2026-08-13-api-panel.md`. Plane BOSS-337.
+
+## 2026-08-13 — Grok — QA-3 unfinished Community surfaces (ai/grok/community-ga)
+
+- Inventory: Studio seed CTA already wired; factory fixture already landed; preview list `open_url` already public-base.
+- Built: factory WIP `github_plane` (read-only describe) + card no longer swallows fetch errors; dashboard + preview list `apiReachable`/`blockedReason`; View for verified-test only when URL exists; list endpoints default `project_id` to `BOSS_DEFAULT_PROJECT_ID`. Settings 500s already in `519ba85`.
+- Doc: `docs/operations/qa-2026-08-13-incomplete.md`.
+- Tests: dual-plane describe, list defaults, factory/dashboard/preview honesty, schema fail-closed.
+
 ## 2026-08-13 — Grok — Factory gate skip + simulated fixture (ai/grok/community-ga)
 
 - `GET /v1/software-factory/proposals/queue` 404/405 is now **SKIP** (POST-only route), not optional FAIL.

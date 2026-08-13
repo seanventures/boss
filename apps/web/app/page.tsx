@@ -873,7 +873,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Cross-phase control snapshot</h2>
             </div>
           </div>
-          <DashboardPanel snapshot={dashboardSnapshot} />
+          <DashboardPanel feed={dashboardSnapshot} />
         </section>
 
         <section className="panel-stack" data-area="assurance" aria-label="Assurance Center">
@@ -3148,7 +3148,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <RouterHealthCard
               projectId={activeProjectId}
               actor={activeActorId}
-              providerHealth={dashboardSnapshot?.providerHealth}
+              providerHealth={dashboardSnapshot.snapshot?.providerHealth}
             />
             <SkillInvokeCard projectId={activeProjectId} invocations={skillInvocations} />
           </div>
@@ -6958,7 +6958,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
-            previews={previewFeed}
+            previews={previewFeed.items}
+            previewBlockedReason={previewFeed.blockedReason}
             benchmarks={qaBenchmarkApps}
             actor={activeActorId}
           />

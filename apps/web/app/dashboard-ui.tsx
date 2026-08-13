@@ -1,6 +1,6 @@
 "use client";
 
-import { type DashboardSnapshot } from "../lib/dashboard";
+import { type DashboardFeed, type DashboardSnapshot } from "../lib/dashboard";
 
 function usd(micros: number): string {
   return `$${(micros / 1_000_000).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
@@ -30,16 +30,27 @@ function StatusText({ label, color, pulse }: { label: string; color: string; pul
   return <span className={`status-text${pulse ? " pulse" : ""}`} style={{ color }}>{label}</span>;
 }
 
-export function DashboardPanel({ snapshot }: { snapshot: DashboardSnapshot }) {
-  if (!snapshot) {
+export function DashboardPanel({
+  feed,
+  snapshot,
+}: {
+  feed?: DashboardFeed;
+  snapshot?: DashboardSnapshot | null;
+}) {
+  const resolved = feed?.snapshot ?? snapshot ?? null;
+  if (!resolved) {
     return (
-      <article className="stack-card">
+      <article className="stack-card" data-dashboard-state="unavailable">
         <h3 style={{ margin: 0 }}>Mission Dashboard</h3>
-        <p className="detail">Dashboard snapshot unavailable — is the control plane reachable?</p>
+        <p className="detail" role="status">
+          {feed?.blockedReason
+            ? `Dashboard snapshot unavailable — ${feed.blockedReason}`
+            : "Dashboard snapshot unavailable — is the control plane reachable?"}
+        </p>
       </article>
     );
   }
-  const s = snapshot;
+  const s = resolved;
   const avail = Math.max(s.spend.capUsdMicros - s.spend.reservedUsdMicros - s.spend.actualUsdMicros, 0);
   const incidents = s.incidents.deadletters + s.incidents.blockedOutbox + s.incidents.deadletteredOutbox;
   const running = s.queue.leased;

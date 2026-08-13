@@ -137,6 +137,59 @@ def test_bind_project_github_falls_back_honestly_when_binding_unusable(monkeypat
     assert sf.github_plane == "legacy_env"
 
 
+def test_describe_github_plane_is_read_only_and_prefers_binding(monkeypatch):
+    sf = SoftwareFactoryService(_settings(), owner="default-owner", repo="default-repo")
+    original_repo = sf.github.repository_full_name
+
+    def fake_resolve(*_a, **_k):
+        return {
+            "owner": "seanheiney",
+            "repo": "boss",
+            "full_name": "seanheiney/boss",
+            "binding_id": "bind_primary_1",
+            "connection_id": "conn_1",
+            "default_branch": "main",
+            "role": "primary",
+            "source": "registry:primary",
+        }
+
+    monkeypatch.setattr(
+        "boss_engine.services.repo_registry.resolve_repository_target",
+        fake_resolve,
+    )
+    plane = sf.describe_github_plane(MagicMock(), "boss-dogfood")
+    assert plane["github_plane"] == "mission_control_binding"
+    assert plane["github_binding_id"] == "bind_primary_1"
+    assert plane["github_connection_id"] == "conn_1"
+    assert plane["full_name"] == "seanheiney/boss"
+    # GET-safe: adapters stay on the legacy settings plane.
+    assert sf.github_plane == "legacy_env"
+    assert sf.github.repository_full_name == original_repo
+
+
+def test_describe_github_plane_legacy_when_no_binding(monkeypatch):
+    sf = SoftwareFactoryService(_settings(), owner="acme", repo="app")
+
+    def fake_resolve(*_a, **_k):
+        return {
+            "owner": "acme",
+            "repo": "app",
+            "full_name": "acme/app",
+            "binding_id": None,
+            "connection_id": None,
+            "source": "legacy_settings",
+        }
+
+    monkeypatch.setattr(
+        "boss_engine.services.repo_registry.resolve_repository_target",
+        fake_resolve,
+    )
+    plane = sf.describe_github_plane(MagicMock(), "boss-dogfood")
+    assert plane["github_plane"] == "legacy_env"
+    assert plane["source"] == "legacy_settings"
+    assert plane["github_binding_id"] is None
+
+
 def test_propose_pull_request_surfaces_github_plane(monkeypatch):
     """propose_pull_request attaches github_plane even on early blocked paths."""
     sf = SoftwareFactoryService(_settings(), owner="acme", repo="app")

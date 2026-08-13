@@ -153,16 +153,38 @@ export function MeetingConsensusCard({ projectId, actor }: { projectId: string; 
 export function FactoryScaleCard({ wip }: { wip: WipStatus }) {
   const [mergeState, mergeAction, mergePending] = useActionState(mergeCheckAction, null);
   const [chunkState, chunkAction, chunkPending] = useActionState(chunkPlanAction, null);
+  const planeLabel =
+    wip?.githubPlane === "mission_control_binding"
+      ? `GitHub: Mission Control binding${wip.githubFullName ? ` (${wip.githubFullName})` : ""}`
+      : wip?.githubPlane === "legacy_env"
+        ? `GitHub: settings token${wip.githubFullName ? ` (${wip.githubFullName})` : ""}`
+        : wip?.githubPlane
+          ? `GitHub: ${wip.githubPlane}`
+          : null;
   return (
     <article className="stack-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <h3 style={{ margin: 0 }}>Factory scale — WIP, gate, chunker</h3>
-        {wip ? (
+        {wip?.apiReachable ? (
           <span className="pill" style={{ color: wip.admit ? "#3fb950" : "#f85149" }}>
             {wip.inFlight}/{wip.wipLimit} in-flight · {wip.admit ? "slot free" : "WIP full"}
           </span>
-        ) : null}
+        ) : (
+          <span className="pill" style={{ color: "#f85149" }}>WIP unavailable</span>
+        )}
       </div>
+      {!wip?.apiReachable ? (
+        <p className="detail" role="status" data-factory-wip="error">
+          Factory WIP card could not load
+          {wip?.blockedReason ? ` — ${wip.blockedReason}` : " — control plane request failed"}.
+        </p>
+      ) : (
+        <p className="detail" data-factory-wip="ok">
+          {planeLabel ?? "GitHub plane not advertised on this API."}
+          {wip.fixtureSupported ? " · no-spend fixture supported" : ""}
+          {wip.githubPlaneReason ? ` · ${wip.githubPlaneReason}` : ""}
+        </p>
+      )}
 
       <p className="detail">Confidence-gated merge check — required gates must pass AND confidence ≥ floor.</p>
       <form action={mergeAction} className="composer compact">

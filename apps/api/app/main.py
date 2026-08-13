@@ -1511,6 +1511,21 @@ def raise_decision_actor_error(
     raise HTTPException(status_code=403, detail=str(error)) from error
 
 
+def resolve_list_project_id(project_id: Optional[str] = None) -> str:
+    """Default omitted list ``project_id`` to the configured Community project.
+
+    Single-tenant Community operators (and gates) often hit ``GET /v1/tasks``
+    without a query string. Fail closed only when no default is configured —
+    never invent a project, never 500.
+    """
+    resolved = str(project_id or "").strip() or str(
+        getattr(settings, "default_project_id", "") or ""
+    ).strip()
+    if not resolved:
+        raise HTTPException(status_code=422, detail="project_id is required.")
+    return resolved
+
+
 def record_policy_denial(
     project_id: str, actor: str, permission: str, reason: str
 ) -> None:
@@ -4926,7 +4941,8 @@ def list_projects() -> ProjectListResponse:
 
 
 @app.get("/v1/members", response_model=ProjectMemberListResponse)
-def list_project_members(project_id: str) -> ProjectMemberListResponse:
+def list_project_members(project_id: Optional[str] = None) -> ProjectMemberListResponse:
+    project_id = resolve_list_project_id(project_id)
     with begin(engine) as connection:
         return ProjectMemberListResponse(
             project_id=project_id,
@@ -8330,12 +8346,16 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
 
 
 @app.get("/v1/previews")
-def list_previews_endpoint(project_id: str, limit: int = 50):
+def list_previews_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List app previews for a project (reaps expired ones)."""
+    project_id = resolve_list_project_id(project_id)
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.preview_service import list_previews
-    return {"previews": list_previews(engine, project_id, limit, settings)}
+    return {
+        "project_id": project_id,
+        "previews": list_previews(engine, project_id, limit, settings),
+    }
 
 
 @app.get("/v1/previews/{preview_id}/logs")
@@ -8469,13 +8489,17 @@ def stop_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
 
 
 @app.get("/v1/code-tasks")
-def list_code_tasks_endpoint(project_id: str, limit: int = 50):
+def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List code-task runs for a project (newest first) for the Code Tasks view."""
+    project_id = resolve_list_project_id(project_id)
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.code_task_service import list_code_task_runs
     with begin(engine) as c:
-        return {"code_tasks": list_code_task_runs(c, project_id, limit)}
+        return {
+            "project_id": project_id,
+            "code_tasks": list_code_task_runs(c, project_id, limit),
+        }
 
 
 @app.get("/v1/code-tasks/{run_id}")
@@ -9352,8 +9376,9 @@ def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: s
 
 @app.get("/v1/tasks", response_model=TaskListResponse)
 def list_tasks(
-    project_id: str, limit: int = 50, offset: int = 0
+    project_id: Optional[str] = None, limit: int = 50, offset: int = 0
 ) -> TaskListResponse:
+    project_id = resolve_list_project_id(project_id)
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
     if offset < 0:
@@ -9888,9 +9913,10 @@ def chaos_list(project_id: str, limit: int = 20) -> dict:
 
 
 @app.get("/v1/dashboard")
-def get_dashboard(project_id: str) -> dict:
+def get_dashboard(project_id: Optional[str] = None) -> dict:
     """Consolidated real-time dashboard snapshot with a monotonic cursor (spec §F). Clients re-render
     only when the cursor advances."""
+    project_id = resolve_list_project_id(project_id)
     with begin(engine) as connection:
         return dashboard_service.snapshot(connection, project_id)
 
@@ -9905,9 +9931,13 @@ def poll_dashboard(project_id: str, cursor: Optional[str] = None, timeout_ms: in
 
 
 @app.get("/v1/factory/wip")
-def factory_wip(project_id: str, wip_limit: int = factory_scale.DEFAULT_WIP_LIMIT) -> dict:
+def factory_wip(
+    project_id: Optional[str] = None,
+    wip_limit: int = factory_scale.DEFAULT_WIP_LIMIT,
+) -> dict:
     """In-flight code tasks vs the per-project WIP limit; admit a new task only if a slot is free
     (spec §E WIP limits + queue-depth gating)."""
+    project_id = resolve_list_project_id(project_id)
     if wip_limit < 1:
         raise HTTPException(status_code=400, detail="wip_limit must be >= 1.")
     with begin(engine) as connection:
@@ -9915,6 +9945,20 @@ def factory_wip(project_id: str, wip_limit: int = factory_scale.DEFAULT_WIP_LIMI
         # Advertise the no-spend fixture so gates never POST simulated=true at an
         # older API that would ignore the flag and enqueue a real budgeted job.
         status["fixture_supported"] = True
+        # Dual-plane honesty (A6): which GitHub plane the factory will use.
+        # Read-only — never rebind adapters on this GET.
+        try:
+            plane = software_factory.describe_github_plane(connection, project_id)
+            status["github_plane"] = plane.get("github_plane")
+            status["github_binding_id"] = plane.get("github_binding_id")
+            status["github_connection_id"] = plane.get("github_connection_id")
+            status["github_source"] = plane.get("source")
+            status["github_full_name"] = plane.get("full_name")
+            if plane.get("reason"):
+                status["github_plane_reason"] = plane["reason"]
+        except Exception as exc:  # noqa: BLE001 — card must not 500
+            status["github_plane"] = "unknown"
+            status["github_plane_error"] = str(exc)[:200]
         return status
 
 
@@ -9954,7 +9998,7 @@ def factory_chunk_plan(payload: FactoryChunkPlanRequest) -> dict:
 
 @app.get("/v1/jobs", response_model=JobListResponse)
 def list_jobs(
-    project_id: str,
+    project_id: Optional[str] = None,
     status: Optional[str] = None,
     kind: Optional[str] = None,
     task_id: Optional[str] = None,
@@ -9962,6 +10006,7 @@ def list_jobs(
     limit: int = 50,
     offset: int = 0,
 ) -> JobListResponse:
+    project_id = resolve_list_project_id(project_id)
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
     if offset < 0:
@@ -17554,7 +17599,10 @@ def queue_sandbox_deployment(payload: SandboxDeploymentJobRequest) -> JobSummary
 
 
 @app.get("/v1/events", response_model=EventFeedResponse)
-def event_feed(project_id: str, limit: int = 50, offset: int = 0) -> EventFeedResponse:
+def event_feed(
+    project_id: Optional[str] = None, limit: int = 50, offset: int = 0
+) -> EventFeedResponse:
+    project_id = resolve_list_project_id(project_id)
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200.")
     if offset < 0:

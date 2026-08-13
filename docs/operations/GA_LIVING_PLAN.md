@@ -17,10 +17,10 @@
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Partial** | Community ProviderOps kernel live 200; env SecretRefs; paste-UX incomplete | One-shot key UX; docs runbook |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Partial** | Dual-plane + fixture create (no spend); 41 hist DLQ | Need live PR success rate |
-| 4 | Previews reachable | **Partial** | List `open_url` absolute public-base on live (`3e6c906`); 0 running so View HTML unproven | Start a running preview; curl 200 HTML |
+| 3 | Code → evidence → PR reliable | **Partial** | Dual-plane advertised on `GET /v1/factory/wip`; fixture create (no spend); 41 hist DLQ | Need live PR success rate |
+| 4 | Previews reachable | **Partial** | List `open_url` absolute public-base; View shown only when URL exists; verified-test without URL is honest (no invented 409) | Start a running preview; curl 200 HTML |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (code)** | `ai/grok/community-ga`: hide/badge Account Connect, marketplace, clusters, SIM; **SSO/IdP kept visible** (Community includes self-hosted SSO). Tests: `apps/web/tests/edition-visibility.test.ts`. Live web image may lag until shared-tag redeploy (A1). | Redeploy web; visual dogfood on `boss.local` |
-| 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live | Factory dual-plane honesty (P0-6) |
+| 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP advertises plane (code) | Redeploy so live WIP shows `github_plane` |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
@@ -41,7 +41,7 @@
 | A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Done live** | Seed 200; 13/13 published; catalog-smoke 13/13 passed 2026-08-13 |
 | A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Claim freeze shipped** (`BOSS_MICROVM_CLAIMS_FROZEN`) | Set freeze on dogfood; unfreeze after rootfs bake proof — see `docs/product/SANDBOX_GA_STATUS.md` |
 | A5 | DLQ triage top classes; prove no missing-git | BOSS-342 | **Partial** git in image tree | DLQ trend + root causes filed |
-| A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Todo** | Binding drives factory **or** UI label |
+| A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Done (code)** | `GET /v1/factory/wip` + FactoryScaleCard advertise `github_plane` (binding vs settings). Live image lag until redeploy. |
 | A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Done (doc)** | [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md); SSO Community self-hosted allowed |
 
 ### Phase B — 1–2 weeks (private preview)
@@ -49,7 +49,7 @@
 | ID | Work | Plane | State |
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List contract PASS live** (absolute `open_url`); View HTML still required (0 running, expired 409) |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List contract PASS live** (absolute `open_url`); View for verified-test only if `open_url` exists (else honesty, no 409). View HTML still required (0 running) |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | Open |
@@ -201,6 +201,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | QA-3 incomplete surfaces: factory WIP dual-plane + no swallowed fetch (dashboard/previews/WIP); list `project_id` defaults; verified-test View honesty. Doc `qa-2026-08-13-incomplete.md`. A6 Done (code). Schema 503 is `519ba85`. | grok |
 | 2026-08-12 | U2 Community UI honesty + U5 claims freeze on `ai/grok/community-ga`: hide/badge Account Connect, marketplace, enterprise clusters, SIM; keep self-hosted SSO/IdP visible; `COMMUNITY_GA_CLAIMS_FREEZE.md`; DoD #5 Mostly (code); A7 Done (doc); B3 Done (code) | grok |
 | 2026-08-12 | Plane open-issue honesty pass: YouTube EP1–3 scripts; engine extract checklist; GTM gap reconciliation (+ AI SRE `/v1/oncall-sre`); Cloud 302/303 cancelled as Phase-03 roadmap; Go S1–S3 left Backlog; licensing 300 remains human-blocked; GA umbrellas 314/337 stay In Progress pending Phase A | grok |
 | 2026-08-12 | Multi-agent E2E Cloud bake: AC tests, Easy Connect link+sync, post-link team/marketplace/workers, retention+MC UX; 29 pytest green | agents |

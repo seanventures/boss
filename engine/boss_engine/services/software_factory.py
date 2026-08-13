@@ -207,6 +207,55 @@ class SoftwareFactoryService:
             "github_connection_id": self.github_connection_id,
         }
 
+    def describe_github_plane(
+        self,
+        connection: Any,
+        project_id: str,
+        *,
+        selector: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Read-only dual-plane honesty for operator cards.
+
+        Does **not** rebind adapters or resolve SecretRefs — safe on GET /factory/wip.
+        Reports whether a Mission Control primary binding exists vs the legacy
+        ``BOSS_GITHUB_TOKEN`` / ``BOSS_TARGET_GITHUB_*`` settings plane.
+        """
+        from .repo_registry import RepositoryResolutionError, resolve_repository_target
+
+        plane: dict[str, Any] = {
+            "github_plane": "legacy_env",
+            "github_binding_id": None,
+            "github_connection_id": None,
+            "owner": getattr(self.github, "owner", None),
+            "repo": getattr(self.github, "repo", None),
+            "full_name": getattr(self.github, "repository_full_name", None),
+            "source": "legacy_settings",
+        }
+        try:
+            target = resolve_repository_target(
+                connection,
+                self.settings,
+                project_id,
+                selector=selector,
+                allow_legacy_fallback=True,
+            )
+        except RepositoryResolutionError as error:
+            plane["reason"] = str(error)[:240]
+            return plane
+
+        plane["owner"] = target.get("owner") or plane["owner"]
+        plane["repo"] = target.get("repo") or plane["repo"]
+        plane["full_name"] = target.get("full_name") or plane["full_name"]
+        plane["source"] = target.get("source") or plane["source"]
+        binding_id = target.get("binding_id")
+        if not binding_id:
+            return plane
+
+        plane["github_plane"] = "mission_control_binding"
+        plane["github_binding_id"] = binding_id
+        plane["github_connection_id"] = target.get("connection_id")
+        return plane
+
     def _validation_follow_up(
         self, validation: PullRequestValidationResult
     ) -> list[str]:
