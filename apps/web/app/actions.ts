@@ -3691,3 +3691,30 @@ export async function reliabilityRemediateAction(formData: FormData): Promise<vo
     actor: getActor(formData),
   });
 }
+
+export async function createPreviewFixtureAction(
+  _prev: { id?: string; error?: string; open_url?: string } | null,
+  formData: FormData,
+): Promise<{ id?: string; error?: string; open_url?: string }> {
+  const projectId = getProjectId(formData);
+  try {
+    const res = await fetch(`${API_URL}/v1/previews/fixture`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        project_id: projectId,
+        actor: getActor(formData),
+        ttl_minutes: 60,
+      }),
+    });
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 240);
+      return { error: `API returned ${res.status}: ${detail || res.statusText}` };
+    }
+    const body = (await res.json()) as { id?: string; open_url?: string; url?: string };
+    revalidatePath("/");
+    return { id: body.id, open_url: body.open_url ?? body.url };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
