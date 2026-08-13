@@ -16,6 +16,7 @@ import {
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
   applyChangeSetAction,
+  resolveDecisionAction,
 } from './actions';
 
 export type ToastType = 'success' | 'error';
@@ -160,6 +161,25 @@ export function KpiCreateForm({ children, className }: { children: ReactNode; cl
       successMessage="KPI saved. Registry revalidated; event feed updated (kpi.upserted)."
       className={className}
       data-testid="kpi-create-form"
+    >
+      {children}
+    </ActionForm>
+  );
+}
+
+export function DecisionResolveForm({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <ActionForm
+      action={resolveDecisionAction}
+      successMessage="Decision recorded. Inbox revalidated."
+      className={className}
+      data-testid="decision-resolve-form"
     >
       {children}
     </ActionForm>
