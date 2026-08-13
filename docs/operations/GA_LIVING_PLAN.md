@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Partial** | Community ProviderOps kernel live 200; env SecretRefs; paste-UX incomplete | One-shot key UX; docs runbook |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Open** | ~41 open DLQ; substrate flaky | Phase A P0-2/3 |
+| 3 | Code → evidence → PR reliable | **Partial** | Dual-plane + fixture create (no spend); 41 hist DLQ | Need live PR success rate |
 | 4 | Previews reachable | **Partial** | List `open_url` absolute public-base on live (`3e6c906`); 0 running so View HTML unproven | Start a running preview; curl 200 HTML |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (code)** | `ai/grok/community-ga`: hide/badge Account Connect, marketplace, clusters, SIM; **SSO/IdP kept visible** (Community includes self-hosted SSO). Tests: `apps/web/tests/edition-visibility.test.ts`. Live web image may lag until shared-tag redeploy (A1). | Redeploy web; visual dogfood on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live | Factory dual-plane honesty (P0-6) |
@@ -95,6 +95,7 @@
 | GitHub MC | 2 connections, 2 bindings | live |
 | Agent Studio | 13 agents (4 published on 3e6c906; reseed in progress) | 2026-08-13 |
 | Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
+| 14-day qa-live | **Day 1/14 PASS** (`/var/lib/boss/qa-live`) | cron 06:15 UTC |
 | Previews | 50 rows (30 expired / 10 failed / 7 stopped / 3 verified / **0 running**); `open_url`=`https://boss-api.local.sean.network/v1/previews/{id}/web/` (37/37 bound); 0 loopback primary; expired View **409** | 2026-08-13 |
 
 ---
