@@ -599,6 +599,10 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
             res = _finalize_meeting(c, settings, run_id)
         return {"status": "completed", "done": True, **res}
 
+    if _is_simulated_run(run):
+        with begin(engine) as c:
+            return _advance_simulated_phase(c, settings, jobs, run)
+
     with begin(engine) as c:
         personas = resolve_roles(run["role_keys"], load_role_map(c, run["project_id"]))
     state = dict(run["state"])
@@ -781,3 +785,450 @@ def _finalize_meeting(connection, settings, run_id) -> dict:
     emit_event(connection, project_id, "meeting.completed", "boss", "meeting", meeting_id,
                {"minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id})
     return {"meeting_id": meeting_id, "minutes_artifact_id": minutes_artifact_id, "decision_id": decision_id}
+
+
+# ============================================================================
+# No-spend simulated fixture (Community E2E). Never calls a model.
+# ============================================================================
+SIMULATED_PHASES = ("research", "round1", "round2", "synthesis", "draft", "finalize")
+
+
+def _is_simulated_run(run: dict) -> bool:
+    constraints = run.get("constraints") or {}
+    finalize_ctx = run.get("finalize_ctx") or {}
+    state = run.get("state") or {}
+    return bool(
+        constraints.get("simulated")
+        or finalize_ctx.get("simulated")
+        or state.get("simulated")
+    )
+
+
+def _fixture_state(directive: str, personas: list[dict]) -> dict:
+    titles = [p["title"] for p in personas]
+    return {
+        "simulated": True,
+        "llm_called": False,
+        "research": {
+            "note": "simulated research; no crawl and no model",
+            "pages": [],
+            "sitemap": [],
+        },
+        "round1": {
+            title: f"[simulated] {title} opening perspective on: {directive[:120]}"
+            for title in titles
+        },
+        "round2": {
+            title: f"[simulated] {title} debate note — no live model was called."
+            for title in titles
+        },
+        "synthesis": (
+            "[simulated] Facilitator synthesis. Fixture only — not a production PRD."
+        ),
+        "prd_markdown": (
+            "# Simulated PRD fixture\n\n"
+            "This run used `simulated=true`. No model was invoked.\n\n"
+            f"Directive: {directive}\n"
+        ),
+    }
+
+
+def _project_scope(connection, project_id: str) -> dict:
+    row = connection.execute(
+        text(
+            """
+            SELECT p.workspace_id, w.org_id
+            FROM projects p
+            JOIN workspaces w ON w.id = p.workspace_id
+            WHERE p.id = :project_id
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise ValueError("meeting project is missing workspace/org scope")
+    return {"workspace_id": str(row["workspace_id"]), "org_id": str(row["org_id"])}
+
+
+def _write_phase_artifact(
+    connection,
+    settings: Settings,
+    *,
+    project_id: str,
+    task_id: Optional[str],
+    phase: str,
+    payload: dict,
+) -> str:
+    return create_artifact(
+        connection,
+        settings,
+        project_id,
+        task_id,
+        f"meeting_phase_{phase}",
+        f"Simulated meeting phase: {phase}",
+        {"phase": phase, "simulated": True, "payload": payload},
+    )
+
+
+def _phase_timeline_from_state(state: dict) -> list[dict]:
+    artifacts = state.get("artifacts") or {}
+    timeline = []
+    for phase in SIMULATED_PHASES:
+        timeline.append(
+            {
+                "phase": phase,
+                "status": "completed",
+                "artifact_id": artifacts.get(phase),
+                "simulated": True,
+            }
+        )
+    return timeline
+
+
+def _advance_simulated_phase(connection, settings: Settings, jobs, run: dict) -> dict:
+    """Advance one simulated phase. No adapter, no budget, no enqueue of spendy work."""
+    personas = resolve_roles(run["role_keys"], load_role_map(connection, run["project_id"]))
+    fixture = _fixture_state(run["directive"], personas)
+    state = dict(run["state"] or {})
+    state.setdefault("artifacts", {})
+    state["simulated"] = True
+    state["llm_called"] = False
+    phase = run["phase"]
+    next_map = {
+        "research": "round1",
+        "round1": "round2",
+        "round2": "synthesis",
+        "synthesis": "draft",
+        "draft": "finalize",
+    }
+    if phase not in next_map:
+        raise ValueError(f"unknown simulated phase {phase}")
+    key = "prd_markdown" if phase == "draft" else phase
+    state[key] = fixture[key]
+    artifact_id = _write_phase_artifact(
+        connection,
+        settings,
+        project_id=run["project_id"],
+        task_id=run.get("task_id"),
+        phase=phase,
+        payload=state[key] if not isinstance(state[key], dict) else state[key],
+    )
+    state["artifacts"][phase] = artifact_id
+    state["phase_timeline"] = _phase_timeline_from_state(state)
+    next_phase = next_map[phase]
+    _save_phase(connection, run["id"], state, 0, "simulated-fixture", next_phase)
+    jobs.create_job(
+        connection,
+        project_id=run["project_id"],
+        task_id=run["task_id"],
+        kind="meeting.step",
+        priority=48,
+        payload={"run_id": run["id"], "simulated": True},
+    )
+    return {"status": "running", "done": False, "phase": next_phase, "simulated": True}
+
+
+def meeting_evidence(connection, meeting_or_run_id: str) -> Optional[dict]:
+    """Operator-visible phase timeline + artifact links for a run or meeting."""
+    run = load_meeting_run(connection, meeting_or_run_id)
+    if run is None:
+        row = connection.execute(
+            text(
+                "SELECT id FROM meeting_runs WHERE meeting_id = :id ORDER BY updated_at DESC LIMIT 1"
+            ),
+            {"id": meeting_or_run_id},
+        ).mappings().first()
+        if row:
+            run = load_meeting_run(connection, row["id"])
+    meeting = connection.execute(
+        text("SELECT * FROM meetings WHERE id = :id"),
+        {"id": (run or {}).get("meeting_id") or meeting_or_run_id},
+    ).mappings().first()
+    if run is None and meeting is None:
+        return None
+    state = (run or {}).get("state") or {}
+    artifacts = dict(state.get("artifacts") or {})
+    timeline = list(state.get("phase_timeline") or [])
+    if not timeline and meeting:
+        minutes = {}
+        if meeting.get("minutes_artifact_id"):
+            art = connection.execute(
+                text("SELECT content FROM artifacts WHERE id = :id"),
+                {"id": meeting["minutes_artifact_id"]},
+            ).mappings().first()
+            content = (art or {}).get("content") or {}
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except Exception:
+                    content = {}
+            minutes = content.get("minutes") or content
+            timeline = list(minutes.get("phase_timeline") or [])
+        artifacts.setdefault("transcript", meeting.get("transcript_artifact_id"))
+        artifacts.setdefault("minutes", meeting.get("minutes_artifact_id"))
+    links = [
+        {"kind": kind, "artifact_id": artifact_id}
+        for kind, artifact_id in artifacts.items()
+        if artifact_id
+    ]
+    if meeting:
+        if meeting.get("transcript_artifact_id"):
+            links.append({"kind": "transcript", "artifact_id": meeting["transcript_artifact_id"]})
+        if meeting.get("minutes_artifact_id"):
+            links.append({"kind": "minutes", "artifact_id": meeting["minutes_artifact_id"]})
+    # de-dupe
+    seen = set()
+    unique_links = []
+    for item in links:
+        key = (item["kind"], item["artifact_id"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_links.append(item)
+    return {
+        "id": (run or {}).get("id") or meeting["id"],
+        "project_id": (run or {}).get("project_id")
+        or (meeting["project_id"] if meeting else None),
+        "meeting_id": (run or {}).get("meeting_id") or (meeting["id"] if meeting else None),
+        "run_id": (run or {}).get("id"),
+        "status": (run or {}).get("status") or meeting["status"],
+        "phase": (run or {}).get("phase"),
+        "simulated": bool(state.get("simulated") or (run and _is_simulated_run(run))),
+        "phase_timeline": timeline,
+        "artifact_links": unique_links,
+        "receipt_id": ((run or {}).get("finalize_ctx") or {}).get("receipt_id"),
+        "minutes_artifact_id": (run or {}).get("minutes_artifact_id")
+        or (meeting["minutes_artifact_id"] if meeting else None),
+        "llm_called": bool(state.get("llm_called")),
+    }
+
+
+def run_simulated_meeting(
+    connection,
+    settings: Settings,
+    *,
+    project_id: str,
+    actor: str,
+    meeting_id: Optional[str] = None,
+    directive: Optional[str] = None,
+    url: str = "",
+    role_keys: Optional[list] = None,
+) -> dict:
+    """Persist a full research→finalize fixture without calling a model or reserving budget.
+
+    Side effects (artifacts, receipt) are receipted with a unique dedupe_key.
+    Does not enqueue a worker job and does not open a publish Decision.
+    """
+    meeting = None
+    if meeting_id:
+        meeting = connection.execute(
+            text("SELECT * FROM meetings WHERE id = :id AND project_id = :p"),
+            {"id": meeting_id, "p": project_id},
+        ).mappings().first()
+        existing_run = load_meeting_run(connection, meeting_id)
+        if existing_run is None:
+            row = connection.execute(
+                text(
+                    "SELECT id FROM meeting_runs WHERE meeting_id = :id AND project_id = :p "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"id": meeting_id, "p": project_id},
+            ).mappings().first()
+            if row:
+                existing_run = load_meeting_run(connection, row["id"])
+        if existing_run and existing_run.get("status") in {"completed", "simulated"}:
+            evidence = meeting_evidence(connection, existing_run["id"]) or {}
+            return {
+                **evidence,
+                "already": True,
+                "simulated": True,
+                "project_id": project_id,
+            }
+    if meeting is None:
+        title = f"Simulated meeting: {(directive or 'Community fixture')[:80]}"
+        from .canonical import CanonicalObjectService
+
+        meeting_dict = CanonicalObjectService().create_meeting(
+            connection,
+            project_id=project_id,
+            title=title,
+            purpose="No-spend simulated multi-agent panel fixture",
+            actor=actor,
+            participants=[],
+            agenda=list(SIMULATED_PHASES),
+        )
+        meeting_id = meeting_dict["id"]
+        meeting = connection.execute(
+            text("SELECT * FROM meetings WHERE id = :id"),
+            {"id": meeting_id},
+        ).mappings().first()
+    directive = directive or meeting["purpose"] or meeting["title"]
+    personas = resolve_roles(role_keys, load_role_map(connection, project_id))
+    state = _fixture_state(directive, personas)
+    artifacts = {}
+    for phase in SIMULATED_PHASES:
+        key = "prd_markdown" if phase == "draft" else phase
+        payload = state.get(key)
+        artifacts[phase] = _write_phase_artifact(
+            connection,
+            settings,
+            project_id=project_id,
+            task_id=None,
+            phase=phase,
+            payload=payload if isinstance(payload, dict) else {"text": payload},
+        )
+    state["artifacts"] = artifacts
+    state["phase_timeline"] = _phase_timeline_from_state(state)
+    scope = _project_scope(connection, project_id)
+    from .receipts import ReceiptService
+
+    receipt, created = ReceiptService().create_or_reuse(
+        connection,
+        scope["org_id"],
+        scope["workspace_id"],
+        project_id,
+        f"meeting.simulated:{project_id}:{meeting['id']}",
+        "meeting.simulated_run",
+        {"meeting_id": meeting["id"], "phases": list(SIMULATED_PHASES)},
+        {"actor": actor, "llm_called": False, "cost_usd_micros": 0},
+    )
+    minutes = {
+        "directive": directive,
+        "url": url,
+        "simulated": True,
+        "llm_called": False,
+        "participants": [p["title"] for p in personas] + [FACILITATOR_TITLE],
+        "role_keys": [p["key"] for p in personas],
+        "research_summary": {
+            "sitemap": [],
+            "pages_studied": 0,
+            "note": state["research"]["note"],
+        },
+        "round1_perspectives": state["round1"],
+        "round2_debate": state["round2"],
+        "synthesis": state["synthesis"],
+        "prd_markdown": state["prd_markdown"],
+        "phase_timeline": state["phase_timeline"],
+        "artifacts": artifacts,
+        "cost_usd_micros": 0,
+        "model": "simulated-fixture",
+    }
+    minutes_artifact_id = create_artifact(
+        connection,
+        settings,
+        project_id,
+        None,
+        "meeting_minutes",
+        f"{meeting['title']} simulated minutes",
+        minutes,
+    )
+    transcript_artifact_id = create_artifact(
+        connection,
+        settings,
+        project_id,
+        None,
+        "meeting_transcript",
+        f"{meeting['title']} simulated transcript",
+        {
+            "simulated": True,
+            "transcript": [
+                {
+                    "speaker": "fixture",
+                    "message": f"phase {phase} recorded",
+                    "phase": phase,
+                }
+                for phase in SIMULATED_PHASES
+            ],
+        },
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE meetings
+            SET status = 'simulated',
+                participants = CAST(:parts AS JSONB),
+                transcript_artifact_id = :transcript,
+                minutes_artifact_id = :minutes,
+                completed_at = now(),
+                updated_at = now()
+            WHERE id = :id
+            """
+        ),
+        {
+            "parts": json.dumps([p["title"] for p in personas] + [FACILITATOR_TITLE]),
+            "transcript": transcript_artifact_id,
+            "minutes": minutes_artifact_id,
+            "id": meeting["id"],
+        },
+    )
+    run_id = make_id("mrun")
+    connection.execute(
+        text(
+            """
+            INSERT INTO meeting_runs (
+              id, project_id, task_id, status, phase, directive, url,
+              role_keys, constraints, state, usage, finalize_ctx,
+              meeting_id, minutes_artifact_id
+            )
+            VALUES (
+              :id, :p, NULL, 'simulated', 'done', :d, :url,
+              CAST(:rk AS JSONB), CAST(:c AS JSONB), CAST(:state AS JSONB),
+              CAST(:usage AS JSONB), CAST(:fc AS JSONB),
+              :meeting_id, :minutes
+            )
+            """
+        ),
+        {
+            "id": run_id,
+            "p": project_id,
+            "d": directive,
+            "url": url,
+            "rk": json.dumps([p["key"] for p in personas]),
+            "c": json.dumps({"simulated": True}),
+            "state": json.dumps(state),
+            "usage": json.dumps(
+                {"cost_usd_micros": 0, "model": "simulated-fixture", "simulated": True}
+            ),
+            "fc": json.dumps({"simulated": True, "receipt_id": receipt["id"]}),
+            "meeting_id": meeting["id"],
+            "minutes": minutes_artifact_id,
+        },
+    )
+    emit_event(
+        connection,
+        project_id,
+        "meeting.simulated",
+        actor,
+        "meeting",
+        meeting["id"],
+        {
+            "run_id": run_id,
+            "receipt_id": receipt["id"],
+            "minutes_artifact_id": minutes_artifact_id,
+            "llm_called": False,
+            "duplicate": not created,
+        },
+    )
+    return {
+        "id": meeting["id"],
+        "run_id": run_id,
+        "meeting_id": meeting["id"],
+        "project_id": project_id,
+        "status": "simulated",
+        "phase": "done",
+        "simulated": True,
+        "llm_called": False,
+        "phase_timeline": state["phase_timeline"],
+        "artifact_links": [
+            {"kind": phase, "artifact_id": artifact_id}
+            for phase, artifact_id in artifacts.items()
+        ]
+        + [
+            {"kind": "transcript", "artifact_id": transcript_artifact_id},
+            {"kind": "minutes", "artifact_id": minutes_artifact_id},
+        ],
+        "receipt_id": receipt["id"],
+        "minutes_artifact_id": minutes_artifact_id,
+        "transcript_artifact_id": transcript_artifact_id,
+        "already": not created,
+    }

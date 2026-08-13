@@ -1,6 +1,27 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — Community PRD-partials: meetings/assurance/local models (ai/grok/community-ga)
+
+Inventory then closed three Community ◐ holes without touching other-agent files (`main.py`, resource_plane, provider-configuration-ui, factory_scale).
+
+- **Meetings:** `POST /v1/meetings/{id}/run` now persists phase timeline + receipt; isolated `POST /v1/meetings/simulated-run` walks research→finalize with artifacts, no LLM/job/budget. UI shows timeline/artifact links + no-spend CTA.
+- **Assurance:** Honest empty (measured-contract copy + how-to). `POST /v1/assurance/seed-demo` creates one deterministic metric+case with `seeded: true` (not production health); fail-closed if tables missing; idempotent.
+- **Local OpenAI-compatible source:** `POST /v1/entitlements/sources/{id}/openai-compatible` stores `base_url` on `approved_local_model_host` + optional SecretRef. Adapter/client receives that base_url; credentials never returned. Distinct from ProviderOps easy-connect (other agent).
+
+Tests: 19 Python + 2 web passed. FEATURES.md: local URLs + assurance ✅; meetings stay ◐ (typed operating meetings still missing). W4.5 Done (code).
+
+## 2026-08-13 — Grok — Community BYOK paste-and-connect (ai/grok/community-ga)
+
+- Catalog: openai, anthropic, openai_compatible, cloudflare, supabase, ssh_host profiles.
+- `POST /v1/providers/easy-connect` writes through local_vault; SecretRef pointer only.
+- Mission Control: Paste and connect above Advanced SecretRef pointer form.
+- Tests: API paste/empty/redact/base_url/catalog + web form source. Plane BOSS-369.
+- Never stores raw keys in Postgres; response last4/fingerprint only.
+- Community-mounted (not enterprise-gated). DoD #1 Mostly (code); live paste still A1.
+- Router appended in platform.py only — main.py untouched.
+- Remaining: live dogfood paste of a real model key after shared-tag redeploy.
+
 ## 2026-08-13 — Grok — QA-2 API/settings/functions panel (ai/grok/community-ga)
 
 - Live probe 114 paths on `boss-api:3e6c906`: 90 PASS / 17 WARN prefix-404 / **7 FAIL 500**.

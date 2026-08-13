@@ -15,7 +15,7 @@
 
 | # | Criterion | Status | Evidence / notes | Next action |
 |---|---|---|---|---|
-| 1 | BYOK model + infra keys | **Partial** | Community ProviderOps kernel live 200; env SecretRefs; paste-UX incomplete | One-shot key UX; docs runbook |
+| 1 | BYOK model + infra keys | **Mostly (code)** | Catalog now lists openai/anthropic/openai_compatible/cloudflare/supabase/ssh_host. Community `POST /v1/providers/easy-connect` writes through to local_vault (SecretRef only). Mission Control **Paste and connect** card above pointer-only expert form. Live dogfood still needs redeploy (A1). | Redeploy + paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
 | 3 | Code → evidence → PR reliable | **Partial** | Dual-plane advertised on `GET /v1/factory/wip`; fixture create (no spend); 41 hist DLQ | Need live PR success rate |
 | 4 | Previews reachable | **Partial** | List `open_url` absolute public-base; View shown only when URL exists; verified-test without URL is honest (no invented 409) | Start a running preview; curl 200 HTML |
@@ -24,7 +24,7 @@
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
-**DoD score:** **~4 / 8** closed (UI honesty code on community-ga; live image lag) · Target for private preview: **6 / 8** (close 3,4,5 substrate/UI) · Target for Community GA: **8 / 8** + 14-day green gate.
+**DoD score:** **~4.5 / 8** closed (BYOK paste-and-connect code on community-ga; live image lag) · Target for private preview: **6 / 8** (close 3,4,5 substrate/UI) · Target for Community GA: **8 / 8** + 14-day green gate.
 
 **Claims freeze (signed list):** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) — Allowed vs Forbidden; SSO is Community self-hosted.
 
@@ -52,7 +52,7 @@
 | B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List contract PASS live** (absolute `open_url`); View for verified-test only if `open_url` exists (else honesty, no 409). View HTML still required (0 running) |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
-| B5 | Assurance empty honesty + optional seed | BOSS-337/348 | Open |
+| B5 | Assurance empty honesty + optional seed | BOSS-337/348 | **Done (code)** |
 | B6 | Deploy SOP requires `qa-live` | BOSS-337 | Open |
 
 ### Phase C — Community GA
@@ -70,11 +70,11 @@
 
 | Stream | Intent | Status | Closed Plane | Open / residual |
 |---|---|---|---|---|
-| **W0** Community keys | BYOK kernel | **Done (code+live kernel)** | BOSS-350, #157 | A1 redeploy for full main |
+| **W0** Community keys | BYOK kernel + paste UX | **Mostly (code)** | BOSS-350, #157; BOSS-369 paste | Live paste after A1 redeploy |
 | **W1** UI honesty | Edition/empty | **Mostly (code)** | 338, 339, 344; community-ga U2 | Live web redeploy; 346 residual |
 | **W2** Substrate | Worker/sandbox/preview | **Partial** | 340 host, 341 code, 342 git image | Rootfs; live shared tag; DLQ |
 | **W3** Vertical slice | CEO→PR sealed | **Partial** | 343 GitHub wire, 345 next_move, 349 OpenAPI, 351 gate | Reliable code path 351 |
-| **W4** Product loops | Studio/Assurance/deploy | **Open** | — | 347, 348, 344 deploy optional |
+| **W4** Product loops | Studio/Assurance/deploy | **Partial** | W4.5 seed (code) | 347, 348, 344 deploy optional |
 | **W5** Gates + Plane | Live proof only | **Active** | Gate script Done | Mandatory deploy gate |
 
 ---
@@ -118,6 +118,7 @@
 | BOSS-348 | Earned autonomy | **Open** | Not GA claim |
 | BOSS-349 | OpenAPI parity | **Done** | #161; deploy lag |
 | BOSS-350 | Community keys decision | **Done** | Full kernel #157 |
+| BOSS-369 | BYOK paste-and-connect | **In Progress** | Catalog + easy-connect + MC paste card |
 | BOSS-351 | Live E2E gate | **Done** (gate) | Factory E2E still open |
 | BOSS-314 | GA readiness closure loop | **In Progress** | Children closed this cycle listed in Plane comment; Phase A live still open |
 | BOSS-288–290 | YouTube EP scripts | **Done** (scripts) | Recording is production work outside repo |
@@ -201,6 +202,9 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | PRD completeness audit vs current code (not Aug 12 stale): `docs/operations/qa-2026-08-13-prd-audit.md`. Top Community holes: BYOK paste, local base URL, factory plane on factory surfaces, pack import UI, typed meetings, assurance seed, comms dry-run, improvement-program writes. | grok |
+| 2026-08-13 | Community PRD-partials: meetings simulated E2E + evidence; assurance honest empty + `POST /v1/assurance/seed-demo`; local OpenAI-compatible entitlement `base_url`. W4.5 Done (code). FEATURES.md: local URLs + assurance ✅; meetings stay ◐ | grok |
+| 2026-08-13 | Community BYOK paste-and-connect (DoD #1): catalog + `POST /v1/providers/easy-connect` + Mission Control paste card; SecretRef/local_vault only; Plane BOSS-369 In Progress | grok |
 | 2026-08-13 | QA-3 incomplete surfaces: factory WIP dual-plane + no swallowed fetch (dashboard/previews/WIP); list `project_id` defaults; verified-test View honesty. Doc `qa-2026-08-13-incomplete.md`. A6 Done (code). Schema 503 is `519ba85`. | grok |
 | 2026-08-12 | U2 Community UI honesty + U5 claims freeze on `ai/grok/community-ga`: hide/badge Account Connect, marketplace, enterprise clusters, SIM; keep self-hosted SSO/IdP visible; `COMMUNITY_GA_CLAIMS_FREEZE.md`; DoD #5 Mostly (code); A7 Done (doc); B3 Done (code) | grok |
 | 2026-08-12 | Plane open-issue honesty pass: YouTube EP1–3 scripts; engine extract checklist; GTM gap reconciliation (+ AI SRE `/v1/oncall-sre`); Cloud 302/303 cancelled as Phase-03 roadmap; Go S1–S3 left Backlog; licensing 300 remains human-blocked; GA umbrellas 314/337 stay In Progress pending Phase A | grok |

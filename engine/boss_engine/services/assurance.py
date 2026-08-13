@@ -204,6 +204,118 @@ class AssuranceService:
         )
         return {**_row(row), "evaluation_job_id": job["id"]}
 
+    DEMO_METRIC_KEY = "community.demo.proof_gate"
+    DEMO_CASE_DEDUPE = "assurance-demo-seed"
+
+    def _assurance_tables_ready(self, connection: Connection) -> tuple[bool, list[str]]:
+        required = (
+            "ground_truth_metric_definitions",
+            "assurance_cases",
+        )
+        missing: list[str] = []
+        for table in required:
+            present = connection.execute(
+                text("SELECT to_regclass(:name)"), {"name": table}
+            ).scalar()
+            if present is None:
+                missing.append(table)
+        return (not missing, missing)
+
+    def seed_demo(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Create one explicit demo metric + case. Not a production health claim.
+
+        Idempotent on (project, demo keys). Fail-closed when the assurance tables
+        are missing — never invent a healthy production posture.
+        """
+        ready, missing = self._assurance_tables_ready(connection)
+        if not ready:
+            raise AssuranceNotFoundError(
+                "Assurance tables are not installed: " + ", ".join(missing)
+            )
+        project_id = _required_text(project_id, "project_id")
+        actor = _required_text(actor, "actor")
+        existing_metric = connection.execute(
+            text(
+                "SELECT * FROM ground_truth_metric_definitions "
+                "WHERE project_id=:p AND metric_key=:k AND status='active' "
+                "ORDER BY version DESC LIMIT 1"
+            ),
+            {"p": project_id, "k": self.DEMO_METRIC_KEY},
+        ).mappings().first()
+        created_metric = False
+        if existing_metric:
+            metric = _row(existing_metric)
+        else:
+            metric = self.create_metric(
+                connection,
+                project_id=project_id,
+                metric_key=self.DEMO_METRIC_KEY,
+                metric_kind="custom",
+                unit="pass_rate",
+                comparator="gte",
+                baseline=0.0,
+                threshold=1.0,
+                threshold_upper=None,
+                cadence_seconds=86400,
+                alert_sla_seconds=86400,
+                owner_ref=actor,
+                evidence_query={
+                    "kind": "demo_contract",
+                    "note": "Seeded fixture. Not a measured production SLO.",
+                },
+                metadata={
+                    "seeded": True,
+                    "demo": True,
+                    "not_production_health": True,
+                },
+                actor=actor,
+            )
+            created_metric = True
+        dedupe = f"{self.DEMO_CASE_DEDUPE}:{project_id}"
+        case = self.create_case(
+            connection,
+            project_id=project_id,
+            subject_type="demo",
+            subject_ref="demo:community-assurance-seed",
+            title="Demo proof gate (seeded — not production health)",
+            risk_tier=0,
+            references={
+                "seeded": True,
+                "demo": True,
+                "not_production_health": True,
+                "metric_refs": [metric["id"]],
+            },
+            dedupe_key=dedupe,
+            actor=actor,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "assurance.demo_seeded",
+            actor,
+            "assurance_case",
+            case["id"],
+            {
+                "seeded": True,
+                "metric_id": metric["id"],
+                "case_id": case["id"],
+                "duplicate": (not created_metric) or bool(case.get("duplicate")),
+            },
+        )
+        return {
+            "seeded": True,
+            "duplicate": (not created_metric) or bool(case.get("duplicate")),
+            "production_health_claimed": False,
+            "metric": {**metric, "seeded": True},
+            "case": {**case, "seeded": True},
+        }
+
     @staticmethod
     def _enqueue_metric_evaluation(
         connection: Connection,

@@ -1,5 +1,7 @@
 import type { AssuranceFeed } from "../lib/assurance";
 import React from "react";
+import { seedAssuranceDemoAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 function text(item: Record<string, unknown>, key: string, fallback = "—"): string {
   const value = item[key];
@@ -76,7 +78,29 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(310px, 1fr))" }}>
         <article className="stack-card">
           <h3 style={{ marginTop: 0 }}>Assurance cases</h3>
-          {overview.cases.length === 0 ? <p className="detail">No cases recorded yet.</p> : (
+          {overview.cases.length === 0 ? (
+            <div className="detail" data-testid="assurance-empty">
+              <p>
+                No cases recorded yet. Proof gates require a <strong>measured contract</strong>
+                — a metric with a baseline/threshold plus an assurance case that cites it.
+                An empty center is not a healthy production claim.
+              </p>
+              <p>
+                Add one via <code>POST /v1/assurance/metrics</code> and{" "}
+                <code>POST /v1/assurance/cases</code>. How-to:{" "}
+                <code>docs/api/ASSURANCE_GOVERNANCE.md</code>.
+              </p>
+              <form action={seedAssuranceDemoAction}>
+                <input type="hidden" name="project_id" value={feed.projectId} />
+                <SubmitButton type="submit" className="cap-btn">
+                  Seed one demo metric + case
+                </SubmitButton>
+              </form>
+              <p className="detail">
+                The demo is labeled <code>seeded: true</code> and is not production health.
+              </p>
+            </div>
+          ) : (
             <div style={{ display: "grid", gap: 8 }}>
               {overview.cases.slice(0, 6).map((item) => (
                 <div key={text(item, "id")} style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>

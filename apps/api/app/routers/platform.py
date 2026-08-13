@@ -127,3 +127,35 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(agent_kms_router)
     except ImportError:
         pass
+
+    # Community meetings simulated E2E + evidence
+    try:
+        from .meetings_e2e import router as meetings_e2e_router
+
+        app.include_router(meetings_e2e_router)
+    except ImportError:
+        pass
+
+    # Community assurance demo seed (W4.5)
+    try:
+        from .assurance_seed import router as assurance_seed_router
+
+        app.include_router(assurance_seed_router)
+    except ImportError:
+        pass
+
+    # Local OpenAI-compatible entitlement source
+    try:
+        from .local_model_source import router as local_model_router
+
+        app.include_router(local_model_router)
+    except ImportError:
+        pass
+
+    # Community BYOK paste-and-connect (local_vault write-through)
+    try:
+        from .provider_easy_connect import router as provider_easy_connect_router
+
+        app.include_router(provider_easy_connect_router)
+    except ImportError:
+        pass

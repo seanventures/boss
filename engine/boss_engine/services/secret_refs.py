@@ -15,7 +15,13 @@ class SecretRefNotFoundError(RuntimeError):
 
 
 class SecretRefService:
-    ALLOWED_REF_KINDS = {"env", "vault", "local_runner", "platform_secret_store"}
+    ALLOWED_REF_KINDS = {
+        "env",
+        "vault",
+        "local_vault",
+        "local_runner",
+        "platform_secret_store",
+    }
     ALLOWED_SCOPE_TYPES = {"org", "workspace", "project"}
     ALLOWED_SECRET_KINDS = {
         "api_token",
@@ -29,6 +35,7 @@ class SecretRefService:
     ALLOWED_STORAGE_BACKENDS = {
         "environment",
         "vault",
+        "local_vault",
         "local_runner",
         "platform_secret_store",
     }
@@ -482,6 +489,7 @@ class SecretRefService:
         return {
             "env": "environment",
             "vault": "vault",
+            "local_vault": "local_vault",
             "local_runner": "local_runner",
             "platform_secret_store": "platform_secret_store",
         }[ref_kind]

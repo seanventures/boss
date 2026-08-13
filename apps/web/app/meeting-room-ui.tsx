@@ -11,6 +11,8 @@ import {
   upsertMeetingRoleAction,
   setMeetingRoleEnabledAction,
   deleteMeetingRoleAction,
+  runSimulatedMeetingAction,
+  loadMeetingEvidenceAction,
 } from "./actions";
 import { SubmitButton } from "./submit-button";
 
@@ -181,7 +183,79 @@ function NewMeetingForm({
 }
 
 /* ---- Single meeting detail (the Meeting Room) ------------------------------- */
-function MeetingDetail({ meeting, onBack, orgId }: { meeting: Meeting; onBack: () => void; orgId?: string }) {
+function MeetingEvidence({
+  meetingId,
+  projectId,
+}: {
+  meetingId: string;
+  projectId: string;
+}) {
+  const [evidence, setEvidence] = useState<{
+    phase_timeline: Array<{ phase: string; status?: string; artifact_id?: string }>;
+    artifact_links: Array<{ kind: string; artifact_id: string }>;
+    receipt_id?: string | null;
+    simulated?: boolean;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadMeetingEvidenceAction(meetingId, projectId).then((result) => {
+      if (!cancelled && result.ok) {
+        setEvidence(result);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId, projectId]);
+  if (!evidence || (evidence.phase_timeline.length === 0 && evidence.artifact_links.length === 0)) {
+    return null;
+  }
+  return (
+    <div className="mr-evidence" data-testid="meeting-evidence">
+      <div className="mr-section-title">Phase timeline &amp; artifacts</div>
+      {evidence.simulated ? (
+        <p className="detail">Simulated fixture — no live model was called.</p>
+      ) : null}
+      {evidence.phase_timeline.length > 0 ? (
+        <ol className="mr-phase-timeline">
+          {evidence.phase_timeline.map((step) => (
+            <li key={step.phase}>
+              <strong>{PHASE_LABEL[step.phase] ?? step.phase}</strong>
+              <span className="detail"> {step.status ?? "recorded"}</span>
+              {step.artifact_id ? (
+                <span className="mr-artifact-link"> artifact {step.artifact_id}</span>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+      {evidence.artifact_links.length > 0 ? (
+        <ul className="mr-artifact-list">
+          {evidence.artifact_links.map((link) => (
+            <li key={`${link.kind}:${link.artifact_id}`}>
+              {link.kind}: <code>{link.artifact_id}</code>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {evidence.receipt_id ? (
+        <p className="detail">Receipt <code>{evidence.receipt_id}</code></p>
+      ) : null}
+    </div>
+  );
+}
+
+function MeetingDetail({
+  meeting,
+  onBack,
+  orgId,
+  projectId,
+}: {
+  meeting: Meeting;
+  onBack: () => void;
+  orgId?: string;
+  projectId: string;
+}) {
   const orgQuery = orgId ? `org=${encodeURIComponent(orgId)}&` : "";
   return (
     <div className="mr">
@@ -196,7 +270,7 @@ function MeetingDetail({ meeting, onBack, orgId }: { meeting: Meeting; onBack: (
           ) : null}
         </div>
         <div className="mr-header-meta">
-          <span className={`cap-badge tone-${meeting.status === "completed" ? "green" : "amber"}`}>{meeting.status}</span>
+          <span className={`cap-badge tone-${meeting.status === "completed" || meeting.status === "simulated" ? "green" : "amber"}`}>{meeting.status}</span>
           {fmtDuration(meeting.created_at, meeting.completed_at) ? (
             <span className="mr-meta-item" title="Time from convening to conclusion">⏱ took {fmtDuration(meeting.created_at, meeting.completed_at)}</span>
           ) : null}
@@ -258,6 +332,7 @@ function MeetingDetail({ meeting, onBack, orgId }: { meeting: Meeting; onBack: (
       {isRunning(meeting) ? (
         <p className="mr-running-note">⏳ Meeting in progress — {PHASE_LABEL[meeting.phase ?? ""] ?? meeting.phase}. This view updates live; the panel survives restarts.</p>
       ) : null}
+      <MeetingEvidence meetingId={meeting.id} projectId={projectId} />
 
       <div className="mr-section-title">Round 1 — opening perspectives</div>
       <div className="mr-grid">
@@ -399,7 +474,14 @@ export function MeetingsHome({
 
   const active = meetings.find((m) => m.id === selected);
   if (active) {
-    return <MeetingDetail meeting={active} onBack={() => selectMeeting(null)} orgId={orgId} />;
+    return (
+      <MeetingDetail
+        meeting={active}
+        onBack={() => selectMeeting(null)}
+        orgId={orgId}
+        projectId={projectId}
+      />
+    );
   }
 
   return (
@@ -423,13 +505,25 @@ export function MeetingsHome({
       ) : null}
 
       {meetings.length === 0 ? (
-        <p className="mr-empty">No meetings yet. Convene your first cross-functional panel with “New meeting”.</p>
+        <div className="mr-empty">
+          <p>No meetings yet. Convene your first cross-functional panel with “New meeting”.</p>
+          <p className="detail">
+            A live panel calls a model. To prove the phase machine without spend, run a simulated fixture.
+          </p>
+          <form action={runSimulatedMeetingAction}>
+            <input type="hidden" name="project_id" value={projectId} />
+            <input type="hidden" name="directive" value="Community simulated panel fixture" />
+            <SubmitButton type="submit" className="cap-btn">
+              Run no-spend fixture
+            </SubmitButton>
+          </form>
+        </div>
       ) : (
         <div className="mr-home-grid">
           {meetings.map((m) => (
             <button key={m.id} type="button" className="mr-meeting-card" onClick={() => selectMeeting(m.id)}>
               <div className="mr-meeting-card-head">
-                <span className={`cap-badge tone-${m.status === "completed" ? "green" : isRunning(m) ? "blue" : "amber"}`}>
+                <span className={`cap-badge tone-${m.status === "completed" || m.status === "simulated" ? "green" : isRunning(m) ? "blue" : "amber"}`}>
                   {isRunning(m) ? "running" : m.status}
                 </span>
                 <span className="mr-meeting-date">{fmtDate(m.completed_at ?? m.created_at)}</span>

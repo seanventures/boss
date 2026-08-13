@@ -121,7 +121,7 @@ Optional / later SKUs (not community DoD): Account Connect, live IdP/SCIM, manag
 | W4.2 | Observability deploy **or** hide | BOSS-344 | W4.1 | No fake Grafana | **Honest empty Done** |
 | W4.3 | Agent Studio seed | BOSS-347 | A1 redeploy | Non-empty catalog | **Open** — seed 404 on live tag |
 | W4.4 | Improvement programs community path | BOSS-339 | W1.2 | One demo | **Partial** packaging |
-| W4.5 | Assurance seed one metric/case | BOSS-337 | — | Not empty shell | **Open** |
+| W4.5 | Assurance seed one metric/case | BOSS-337 | — | Not empty shell | **Done (code)** — honest empty + `POST /v1/assurance/seed-demo` (`seeded: true`, fail-closed, idempotent) |
 | W4.6 | Earned autonomy G1–G3 | BOSS-348 | W3 | Budget claim order | **Open** — not GA claim |
 | W4.7 | Comms dry-run or hide | BOSS-337 | — | Honest | **Open** |
 

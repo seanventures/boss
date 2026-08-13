@@ -90,6 +90,7 @@ def test_paid_surface_classification(path):
         # ChangeSets (actuate your own cloud), local worker pools / autoscaler / janitor.
         "/v1/provider-definitions",
         "/v1/providers",
+        "/v1/providers/easy-connect",
         "/v1/providers/pa_1/test",
         "/v1/providers/pa_1/rotate",
         "/v1/resources",

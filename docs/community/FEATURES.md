@@ -34,7 +34,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
-| Local / OpenAI-compatible base URLs | ◐ |
+| Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |
 | Managed multi-tenant model gateway | ✦ Cloud |
@@ -83,7 +83,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ◐ |
-| Assurance / ground-truth runtime | ◐ |
+| Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 
 ## Open-core boundary

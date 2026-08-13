@@ -8,6 +8,7 @@ import {
   createKpiAction,
   submitCommandAction,
   createProviderAccountAction,
+  easyConnectProviderAction,
   submitSelfImprovementProposalAction,
   queueOutboxMessageAction,
   testProviderAccountAction,
@@ -185,6 +186,19 @@ export function ProviderCreateForm({ children, className }: { children: ReactNod
       successMessage="Provider account registered. Use Test/Sync for inventory + receipts."
       className={className}
       data-testid="provider-create-form"
+    >
+      {children}
+    </ActionForm>
+  );
+}
+
+export function ProviderEasyConnectForm({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <ActionForm
+      action={easyConnectProviderAction}
+      successMessage="Key written to the local vault. BOSS stored only a SecretRef."
+      className={className}
+      data-testid="provider-paste-connect-form"
     >
       {children}
     </ActionForm>

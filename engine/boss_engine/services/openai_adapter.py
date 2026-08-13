@@ -192,8 +192,26 @@ def _usage_from_response(response, model: str) -> dict:
 
 
 class OpenAIAdapter:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ):
         self.settings = settings
+        self._base_url_override = (base_url or "").strip() or None
+        self._api_key_override = api_key
+
+    def _resolved_base_url(self) -> str:
+        if self._base_url_override:
+            return self._base_url_override
+        return (self.settings.openai_base_url or "").strip()
+
+    def _resolved_api_key(self) -> Optional[str]:
+        if self._api_key_override is not None:
+            return self._api_key_override
+        return self.settings.openai_api_key
 
     def _azure_enabled(self) -> bool:
         return bool(
@@ -207,8 +225,8 @@ class OpenAIAdapter:
         target any OpenAI-compatible provider (OpenRouter/Fireworks/DeepSeek/local) — the
         same knob the guest path already honors. Empty base_url => SDK default (api.openai.com).
         Azure keeps precedence via _azure_enabled(); base_url is ignored when Azure is configured."""
-        kwargs: dict = {"api_key": self.settings.openai_api_key}
-        base = (self.settings.openai_base_url or "").strip()
+        kwargs: dict = {"api_key": self._resolved_api_key()}
+        base = self._resolved_base_url()
         if base:
             kwargs["base_url"] = base
         return OpenAI(**kwargs)
@@ -244,13 +262,13 @@ class OpenAIAdapter:
             usage["retries"] = stats.get("retries", 0)
             return response.id, text, usage
 
-        if not self.settings.openai_api_key:
+        if not self._resolved_api_key():
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
         client = self._openai_client()
         used_model = model or self.settings.openai_model
         stats = {}
-        if self.settings.openai_base_url:
+        if self._resolved_base_url():
             messages: list[dict] = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
@@ -303,7 +321,7 @@ class OpenAIAdapter:
                 api_version=self.settings.azure_openai_api_version,
             )
             model = self.settings.azure_openai_deployment or "gpt-4o"
-        elif self.settings.openai_api_key:
+        elif self._resolved_api_key():
             client = self._openai_client()
             model = self.settings.openai_model
         else:
@@ -319,7 +337,8 @@ class OpenAIAdapter:
         max_out = capped_max_output_tokens(
             max_out,
             model,
-            base_url=str(getattr(self.settings, "openai_base_url", "") or ""),
+            base_url=self._resolved_base_url()
+            or str(getattr(self.settings, "openai_base_url", "") or ""),
             engine=str(getattr(self.settings, "code_agent_engine", "") or ""),
         )
         if max_out > 0:
@@ -348,3 +367,20 @@ class OpenAIAdapter:
         usage = _usage_from_response(response, model)
         usage["retries"] = stats.get("retries", 0)
         return normalized, usage
+
+
+def adapter_for_entitlement_source(
+    settings: Settings,
+    source: dict,
+    *,
+    api_key: Optional[str] = None,
+) -> OpenAIAdapter:
+    """Build an adapter routed at the entitlement source's OpenAI-compatible base_url."""
+    from .entitlements import EntitlementBrokerService
+
+    endpoint = EntitlementBrokerService.resolve_openai_compatible_endpoint(source)
+    return OpenAIAdapter(
+        settings,
+        base_url=endpoint.get("base_url"),
+        api_key=api_key if api_key is not None else "local",
+    )

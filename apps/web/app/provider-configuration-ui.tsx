@@ -37,6 +37,7 @@ import {
 import {
   ActionForm,
   ProviderCreateForm,
+  ProviderEasyConnectForm,
   ProviderSyncForm,
   ProviderTestForm,
 } from "./client-forms";
@@ -236,6 +237,116 @@ function ProviderCatalog({
   );
 }
 
+function PasteAndConnect({
+  projectId,
+  actor,
+  canManage,
+  definitions,
+}: {
+  projectId: string;
+  actor: string;
+  canManage: boolean;
+  definitions: ProviderDefinitionFeedItem[];
+}) {
+  const pasteable = useMemo(
+    () =>
+      definitions.filter((definition) =>
+        definition.authMethods.some((method) => method.credentialSlots.length > 0),
+      ),
+    [definitions],
+  );
+  const [provider, setProvider] = useState(pasteable[0]?.provider ?? "openai");
+  const selected = pasteable.find((item) => item.provider === provider) ?? pasteable[0];
+  const showBaseUrl = ["openai", "openai_compatible", "anthropic"].includes(
+    selected?.provider ?? provider,
+  );
+
+  useEffect(() => {
+    if (!pasteable.some((item) => item.provider === provider) && pasteable[0]) {
+      setProvider(pasteable[0].provider);
+    }
+  }, [pasteable, provider]);
+
+  if (pasteable.length === 0) {
+    return null;
+  }
+
+  return (
+    <ProviderEasyConnectForm className="provider-create-form">
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="actor" value={actor} />
+      <div className="provider-form-heading">
+        <div>
+          <span className="eyebrow">Paste and connect</span>
+          <h3>Bring your own model or infra key</h3>
+        </div>
+        <StatusBadge status="available" />
+      </div>
+      <p className="provider-notice" role="note">
+        Value is written to the local vault. BOSS stores only a SecretRef. Agents
+        never see the raw key.
+      </p>
+      <div className="provider-form-grid">
+        <label className="field">
+          <span>Provider</span>
+          <select
+            className="input"
+            name="provider"
+            value={selected?.provider ?? provider}
+            onChange={(event) => setProvider(event.target.value)}
+            disabled={!canManage}
+          >
+            {pasteable.map((definition) => (
+              <option key={definition.provider} value={definition.provider}>
+                {definition.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Account label</span>
+          <input
+            className="input"
+            name="account_label"
+            placeholder={`${selected?.displayName ?? "Provider"} production`}
+            required
+            disabled={!canManage}
+          />
+        </label>
+      </div>
+      <label className="field">
+        <span>API key / token</span>
+        <input
+          className="input"
+          name="secret_value"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Paste key — written to the local vault"
+          required
+          disabled={!canManage}
+        />
+      </label>
+      {showBaseUrl ? (
+        <label className="field">
+          <span>Base URL · optional</span>
+          <input
+            className="input"
+            name="base_url"
+            type="url"
+            placeholder="https://localhost:11434/v1"
+            disabled={!canManage}
+          />
+          <small>Ollama, vLLM, or any OpenAI-compatible endpoint.</small>
+        </label>
+      ) : null}
+      <button className="button primary" type="submit" disabled={!canManage}>
+        <Key size={15} aria-hidden />
+        Paste and connect
+      </button>
+    </ProviderEasyConnectForm>
+  );
+}
+
 function ConnectionCreate({
   projectId,
   actor,
@@ -273,7 +384,7 @@ function ConnectionCreate({
       <input type="hidden" name="provider" value={definition.provider} />
       <div className="provider-form-heading">
         <div>
-          <span className="eyebrow">New connection</span>
+          <span className="eyebrow">Advanced: bind an existing SecretRef</span>
           <h3>{definition.displayName}</h3>
         </div>
         <StatusBadge status={available ? "available" : "planned"} />
@@ -1657,6 +1768,12 @@ export function ProviderConfigurationSuite({
             definitions={feed.providerDefinitions}
             selectedProvider={selectedProvider}
             onSelect={setSelectedProvider}
+          />
+          <PasteAndConnect
+            projectId={projectId}
+            actor={actor}
+            canManage={canManage}
+            definitions={feed.providerDefinitions}
           />
           <ConnectionCreate
             projectId={projectId}

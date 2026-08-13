@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .core import create_artifact, emit_event, make_id, now_utc
+from .receipts import ReceiptService
 
 
 class CanonicalObjectService:
@@ -538,6 +539,20 @@ class CanonicalObjectService:
                 "meeting_id": meeting_id,
             },
         )
+        phase_timeline = self._phase_timeline_from_transcript(normalized_transcript)
+        artifact_links = [
+            {"kind": "transcript", "artifact_id": transcript_artifact_id},
+            {"kind": "minutes", "artifact_id": minutes_artifact_id},
+        ]
+        receipt_id = self._record_meeting_run_receipt(
+            connection,
+            project_id=project_id,
+            meeting_id=meeting_id,
+            actor=actor,
+            transcript_artifact_id=transcript_artifact_id,
+            minutes_artifact_id=minutes_artifact_id,
+            phase_timeline=phase_timeline,
+        )
         emit_event(
             connection,
             project_id,
@@ -553,10 +568,83 @@ class CanonicalObjectService:
                 "decision_ids": [item["decision_id"] for item in decisions],
                 "dissent_count": len(normalized_dissent),
                 "blocked": normalized_status == "blocked",
+                "receipt_id": receipt_id,
+                "phase_count": len(phase_timeline),
             },
         )
-        row = self._get_by_id(connection, "meetings", meeting_id)
-        return self._serialize_temporal(row)
+        row = self._serialize_temporal(self._get_by_id(connection, "meetings", meeting_id))
+        row["phase_timeline"] = phase_timeline
+        row["artifact_links"] = artifact_links
+        row["receipt_id"] = receipt_id
+        row["simulated"] = bool((normalized_minutes or {}).get("simulated"))
+        return row
+
+    @staticmethod
+    def _phase_timeline_from_transcript(transcript: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Operator-visible phase evidence from per-entry transcript.phase fields."""
+        order = ["research", "round1", "round2", "synthesis", "draft", "finalize"]
+        seen: dict[str, dict[str, Any]] = {}
+        extras: list[dict[str, Any]] = []
+        for entry in transcript:
+            phase = str(entry.get("phase") or "").strip().lower()
+            if not phase:
+                continue
+            item = {
+                "phase": phase,
+                "status": "recorded",
+                "speaker": entry.get("speaker"),
+            }
+            if phase in seen:
+                continue
+            if phase in order:
+                seen[phase] = item
+            else:
+                extras.append(item)
+        return [seen[name] for name in order if name in seen] + extras
+
+    def _record_meeting_run_receipt(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        meeting_id: str,
+        actor: str,
+        transcript_artifact_id: str,
+        minutes_artifact_id: str,
+        phase_timeline: list[dict[str, Any]],
+    ) -> str:
+        scope = connection.execute(
+            text(
+                """
+                SELECT p.workspace_id, w.org_id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if not scope:
+            raise ValueError("meeting project is missing workspace/org scope")
+        receipt, _created = ReceiptService().create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            f"meeting.run:{project_id}:{meeting_id}",
+            "meeting.run",
+            {
+                "meeting_id": meeting_id,
+                "transcript_artifact_id": transcript_artifact_id,
+                "minutes_artifact_id": minutes_artifact_id,
+            },
+            {
+                "actor": actor,
+                "phase_count": len(phase_timeline),
+                "phases": [item.get("phase") for item in phase_timeline],
+            },
+        )
+        return receipt["id"]
 
     def _create_meeting_action_task(
         self,

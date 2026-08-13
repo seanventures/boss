@@ -2540,6 +2540,10 @@ class MeetingSummary(BaseModel):
     created_by: str
     created_at: str
     updated_at: str
+    phase_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    artifact_links: list[dict[str, Any]] = Field(default_factory=list)
+    receipt_id: Optional[str] = None
+    simulated: bool = False
 
 
 class MeetingCreateRequest(BaseModel):

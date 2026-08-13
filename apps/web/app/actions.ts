@@ -1967,6 +1967,46 @@ export async function enqueueGitHubMergeAction(
   revalidatePath("/");
 }
 
+export async function easyConnectProviderAction(
+  formData: FormData,
+): Promise<void> {
+  const provider = formData.get("provider");
+  const accountLabel = formData.get("account_label");
+  const secretValue = formData.get("secret_value");
+  if (typeof provider !== "string" || !provider.trim()) {
+    throw new Error("provider is required");
+  }
+  if (typeof accountLabel !== "string" || !accountLabel.trim()) {
+    throw new Error("account_label is required");
+  }
+  if (typeof secretValue !== "string" || !secretValue.trim()) {
+    throw new Error("secret_value is required");
+  }
+  const body: Record<string, unknown> = {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    provider: provider.trim(),
+    account_label: accountLabel.trim(),
+    secret_value: secretValue,
+    backend: "local_vault",
+    read_only: true,
+  };
+  const baseUrl = getOptionalString(formData, "base_url");
+  if (baseUrl) {
+    body.base_url = baseUrl;
+  }
+  const response = await fetch(`${API_URL}/v1/providers/easy-connect`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const out = await response.json().catch(() => ({}));
+    throw new Error(failureText(out?.detail, response.status));
+  }
+  revalidatePath("/");
+}
+
 export async function createProviderAccountAction(
   formData: FormData,
 ): Promise<void> {
@@ -2551,6 +2591,73 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
     roles: roles.length ? roles : undefined,
     task_id: taskId || undefined,
     actor: getActor(formData),
+  });
+  revalidatePath("/");
+}
+
+export async function runSimulatedMeetingAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const meetingId = String(formData.get("meeting_id") ?? "").trim();
+  const directive = String(formData.get("directive") ?? "").trim();
+  const path = meetingId
+    ? `/v1/meetings/${encodeURIComponent(meetingId)}/simulated-run`
+    : "/v1/meetings/simulated-run";
+  await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      project_id: projectId,
+      actor: getActor(formData),
+      directive: directive || "Community simulated panel fixture",
+      simulated: true,
+    }),
+  });
+  revalidatePath("/");
+}
+
+export async function loadMeetingEvidenceAction(
+  meetingId: string,
+  projectId: string,
+): Promise<{
+  ok: boolean;
+  phase_timeline: Array<{ phase: string; status?: string; artifact_id?: string }>;
+  artifact_links: Array<{ kind: string; artifact_id: string }>;
+  receipt_id?: string | null;
+  simulated?: boolean;
+}> {
+  const p = encodeURIComponent(projectId);
+  const id = encodeURIComponent(meetingId);
+  const res = await fetch(
+    `${API_URL}/v1/meetings/${id}/evidence?project_id=${p}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    return { ok: false, phase_timeline: [], artifact_links: [] };
+  }
+  const data = (await res.json()) as {
+    phase_timeline?: Array<{ phase: string; status?: string; artifact_id?: string }>;
+    artifact_links?: Array<{ kind: string; artifact_id: string }>;
+    receipt_id?: string | null;
+    simulated?: boolean;
+  };
+  return {
+    ok: true,
+    phase_timeline: data.phase_timeline ?? [],
+    artifact_links: data.artifact_links ?? [],
+    receipt_id: data.receipt_id,
+    simulated: data.simulated,
+  };
+}
+
+export async function seedAssuranceDemoAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  await fetch(`${API_URL}/v1/assurance/seed-demo`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      project_id: projectId,
+      actor: getActor(formData),
+    }),
   });
   revalidatePath("/");
 }

@@ -163,4 +163,33 @@ describe("provider configuration workspace", () => {
     expect(source).toContain("editionLimitations");
     expect(source).toContain("fully functional when operators bring their own");
   });
+
+  it("renders paste-and-connect above the pointer-only SecretRef form", () => {
+    const source = readFileSync(
+      resolve(__dirname, "../app/provider-configuration-ui.tsx"),
+      "utf8",
+    );
+    const forms = readFileSync(
+      resolve(__dirname, "../app/client-forms.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain("Paste and connect");
+    expect(source).toContain(
+      "Value is written to the local vault. BOSS stores only a SecretRef. Agents",
+    );
+    expect(source).toContain("Advanced: bind an existing SecretRef");
+    expect(source).toContain("<PasteAndConnect");
+    expect(source).toContain("<ConnectionCreate");
+    expect(source.indexOf("<PasteAndConnect")).toBeLessThan(
+      source.indexOf("<ConnectionCreate"),
+    );
+    expect(source).toContain('name="secret_value"');
+    expect(source).toContain('autoComplete="new-password"');
+    expect(source).toContain('name="base_url"');
+    expect(forms).toContain('data-testid="provider-paste-connect-form"');
+    expect(forms).toContain('data-testid="provider-create-form"');
+    expect(forms).toContain("easyConnectProviderAction");
+    expect(forms).toContain("createProviderAccountAction");
+  });
 });
