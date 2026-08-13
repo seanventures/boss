@@ -988,17 +988,18 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_GITHUB_APP_INSTALLATION_ID"
     )
 
-    # Simple rate limiting for high-cost paths (P2 per .ai/security-review.md).
-    # In-memory implementation only (see main.py); production requires Redis or
-    # edge limiter (nginx, CDN, etc). Default protects metatron/query, commands/propose,
-    # resources/sync etc at 10 req/min per (IP+actor) key. Can disable or tune via env.
+    # In-process rate limiting for high-cost paths (P2 per .ai/security-review.md).
+    # Community / single-process: the in-memory limiter in apps/api/app/main.py is
+    # the supported control. Redis is the A2A transport, not a rate-limit backend.
+    # Multi-replica / public-edge: front with Redis/LB/CDN and optionally disable
+    # this limiter via BOSS_RATE_LIMIT_ENABLED=false. Default protects
+    # metatron/query, commands/propose, resources/sync per (IP+actor) key.
     rate_limit_enabled: bool = Field(
         default=True, alias="BOSS_RATE_LIMIT_ENABLED"
     )
     rate_limit_requests_per_minute: int = Field(
         # Bumped 10 -> 120 so interactive console/validation sessions aren't
-        # throttled on the high-cost paths (propose/query/chat/sync). Still
-        # env-overridable; prod should front with Redis/LB rate limiting.
+        # throttled on the high-cost paths (propose/query/chat/sync).
         default=120, alias="BOSS_RATE_LIMIT_RPM"
     )
 

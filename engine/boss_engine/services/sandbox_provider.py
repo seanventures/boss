@@ -120,6 +120,11 @@ def sandbox_host_base(settings) -> str:
     return (getattr(settings, "sandbox_agent_url", "") or "").strip().rstrip("/")
 
 
+# Freeze-safe echo diagnostic. engine=echo + test_mode only — never claude_code.
+ECHO_ENGINE = "echo"
+ECHO_EXERCISE_TASK_ID = "exercise_echo_api"
+
+
 @runtime_checkable
 class Sandbox(Protocol):
     """The surface the code pipeline uses — implemented by EphemeralSandbox and,
@@ -361,10 +366,171 @@ class MicroVMProvider:
         )
 
 
+def build_echo_submit_body(*, task_id: str = ECHO_EXERCISE_TASK_ID) -> dict:
+    """Versioned submit envelope for the freeze-safe echo diagnostic.
+
+    Hard-coded ``engine=echo`` + ``test_mode``. Never carries claude_code,
+    model credentials, or a coding claim.
+    """
+    from .sandbox_contract import CONTRACT_VERSION
+
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "task_id": task_id,
+        "test_mode": True,
+        "engine": ECHO_ENGINE,
+        "instructions": "Deterministic sandbox echo exercise — no LLM.",
+        "acceptance_criteria": ["SANDBOX_OK.txt exists"],
+        "test_commands": [],
+        "repo": {},
+        "engine_env": {},
+        "run_mutation": False,
+        "resources": {"vcpu": 1, "mem_mb": 512, "timeout_s": 180},
+    }
+
+
+def run_echo_exercise(
+    settings,
+    *,
+    http_client=None,
+    sleep=None,
+    timeout_s: Optional[int] = None,
+) -> dict:
+    """Submit/poll a throwaway echo VM. Safe while claims are frozen.
+
+    Does **not** call :func:`ensure_microvm_execution_allowed` — echo does not
+    claim coding / claude_code / microVM GA. Missing or unreachable host
+    raises :class:`SandboxHostUnavailable` (API maps to HTTP 503).
+    """
+    import time
+
+    import httpx
+
+    from .sandbox_contract import is_terminal, parse_submit_response
+
+    base = sandbox_host_base(settings)
+    if not base:
+        raise SandboxHostUnavailable(
+            "sandbox host not configured (BOSS_SANDBOX_AGENT_URL is empty)"
+        )
+
+    sleep_fn = time.sleep if sleep is None else sleep
+    timeout = 180 if timeout_s is None else int(timeout_s)
+    poll = max(0, int(getattr(settings, "sandbox_poll_interval_seconds", 3) or 0))
+    body = build_echo_submit_body()
+    if body.get("engine") != ECHO_ENGINE or not body.get("test_mode"):
+        raise SandboxPlaneError(
+            "echo exercise refused a non-echo submit body",
+            status_code=422,
+            code="echo_engine_required",
+        )
+    headers: dict[str, str] = {}
+    token = getattr(settings, "sandbox_token", "") or ""
+    if token:
+        headers["X-Sandbox-Token"] = token
+
+    out: dict = {
+        "url": base,
+        "claims_frozen": microvm_claims_are_frozen(settings),
+        "engine": ECHO_ENGINE,
+        "test_mode": True,
+        "coding_claimed": False,
+        "claude_code_claimed": False,
+    }
+
+    owns_client = http_client is None
+    client = http_client if http_client is not None else httpx.Client(timeout=20.0)
+    try:
+        try:
+            submitted = client.post(f"{base}/v1/sandbox/tasks", json=body, headers=headers)
+            out["submit_http"] = getattr(submitted, "status_code", None)
+            submitted.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise map_sandbox_http_error(exc, base=base, action="submit echo") from exc
+        payload = submitted.json() if hasattr(submitted, "json") else {}
+        sid = parse_submit_response(payload)
+        if not sid:
+            raise SandboxHostUnavailable(
+                "sandbox-service did not return a sandbox_task_id"
+            )
+        out["sandbox_task_id"] = sid
+        last: Optional[dict] = None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if poll:
+                sleep_fn(poll)
+            try:
+                polled = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
+                polled.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise map_sandbox_http_error(
+                    exc, base=base, sandbox_task_id=sid, action="poll echo"
+                ) from exc
+            last = polled.json() if hasattr(polled, "json") else {}
+            if not isinstance(last, dict):
+                last = {}
+            if is_terminal(last.get("status")):
+                break
+        result = (last or {}).get("result") or {}
+        if not isinstance(result, dict):
+            result = {}
+        out["final_status"] = (last or {}).get("status")
+        out["summary"] = result.get("summary")
+        out["diff_paths"] = [
+            item.get("path")
+            for item in (result.get("diff") or [])
+            if isinstance(item, dict)
+        ]
+        out["reached"] = out["final_status"] == "done" and bool(out["diff_paths"])
+        return out
+    finally:
+        if owns_client:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+
+
+@runtime_checkable
+class Sandbox(Protocol):
+    """The surface the code pipeline uses — implemented by EphemeralSandbox and,
+    later, by a microVM-backed sandbox."""
+
+    path: Optional[object]
+
+    def provision(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        base_branch: str = "main",
+        work_branch: Optional[str] = None,
+        token: Optional[str] = None,
+    ) -> object: ...
+
+    def run(self, command: str, *, timeout: Optional[int] = None): ...
+
+    def diff(self) -> list[FileChange]: ...
+
+    def diff_summary(self) -> DiffSummary: ...
+
+    def teardown(self) -> None: ...
+
+
+class SandboxProvider(Protocol):
+    def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox: ...
+
+
+
 def make_sandbox_provider(settings: Settings) -> SandboxProvider:
     kind = (getattr(settings, "sandbox_provider", "local") or "local").lower()
     if kind in ("local", "subprocess"):
         return LocalSubprocessProvider(settings)
     if kind in ("microvm", "firecracker", "gvisor"):
+        # Community GA bar is working software, not Firecracker marketing.
+        # While microVM coding claims are frozen, new code.task runs on the
+        # local subprocess substrate (the path that already shipped BugBox).
+        # MicroVMProvider.run_code_task still 422s if called directly.
+        if microvm_claims_are_frozen(settings):
+            return LocalSubprocessProvider(settings)
         return MicroVMProvider(settings)
     raise ValueError(f"Unknown BOSS_SANDBOX_PROVIDER: {settings.sandbox_provider!r}")

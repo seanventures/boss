@@ -799,6 +799,52 @@ export async function exportPackAction(
   return { yaml, packId: packId.trim() };
 }
 
+export async function importSkillAction(formData: FormData): Promise<void> {
+  const yamlContent = await readSkillYaml(formData);
+  try {
+    await client.importSkill({
+      project_id: getProjectId(formData),
+      bundle: yamlContent,
+      allow_untrusted: true,
+      actor: getActor(formData),
+    });
+  } catch (error) {
+    throw packYamlApiError(error, "Skill import failed.");
+  }
+  revalidatePath("/");
+}
+
+export async function exportSkillYaml(
+  projectId: string,
+  skillId: string,
+  actor = "ceo",
+): Promise<string> {
+  try {
+    const yaml = await client.exportSkill(projectId, skillId, actor);
+    if (typeof yaml !== "string" || !yaml) {
+      throw new Error("Skill export returned empty YAML.");
+    }
+    return yaml;
+  } catch (error) {
+    throw packYamlApiError(error, "Skill export failed.");
+  }
+}
+
+export async function exportSkillAction(
+  formData: FormData,
+): Promise<{ yaml: string; skillId: string }> {
+  const skillId = formData.get("skill_id");
+  if (typeof skillId !== "string" || !skillId.trim()) {
+    throw new Error("skill_id is required");
+  }
+  const yaml = await exportSkillYaml(
+    getProjectId(formData),
+    skillId.trim(),
+    getActor(formData),
+  );
+  return { yaml, skillId: skillId.trim() };
+}
+
 async function readPackYaml(formData: FormData): Promise<string> {
   const pasted = formData.get("yaml");
   if (typeof pasted === "string" && pasted.trim()) {
@@ -812,6 +858,21 @@ async function readPackYaml(formData: FormData): Promise<string> {
     }
   }
   throw new Error("Pack YAML is required");
+}
+
+async function readSkillYaml(formData: FormData): Promise<string> {
+  const pasted = formData.get("yaml");
+  if (typeof pasted === "string" && pasted.trim()) {
+    return pasted;
+  }
+  const uploaded = formData.get("yaml_file");
+  if (uploaded instanceof Blob) {
+    const text = await uploaded.text();
+    if (text.trim()) {
+      return text;
+    }
+  }
+  throw new Error("Skill YAML is required");
 }
 
 function packYamlApiError(error: unknown, fallback: string): Error {

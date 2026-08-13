@@ -54,8 +54,8 @@ internal_url: http://127.0.0.1:41635
 ```
 
 **List contract: PASS.**  
-**View HTML (real app): NOT PROVEN** — 0 running sandboxed previews; microVM claims frozen.  
-**View HTML (fixture):** **PASS live** on `boss-api:1d5c081` — `POST /v1/previews/fixture` → `prev_8a4947e073c547aab6d9`, `open_url=https://boss-api.local.sean.network/v1/previews/prev_8a4947e073c547aab6d9/web/`, GET **200** `text/html` with “fixture — not a sandboxed app”.
+**View HTML (real app): PASS live (replay)** — `POST /v1/code-tasks/crun_7cc663627f2340dc85ac/preview` → `prev_af60b33719b04082b027` **running**, GET **200** title `BugBox — capture, track, resolve`. Historical factory run (`npm run verify` exit 0, PR #83). New greenfield build on current tag still unproven.  
+**View HTML (fixture):** **PASS live** on `boss-api:1d5c081` — `POST /v1/previews/fixture` → `prev_8a4947e073c547aab6d9`, honest “fixture — not a sandboxed app”.
 
 ---
 

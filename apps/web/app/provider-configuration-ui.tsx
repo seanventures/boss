@@ -16,7 +16,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { formatDateTime as formatDateTimeUtc } from "../lib/datetime";
 import type { ActivityFeedItem } from "../lib/events";
@@ -26,6 +26,11 @@ import type {
   ProviderAccountFeedItem,
   ProviderDefinitionFeedItem,
   ProviderOpsFeed,
+} from "../lib/providerops";
+import {
+  costsForHonestyChart,
+  describeResourceMonthlyCost,
+  describeSpendHonesty,
 } from "../lib/providerops";
 import {
   disableProviderAccountAction,
@@ -1236,14 +1241,23 @@ function ResourceView({
                       <small>Seen {formatDate(resource.lastSeenAt)}</small>
                     </td>
                     <td>
-                      <strong>
-                        {formatMicros(
-                          resource.actualMonthlyUsdMicros ??
-                            resource.estimatedMonthlyUsdMicros ??
-                            0,
-                        )}
-                      </strong>
-                      <small>{titleCase(resource.costConfidence)}</small>
+                      {(() => {
+                        const monthly = describeResourceMonthlyCost(resource);
+                        return (
+                          <>
+                            <strong>
+                              {monthly.amountUsdMicros == null
+                                ? monthly.label
+                                : formatMicros(monthly.amountUsdMicros)}
+                            </strong>
+                            <small>
+                              {monthly.amountUsdMicros == null
+                                ? monthly.helper
+                                : titleCase(resource.costConfidence)}
+                            </small>
+                          </>
+                        );
+                      })()}
                     </td>
                     <td>
                       <button
@@ -1337,12 +1351,12 @@ function ResourceDrawer({
           <div>
             <dt>Cost</dt>
             <dd>
-              {formatMicros(
-                resource.actualMonthlyUsdMicros ??
-                  resource.estimatedMonthlyUsdMicros ??
-                  0,
-              )}{" "}
-              · {titleCase(resource.costConfidence)}
+              {(() => {
+                const monthly = describeResourceMonthlyCost(resource);
+                return monthly.amountUsdMicros == null
+                  ? `${monthly.label} — ${monthly.helper}`
+                  : `${formatMicros(monthly.amountUsdMicros)} · ${titleCase(resource.costConfidence)}`;
+              })()}
             </dd>
           </div>
           <div>
@@ -1469,20 +1483,33 @@ export function costByProvider(costs: CostEventFeedItem[]) {
     .sort((left, right) => right.amount - left.amount);
 }
 
-function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
-  const totals = costByProvider(feed.costs);
+export function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
+  const honesty = describeSpendHonesty({
+    costs: feed.costs,
+    health: feed.providerHealth,
+    runs: feed.reconciliationRuns,
+  });
+  const showExactChart =
+    honesty.kind === "observed" || honesty.kind === "estimated";
+  const totals = showExactChart
+    ? costByProvider(costsForHonestyChart(feed.costs, honesty.kind))
+    : [];
   const max = Math.max(...totals.map((item) => item.amount), 1);
   return (
     <div className="provider-view-panel provider-split-view">
       <section aria-labelledby="provider-spend-heading">
         <div className="provider-view-heading">
           <div>
-            <span className="eyebrow">Observed spend</span>
+            <span className="eyebrow">{honesty.label}</span>
             <h3 id="provider-spend-heading">Provider distribution</h3>
           </div>
-          <strong>{formatMicros(feed.summary.spendUsdMicros)}</strong>
+          <strong data-testid="provider-spend-amount">
+            {honesty.amountUsdMicros == null
+              ? "—"
+              : formatMicros(honesty.amountUsdMicros)}
+          </strong>
         </div>
-        {totals.length > 0 ? (
+        {showExactChart && totals.length > 0 ? (
           <div className="provider-cost-chart" role="img" aria-label="Observed cost by provider">
             {totals.map((item) => (
               <div key={item.provider}>
@@ -1497,14 +1524,16 @@ function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
             ))}
           </div>
         ) : (
-          <div className="provider-empty compact">
+          <div
+            className="provider-empty compact"
+            data-testid="provider-spend-honesty"
+          >
             <ChartBar size={22} aria-hidden />
-            <p>No cost events are available for this project.</p>
+            <p>{honesty.helper}</p>
           </div>
         )}
         <p className="provider-helper">
-          Every value retains its confidence label. Estimates are never presented
-          as reconciled actuals.
+          {honesty.helper} Resource receipts prove actions; they are not invoices.
         </p>
       </section>
       <section aria-labelledby="provider-finops-evidence-heading">
@@ -1534,7 +1563,9 @@ function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
               <span>
                 <strong>{titleCase(run.provider ?? "all providers")}</strong>
                 <small>
-                  {run.resourcesSeen} resources · {run.costsSeen} costs ·{" "}
+                  {run.resourcesSeen} resources · {run.costsSeen} cost events ·{" "}
+                  billing {run.billingStatus ?? "unknown"}
+                  {run.billingMessage ? ` — ${run.billingMessage}` : ""} ·{" "}
                   {formatDate(run.startedAt)}
                 </small>
               </span>
@@ -1723,11 +1754,28 @@ export function ProviderConfigurationSuite({
           <strong>{feed.summary.healthyProviders}</strong>
           <small>{feed.providerHealth.length} observations</small>
         </div>
-        <div>
-          <span>Observed spend</span>
-          <strong>{formatMicros(feed.summary.spendUsdMicros)}</strong>
-          <small>{feed.summary.openCostAnomalies} open anomalies</small>
-        </div>
+        {(() => {
+          const honesty = describeSpendHonesty({
+            costs: feed.costs,
+            health: feed.providerHealth,
+            runs: feed.reconciliationRuns,
+          });
+          return (
+            <div data-testid="provider-suite-spend">
+              <span>{honesty.label}</span>
+              <strong>
+                {honesty.amountUsdMicros == null
+                  ? "—"
+                  : formatMicros(honesty.amountUsdMicros)}
+              </strong>
+              <small>
+                {honesty.kind === "observed" || honesty.kind === "estimated"
+                  ? `${feed.summary.openCostAnomalies} open anomalies`
+                  : honesty.helper}
+              </small>
+            </div>
+          );
+        })()}
       </div>
 
       <nav className="provider-subnav" aria-label="System configuration sections">

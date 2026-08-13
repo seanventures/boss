@@ -28,7 +28,9 @@ vi.mock("../lib/client", () => ({
 
 describe("ProviderOps feed", async () => {
   const { client } = await import("../lib/client");
-  const { fetchProviderOpsFeed } = await import("../lib/providerops");
+  const { describeSpendHonesty, fetchProviderOpsFeed } = await import(
+    "../lib/providerops"
+  );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -413,7 +415,10 @@ describe("ProviderOps feed", async () => {
           rate_limit_status: "unknown",
           usage_cap_status: "unknown",
           last_checked_at: "2026-06-03T12:00:00Z",
-          detail: {},
+          detail: {
+            billing_status: "synced",
+            billing_confidence: "provider_reported",
+          },
           created_at: "2026-06-03T12:00:00Z",
         },
       ],
@@ -453,6 +458,8 @@ describe("ProviderOps feed", async () => {
           finished_at: "2026-06-03T12:01:00Z",
           metadata: {
             inventory_snapshot_artifact_id: "art_providerops_snapshot_1",
+            billing_status: "synced",
+            billing_confidence: "provider_reported",
           },
         },
       ],
@@ -565,9 +572,16 @@ describe("ProviderOps feed", async () => {
       triggerReason: "queue_pressure",
       queueDepth: 7,
     });
+    expect(feed.providerHealth[0]).toMatchObject({
+      provider: "cloudflare",
+      billingStatus: "synced",
+      billingConfidence: "provider_reported",
+    });
     expect(feed.reconciliationRuns[0]).toMatchObject({
       provider: "cloudflare",
       inventorySnapshotArtifactId: "art_providerops_snapshot_1",
+      billingStatus: "synced",
+      billingConfidence: "provider_reported",
     });
     expect(feed.deploymentRuns[0]).toMatchObject({
       appName: "BOSS",
@@ -583,6 +597,94 @@ describe("ProviderOps feed", async () => {
       pipelineStatus: "passed",
       gateStatus: "waiting",
       stagingRunStatus: "created",
+    });
+  });
+
+  it("maps billing unavailable/unknown without inventing cost events", async () => {
+    mockPaidEdition();
+    vi.mocked(client.listProviderDefinitions).mockResolvedValueOnce({ items: [] });
+    vi.mocked(client.listProviderAccounts).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    mockEmptySecondaryEndpoints();
+    vi.mocked(client.listProviderHealth).mockReset();
+    vi.mocked(client.listReconciliationRuns).mockReset();
+    vi.mocked(client.listProviderHealth).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "ph_cf",
+          project_id: "boss-dogfood",
+          provider: "cloudflare",
+          status: "healthy",
+          api_available: true,
+          rate_limit_status: "ok",
+          usage_cap_status: "ok",
+          last_checked_at: "2026-08-13T00:00:00Z",
+          detail: {
+            billing_status: "unavailable",
+            billing_confidence: "unknown",
+            billing_message: "Exact billing sync is not available for cloudflare",
+          },
+          created_at: "2026-08-13T00:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listReconciliationRuns).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "recon_cf",
+          project_id: "boss-dogfood",
+          provider: "cloudflare",
+          status: "succeeded",
+          resources_seen: 4,
+          resources_changed: 0,
+          costs_seen: 0,
+          started_by: "ceo",
+          started_at: "2026-08-13T00:00:00Z",
+          metadata: {
+            billing_status: "unavailable",
+            billing_message: "Exact billing sync is not available for cloudflare",
+          },
+        },
+      ],
+    });
+    vi.mocked(client.listChangeSets).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listWorkerPools).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+    vi.mocked(client.listScalePlans).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [],
+    });
+
+    const feed = await fetchProviderOpsFeed();
+    expect(feed.costs).toEqual([]);
+    expect(feed.summary.spendUsdMicros).toBe(0);
+    expect(feed.providerHealth[0]).toMatchObject({
+      billingStatus: "unavailable",
+      billingConfidence: "unknown",
+    });
+    expect(feed.reconciliationRuns[0]).toMatchObject({
+      costsSeen: 0,
+      billingStatus: "unavailable",
+    });
+    expect(
+      describeSpendHonesty({
+        costs: feed.costs,
+        health: feed.providerHealth,
+        runs: feed.reconciliationRuns,
+      }),
+    ).toMatchObject({
+      kind: "unavailable",
+      amountUsdMicros: null,
+      label: "Billing unavailable",
     });
   });
 

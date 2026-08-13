@@ -2,7 +2,15 @@
 
 Phase 1 of ``scripts/qa/harness.py``. Probes a curated settings + features
 surface — not every mounted route. Never POSTs spendy or mutating work
-(no code-task create, changeset apply, provider easy-connect, budget reserve).
+(no code-task create, changeset apply, provider/github/cloud easy-connect,
+budget reserve, skill/pack import, assurance seed, standup create, preview
+fixture create, or comms deliver).
+
+Community routes added after the original 55-check catalog are
+``required=False`` so a 404 on an older live tag is not a false red.
+
+``POST /v1/diag/sandbox-echo`` is freeze-honest: 422 frozen or 503 no host
+is not a required fail (and does not launch a canary).
 
 Never prints API keys.
 """
@@ -23,8 +31,11 @@ PHASE = "features"
 
 EXPECT_2XX = "2xx"
 EXPECT_2XX_OR_404 = "2xx_or_404"
+EXPECT_2XX_OR_405 = "2xx_or_404_or_405"
 EXPECT_2XX_OR_503 = "2xx_or_503"
 EXPECT_401_UNAUTH = "401_unauth"
+# 2xx / 404 old image / 405 GET-on-POST / 422 claims frozen / 503 no host.
+EXPECT_FREEZE_HONEST = "freeze_honest"
 
 # Paid Cloud/Enterprise operational surfaces. Community edition honesty:
 # 404 is PASS; 500 is FAIL. Inspected list GETs (prefix-only paths 404 even
@@ -47,6 +58,15 @@ FORBIDDEN_POST_PREFIXES = (
     "/v1/commands",
     "/v1/github/easy-connect",
     "/v1/cloud/easy-connect",
+    "/v1/skills/import",
+    "/v1/packs/import",
+    "/v1/packs/install",
+    "/v1/previews/fixture",
+    "/v1/assurance/seed-demo",
+    "/v1/meetings/standup",
+    "/v1/meetings/simulated-run",
+    "/v1/comms/outbox",
+    "/v1/entitlements/sources",
 )
 
 
@@ -98,6 +118,7 @@ def build_probes(
         Probe("settings.provider-definitions", "/v1/provider-definitions"),
         Probe("settings.changesets", "/v1/changesets", query=q),
         Probe("settings.resources", "/v1/resources", query=q),
+        Probe("settings.resource-receipts", "/v1/resource-receipts", query=q),
         Probe("settings.worker-pools", "/v1/worker-pools", query=q),
         Probe("settings.entitlements-sources", "/v1/entitlements/sources", query=q),
         # Factory / GitHub — bindings live at repository-bindings, not /bindings
@@ -174,7 +195,7 @@ def build_probes(
             required=False,
             expect=EXPECT_2XX_OR_503,
         ),
-        # One safe POST: classify only, never escalate model spend/decisions.
+        # One required safe POST: classify only, never escalate model spend.
         Probe(
             "safe.deadletters-classify",
             "/v1/deadletters/classify",
@@ -185,6 +206,124 @@ def build_probes(
                 "actor": actor,
                 "limit": 50,
             },
+        ),
+        # Community routes added after the original 55-check catalog.
+        # required=False: 404 on older live tags is not a false red.
+        Probe(
+            "community.deadletter-remediations",
+            "/v1/deadletters/remediations",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "community.sandbox-echo",
+            "/v1/diag/sandbox-echo",
+            method="POST",
+            body={},
+            required=False,
+            expect=EXPECT_FREEZE_HONEST,
+        ),
+        Probe(
+            "community.skills",
+            "/v1/skills",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "community.skills-export",
+            "/v1/skills/deployment.health.check/export",
+            query={**q, "actor": actor},
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "community.skills-import",
+            "/v1/skills/import",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.meetings-standup",
+            "/v1/meetings/standup",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.meetings-simulated-run",
+            "/v1/meetings/simulated-run",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.assurance-seed-demo",
+            "/v1/assurance/seed-demo",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.packs",
+            "/v1/packs",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "community.packs-export",
+            "/v1/packs/community_edition/export",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "community.packs-import",
+            "/v1/packs/import",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.preview-fixture",
+            "/v1/previews/fixture",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.comms-outbox",
+            "/v1/comms/outbox",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "community.comms-dry-run",
+            "/v1/comms/outbox/_qa_absent/dry-run",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.providers-easy-connect",
+            "/v1/providers/easy-connect",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.github-easy-connect",
+            "/v1/github/easy-connect",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.cloud-easy-connect",
+            "/v1/cloud/easy-connect",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
+        ),
+        Probe(
+            "community.openai-compatible-source",
+            "/v1/entitlements/sources/approved_local_model_host/openai-compatible",
+            required=False,
+            expect=EXPECT_2XX_OR_405,
         ),
     ]
     return probes
@@ -222,8 +361,21 @@ def evaluate(
     if expect == EXPECT_2XX_OR_404 and status == 404:
         return True, f"{method} {path} → 404 (edition honesty)"
 
+    if expect == EXPECT_2XX_OR_405 and status in (404, 405):
+        reason = "old image" if status == 404 else "POST-only mounted"
+        return True, f"{method} {path} → {status} ({reason})"
+
     if expect == EXPECT_2XX_OR_503 and status == 503:
         return True, f"{method} {path} → 503 WARN missing schema"
+
+    if expect == EXPECT_FREEZE_HONEST and status in (404, 405, 422, 503):
+        reason = {
+            404: "old image",
+            405: "POST-only mounted",
+            422: "frozen",
+            503: "no host",
+        }[status]
+        return True, f"{method} {path} → {status} freeze-honest {reason}"
 
     if expect == EXPECT_401_UNAUTH and status in (401, 403):
         return True, f"{method} {path} → {status} fail-closed"

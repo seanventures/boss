@@ -18,8 +18,8 @@ A founder can, on `boss.local.sean.network` / `boss-api.local.sean.network` **co
 |---|---|---|
 | 1 | Attach **third-party model keys** and **infra API keys** in System Configuration (not only `.env`). | **Partial** — ProviderOps kernel + env SecretRefs live; paste UX incomplete |
 | 2 | Issue a **CEO command** → durable task + plan + budget path. | **Mostly** — `qa-live` command+budget PASS |
-| 3 | Drive **code work** in sandbox → tests/evidence → PR proposal with receipts (reliable, not 50% DLQ). | **Open** — ~41 DLQ; rootfs/substrate |
-| 4 | Open **previews** from Mission Control (reachable URLs, not `127.0.0.1`). | **Open** — View not proven live |
+| 3 | Drive **code work** in sandbox → tests/evidence → PR proposal with receipts (reliable, not 50% DLQ). | **Mostly** — BugBox completed + verify green + PR #83; new-build on current tag unproven |
+| 4 | Open **previews** from Mission Control (reachable URLs, not `127.0.0.1`). | **Live replay** — BugBox View 200 `prev_af60b33719b04082b027` |
 | 5 | See **honest UI** for anything unpaid or unconfigured (no permanent 404 banners). | **Partial** — improved; Enterprise still visible |
 | 6 | Use **GitHub Mission Control** with a real connection+binding **or** clear setup empty-state. | **Done** — 2 conns / 2 binds |
 | 7 | Either run a **minimal deploy path** to a sandbox target **or** honest not-configured CI/CD. | **Honest empty** |
@@ -81,7 +81,7 @@ Optional / later SKUs (not community DoD): Account Connect, live IdP/SCIM, manag
 |---|---|---|---|---|---|
 | W1.1 | Soft-partial / full kernel ProviderOps community | BOSS-338 | W0 | No hard banner when kernel works | **Done** (#157) |
 | W1.2 | Self-Improvement hide or rewire community | BOSS-339 | — | No 404 CTAs | **Done** |
-| W1.3 | Enterprise/Account Connect edition-aware nav | BOSS-338 | — | Not a 404 farm | **Partial** — still shown |
+| W1.3 | Enterprise/Account Connect edition-aware nav | BOSS-338 | — | Not a 404 farm | **Done** — Community nav is SSO; lab hide_nav; paid CTAs gated |
 | W1.4 | CI/CD + Monitoring empty states | BOSS-344 | — | Honest copy | **Done** |
 | W1.5 | React hydration #418 residual | BOSS-346 | — | pageErrors empty | **Open** residual |
 | W1.6 | Decision inbox actionable default | BOSS-337 | — | CEO cockpit usable | **Open** |

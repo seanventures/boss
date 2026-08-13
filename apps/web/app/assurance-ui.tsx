@@ -129,14 +129,14 @@ export function AssuranceCenter({ feed }: { feed: AssuranceFeed }) {
         <article className="stack-card">
           <h3 style={{ marginTop: 0 }}>Model usage · 30 days</h3>
           <p className="detail">
-            {Number(modelUsage.totals.calls ?? 0).toLocaleString()} calls ·{" "}
-            {Number(modelUsage.totals.total_tokens ?? 0).toLocaleString()} tokens ·{" "}
+            {Number(modelUsage.totals.calls ?? 0).toLocaleString("en-US")} calls ·{" "}
+            {Number(modelUsage.totals.total_tokens ?? 0).toLocaleString("en-US")} tokens ·{" "}
             {totalCost.toLocaleString("en-US", { style: "currency", currency: "USD" })}
           </p>
           {modelUsage.items.slice(0, 6).map((item) => (
             <div key={`${item.engine}:${item.model ?? "default"}`} style={{ display: "flex", justifyContent: "space-between", gap: 10, marginTop: 7 }}>
               <span>{item.engine} / {item.model ?? "default"}</span>
-              <span className="detail">{item.total_tokens.toLocaleString()} tok</span>
+              <span className="detail">{item.total_tokens.toLocaleString("en-US")} tok</span>
             </div>
           ))}
         </article>

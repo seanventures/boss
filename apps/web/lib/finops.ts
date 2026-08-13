@@ -52,6 +52,43 @@ export type FinopsSummary = {
   apiReachable: boolean;
 };
 
+export type FinopsSpendHonesty = {
+  kind: "unavailable" | "empty" | "recorded";
+  label: string;
+  amountUsdMicros: number | null;
+  helper: string;
+};
+
+/** Empty FinOps windows must not render as exact $0.00 cloud spend. */
+export function describeFinopsSpendHonesty(
+  summary?: FinopsSummary | null,
+): FinopsSpendHonesty {
+  if (!summary?.apiReachable) {
+    return {
+      kind: "unavailable",
+      label: "FinOps summary unavailable",
+      amountUsdMicros: null,
+      helper: "Cloud spend is not loaded. This is not $0.00.",
+    };
+  }
+  const rows = summary.spendByProvider ?? [];
+  if (rows.length === 0) {
+    return {
+      kind: "empty",
+      label: "No billed cost events",
+      amountUsdMicros: null,
+      helper:
+        "No cost events in this window. Absence is not $0.00 spend.",
+    };
+  }
+  return {
+    kind: "recorded",
+    label: `Last ${summary.days}d recorded cost events`,
+    amountUsdMicros: rows.reduce((total, row) => total + row.costUsdMicros, 0),
+    helper: "Totals come from recorded cost events only — not implied exact invoices.",
+  };
+}
+
 const EMPTY_SUMMARY = (projectId: string, days: number): FinopsSummary => ({
   projectId,
   days,

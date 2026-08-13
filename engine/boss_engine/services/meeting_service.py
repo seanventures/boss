@@ -114,9 +114,26 @@ ROLE_CATALOG: dict[str, dict] = {
 }
 DEFAULT_ROLE_KEYS = ["product_manager", "engineer", "ux_designer", "privacy_safety"]
 FACILITATOR_TITLE = "Facilitator / Chief of Staff"
-MEETING_TYPES = ("prd_panel", "standup")
+MEETING_TYPES = ("prd_panel", "standup", "go_no_go")
 DEFAULT_MEETING_TYPE = "prd_panel"
 STANDUP_DEFAULT_DIRECTIVE = "Daily standup — blockers, commitments, and today's plan."
+GO_NO_GO_DEFAULT_DIRECTIVE = "Go/no-go — ship, hold, or stop with recorded dissent."
+MEETING_TYPE_ALIASES = {
+    "go_nogo": "go_no_go",
+    "gonogo": "go_no_go",
+}
+TYPED_DEFAULT_DIRECTIVES = {
+    "standup": STANDUP_DEFAULT_DIRECTIVE,
+    "go_no_go": GO_NO_GO_DEFAULT_DIRECTIVE,
+}
+TYPED_TITLE_PREFIX = {
+    "standup": "Standup",
+    "go_no_go": "Go/No-Go",
+}
+TYPED_PURPOSE = {
+    "standup": "No-spend simulated daily standup",
+    "go_no_go": "No-spend simulated go/no-go fixture",
+}
 # ROLE_CATALOG above is the BASELINE seed every org/project starts with; orgs can
 # then add/edit/disable their own roles in the meeting_roles table.
 
@@ -365,6 +382,8 @@ def load_meeting_run(connection: Connection, run_id: str) -> Optional[dict]:
 
 def normalize_meeting_type(value: Optional[str]) -> str:
     meeting_type = (value or DEFAULT_MEETING_TYPE).strip().lower() or DEFAULT_MEETING_TYPE
+    meeting_type = meeting_type.replace("-", "_").replace("/", "_")
+    meeting_type = MEETING_TYPE_ALIASES.get(meeting_type, meeting_type)
     if meeting_type not in MEETING_TYPES:
         raise ValueError(f"unsupported meeting_type {meeting_type!r}; expected one of {MEETING_TYPES}")
     return meeting_type
@@ -892,6 +911,67 @@ def _fixture_state(directive: str, personas: list[dict], meeting_type: str = DEF
                 }
             ],
         }
+    if meeting_type == "go_no_go":
+        return {
+            "simulated": True,
+            "llm_called": False,
+            "meeting_type": "go_no_go",
+            "research": {
+                "note": "simulated go/no-go evidence pack; no crawl and no model",
+                "pages": [],
+                "sitemap": [],
+            },
+            "round1": {
+                title: f"[go/no-go] {title}: evidence reviewed for: {directive[:80]}"
+                for title in titles
+            },
+            "round2": {
+                title: f"[go/no-go] {title}: fixture stance recorded; dissent allowed."
+                for title in titles
+            },
+            "synthesis": (
+                "[go/no-go] Facilitator recap: explicit GO recorded; one dissent preserved."
+            ),
+            "prd_markdown": (
+                "# Simulated go/no-go minutes\n\n"
+                "This run used `simulated=true`. No model was invoked.\n\n"
+                f"Directive: {directive}\n\n"
+                "Verdict: GO (fixture).\n"
+            ),
+            "action_items": [
+                {
+                    "title": "Record residual risk from dissent",
+                    "description": "Fixture follow-up from go/no-go — owner tracks the recorded dissent.",
+                    "priority": "p1",
+                    "risk_tier": 1,
+                }
+            ],
+            "dissent_records": [
+                {
+                    "role": "QA / Test",
+                    "position": "no-go",
+                    "reason": "Fixture residual risk; do not treat this as a live release gate.",
+                }
+            ],
+            "decision_items": [
+                {
+                    "question": "Go or no-go on this change?",
+                    "recommendation": {
+                        "summary": (
+                            "Fixture verdict: GO. Dissent is preserved; this is not a live LLM panel."
+                        ),
+                        "verdict": "go",
+                    },
+                    "options": [
+                        {"action": "approve", "label": "Go"},
+                        {"action": "reject", "label": "No-go"},
+                        {"action": "revise", "label": "Hold"},
+                    ],
+                    "risk_tier": 2,
+                    "default_action": "hold",
+                }
+            ],
+        }
     return {
         "simulated": True,
         "llm_called": False,
@@ -975,7 +1055,7 @@ def _phase_timeline_from_state(state: dict) -> list[dict]:
 def _advance_simulated_phase(connection, settings: Settings, jobs, run: dict) -> dict:
     """Advance one simulated phase. No adapter, no budget, no enqueue of spendy work."""
     personas = resolve_roles(run["role_keys"], load_role_map(connection, run["project_id"]))
-    fixture = _fixture_state(run["directive"], personas)
+    fixture = _fixture_state(run["directive"], personas, meeting_type=meeting_type_of(run))
     state = dict(run["state"] or {})
     state.setdefault("artifacts", {})
     state["simulated"] = True
@@ -1127,7 +1207,7 @@ def _materialize_standup_outputs(
     minutes_artifact_id: str,
     state: dict,
 ) -> dict:
-    """Turn standup fixture lists into action tasks + a Decision. No model."""
+    """Turn typed fixture lists into action tasks + a Decision. No model."""
     from .canonical import CanonicalObjectService
 
     canonical = CanonicalObjectService()
@@ -1201,12 +1281,13 @@ def run_simulated_meeting(
     """Persist a full research→finalize fixture without calling a model or reserving budget.
 
     Side effects (artifacts, receipt) are receipted with a unique dedupe_key.
-    Does not enqueue a worker job. Standup also materializes action items, optional
-    dissent, and a Decision — still with no live model.
+    Does not enqueue a worker job. Typed fixtures (standup, go/no-go) also
+    materialize action items, optional dissent, and a Decision — still with no
+    live model.
     """
     meeting_type = normalize_meeting_type(meeting_type)
-    default_directive = (
-        STANDUP_DEFAULT_DIRECTIVE if meeting_type == "standup" else "Community simulated panel fixture"
+    default_directive = TYPED_DEFAULT_DIRECTIVES.get(
+        meeting_type, "Community simulated panel fixture"
     )
     meeting = None
     if meeting_id:
@@ -1271,12 +1352,10 @@ def run_simulated_meeting(
         }
 
     if meeting is None:
-        title_prefix = "Standup" if meeting_type == "standup" else "Simulated meeting"
+        title_prefix = TYPED_TITLE_PREFIX.get(meeting_type, "Simulated meeting")
         title = f"{title_prefix}: {resolved_directive[:80]}"
-        purpose = (
-            "No-spend simulated daily standup"
-            if meeting_type == "standup"
-            else "No-spend simulated multi-agent panel fixture"
+        purpose = TYPED_PURPOSE.get(
+            meeting_type, "No-spend simulated multi-agent panel fixture"
         )
         from .canonical import CanonicalObjectService
 
@@ -1405,7 +1484,7 @@ def run_simulated_meeting(
         "decision_id": None,
         "dissent_records": [],
     }
-    if meeting_type == "standup":
+    if meeting_type in {"standup", "go_no_go"}:
         standup_outputs = _materialize_standup_outputs(
             connection,
             project_id=project_id,

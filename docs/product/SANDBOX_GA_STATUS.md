@@ -1,6 +1,6 @@
 # Sandbox / microVM — Community GA status
 
-**Status date:** 2026-08-12  
+**Status date:** 2026-08-13  
 **Plane:** BOSS-340 (host), BOSS-337 Phase A4  
 **Code path:** `engine/boss_engine/services/sandbox_provider.py`, `sandbox_console.py`, `sandbox-host/`
 
@@ -11,7 +11,8 @@
 | Claim | GA status | Notes |
 |---|---|---|
 | Sandbox **host connectivity** (health probe) | **Allowed** when live host is up | BOSS-340 restored `sandbox-service` on goldeneye |
-| microVM **task execution** (submit → done + diff) | **Not claimed** | Guest rootfs bake not proven; registry guest tags may be null |
+| microVM **echo exercise** (test_mode + engine=echo) | **Proven live** 2026-08-13 | Rootfs baked (`guest-base.ext4` 289M); task `sbx-865940e15a70440a` **done**, diff `SANDBOX_OK.txt`. Coding/claude_code still **not claimed**. |
+| **Local coding** while freeze is on | **Allowed (GA path)** | `make_sandbox_provider` returns `LocalSubprocessProvider` when `BOSS_MICROVM_CLAIMS_FROZEN=true` even if env says `microvm`. BugBox shipped this way. |
 | Retained-rootfs preview from microVM build | **Not claimed** | Depends on successful execution + rootfs |
 | Local subprocess coding (`BOSS_SANDBOX_PROVIDER=local`) | **Allowed** | Weaker isolation; needs git/tools in worker image |
 

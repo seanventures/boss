@@ -1000,19 +1000,19 @@ current_auth_method: ContextVar[Optional[str]] = ContextVar(
 )
 
 
-# --- Simple in-memory rate limiter for P2 high-cost paths (per .ai/security-review.md) ---
+# --- In-process rate limiter for high-cost paths (per .ai/security-review.md) ---
 # Protects e.g. /v1/metatron/query (Metatron), /v1/commands/propose (intake), provider
 # sync /v1/resources/sync (and similar costly like account-connect/marketplace syncs).
-# Implementation: pure stdlib (time + collections.deque), no external deps per task reqs.
+# Implementation: pure stdlib (time + collections.deque). Redis is used for A2A streams
+# only — it is not half-wired as a rate-limit backend and is not required for Community.
 # Key strategy: per-IP+project+actor (allows per-actor or IP scoping).
-# Limit: 10 requests per 60s sliding window (configurable via BOSS_RATE_LIMIT_RPM / _ENABLED).
+# Limit: sliding 60s window (configurable via BOSS_RATE_LIMIT_RPM / _ENABLED).
 # On exceed: raises 429 immediately + emits "rate_limit.exceeded" event (visible in audit/feed,
 # using same pattern as policy.denied / budget.*denied for "every failure visible").
-# NOTE per task + AGENTS: this is local/test sufficient only. Prod deployments MUST front
-# with Redis-backed limiter, rate limit at LB/CDN, or equivalent (in-mem is per-process,
-# lost on restart, not shared across replicas). Set BOSS_RATE_LIMIT_ENABLED=false to bypass
-# if using external. No budget spend here (rate is separate from budget governor).
-# Follows: small vertical, typed, deterministic, events for effects, no direct external.
+# Community / single-process: this in-proc limiter is the supported control (lost on
+# restart, not shared across replicas). Multi-replica or public-edge Enterprise should
+# front with Redis/LB/CDN and may set BOSS_RATE_LIMIT_ENABLED=false to avoid double-count.
+# No budget spend here (rate is separate from budget governor).
 class InMemoryRateLimiter:
     def __init__(self, rpm: int = 10):
         self.rpm = max(1, int(rpm))
@@ -9989,6 +9989,22 @@ def factory_wip(
         # Advertise the no-spend fixture so gates never POST simulated=true at an
         # older API that would ignore the flag and enqueue a real budgeted job.
         status["fixture_supported"] = True
+        # Working-software GA bar: say which substrate will actually code.
+        # Frozen microVM → local fallback (do not claim Firecracker coding).
+        from boss_engine.services.sandbox_provider import (
+            make_sandbox_provider,
+            microvm_claims_are_frozen,
+        )
+
+        configured = (getattr(settings, "sandbox_provider", "local") or "local").lower()
+        effective = make_sandbox_provider(settings)
+        status["coding_substrate_configured"] = configured
+        status["coding_substrate"] = getattr(effective, "kind", configured)
+        status["microvm_claims_frozen"] = microvm_claims_are_frozen(settings)
+        status["working_software_bar"] = (
+            "A completed code.task with tests_passed plus a reachable "
+            "non-fixture preview is the Community GA bar — not control-plane gates."
+        )
         # Dual-plane honesty (A6): which GitHub plane the factory will use.
         # Read-only — never rebind adapters on this GET.
         try:
@@ -10003,6 +10019,17 @@ def factory_wip(
         except Exception as exc:  # noqa: BLE001 — card must not 500
             status["github_plane"] = "unknown"
             status["github_plane_error"] = str(exc)[:200]
+        try:
+            from boss_engine.services.factory_honesty import sealed_slice_status
+
+            status.update(sealed_slice_status(connection, project_id))
+        except Exception as exc:  # noqa: BLE001 — card must not 500
+            status["live_pr_success"] = {
+                "rate": None,
+                "label": "unknown / not proven",
+                "proven": False,
+                "error": str(exc)[:200],
+            }
         return status
 
 

@@ -20,6 +20,7 @@ import {
   communityNavCopy,
   editionDisplayName,
   isCommunityEdition,
+  isCommunityPrimaryNavVisible,
   isCommunitySurfaceVisible,
   isPaidEdition,
   isPaidSurfaceVisible,
@@ -96,11 +97,25 @@ describe("paid vs community surface visibility", () => {
 });
 
 describe("community nav honesty helpers", () => {
-  it("relabels Editions nav to emphasize SSO on community", () => {
+  it("relabels leftover Enterprise nav to SSO only — not an Enterprise product area", () => {
     const copy = communityNavCopy("enterprise");
-    expect(copy.label).toMatch(/SSO/i);
+    expect(copy.label).toBe("SSO");
+    expect(copy.label).not.toMatch(/Enterprise/i);
     expect(copy.sub).toMatch(/OIDC|SAML|SCIM/i);
+    expect(copy.sub).not.toMatch(/Enterprise/i);
     expect(copy.badge).toBe("SSO");
+  });
+
+  it("hides design-system-as-product from Community primary nav and keeps SSO", () => {
+    expect(isCommunityPrimaryNavVisible("foundations", "community")).toBe(false);
+    expect(isCommunityPrimaryNavVisible("components", "community")).toBe(false);
+    expect(isCommunityPrimaryNavVisible("enterprise", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("overview", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("ops", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("org", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("foundations", "enterprise")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("components", "cloud")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("enterprise", "enterprise")).toBe(true);
   });
 
   it("softens ops/org copy and marks paid nav badges only on community", () => {
@@ -108,6 +123,7 @@ describe("community nav honesty helpers", () => {
     expect(shouldShowPaidNavBadge("ops", "community")).toBe(true);
     expect(shouldShowPaidNavBadge("org", "community")).toBe(true);
     expect(shouldShowPaidNavBadge("enterprise", "community")).toBe(false);
+    expect(shouldShowPaidNavBadge("foundations", "community")).toBe(false);
     expect(shouldShowPaidNavBadge("ops", "enterprise")).toBe(false);
   });
 });
@@ -193,7 +209,7 @@ describe("ConsoleShell edition-aware nav", () => {
     children: React.createElement("div", null, "body"),
   };
 
-  it("shows SSO-labeled nav and keeps enterprise area on community", () => {
+  it("shows SSO-labeled nav, hides design-system lab, and never labels a required area Enterprise", () => {
     const html = renderToStaticMarkup(
       React.createElement(ConsoleShell, {
         ...baseProps,
@@ -205,14 +221,28 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).toContain('data-area-nav="enterprise"');
     expect(html).toContain('data-sso-visible="true"');
     expect(html).toContain('data-testid="nav-sso-badge"');
-    expect(html).toMatch(/SSO &amp; Editions|SSO & Editions/);
     expect(html).toContain('data-testid="edition-chip"');
+    // SSO stays; leftover Enterprise product framing and design-system-as-product do not.
+    expect(html).not.toContain('data-area-nav="foundations"');
+    expect(html).not.toContain('data-area-nav="components"');
+    const enterpriseNav = html.match(
+      /data-area-nav="enterprise"[\s\S]*?<\/button>/,
+    )?.[0] ?? "";
+    expect(enterpriseNav).toMatch(/>SSO</);
+    expect(enterpriseNav).not.toMatch(/Enterprise/);
+    expect(enterpriseNav).not.toMatch(/Editions/);
+    const sidebar = html.match(
+      /aria-label="Console areas"[\s\S]*?<\/nav>/,
+    )?.[0] ?? "";
+    expect(sidebar).not.toMatch(/>Enterprise</);
+    expect(sidebar).not.toMatch(/>Foundations</);
+    expect(sidebar).not.toMatch(/>Components</);
     // Paid badges on ops/org (self-improvement + marketplace homes)
     expect(html).toContain('data-testid="nav-paid-badge-ops"');
     expect(html).toContain('data-testid="nav-paid-badge-org"');
   });
 
-  it("does not badge paid nav on enterprise edition", () => {
+  it("does not badge paid nav on enterprise edition and keeps lab + editions areas", () => {
     const html = renderToStaticMarkup(
       React.createElement(ConsoleShell, {
         ...baseProps,
@@ -225,5 +255,8 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).not.toContain("nav-sso-badge");
     // Default label when not community-relabeled
     expect(html).toContain("Editions &amp; SSO");
+    expect(html).toContain('data-area-nav="foundations"');
+    expect(html).toContain('data-area-nav="components"');
+    expect(html).toContain('data-area-nav="enterprise"');
   });
 });

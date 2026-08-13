@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { formatDateTime, formatTime } from "../lib/datetime";
 import { type PolicyEval, type RunTrace } from "../lib/safety";
 import { scanAnomaliesAction } from "./actions";
 import { SubmitButton } from "./submit-button";
@@ -36,7 +37,7 @@ export function PolicyEvalList({ items }: { items: PolicyEval[] }) {
                 </h4>
                 <p className="detail">{e.action ?? "—"}{e.reason ? ` · ${e.reason}` : ""}</p>
               </div>
-              <span className="pill">{e.createdAt ? e.createdAt.slice(0, 19).replace("T", " ") : ""}</span>
+              <span className="pill">{e.createdAt ? formatDateTime(e.createdAt) : ""}</span>
             </div>
           ))}
         </div>
@@ -112,7 +113,7 @@ export function RunTraceViewer({ trace, initialRunId }: { trace: RunTrace; initi
           <div style={{ display: "grid", gap: 3 }}>
             {trace.timeline.slice(0, 40).map((ev, i) => (
               <div key={i} style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>
-                <span style={{ color: "var(--muted)" }}>{ev.createdAt.slice(11, 19)}</span>{" "}
+                <span style={{ color: "var(--muted)" }}>{formatTime(ev.createdAt)}</span>{" "}
                 <b style={{ color: "var(--ink)" }}>{ev.eventType}</b>{" "}
                 <span style={{ color: "var(--muted)" }}>· {ev.actor}</span>
               </div>

@@ -134,3 +134,15 @@ def test_classify_endpoint_escalates_model_capacity_to_decision(client, engine):
 def test_pure_helpers_reexported_via_api_services():
     assert classify_deadletter_error("github pull request 403") == "github"
     assert is_model_capacity_exhaustion("credits exhausted")
+    # credits ≠ credentials (already-fixed classifier)
+    assert classify_deadletter_error("bad credentials") == "github"
+    assert not is_model_capacity_exhaustion("bad credentials")
+    assert (
+        classify_deadletter_error(
+            "Missing credential for SecretRef env:BOSS_DIGITALOCEAN_TOKEN."
+        )
+        == "other"
+    )
+    # existing fail-closed sandbox classes
+    assert classify_deadletter_error("microvm_claims_frozen") == "sandbox"
+    assert classify_deadletter_error("sandbox_task_missing") == "sandbox"

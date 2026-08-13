@@ -11,11 +11,15 @@ import {
   formatTime,
 } from "../lib/datetime";
 import { MissionTaskBoard } from "../app/mission-operations-ui";
+import { PolicyEvalList } from "../app/safety-ui";
+import { CICDPipelinesPanel } from "../app/cicd-pipelines-ui";
+import { GitHubOperations } from "../app/github-operations-ui";
+import { emptyGitHubOperationsFeed } from "../lib/github-operations";
 import type { TaskFeedItem } from "../lib/tasks";
 import type { ReceiptFeedItem } from "../lib/receipts";
 import type { OpsQueueJobItem } from "@boss/api-client";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 
 /**
  * BOSS-346: React #418 (HTML mismatch) was driven by locale/TZ-dependent date
@@ -128,5 +132,110 @@ describe("datetime helpers are hydration-safe", () => {
         expect(src).toMatch(/ClientRelativeTime|formatDate/);
       }
     }
+  });
+
+  it("residual client islands use UTC helpers, pinned locales, and no raw ISO slices", () => {
+    const appRoot = resolve(__dirname, "../app");
+    const allowDateNow = new Set([
+      "client-relative-time.tsx",
+      "code-tasks-ui.tsx",
+      "client-forms.tsx",
+      "actions.ts",
+      "api/debug-api/route.ts",
+      "page.tsx",
+    ]);
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules") continue;
+          walk(full);
+          continue;
+        }
+        if (/\.(ts|tsx)$/.test(entry.name)) files.push(full);
+      }
+    };
+    walk(appRoot);
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const rel = relative(appRoot, file).replaceAll("\\", "/");
+      const src = readFileSync(file, "utf8");
+      const hits: string[] = [];
+      if (/toLocaleDateString\s*\(/.test(src)) hits.push("toLocaleDateString");
+      if (/toLocaleTimeString\s*\(/.test(src)) hits.push("toLocaleTimeString");
+      if (/new Intl\.DateTimeFormat\s*\(/.test(src)) hits.push("Intl.DateTimeFormat");
+      if (/\.toLocaleString\s*\(\s*\)/.test(src)) hits.push("toLocaleString()");
+      if (/\.toLocaleString\s*\(\s*(?!["']en-US)/.test(src)) hits.push("toLocaleString(non-en-US)");
+      if (/\.slice\(\s*0\s*,\s*19\s*\)/.test(src)) hits.push("iso.slice(0, 19)");
+      if (/\.slice\(\s*11\s*,\s*19\s*\)/.test(src)) hits.push("iso.slice(11, 19)");
+      if (/toISOString\(\)\s*\.replace\(\s*["']T["']/.test(src)) hits.push("toISOString().replace(T)");
+      if (
+        !allowDateNow.has(rel) &&
+        /Date\.now\s*\(/.test(src) &&
+        !/useEffect\([\s\S]*Date\.now\(\)[\s\S]*\}\s*,/.test(src)
+      ) {
+        hits.push("Date.now() in render");
+      }
+      if (hits.length) offenders.push(`${rel}: ${hits.join(", ")}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("residual Safety / CI/CD / GitHub SSR markup emits UTC helper text", () => {
+    const policyHtml = renderToStaticMarkup(
+      React.createElement(PolicyEvalList, {
+        items: [
+          {
+            id: "pol_1",
+            boundary: "budget",
+            action: "reserve",
+            decision: "allow",
+            reason: null,
+            createdAt: iso,
+          },
+        ],
+      }),
+    );
+    expect(policyHtml).toContain("Aug 12, 2026, 1:25 AM UTC");
+    expect(policyHtml).not.toContain("2026-08-12T01:25:15");
+    expect(policyHtml).not.toContain("2026-08-12 01:25:15");
+
+    const cicdHtml = renderToStaticMarkup(
+      React.createElement(CICDPipelinesPanel, {
+        projectId: "boss-dogfood",
+        initialRuns: [
+          {
+            id: "run_1",
+            project_id: "boss-dogfood",
+            vendor: "github_actions",
+            status: "succeeded",
+            recorded_at: iso,
+            source: "webhook",
+          },
+        ],
+      }),
+    );
+    expect(cicdHtml).toContain("Aug 12, 2026, 1:25 AM UTC");
+    expect(cicdHtml).not.toMatch(/2026-08-12[T ]01:25:15/);
+
+    const feed = {
+      ...emptyGitHubOperationsFeed(undefined, "boss-dogfood"),
+      apiReachable: true,
+      summary: {
+        ...emptyGitHubOperationsFeed(undefined, "boss-dogfood").summary,
+        lastObservedAt: iso,
+      },
+    };
+    const githubHtml = renderToStaticMarkup(
+      React.createElement(GitHubOperations, {
+        feed,
+        actor: "ceo",
+        canManage: false,
+      }),
+    );
+    expect(githubHtml).toContain("Aug 12, 2026, 1:25 AM UTC");
+    expect(githubHtml).not.toContain("2026-08-12 01:25 UTC");
   });
 });

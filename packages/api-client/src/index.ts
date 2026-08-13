@@ -2979,6 +2979,26 @@ export type PackImportRequest = {
   actor?: string;
 };
 
+export type SkillImportRequest = {
+  project_id: string;
+  bundle: string;
+  allow_untrusted?: boolean;
+  enabled?: boolean;
+  on_demand?: boolean | null;
+  actor?: string;
+};
+
+export type SkillImportResponse = {
+  id: string;
+  project_id?: string;
+  skill_id?: string;
+  source?: string;
+  enabled?: boolean;
+  on_demand?: boolean;
+  publisher?: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
+};
+
 export type SecretRefSummary = {
   id: string;
   project_id: string;
@@ -5356,7 +5376,11 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return undefined as T;
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("yaml") || contentType.includes("text/plain")) {
+    if (
+      contentType.includes("yaml") ||
+      contentType.includes("text/plain") ||
+      contentType.includes("vnd.boss.capability")
+    ) {
       return text as T;
     }
     return JSON.parse(text) as T;
@@ -7007,6 +7031,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
     },
     listSkills() {
       return request<SkillListResponse>("GET", "/v1/skills");
+    },
+    importSkill(payload: SkillImportRequest) {
+      return request<SkillImportResponse>("POST", "/v1/skills/import", {
+        body: payload,
+      });
+    },
+    exportSkill(projectId: string, skillId: string, actor = "ceo") {
+      return request<string>(
+        "GET",
+        `/v1/skills/${encodeURIComponent(skillId)}/export`,
+        { query: { project_id: projectId, actor } },
+      );
     },
     listModelAdapters() {
       return request<ModelAdapterListResponse>("GET", "/v1/model-adapters");

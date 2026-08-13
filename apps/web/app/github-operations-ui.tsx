@@ -17,6 +17,7 @@ import {
   setGitHubConnectionStateAction,
   testGitHubConnectionAction,
 } from "./actions";
+import { formatDateTime } from "../lib/datetime";
 import type { GitHubOperationsFeed } from "../lib/github-operations";
 import { SubmitButton } from "./submit-button";
 
@@ -88,10 +89,7 @@ function shortId(value?: string | null): string {
 }
 
 function formatTime(value?: string | null): string {
-  if (!value) return "not observed";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  return formatDateTime(value, "not observed");
 }
 
 function Status({ value }: { value?: string | null }) {
@@ -462,7 +460,7 @@ export function GitHubOperations({
                     <code>{shortSha(ref.commit_sha)}</code>
                     <span><Status value={ref.protected ? "protected" : "open"} /></span>
                     <span>
-                      <time>{formatTime(ref.observed_at)}</time>
+                      <time dateTime={ref.observed_at ?? undefined}>{formatTime(ref.observed_at)}</time>
                       {snapshot ? <small>{label(snapshot.classification)}</small> : null}
                     </span>
                   </button>

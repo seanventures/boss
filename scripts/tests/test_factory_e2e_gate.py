@@ -67,6 +67,7 @@ def test_structural_endpoints_catalog():
     assert "code_tasks.list" in names
     assert "code_tasks.create" in names
     assert "code_tasks.create_fixture" in names
+    assert "factory.live_pr" in names
 
 
 def test_classify_proposals_queue_405_is_skip_not_fail():
@@ -335,3 +336,125 @@ def test_check_flag_skip_beats_fail():
     assert gate.check_flag(skip) == "SKIP"
     fail = gate.CheckResult(name="y", ok=False)
     assert gate.check_flag(fail) == "FAIL"
+
+
+def _readonly_client(**overrides):
+    class _Client:
+        def request(self, method, path, **kwargs):
+            if method == "POST":
+                raise AssertionError(f"no-spend path must not POST {path}")
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                payload = {
+                    "items": [],
+                    "fixture_supported": True,
+                    "github_plane": "mission_control_binding",
+                    "last_simulated_fixture": None,
+                    "live_pr_success": {
+                        "rate": None,
+                        "label": "unknown / not proven",
+                        "proven": False,
+                        "sample_size": 0,
+                    },
+                }
+                payload.update(overrides.get("wip", {}))
+                return 200, payload, 1
+            if path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 405, {}, 1
+            return 500, {}, 1
+
+    return _Client()
+
+
+def test_honesty_from_wip_rejects_invented_percent():
+    empty = gate.honesty_from_wip({})
+    assert empty["live_pr_success"]["label"] == gate.LIVE_PR_UNKNOWN_LABEL
+    assert empty["live_pr_success"]["rate"] is None
+    fake = gate.honesty_from_wip({"live_pr_success": {"label": "87%", "rate": 0.87}})
+    assert fake["live_pr_success"]["label"] == gate.LIVE_PR_UNKNOWN_LABEL
+
+
+def test_live_pr_without_canaries_fails_closed_and_does_not_post(monkeypatch):
+    monkeypatch.delenv("BOSS_QA_ALLOW_CANARIES", raising=False)
+    posts: list[object] = []
+
+    class _Client:
+        def request(self, method, path, **kwargs):
+            if method == "POST":
+                posts.append((path, kwargs.get("body")))
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                return 200, {"items": [], "fixture_supported": True}, 1
+            if path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 405, {}, 1
+            return 500, {}, 1
+
+    checks = gate.run_gate(_Client(), project_id="boss-dogfood", live_pr=True)
+    live = next(c for c in checks if c.name == "factory.live_pr")
+    assert live.required is False
+    assert live.skipped is False
+    assert live.ok is False
+    assert "FAIL CLOSED" in live.detail
+    assert "unknown / not proven" in live.detail
+    assert posts == []
+    report = gate.build_report(
+        api_url="u",
+        project_id="p",
+        checks=checks,
+        started_at="a",
+        finished_at="b",
+        duration_ms=1,
+        mode="live+readonly",
+    )
+    assert report["summary"]["passed"] is True
+    assert "factory.live_pr" in report["summary"]["failed_optional_names"]
+
+
+def test_live_pr_with_canaries_still_does_not_post(monkeypatch):
+    monkeypatch.setenv("BOSS_QA_ALLOW_CANARIES", "1")
+    posts: list[object] = []
+
+    class _Client:
+        def request(self, method, path, **kwargs):
+            if method == "POST":
+                posts.append((path, kwargs.get("body")))
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                return 200, {"items": []}, 1
+            if path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 405, {}, 1
+            return 500, {}, 1
+
+    checks = gate.run_gate(_Client(), project_id="boss-dogfood", live_pr=True)
+    live = next(c for c in checks if c.name == "factory.live_pr")
+    assert live.ok is False
+    assert live.required is False
+    assert posts == []
+
+
+def test_sealed_slice_honesty_is_optional_and_records_unknown(monkeypatch):
+    monkeypatch.delenv("BOSS_QA_ALLOW_CANARIES", raising=False)
+    checks = gate.run_gate(_readonly_client(), project_id="boss-dogfood")
+    honesty = next(c for c in checks if c.name == "factory.sealed_slice_honesty")
+    assert honesty.required is False
+    assert honesty.ok is True
+    assert honesty.evidence["live_pr_success"]["label"] == "unknown / not proven"
+    live = next(c for c in checks if c.name == "factory.live_pr")
+    assert live.skipped is True
+    assert live.ok is True
+
+
+def test_allow_live_pr_from_env(monkeypatch):
+    monkeypatch.delenv("BOSS_QA_ALLOW_CANARIES", raising=False)
+    assert gate.allow_live_pr_from_env() is False
+    monkeypatch.setenv("BOSS_QA_ALLOW_CANARIES", "1")
+    assert gate.allow_live_pr_from_env() is True

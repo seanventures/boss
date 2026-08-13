@@ -1,7 +1,7 @@
 # BOSS GA living plan
 
 **Status date:** 2026-08-13  
-**Overall GA:** **NOT READY** (public). **CONDITIONAL** private Community preview — **workflow gate live PASS**; factory/substrate still live-blocked.  
+**Overall GA:** **NOT READY** to stamp. **Working-software bar is the only GA bar:** an operator can drive the factory and open **working software as designed** (not a fixture, not `qa-live` alone). Live 2026-08-13: BugBox preview **running**.  
 **System of record:** Plane `goldeneye` / BOSS · umbrella **BOSS-337**  
 **Scorecard:** [`ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md`](ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md)  
 **E2E plan (detail):** [`E2E_COMPLETION_PLAN.md`](E2E_COMPLETION_PLAN.md)  
@@ -11,20 +11,44 @@
 
 ---
 
+## The only GA bar
+
+**Community is GA-ready when we can build a functional app through the full system and get working software as designed.**
+
+That means, on dogfood, all of:
+
+1. Outcome / benchmark / CEO command enters the control plane.
+2. A budgeted `code.task` runs on a coding substrate (local while microVM claims stay frozen).
+3. Evidence exists: plan, `npm run verify` (or equivalent) **exit 0**, receipts.
+4. Operator opens a **non-fixture** preview (or merged/PR'd app) that is the designed product.
+
+Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **necessary but not sufficient**.
+
+| Live proof (2026-08-13) | Result |
+|---|---|
+| Completed BugBox `crun_7cc663627f2340dc85ac` | `status=completed`, `tests_passed=true`, `test_command=npm run verify`, `test_exit_code=0`, substrate `local` |
+| PR | https://github.com/paramg/boss-sandbox/pull/83 |
+| Replay preview | `POST /v1/code-tasks/crun_7cc663627f2340dc85ac/preview` → `prev_af60b33719b04082b027` **running** |
+| View HTML | **200** `https://boss-api.local.sean.network/v1/previews/prev_af60b33719b04082b027/web/` title **BugBox — capture, track, resolve** (Vite `root` + assets; not fixture copy) |
+| Repeatable *new* build on current shared tag | **Not yet proven** — worker may still be `BOSS_SANDBOX_PROVIDER=microvm` + frozen. Code now falls back to local when frozen (`make_sandbox_provider`). Deploy that SHA before claiming “we can build again today.” |
+| Gate | `make qa-working-software` |
+
+Until a **new** greenfield canary (or equivalent) completes on the current image *and* the working-software gate is green after that deploy, do **not** stamp Community GA.
+
 ## North star (Community DoD — 8 criteria)
 
 | # | Criterion | Status | Evidence / notes | Next action |
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `cd13067` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted (401 unauth / 422 empty). Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Partial** | Live `cd13067`: WIP `github_plane=mission_control_binding` (`seanheiney/boss`); `POST /v1/code-tasks` `simulated=true` → `status=simulated`, `job_enqueued=false`. 41 hist DLQ. | Live PR success rate still required for the claim |
-| 4 | Previews reachable | **Partial (fixture View live)** | List contract live. Fixture View **200 HTML** on `1d5c081` (`prev_8a4947e073c547aab6d9`, public-base URL, honest “not a sandboxed app”). Real app View still 0 running / claims frozen. | Unfreeze only after a real running sandbox View |
+| 3 | Code → evidence → PR reliable | **Mostly (historical + replay)** | BugBox completed on local substrate, verify green, PR #83. New-build on current tag still unproven (frozen microVM until local-fallback SHA deploys). | Deploy local-fallback; run `qa-working-software`; optional new canary |
+| 4 | Previews reachable | **Real app View live (replay)** | Fixture still honest. **Real** BugBox View **200** `prev_af60b33719b04082b027` title “BugBox — capture, track, resolve”. | Keep a running preview; gate `qa-working-software` |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `cd13067` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane` on `cd13067` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
-**DoD score:** **~5 / 8** closed (A1 shared-tag live; #1/#5 live-mounted; #3/#4 still substrate). Target for private preview: **6 / 8** (close 3 or 4). Target for Community GA: **8 / 8** + 14-day green gate.
+**DoD score:** **~6.5 / 8** toward the working-software bar (replay BugBox View live). Target for Community GA: **new build on current tag** + 8/8 + 14-day green gate. Do not stamp on replay alone.
 
 **Claims freeze (signed list):** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) — Allowed vs Forbidden; SSO is Community self-hosted.
 
@@ -40,7 +64,7 @@
 | A2 | Re-run `make qa-live` | BOSS-351 | **Done live** | **10/10 + Metatron** on `cd13067`; harness catalog **55/55** |
 | A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Done live** | Seed 200; 13/13 published; catalog-smoke 13/13 passed 2026-08-13 |
 | A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Claim freeze shipped** (`BOSS_MICROVM_CLAIMS_FROZEN`) | Set freeze on dogfood; unfreeze after rootfs bake proof — see `docs/product/SANDBOX_GA_STATUS.md` |
-| A5 | DLQ triage top classes; prove no missing-git | BOSS-342 | **Partial** git in image tree | DLQ trend + root causes filed |
+| A5 | DLQ triage top classes; prove no missing-git | BOSS-342 / **372** | **Partial** git in image + remediations list/retry | Hist 41 still open (TPM + missing DO creds); git 0 new after image. See `qa-dlq-remediations.md` |
 | A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Done live** | `GET /v1/factory/wip` + FactoryScaleCard + Code Tasks advertise `github_plane` on `cd13067` |
 | A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Done (doc)** | [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md); SSO Community self-hosted allowed |
 
@@ -49,8 +73,8 @@
 | ID | Work | Plane | State |
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Fixture View PASS live** (200 HTML, public-base). Real-app View still 0 running / claims frozen |
-| B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Real BugBox View PASS live** `prev_af60b33719b04082b027` (plus fixture honesty). New-build still open |
+| B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (nav residual closed)** — Community primary nav is **SSO** (not Enterprise); foundations/components `hide_nav`; Account Connect / marketplace / clusters / SIM stay gated or Paid-badged |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | **Done (code)** |
 | B6 | Deploy SOP requires `qa-live` | BOSS-337 | **Done (doc)** — `GOLDENEYE_DEPLOYMENT.md` redeploy must run `qa-live` + `qa-harness` catalog |
@@ -60,7 +84,7 @@
 | ID | Work | State |
 |---|---|---|
 | C1 | 14 consecutive days `qa-live` green | Open |
-| C2 | Security must-fix (principals, dep CI, rate limits) | Open |
+| C2 | Security must-fix (principals, dep CI, rate limits) | **Open** (local-code partial) | Principals map exists; BOSS-320 org-fallback test added; in-proc limiter Community-ok + existing 429/`rate_limit.exceeded` test; PyJWT 2.13.0 + cryptography 50.0.0 already latest. Residuals in [`SECURITY_C2_STATUS.md`](SECURITY_C2_STATUS.md) — **do not stamp C2 Done** |
 | C3 | Legal/OSS readiness if public announce | Open |
 | C4 | Tag + notes with allowed claims only | Open |
 
@@ -91,12 +115,13 @@
 | `qa-live` | **10/10 PASS + Metatron** on `cd13067` | 2026-08-13T14:14Z |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
-| Open DLQ | 41 open: 18 missing DO creds, 21 claude-143, 1 sandbox 404, 1 missing-git | 2026-08-13 |
+| Open DLQ | 41 historical still open (TPM + missing DO creds); not the GA bar | 2026-08-13 |
+| Working software | BugBox preview **running** `prev_af60b33719b04082b027` | 2026-08-13 |
 | GitHub MC | 2 connections, 2 bindings | live |
 | Agent Studio | 13 agents (4 published on 3e6c906; reseed in progress) | 2026-08-13 |
 | Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
 | 14-day qa-live | **Day 1/14 PASS** (same-day re-run on `cd13067` also 10/10; does not add a day) | cron 06:15 UTC |
-| Previews | 50 rows (30 expired / 10 failed / 7 stopped / 3 verified / **0 running**); `open_url`=`https://boss-api.local.sean.network/v1/previews/{id}/web/` (37/37 bound); 0 loopback primary; expired View **409** | 2026-08-13 |
+| Previews | **1 running real app** `prev_af60b33719b04082b027` (BugBox); fixture `prev_8a4947e073c547aab6d9` expired. Public-base URLs; 0 loopback primary | 2026-08-13 |
 
 ---
 
@@ -105,11 +130,12 @@
 | Issue | Topic | State | Notes |
 |---|---|---|---|
 | BOSS-337 | Umbrella QA/GA | **In Progress** | GA assessment filed |
-| BOSS-338 | Edition MC honesty | **Done** (partial residual) | Enterprise nav still visible |
+| BOSS-338 | Edition MC honesty | **Done** | Community nav: SSO kept; design-system lab hidden; paid surfaces gated/badged |
 | BOSS-339 | SIM community | **Done** | Ops honesty |
 | BOSS-340 | Sandbox host | **Done** (host) | Rootfs still open work |
-| BOSS-341 | Preview loopback | **Done** (code + live list) | View HTML still pending (0 running) |
+| BOSS-341 | Preview loopback | **Done live (replay View)** | Real BugBox HTML 200; new-build still open |
 | BOSS-342 | Worker git/image | **Done** (code) | Live shared-tag pending |
+| BOSS-372 | DLQ remediations (342 residual / A5) | **In Progress** | List/create/retry fail-closed; hist 41 still open (TPM + missing DO creds) |
 | BOSS-343 | GitHub MC wire | **Done** | Dual-plane follow-on |
 | BOSS-344 | CI/CD empty honesty | **Done** | |
 | BOSS-345 | next_move glue | **Done** | |
@@ -202,6 +228,9 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | **GA bar restated:** working software through the factory. Live replay: BugBox `crun_7cc663627f2340dc85ac` verify green → preview `prev_af60b33719b04082b027` title “BugBox — capture, track, resolve”. `make qa-working-software`. Frozen microVM now falls back to local coding (`make_sandbox_provider`). Do not stamp GA until a new build on current tag. | grok |
+| 2026-08-13 | A5 DLQ remediations: `GET/POST /v1/deadletters/remediations` + `POST /v1/deadletters/{id}/retry`; credit-vs-credential classifier tests; remaining live classes TPM + missing DO creds. `qa-dlq-remediations.md`. Plane BOSS-372. | grok |
+| 2026-08-13 | C2 local-code: SCIM deprovision org-fallback test (BOSS-320); document in-proc rate limiter Community-ok (no Redis); PyJWT/cryptography already latest — residuals in `SECURITY_C2_STATUS.md`. C2 stays Open. | grok |
 | 2026-08-13 | Factory live: WIP `github_plane=mission_control_binding` + simulated code-task no job. Preview fixture: `POST /v1/previews/fixture` serves honest `/web/` HTML (no microVM). | grok |
 | 2026-08-13 | A1/A2 live: shared-tag `cd13067` api+worker+web (no `--env-template`; rollback `.env.bak.3e6c906`). `qa-live` **10/10 + Metatron**. Harness catalog **55/55**, optional schema 500s gone. Provider catalog 11. | grok |
 | 2026-08-13 | Typed `standup` meeting: persist type, no-spend fixture → minutes + actions + Decision; duplicate convene refused. FEATURES meetings ✅. | grok |

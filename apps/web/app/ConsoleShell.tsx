@@ -43,6 +43,7 @@ import {
 import {
   communityNavCopy,
   isCommunityEdition,
+  isCommunityPrimaryNavVisible,
   normalizeEditionId,
   shouldShowPaidNavBadge,
 } from "../lib/edition";
@@ -316,6 +317,13 @@ export default function ConsoleShell({
     });
   }, [community]);
 
+  // Sidebar only: design-system lab is hide_nav on Community. Palette +
+  // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
+  const navAreas = useMemo(
+    () => areasForEdition.filter((a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition)),
+    [areasForEdition, resolvedEdition],
+  );
+
   const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];
   const tone = budgetTone(status.budgetState);
 
@@ -362,7 +370,7 @@ export default function ConsoleShell({
           {GROUP_ORDER.map((group) => (
             <div key={group}>
               <div className="bx-nav-label">{group}</div>
-              {areasForEdition.filter((a) => a.group === group).map((a) => {
+              {navAreas.filter((a) => a.group === group).map((a) => {
                 const badge = badgeFor(a.id);
                 const Icon = a.icon;
                 const paidBadge = shouldShowPaidNavBadge(a.id, resolvedEdition);

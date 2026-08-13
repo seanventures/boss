@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness openapi-live-qa-parity
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software public-flip-check openapi-live-qa-parity
 
 install: install-node install-python
 
@@ -202,6 +202,41 @@ else
 		$(if $(BOSS_HARNESS_OUTPUT),--output "$(BOSS_HARNESS_OUTPUT)")
 endif
 
+# Community GA bar: completed factory app + reachable non-fixture preview.
+# Never launches a new budgeted code.task. DRY_RUN=1 structure only.
+qa-working-software:
+ifeq ($(DRY_RUN),1)
+	$(PYTHON_BOOTSTRAP) scripts/qa/working_software_gate.py --dry-run \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}"
+else
+	$(PYTHON_BOOTSTRAP) scripts/qa/working_software_gate.py \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}"
+endif
+
+# Community system gate: whole no-spend stack as subprocesses.
+# Always: harness --dry-run, workflow (dry-run or live), factory --dry-run.
+# When BOSS_API_KEY is set: harness catalog, live_dogfood, workflow live,
+# factory live with --create-fixture only if fixture_supported.
+# QA_PREVIEW_FIXTURE=1 adds POST+GET /v1/previews/{id}/web/.
+# DRY_RUN=1 structure + child --dry-run only. Never echoes BOSS_API_KEY. Never spends.
+qa-system:
+ifeq ($(DRY_RUN),1)
+	$(PYTHON_BOOTSTRAP) scripts/qa/system_gate.py --dry-run \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(BOSS_SYSTEM_GATE_OUTPUT),--output "$(BOSS_SYSTEM_GATE_OUTPUT)")
+else
+	$(PYTHON_BOOTSTRAP) scripts/qa/system_gate.py \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(BOSS_SYSTEM_GATE_OUTPUT),--output "$(BOSS_SYSTEM_GATE_OUTPUT)")
+endif
+
+public-flip-check:
+	$(PYTHON_BOOTSTRAP) scripts/check_public_flip.py
+
 openapi-live-qa-parity: install-python
 	PYTHONPATH=.:engine $(PYTHON) scripts/validate_openapi_route_parity.py \
 		--prefix /v1/code-tasks \
@@ -219,6 +254,7 @@ sandbox-template:
 
 # Security/DevOps P2: dep audit (per .ai/security-review + AUTO-004 follow-up). Reports current state; recommends full tools for CI.
 # No auto-fix; dev-only vulns expected in some (vite etc for web dev server). Invoked by full-validate.
+# Advisory only — does not fail the build. Use deps-audit-strict to fail on high/critical runtime Python pins.
 deps-audit: install-python
 	@echo "=== Python runtime deps (freeze) ==="
 	$(PYTHON) -m pip list --format=freeze | sed -n '1,30p'
@@ -226,7 +262,13 @@ deps-audit: install-python
 	@echo "=== Web pnpm audit (dev deps only; prod build unaffected) ==="
 	cd apps/web && pnpm audit --json 2>/dev/null | $(abspath $(PYTHON)) -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get("advisories", {}) or d, indent=2)[:2000])' || echo "(pnpm audit output or no vulns; run in web/ for details)"
 	@echo ""
-	@echo "For full: pip install pip-audit safety; add to CI. Current dev vulns (if any) noted in .ai/security-review.md; not prod runtime."
+	@echo "Advisory only. Fail-on-high runtime Python: make deps-audit-strict. Dev-only npm/pnpm toolchain advisories stay waived."
+
+# Local fail-on-high/critical gate for runtime Python pins (engine + app runtime).
+# Does not enable GitHub Actions. Does not fail on waived npm/vitest/vite/esbuild/postcss findings.
+deps-audit-strict: install-python
+	$(PYTHON) -c "import pip_audit" 2>/dev/null || $(PIP) install -q 'pip-audit>=2.7,<3'
+	$(PYTHON) scripts/deps_audit_strict.py
 
 # Full local release readiness (per .ai/release-readiness, INFRA_RUNBOOK, AUTO-004).
 # Includes all validators + build/lint/test + deps-audit. DB/docker required for test/smoke paths.

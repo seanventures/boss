@@ -168,10 +168,42 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Freeze-safe Firecracker echo exercise
+    try:
+        from .sandbox_echo import router as sandbox_echo_router
+
+        app.include_router(sandbox_echo_router)
+    except ImportError:
+        pass
+
     # Community comms dry-run close-the-loop (no Slack/email send)
     try:
         from .comms_dry_run import router as comms_dry_run_router
 
         app.include_router(comms_dry_run_router)
+    except ImportError:
+        pass
+
+    # DLQ operator remediations (list/create/retry) — do not add these to main.py
+    try:
+        from .deadletter_ops import router as deadletter_ops_router
+
+        app.include_router(deadletter_ops_router)
+    except ImportError:
+        pass
+
+    # Community go/no-go meeting fixture (no LLM)
+    try:
+        from .meetings_go_no_go import router as meetings_go_no_go_router
+
+        app.include_router(meetings_go_no_go_router)
+    except ImportError:
+        pass
+
+    # Agent Studio catalog seed (no spend / no live launch)
+    try:
+        from .agent_studio_seed import router as agent_studio_seed_router
+
+        app.include_router(agent_studio_seed_router)
     except ImportError:
         pass

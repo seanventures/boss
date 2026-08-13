@@ -2682,6 +2682,29 @@ ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS requeued_job_id TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_by TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Operator remediations attached to a deadletter (A5 / BOSS-342 residual).
+-- Every retry/requeue/hold/escalate writes a row so operator actions never silently drop.
+CREATE TABLE IF NOT EXISTS deadletter_remediations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  deadletter_id TEXT NOT NULL REFERENCES deadletters(id),
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  requeued_job_id TEXT,
+  decision_id TEXT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_deadletter_remediations_project
+  ON deadletter_remediations(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deadletter_remediations_dlq
+  ON deadletter_remediations(deadletter_id, created_at DESC);
+
 DO $$
 BEGIN
   IF NOT EXISTS (

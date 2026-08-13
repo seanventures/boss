@@ -122,14 +122,24 @@ export function editionDisplayName(editionId?: string | null): string {
 }
 
 /**
+ * Leftover product chrome that must not appear as a required Community
+ * primary-nav area. Routes, ⌘K, and `?area=` deep links stay intact.
+ *
+ * `enterprise` is NOT hidden: Community self-hosted SSO / IdP packs live there.
+ * Only the Enterprise *label* is stripped via `communityNavCopy`.
+ */
+const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
+
+/**
  * Nav chrome adjustments for Community honesty.
- * Enterprise area stays (SSO lives there); paid ops copy is softened.
+ * Enterprise area stays as **SSO** (identity lives there); it is not an
+ * Enterprise-product required area. Paid ops/org copy is softened.
  */
 export function communityNavCopy(areaId: string): { label?: string; sub?: string; badge?: string } {
   if (areaId === "enterprise") {
     return {
-      label: "SSO & Editions",
-      sub: "Self-hosted SSO (OIDC/SAML/SCIM) · IdP packs · edition status",
+      label: "SSO",
+      sub: "Self-hosted identity — OIDC, SAML, SCIM, and IdP packs",
       badge: "SSO",
     };
   }
@@ -144,6 +154,15 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
     };
   }
   return {};
+}
+
+/** False for design-system-as-product lab areas on Community primary nav. */
+export function isCommunityPrimaryNavVisible(
+  areaId: string,
+  editionId?: string | null,
+): boolean {
+  if (!isCommunityEdition(editionId)) return true;
+  return !COMMUNITY_HIDDEN_PRIMARY_NAV.has(areaId);
 }
 
 export function shouldShowPaidNavBadge(areaId: string, editionId?: string | null): boolean {

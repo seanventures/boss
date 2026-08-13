@@ -17,9 +17,18 @@ from .core import (
 )
 from .jobs import JobLeaseService
 
+
+class DeadletterRemediationBlocked(ValueError):
+    """Expected operator-visible block (non-job source, not requeueable). Not a silent drop."""
+
+
 # Operator-facing error taxonomy for open deadletters (factory / worker reliability).
 # Kept coarse on purpose: DLQ triage buckets, not a full exception hierarchy.
 DEADLETTER_ERROR_CLASSES = ("git", "sandbox", "model", "github", "other")
+
+# First-class operator remediations attached to a deadletter. Unknown actions fail closed.
+REMEDIATION_ACTIONS = ("retry", "requeue", "escalate", "hold")
+REMEDIATION_STATUSES = ("queued", "applied", "blocked", "failed")
 
 # Ordered rules: first match wins. Patterns are substring / regex against the combined
 # reason + payload text (lowercased).
@@ -278,6 +287,390 @@ class DeadletterRemediationService:
             "escalations": escalations,
             "error_classes": list(DEADLETTER_ERROR_CLASSES),
         }
+
+    def list_remediations(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        deadletter_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """List operator remediations. Never invents rows; empty list is a valid result."""
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        clause = ""
+        params: dict[str, Any] = {"project_id": project_id, "limit": limit}
+        if deadletter_id:
+            clause = " AND deadletter_id = :deadletter_id"
+            params["deadletter_id"] = deadletter_id
+        rows = connection.execute(
+            text(
+                f"""
+                SELECT id, project_id, deadletter_id, action, status, actor, reason,
+                       result, requeued_job_id, decision_id, error, created_at, updated_at
+                FROM deadletter_remediations
+                WHERE project_id = :project_id{clause}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """
+            ),
+            params,
+        ).mappings().all()
+        return {
+            "project_id": project_id,
+            "deadletter_id": deadletter_id,
+            "items": [self._serialize_remediation(row) for row in rows],
+            "actions": list(REMEDIATION_ACTIONS),
+        }
+
+    def create_remediation(
+        self,
+        connection: Connection,
+        *,
+        deadletter_id: str,
+        actor: str,
+        action: str,
+        reason: str = "",
+        run_after_seconds: int = 0,
+    ) -> dict[str, Any]:
+        """Attach a first-class remediation to a deadletter and apply it.
+
+        Fail-closed: unknown actions and missing deadletters raise. Apply failures
+        persist as blocked/failed remediations plus events — never a silent drop.
+        """
+        action_name = (action or "").strip().lower()
+        if action_name not in REMEDIATION_ACTIONS:
+            raise ValueError(
+                "action must be one of: " + ", ".join(REMEDIATION_ACTIONS)
+            )
+        deadletter = self._get_deadletter_for_update(connection, deadletter_id)
+        rem = self._insert_remediation(
+            connection,
+            project_id=deadletter["project_id"],
+            deadletter_id=deadletter_id,
+            action=action_name,
+            actor=actor,
+            reason=reason or f"operator_{action_name}",
+        )
+        try:
+            if action_name in {"retry", "requeue"}:
+                return self._apply_retry(
+                    connection,
+                    deadletter=deadletter,
+                    remediation=rem,
+                    actor=actor,
+                    reason=reason or "operator_requested_requeue",
+                    run_after_seconds=run_after_seconds,
+                )
+            if action_name == "escalate":
+                return self._apply_escalate(
+                    connection,
+                    deadletter=deadletter,
+                    remediation=rem,
+                    actor=actor,
+                    reason=reason,
+                )
+            return self._apply_hold(
+                connection,
+                deadletter=deadletter,
+                remediation=rem,
+                actor=actor,
+                reason=reason,
+            )
+        except DeadletterRemediationBlocked as blocked:
+            return self._finalize_remediation(
+                connection,
+                rem["id"],
+                status="blocked",
+                error=str(blocked),
+                result={"blocked_reason": str(blocked)},
+                emit_type="deadletter.remediation_blocked",
+                actor=actor,
+                project_id=deadletter["project_id"],
+                deadletter_id=deadletter_id,
+                extra={"action": action_name},
+            )
+        except Exception as error:
+            self._finalize_remediation(
+                connection,
+                rem["id"],
+                status="failed",
+                error=str(error),
+                result={"failed": True},
+                emit_type="deadletter.remediation_failed",
+                actor=actor,
+                project_id=deadletter["project_id"],
+                deadletter_id=deadletter_id,
+                extra={"action": action_name},
+            )
+            raise
+
+    def retry_deadletter(
+        self,
+        connection: Connection,
+        *,
+        deadletter_id: str,
+        actor: str,
+        reason: str = "operator_requested_retry",
+        run_after_seconds: int = 0,
+    ) -> dict[str, Any]:
+        """Operator retry: persist a remediation, requeue when safe, always leave visible state."""
+        return self.create_remediation(
+            connection,
+            deadletter_id=deadletter_id,
+            actor=actor,
+            action="retry",
+            reason=reason,
+            run_after_seconds=run_after_seconds,
+        )
+
+    def _insert_remediation(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        deadletter_id: str,
+        action: str,
+        actor: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        rem_id = make_id("dlr")
+        connection.execute(
+            text(
+                """
+                INSERT INTO deadletter_remediations (
+                    id, project_id, deadletter_id, action, status, actor, reason, result
+                )
+                VALUES (
+                    :id, :project_id, :deadletter_id, :action, 'queued', :actor, :reason,
+                    '{}'::jsonb
+                )
+                """
+            ),
+            {
+                "id": rem_id,
+                "project_id": project_id,
+                "deadletter_id": deadletter_id,
+                "action": action,
+                "actor": actor,
+                "reason": reason,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "deadletter.remediation_created",
+            actor,
+            "deadletter_remediation",
+            rem_id,
+            {
+                "deadletter_id": deadletter_id,
+                "action": action,
+                "status": "queued",
+                "reason": (reason or "")[:300],
+            },
+        )
+        return self._get_remediation(connection, rem_id)
+
+    def _apply_retry(
+        self,
+        connection: Connection,
+        *,
+        deadletter: dict[str, Any],
+        remediation: dict[str, Any],
+        actor: str,
+        reason: str,
+        run_after_seconds: int,
+    ) -> dict[str, Any]:
+        if deadletter["source_kind"] != "job":
+            raise DeadletterRemediationBlocked("only job deadletters can be retried")
+        if deadletter.get("requeued_job_id"):
+            already = self._get_deadletter(connection, deadletter["id"])
+            return self._finalize_remediation(
+                connection,
+                remediation["id"],
+                status="applied",
+                requeued_job_id=already.get("requeued_job_id"),
+                result={
+                    "already_requeued": True,
+                    "requeued_job_id": already.get("requeued_job_id"),
+                    "deadletter_status": already.get("status"),
+                },
+                emit_type="deadletter.remediation_applied",
+                actor=actor,
+                project_id=deadletter["project_id"],
+                deadletter_id=deadletter["id"],
+                extra={"action": remediation["action"], "already_requeued": True},
+            )
+        try:
+            updated = self.requeue_job_deadletter(
+                connection,
+                deadletter_id=deadletter["id"],
+                actor=actor,
+                reason=reason,
+                run_after_seconds=run_after_seconds,
+            )
+        except ValueError as error:
+            raise DeadletterRemediationBlocked(str(error)) from error
+        return self._finalize_remediation(
+            connection,
+            remediation["id"],
+            status="applied",
+            requeued_job_id=updated.get("requeued_job_id"),
+            result={
+                "already_requeued": False,
+                "requeued_job_id": updated.get("requeued_job_id"),
+                "deadletter_status": updated.get("status"),
+            },
+            emit_type="deadletter.remediation_applied",
+            actor=actor,
+            project_id=deadletter["project_id"],
+            deadletter_id=deadletter["id"],
+            extra={"action": remediation["action"]},
+        )
+
+    def _apply_escalate(
+        self,
+        connection: Connection,
+        *,
+        deadletter: dict[str, Any],
+        remediation: dict[str, Any],
+        actor: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        packet = self.create_incident_packet(
+            connection,
+            deadletter_id=deadletter["id"],
+            actor=actor,
+            severity="high",
+            summary=reason or None,
+        )
+        return self._finalize_remediation(
+            connection,
+            remediation["id"],
+            status="applied",
+            decision_id=packet.get("remediation_decision_id"),
+            result={
+                "incident_task_id": packet.get("incident_task_id"),
+                "incident_artifact_id": packet.get("incident_artifact_id"),
+                "deadletter_status": packet.get("status"),
+            },
+            emit_type="deadletter.remediation_applied",
+            actor=actor,
+            project_id=deadletter["project_id"],
+            deadletter_id=deadletter["id"],
+            extra={"action": "escalate"},
+        )
+
+    def _apply_hold(
+        self,
+        connection: Connection,
+        *,
+        deadletter: dict[str, Any],
+        remediation: dict[str, Any],
+        actor: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        # Hold is an explicit operator pause — the deadletter stays open and visible.
+        return self._finalize_remediation(
+            connection,
+            remediation["id"],
+            status="applied",
+            result={
+                "held": True,
+                "deadletter_status": deadletter.get("status") or "open",
+                "reason": reason or "operator_hold",
+            },
+            emit_type="deadletter.remediation_applied",
+            actor=actor,
+            project_id=deadletter["project_id"],
+            deadletter_id=deadletter["id"],
+            extra={"action": "hold"},
+        )
+
+    def _finalize_remediation(
+        self,
+        connection: Connection,
+        remediation_id: str,
+        *,
+        status: str,
+        actor: str,
+        project_id: str,
+        deadletter_id: str,
+        emit_type: str,
+        result: Optional[dict[str, Any]] = None,
+        error: Optional[str] = None,
+        requeued_job_id: Optional[str] = None,
+        decision_id: Optional[str] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        if status not in REMEDIATION_STATUSES:
+            raise ValueError(f"invalid remediation status: {status}")
+        connection.execute(
+            text(
+                """
+                UPDATE deadletter_remediations
+                SET status = :status,
+                    result = CAST(:result AS JSONB),
+                    error = :error,
+                    requeued_job_id = COALESCE(:requeued_job_id, requeued_job_id),
+                    decision_id = COALESCE(:decision_id, decision_id),
+                    updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": remediation_id,
+                "status": status,
+                "result": json.dumps(result or {}),
+                "error": error,
+                "requeued_job_id": requeued_job_id,
+                "decision_id": decision_id,
+            },
+        )
+        payload = {
+            "deadletter_id": deadletter_id,
+            "status": status,
+            "requeued_job_id": requeued_job_id,
+            "decision_id": decision_id,
+            "error": (error or "")[:300] or None,
+        }
+        if extra:
+            payload.update(extra)
+        emit_event(
+            connection,
+            project_id,
+            emit_type,
+            actor,
+            "deadletter_remediation",
+            remediation_id,
+            payload,
+        )
+        return self._get_remediation(connection, remediation_id)
+
+    def _get_remediation(self, connection: Connection, remediation_id: str) -> dict[str, Any]:
+        row = connection.execute(
+            text("SELECT * FROM deadletter_remediations WHERE id = :id"),
+            {"id": remediation_id},
+        ).mappings().first()
+        if not row:
+            raise ValueError("remediation not found")
+        return self._serialize_remediation(row)
+
+    def _serialize_remediation(self, row: Any) -> dict[str, Any]:
+        payload = dict(row)
+        result = payload.get("result") or {}
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except json.JSONDecodeError:
+                result = {"raw": result}
+        payload["result"] = result if isinstance(result, dict) else {}
+        for key in ("created_at", "updated_at"):
+            if payload.get(key) and hasattr(payload[key], "isoformat"):
+                payload[key] = payload[key].isoformat()
+        return payload
 
     def _escalate_model_capacity(
         self,

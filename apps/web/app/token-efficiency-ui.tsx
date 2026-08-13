@@ -95,7 +95,7 @@ export function TokenScorecardCard({ scorecard }: { scorecard: TokenScorecard })
             <div>
               <div className="detail">Avg tokens/call</div>
               <b style={{ fontSize: 18 }}>
-                {Math.round(scorecard.avgTokensPerCall).toLocaleString()}
+                {Math.round(scorecard.avgTokensPerCall).toLocaleString("en-US")}
               </b>
               <div>
                 <GradeChip label="" grade={scorecard.grades.avg_tokens} />
@@ -129,7 +129,7 @@ export function TokenScorecardCard({ scorecard }: { scorecard: TokenScorecard })
                   >
                     <span style={{ fontFamily: "var(--mono, monospace)" }}>{s.stage}</span>
                     <span style={{ color: "var(--muted, #8b949e)" }}>
-                      {s.calls} calls · {Math.round(s.avgTokensPerCall).toLocaleString()} tok avg ·{" "}
+                      {s.calls} calls · {Math.round(s.avgTokensPerCall).toLocaleString("en-US")} tok avg ·{" "}
                       {usd(s.costUsdMicros)}
                       {s.cacheRatio != null ? ` · cache ${pct(s.cacheRatio)}` : ""}
                     </span>
@@ -158,7 +158,7 @@ export function TokenConsumptionCard({ consumption }: { consumption: TokenConsum
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 6 }}>
             <div>
               <div className="detail">Tokens</div>
-              <b>{consumption.totalTokens.toLocaleString()}</b>
+              <b>{consumption.totalTokens.toLocaleString("en-US")}</b>
               <div className="detail" style={{ fontSize: 11 }}>
                 util {pct(consumption.tokenUtilization)}
               </div>
@@ -232,7 +232,7 @@ export function TokenPoliciesCard({ feed }: { feed: TokenPoliciesFeed }) {
               <b>Project default</b>
               <div className="detail">
                 {project.maxTokensPerDay != null
-                  ? `${project.maxTokensPerDay.toLocaleString()} tokens/day`
+                  ? `${project.maxTokensPerDay.toLocaleString("en-US")} tokens/day`
                   : "no daily token cap"}
                 {" · "}
                 {project.maxCostUsdMicrosPerDay != null
@@ -260,7 +260,7 @@ export function TokenPoliciesCard({ feed }: { feed: TokenPoliciesFeed }) {
                   <span style={{ fontFamily: "var(--mono, monospace)" }}>{p.stage}</span>
                   <span style={{ color: "var(--muted, #8b949e)" }}>
                     {p.maxTotalTokensPerCall != null
-                      ? `${p.maxTotalTokensPerCall.toLocaleString()} tok/call`
+                      ? `${p.maxTotalTokensPerCall.toLocaleString("en-US")} tok/call`
                       : "—"}
                     {p.preferredModelClass ? ` · ${p.preferredModelClass}` : ""}
                     {!p.enabled ? " · off" : ""}
@@ -322,7 +322,7 @@ export function TokenRecommendationsCard({
                 ) : null}
                 {rec.potentialTokenSaving > 0 ? (
                   <b style={{ fontSize: 12.5 }}>
-                    ≈ {rec.potentialTokenSaving.toLocaleString()} tok
+                    ≈ {rec.potentialTokenSaving.toLocaleString("en-US")} tok
                   </b>
                 ) : null}
               </div>

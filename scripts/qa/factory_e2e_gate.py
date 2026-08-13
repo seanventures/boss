@@ -73,7 +73,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 GATE_NAME = "factory_e2e_gate"
-GATE_VERSION = "1.1.0"
+GATE_VERSION = "1.2.0"
 PROPOSALS_QUEUE_SKIP_STATUSES = frozenset({404, 405})
 DEFAULT_API_URL = "https://boss-api.local.sean.network"
 DEFAULT_PROJECT_ID = "boss-dogfood"
@@ -151,6 +151,18 @@ STRUCTURAL_ENDPOINTS: list[dict[str, Any]] = [
         "required": False,
         "body_keys": ["project_id"],
         "note": "structural only unless --live-merge-check",
+    },
+    {
+        "name": "factory.live_pr",
+        "method": "POST",
+        "path": "/v1/code-tasks",
+        "auth": True,
+        "required": False,
+        "body_keys": ["project_id", "title", "instructions", "owner", "repo", "open_pr"],
+        "note": (
+            "optional live PR — fails closed without BOSS_QA_ALLOW_CANARIES=1; "
+            "this slice does not open real PRs"
+        ),
     },
 ]
 
@@ -347,6 +359,56 @@ def allow_create_from_env() -> bool:
     )
 
 
+def allow_live_pr_from_env() -> bool:
+    """Live PR attempts spend and open PRs. Fail closed unless canaries are explicit."""
+    return os.environ.get("BOSS_QA_ALLOW_CANARIES", "").strip() in (
+        "1",
+        "true",
+        "TRUE",
+        "yes",
+        "YES",
+    )
+
+
+LIVE_PR_UNKNOWN_LABEL = "unknown / not proven"
+
+
+def honesty_from_wip(wip_payload: Any) -> dict[str, Any]:
+    """Read-only sealed-slice fields from GET /v1/factory/wip. Never invent a %."""
+    if not isinstance(wip_payload, dict):
+        return {
+            "github_plane": None,
+            "last_simulated_fixture": None,
+            "live_pr_success": {
+                "rate": None,
+                "label": LIVE_PR_UNKNOWN_LABEL,
+                "proven": False,
+                "sample_size": 0,
+            },
+        }
+    live = wip_payload.get("live_pr_success")
+    if not isinstance(live, dict):
+        live = {
+            "rate": None,
+            "label": LIVE_PR_UNKNOWN_LABEL,
+            "proven": False,
+            "sample_size": 0,
+        }
+    label = live.get("label") if isinstance(live.get("label"), str) else LIVE_PR_UNKNOWN_LABEL
+    if label.strip().endswith("%") and "/" not in label:
+        label = LIVE_PR_UNKNOWN_LABEL
+    return {
+        "github_plane": wip_payload.get("github_plane"),
+        "last_simulated_fixture": wip_payload.get("last_simulated_fixture"),
+        "live_pr_success": {
+            "rate": live.get("rate"),
+            "label": label or LIVE_PR_UNKNOWN_LABEL,
+            "proven": live.get("proven") is True,
+            "sample_size": int(live.get("sample_size") or 0),
+        },
+    }
+
+
 def validate_dry_run_structure(
     *,
     api_base: str = DEFAULT_API_URL,
@@ -444,6 +506,23 @@ def validate_dry_run_structure(
         )
     )
 
+    empty_honesty = honesty_from_wip({})
+    fake_pct = honesty_from_wip({"live_pr_success": {"rate": 0.87, "label": "87%"}})
+    checks.append(
+        CheckResult(
+            name="structure.live_pr_honesty",
+            ok=(
+                empty_honesty["live_pr_success"]["label"] == LIVE_PR_UNKNOWN_LABEL
+                and empty_honesty["live_pr_success"]["rate"] is None
+                and fake_pct["live_pr_success"]["label"] == LIVE_PR_UNKNOWN_LABEL
+            ),
+            detail=(
+                "empty live PR rate is unknown / not proven; invented % rejected; "
+                "BOSS_QA_ALLOW_CANARIES unset in dry-run"
+            ),
+        )
+    )
+
     # document live env requirements in evidence for operators reading dry-run report
     checks.append(
         CheckResult(
@@ -468,6 +547,9 @@ def validate_dry_run_structure(
                 ],
                 "optional_fixture": [
                     "--create-fixture (no spend; needs fixture_supported on factory/wip)",
+                ],
+                "optional_live_pr": [
+                    "--live-pr fails closed without BOSS_QA_ALLOW_CANARIES=1 (no POST)",
                 ],
             },
         )
@@ -538,6 +620,9 @@ def build_report(
             ],
             "optional_fixture": [
                 "CLI flag --create-fixture (no spend; requires fixture_supported on factory/wip)",
+            ],
+            "optional_live_pr": [
+                "CLI flag --live-pr fails closed without BOSS_QA_ALLOW_CANARIES=1 (no POST)",
             ],
         },
     }
@@ -629,6 +714,7 @@ def run_gate(
     project_id: str,
     create_code_task: bool = False,
     create_fixture: bool = False,
+    live_pr: bool = False,
     owner: str | None = None,
     repo: str | None = None,
     base_branch: str = "main",
@@ -686,6 +772,26 @@ def run_gate(
         )
     except RuntimeError as error:
         record(CheckResult(name="factory.wip", ok=False, detail=str(error)))
+
+    honesty = honesty_from_wip(wip_payload)
+    live = honesty["live_pr_success"]
+    last_sim = honesty["last_simulated_fixture"]
+    last_id = None
+    if isinstance(last_sim, dict):
+        last_id = last_sim.get("run_id") or last_sim.get("id")
+    record(
+        CheckResult(
+            name="factory.sealed_slice_honesty",
+            ok=True,
+            required=False,
+            detail=(
+                f"github_plane={honesty.get('github_plane')!r} "
+                f"last_simulated={last_id or 'none'} "
+                f"live_pr={live.get('label')}"
+            ),
+            evidence=honesty,
+        )
+    )
 
     # 3. code-tasks list
     try:
@@ -951,6 +1057,56 @@ def run_gate(
             )
         )
 
+    # 6. optional live PR — fail closed without BOSS_QA_ALLOW_CANARIES. Never POST.
+    if live_pr:
+        if not allow_live_pr_from_env():
+            record(
+                CheckResult(
+                    name="factory.live_pr",
+                    ok=False,
+                    required=False,
+                    detail=(
+                        "FAIL CLOSED: live PR requires BOSS_QA_ALLOW_CANARIES=1. "
+                        f"live PR success rate: {LIVE_PR_UNKNOWN_LABEL}. No POST."
+                    ),
+                    evidence={
+                        "why": "canaries_not_allowed",
+                        "posts": 0,
+                        "live_pr_success": honesty["live_pr_success"],
+                    },
+                )
+            )
+        else:
+            record(
+                CheckResult(
+                    name="factory.live_pr",
+                    ok=False,
+                    required=False,
+                    detail=(
+                        "FAIL CLOSED: this no-spend slice does not open real PRs even "
+                        f"with canaries allowed. live PR success rate: {LIVE_PR_UNKNOWN_LABEL}."
+                    ),
+                    evidence={
+                        "why": "live_pr_not_implemented_no_spend",
+                        "posts": 0,
+                        "live_pr_success": honesty["live_pr_success"],
+                    },
+                )
+            )
+    else:
+        record(
+            CheckResult(
+                name="factory.live_pr",
+                ok=True,
+                required=False,
+                skipped=True,
+                detail=(
+                    "skipped (pass --live-pr to request the optional live PR check; "
+                    "fails closed without BOSS_QA_ALLOW_CANARIES=1)"
+                ),
+            )
+        )
+
     return checks
 
 
@@ -1004,6 +1160,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "POST /v1/code-tasks with simulated=true (no spend) when the live API "
             "advertises fixture_supported. Not a sealed factory path."
+        ),
+    )
+    parser.add_argument(
+        "--live-pr",
+        action="store_true",
+        dest="live_pr",
+        help=(
+            "Optional live PR proof. Fails closed without BOSS_QA_ALLOW_CANARIES=1 "
+            "and does not POST. Required checks stay no-spend."
         ),
     )
     parser.add_argument(
@@ -1101,6 +1266,7 @@ def main(argv: list[str] | None = None) -> int:
                 project_id=project_id,
                 create_code_task=bool(args.create_code_task),
                 create_fixture=bool(args.create_fixture),
+                live_pr=bool(args.live_pr),
                 owner=owner,
                 repo=repo,
                 base_branch=base_branch,
@@ -1133,9 +1299,11 @@ def main(argv: list[str] | None = None) -> int:
         meta={
             "create_requested": bool(args.create_code_task),
             "fixture_requested": bool(args.create_fixture),
+            "live_pr_requested": bool(args.live_pr),
             "owner_set": bool(owner),
             "repo_set": bool(repo),
             "allow_create_env": allow_create_from_env(),
+            "allow_live_pr_env": allow_live_pr_from_env(),
         },
     )
     exit_code = gate_exit_code(report)

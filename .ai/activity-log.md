@@ -1,5 +1,50 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-13 — Grok — GA bar = working software
+
+- Operator definition: Community is GA only when a functional app can be built through the full system and opened as designed.
+- Live replay: completed BugBox `crun_7cc663627f2340dc85ac` (`npm run verify` exit 0, PR paramg/boss-sandbox#83) → `POST .../preview` → `prev_af60b33719b04082b027` running; HTML title **BugBox — capture, track, resolve**.
+- `make_sandbox_provider`: frozen microVM now selects local coding (does not unfreeze Firecracker).
+- Gate: `make qa-working-software` (`scripts/qa/working_software_gate.py`).
+- Do **not** stamp GA: new greenfield canary on the current shared tag is still unproven.
+
+## 2026-08-13 — Codex — Community OpenAPI sync (ai/grok/community-ga)
+
+- Extended `scripts/sync_openapi_from_routes.py` to scan `apps/api/app/routers/*.py` (honors `APIRouter` prefix) and splice missing paths instead of rewriting 49k-line `api/openapi.yaml`.
+- Synced Community GA isolated routes: easy-connect, preview fixture, comms dry-run, standup/simulated-run/evidence, assurance seed-demo, openai-compatible entitlement source.
+- `packages/api-client` unchanged (no OpenAPI→TS generator; Grok skill import/export WIP left alone).
+- Tests: `apps/api/tests/test_community_openapi_routes.py` + `scripts/tests/test_sync_openapi_community_routes.py`. `make openapi-live-qa-parity` OK (80).
+- Plane: BOSS-373 Done (`028f194`). Did not touch parallel Grok working-tree files.
+
+## 2026-08-13 — Grok — Resource receipts / cost-event honesty (ai/grok/community-ga)
+
+- API already keeps inventory when billing is unavailable (`billing_status` / `billing_confidence=unknown`).
+- Mission Control FinOps/receipts no longer render empty/unknown/unavailable as exact `$0.00`.
+- Feed maps health/recon billing fields; receipts empty copy says they are not invoices.
+- Tests: `finops-honesty.test.tsx`, providerops mapping, feature_sweep `GET /v1/resource-receipts`.
+- FEATURES.md receipts stay ◐ — honest labels; exact $ still needs billing-readable keys. No live E2E spend proof.
+
+## 2026-08-13 — Grok — Phase C2 local-code security (ai/grok/community-ga)
+
+- Confirmed `BOSS_API_KEY_PRINCIPALS` map + unbound-key 401. Added focused BOSS-320 test: leftover `org_members` mirror cannot authorize a deprovisioned SCIM user.
+- Rate limits: documented in-proc limiter as Community-ok; Redis is A2A-only (not added). Existing 429 + `rate_limit.exceeded` test kept.
+- BOSS-326: PyJWT==2.13.0 and cryptography==50.0.0 are already latest PyPI; no bump. Honest residuals in `docs/operations/SECURITY_C2_STATUS.md`. **C2 not Done** (no dep CI fail-gate; Actions stay off).
+- Plane: BOSS-320/326 already Done; comment evidence. OPS_BASE_URL unset — used local Plane key file.
+
+## 2026-08-13 — Grok — BOSS-338 residual: Community nav honesty (ai/grok/community-ga)
+
+- Community primary nav no longer presents leftover **Enterprise** or design-system-as-product as required areas.
+- `foundations` / `components` are `hide_nav` on Community (⌘K + `?area=` still resolve).
+- Area id `enterprise` stays as **SSO** (OIDC/SAML/SCIM/IdP). Account Connect, marketplace, clusters, SIM remain gated or Paid-badged.
+- Tests: `apps/web/tests/edition-visibility.test.ts` (15). No API edits. Plane: `OPS_BASE_URL` unset — track on branch.
+
+## 2026-08-13 — Grok — Community skill YAML import/export UI (ai/grok/community-ga)
+
+- Mission Control Company Pack sibling: local skill YAML import (`importSkillAction` → `POST /v1/skills/import`) and per-skill export download (`exportSkillAction` → `GET /v1/skills/{id}/export`).
+- Island: `apps/web/app/skills-import-ui.tsx` (`data-testid=skill-import` / `skill-export`). Marketplace stays behind PaidSurfaceGate.
+- Client: capability-bundle export (`application/vnd.boss.capability+json`) is not JSON-parsed (checksum preserved).
+- Tests: `apps/web/tests/skills-import.test.ts`. Plane: `OPS_BASE_URL` unset — track on branch.
+
 
 ## 2026-08-13 — Grok — Factory + preview fixture slice (ai/grok/community-ga)
 

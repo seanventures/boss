@@ -159,6 +159,8 @@ describe("provider configuration workspace", () => {
     expect(source).toContain("Connections");
     expect(source).toContain("Scaling & Health");
     expect(source).toContain("Cloud FinOps");
+    expect(source).toContain("describeSpendHonesty");
+    expect(source).toContain("Resource receipts prove actions");
     expect(source).toContain("ResourceReceipt");
     expect(source).toContain("editionLimitations");
     expect(source).toContain("fully functional when operators bring their own");

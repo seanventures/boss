@@ -67,6 +67,36 @@ def test_is_model_capacity_exhaustion():
     assert not is_model_capacity_exhaustion("No such file or directory: 'git'")
 
 
+def test_credits_are_model_credentials_are_not():
+    """Credit exhaustion is model capacity; credential/auth failures are not.
+
+    The ``credits?\\b`` model rule must not swallow ``credentials``.
+    """
+    assert classify_deadletter_error("OpenRouter credits exhausted") == "model"
+    assert classify_deadletter_error("insufficient credits") == "model"
+    assert is_model_capacity_exhaustion("OpenRouter credits exhausted")
+    assert classify_deadletter_error("pull request create failed: bad credentials") == "github"
+    assert classify_deadletter_error("bad credentials") == "github"
+    assert not is_model_capacity_exhaustion("bad credentials")
+    assert not is_model_capacity_exhaustion("pull request create failed: bad credentials")
+    missing_do = "Missing credential for SecretRef env:BOSS_DIGITALOCEAN_TOKEN."
+    assert classify_deadletter_error(missing_do) == "other"
+    assert not is_model_capacity_exhaustion(missing_do)
+
+
+def test_sandbox_fail_closed_reason_codes_classify_as_sandbox():
+    """microvm_claims_frozen + sandbox_task_missing already exist — keep them sandbox."""
+    frozen = (
+        "microVM execution is not claimed for Community GA "
+        "(BOSS_MICROVM_CLAIMS_FROZEN=true)"
+    )
+    missing = "sandbox host task missing (HTTP 404) for sbx_1"
+    assert classify_deadletter_error(frozen) == "sandbox"
+    assert classify_deadletter_error(missing) == "sandbox"
+    assert classify_deadletter_error("reason_code=microvm_claims_frozen") == "sandbox"
+    assert classify_deadletter_error("reason_code=sandbox_task_missing") == "sandbox"
+
+
 @pytest.mark.parametrize(
     "reason,fclass,rcode",
     [

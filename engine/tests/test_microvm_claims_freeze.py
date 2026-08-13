@@ -113,6 +113,23 @@ def test_local_provider_happy_path_unaffected_by_freeze():
         MicroVMProvider(s).run_code_task({"owner": "o", "repo": "r", "task_id": "x"})
 
 
+def test_make_sandbox_provider_falls_back_to_local_when_microvm_frozen():
+    """Worker env may still say microvm; freeze must not block building software."""
+    s = _settings(sandbox_provider="microvm", microvm_claims_frozen=True)
+    provider = make_sandbox_provider(s)
+    assert isinstance(provider, LocalSubprocessProvider)
+    assert provider.kind == "local"
+    # Explicit MicroVMProvider stays fail-closed (no silent Firecracker claim).
+    with pytest.raises(MicroVMClaimsFrozen):
+        MicroVMProvider(s).run_code_task({"owner": "o", "repo": "r", "task_id": "x"})
+
+
+def test_make_sandbox_provider_uses_microvm_when_unfrozen():
+    s = _settings(sandbox_provider="microvm", microvm_claims_frozen=False)
+    provider = make_sandbox_provider(s)
+    assert isinstance(provider, MicroVMProvider)
+
+
 def test_list_sandboxes_reports_claims_frozen_without_raising():
     s = _settings(microvm_claims_frozen=True, sandbox_agent_url="")
     result = sandbox_console.list_sandboxes(s)

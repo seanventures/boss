@@ -73,7 +73,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Provider accounts (model + infra keys) | ✅ |
 | Read-only inventory sync | ✅ |
 | ChangeSets (plan / approve / apply) | ✅ |
-| Resource receipts and cost events | ◐ / ✅ |
+| Resource receipts and cost events | ◐ Honest empty/unknown/unavailable labels; exact $ needs billing-readable keys |
 | Worker pools and scale proposals | ✅ |
 | Hosted connector marketplace | ✦ Cloud |
 

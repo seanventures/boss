@@ -86,6 +86,7 @@ import { AgentStudio } from "./agent-studio-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
+import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -172,7 +173,7 @@ import { fetchApprovalRules } from "../lib/approval-rules";
 import { ApprovalRulesView } from "./approval-rules-ui";
 import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
-import { fetchProviderOpsFeed } from "../lib/providerops";
+import { describeSpendHonesty, fetchProviderOpsFeed } from "../lib/providerops";
 import { ProviderConfigurationSuite } from "./provider-configuration-ui";
 import { fetchInfraFabricFeed } from "../lib/infra-fabric";
 import { InfraFabricPanel } from "./infra-fabric-ui";
@@ -2748,6 +2749,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             Rate limit {health.rateLimitStatus} / cap{" "}
                             {health.usageCapStatus}
                           </p>
+                          <p className="detail">
+                            Billing {health.billingStatus ?? "unknown"} /
+                            confidence {health.billingConfidence ?? "unknown"}
+                            {health.billingMessage
+                              ? ` — ${health.billingMessage}`
+                              : ""}
+                          </p>
                         </div>
                         <code className="mono">
                           {formatDateTime(health.lastCheckedAt)}
@@ -2785,11 +2793,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </code>
                       </div>
                     ))}
+                    {providerOps.resourceReceipts.length === 0 ? (
+                      <p className="detail">
+                        No resource receipts yet. Receipts prove provider
+                        actions; they are not invoices and do not imply $0.00
+                        spend.
+                      </p>
+                    ) : null}
                     {providerOps.providerHealth.length === 0 &&
                     providerOps.driftReports.length === 0 &&
                     providerOps.resourceReceipts.length === 0 ? (
                       <p className="detail">
-                        No ProviderOps health, drift, or receipt records yet.
+                        No ProviderOps health or drift records yet.
                       </p>
                     ) : null}
                   </div>
@@ -2797,6 +2812,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
                 <article className="stack-card" id="provider-finops">
                   <h3>Cost and Reconciliation Ledger</h3>
+                  {(() => {
+                    const honesty = describeSpendHonesty({
+                      costs: providerOps.costs,
+                      health: providerOps.providerHealth,
+                      runs: providerOps.reconciliationRuns,
+                    });
+                    return (
+                      <p className="detail" data-testid="provider-ledger-honesty">
+                        {honesty.label}
+                        {honesty.amountUsdMicros == null
+                          ? " — "
+                          : ` ${formatMicros(honesty.amountUsdMicros)} — `}
+                        {honesty.helper}
+                      </p>
+                    );
+                  })()}
                   <div className="feed-list">
                     {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
                       <div className="feed-row" key={anomaly.id}>
@@ -2824,8 +2855,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             {cost.provider} / {cost.category}
                           </h4>
                           <p className="detail">
-                            {formatMicros(cost.amountUsdMicros)} /{" "}
-                            {cost.costLayer} / {cost.confidence}
+                            {cost.confidence === "unknown"
+                              ? "amount unknown"
+                              : formatMicros(cost.amountUsdMicros)}{" "}
+                            / {cost.costLayer} / {cost.confidence}
                           </p>
                           <p className="detail">
                             {cost.sourceRef ?? formatDateTime(cost.createdAt)}
@@ -2842,12 +2875,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </h4>
                           <p className="detail">
                             {run.resourcesSeen} resources seen /{" "}
-                            {run.resourcesChanged} changed / {run.costsSeen} costs
+                            {run.resourcesChanged} changed / {run.costsSeen} cost
+                            events / billing {run.billingStatus ?? "unknown"}
                           </p>
                           <p className="detail">
                             Started by {run.startedBy} at{" "}
                             {formatDateTime(run.startedAt)}
                           </p>
+                          {run.billingMessage ? (
+                            <p className="detail">{run.billingMessage}</p>
+                          ) : null}
                           {run.inventorySnapshotArtifactId ? (
                             <p className="detail">
                               Inventory snapshot: {run.inventorySnapshotArtifactId}
@@ -2861,7 +2898,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     providerOps.costs.length === 0 &&
                     providerOps.reconciliationRuns.length === 0 ? (
                       <p className="detail">
-                        No provider cost or reconciliation records yet.
+                        No provider cost or reconciliation records yet. Empty is
+                        not $0.00.
                       </p>
                     ) : null}
                   </div>
@@ -3982,6 +4020,36 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </div>
               )}
               <PackImportForm projectId={activeProjectId} actor={activeActorId} />
+            </article>
+
+            <article className="stack-card">
+              <h3>Community skill YAML</h3>
+              {!skills.apiReachable ? (
+                <p className="detail">
+                  {skills.blockedReason ?? "Skill API is unavailable."}
+                </p>
+              ) : skills.items.length === 0 ? (
+                <p className="detail">No skills are registered to export.</p>
+              ) : (
+                <div className="feed-list">
+                  {skills.items.slice(0, 6).map((skill) => (
+                    <div className="feed-row" key={skill.id}>
+                      <div>
+                        <h4>{skill.id}</h4>
+                        <p className="detail">
+                          {titleCaseToken(skill.kind)} / risk {skill.riskTier}
+                        </p>
+                      </div>
+                      <SkillExportButton
+                        projectId={activeProjectId}
+                        skillId={skill.id}
+                        actor={activeActorId}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              <SkillImportForm projectId={activeProjectId} actor={activeActorId} />
             </article>
 
             <article className="stack-card">

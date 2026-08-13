@@ -40,6 +40,15 @@ class PanelVersionStateError(ValueError):
     pass
 
 
+class AgentStudioSchemaMissingError(RuntimeError):
+    """Studio tables are not applied on this runtime — fail closed, never 500."""
+
+    def __init__(self, missing: list[str]):
+        self.missing = list(missing)
+        detail = "Agent Studio schema is not applied: " + ", ".join(self.missing)
+        super().__init__(detail)
+
+
 class AgentStudioService:
     """Versioned agent/panel registry and deterministic execution planner.
 
@@ -67,9 +76,27 @@ class AgentStudioService:
         "producer_reviewer",
         "hold_for_evidence",
     }
+    CATALOG_TABLES = (
+        "agent_definitions",
+        "agent_versions",
+        "panel_definitions",
+        "panel_versions",
+    )
 
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    def _catalog_tables_ready(
+        self, connection: Connection
+    ) -> tuple[bool, list[str]]:
+        missing: list[str] = []
+        for table in self.CATALOG_TABLES:
+            present = connection.execute(
+                text("SELECT to_regclass(:name)"), {"name": table}
+            ).scalar()
+            if present is None:
+                missing.append(table)
+        return (not missing, missing)
 
     # ------------------------------------------------------------------
     # Seed catalog
@@ -80,6 +107,9 @@ class AgentStudioService:
         project_id: str,
         actor: str = "bootstrap",
     ) -> dict[str, list[dict[str, Any]]]:
+        ready, missing = self._catalog_tables_ready(connection)
+        if not ready:
+            raise AgentStudioSchemaMissingError(missing)
         agents: list[dict[str, Any]] = []
         panels: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []

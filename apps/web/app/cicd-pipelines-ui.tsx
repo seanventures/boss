@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useState, type CSSProperties } from "react";
+import React, { useCallback, useMemo, useState, type CSSProperties } from "react";
+import { formatDateTime } from "../lib/datetime";
 import {
   type CICDCatalog,
   type CICDGenerateResult,
@@ -347,7 +348,7 @@ export function CICDPipelinesPanel({
                       {run.external_id || "—"}
                     </td>
                     <td style={{ padding: "6px 8px", color: "var(--muted)" }}>
-                      {run.recorded_at?.slice(0, 19)?.replace("T", " ") || "—"}
+                      {formatDateTime(run.recorded_at, "—")}
                     </td>
                   </tr>
                 ))}

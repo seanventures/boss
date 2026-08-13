@@ -27,7 +27,7 @@ Evidence:
 | Issue | Proof summary |
 |---|---|
 | **BOSS-350** | Community BYOK + full ProviderOps kernel (#157); live providers/changesets 200 |
-| **BOSS-338** | Edition-aware MC / kernel UI (residual: Enterprise nav still visible) |
+| **BOSS-338** | Edition-aware MC / kernel UI (Community SSO kept; Enterprise/design-system primary nav residual closed) |
 | **BOSS-339** | SIM / improvement-programs honesty on community |
 | **BOSS-340** | Sandbox host.connected=true (rootfs still a follow-on) |
 | **BOSS-341** | Preview publicize + live list contract (absolute `open_url`); View HTML still Phase B |
@@ -47,7 +47,7 @@ Evidence:
 | **BOSS-347** | Open / In Progress | Redeploy seed route; catalog 13/3; one deterministic run |
 | **BOSS-348** | Open | G1–G3 — not required for narrow Community GA claims |
 | **BOSS-340 residual** | Open work | Guest rootfs / provision success |
-| **BOSS-342 residual** | Open work | Shared-tag live api=worker=web |
+| **BOSS-342 residual / BOSS-372** | In Progress | DLQ remediations list + fail-closed retry; remaining live classes TPM + missing DO creds |
 | **BOSS-343 residual** | Open work | Factory uses primary binding or UI dual-plane honesty |
 | **BOSS-351 residual** | Open work | Sealed weekly command→PR reliability |
 
@@ -68,7 +68,9 @@ Evidence:
 | Issue | Note |
 |---|---|
 | BOSS-246–255 | GHX feature stack — dogfood connect now live |
+| BOSS-320 | SCIM deprovision org-member fallback — Done (#131); C2 added focused 403 test 2026-08-13 |
 | BOSS-324 | boss-sandbox main protection (external/plan) |
+| BOSS-326 | PyJWT 2.13.0 / cryptography 50.0.0 — Done (#139); C2 re-scan 2026-08-13, no bump, no CI fail-gate |
 | GAP-002/003/004 | Account Connect / IdP / prod provider writes — fail-closed |
 
 ## Agent rules for this workstream

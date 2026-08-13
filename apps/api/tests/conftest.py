@@ -243,6 +243,7 @@ def clean_tables(engine):
             "webhook_deliveries",
             "webhook_endpoints",
             "receipts",
+            "deadletter_remediations",
             "deadletters",
             "routing_logs",
             "meetings",
