@@ -93,7 +93,7 @@
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
 | Open DLQ | 41 open: 18 missing DO creds, 21 claude-143, 1 sandbox 404, 1 missing-git | 2026-08-13 |
 | GitHub MC | 2 connections, 2 bindings | live |
-| Agent Studio | 0 agents/panels/workflows | live |
+| Agent Studio | 13 agents (4 published on 3e6c906; reseed in progress) | 2026-08-13 |
 | Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
 | Previews | 50 expired; `internal_url` 127.0.0.1; `open_url` gateway path | live |
 
