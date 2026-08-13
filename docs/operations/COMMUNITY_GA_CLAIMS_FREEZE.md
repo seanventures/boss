@@ -29,6 +29,7 @@ marketplace, or Enterprise cluster packs.
 | Local auth / API keys | Default Community auth |
 | Metatron status Q&A | Optional gate PASS |
 | Honest empty CI/CD and monitoring when undeployed | BOSS-344 |
+| Preview list `open_url` is an API-gateway URL (absolute when `BOSS_PREVIEW_PUBLIC_BASE` is set); loopback is `internal_url` only | Live list 2026-08-13; `PREVIEW_GA_CHECKLIST.md` |
 | Automated `make qa-live` control-plane gate | 10/10 PASS |
 | Optional BOSS Cloud Easy Connect **without** requiring Cloud for core loops | Community independence enforced |
 | Software Factory / code-task **APIs and UI exist** (not “always reliable unattended”) | Partial substrate — see Forbidden |
@@ -49,7 +50,8 @@ Do **not** say these for Community GA, private preview, or public “autonomous 
 | Autonomous unattended company / fully reliable factory unattended | DLQ + substrate gaps |
 | Agent Studio workforce out of the box | Empty catalog / seed lag on live |
 | Earned autonomy economy complete (G1–G3 “done” product) | Not a Community GA claim |
-| Sandboxes / previews “always work” | Rootfs / View proof open |
+| Sandboxes / previews “always work” | Rootfs unproven; **0 running** previews; expired View is 409 |
+| “Preview View opens a live app” | List `open_url` is a public-base gateway URL (proven); browser 200 HTML is **not** proven |
 | **Hosted** multi-tenant IdP / Account Connect as Community features | Paid Cloud surface |
 | Hosted agent marketplace / billing portal as Community | Paid Cloud surface |
 | Self-improvement proposal canary/rollout as Community | Enterprise-only routes |

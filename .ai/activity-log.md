@@ -1,6 +1,15 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — Community GA preview operator URL (ai/grok/community-ga)
+
+- Live SSH `boss-app-api-1` (`boss-api:3e6c906`): `BOSS_PREVIEW_PUBLIC_BASE=https://boss-api.local.sean.network` is set and bound.
+- `GET /v1/previews` 50 rows: 37 bound `open_url`s are absolute `{public-base}/v1/previews/{id}/web/`; 0 loopback primary; 13 empty (never-bound). Status: 30 expired / 10 failed / 7 stopped / 3 verified / **0 running**.
+- Expired View `GET /v1/previews/{id}/web/` → **409** `preview not running (status=expired)`.
+- Code: env fallback when Settings field empty; `list_previews` + list-payload tests forbid 127.0.0.1 as `open_url` when public base is set; smoke/agent report use the same helper.
+- Docs: `PREVIEW_GA_CHECKLIST.md` live truth; GA living plan + claims freeze (View HTML still forbidden).
+- Plane: `OPS_BASE_URL` unset — no issue comment; track BOSS-341 on branch.
+
 ## 2026-08-12 — Grok — Community GA DLQ hardening (ai/grok/community-ga)
 
 - Worker Dockerfile: pytest `test_worker_dockerfile_run_line_includes_git` asserts the worker RUN `apt-get install` line lists `git` (BOSS-342 regression).

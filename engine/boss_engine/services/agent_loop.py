@@ -517,6 +517,8 @@ def _tool_diagnose_preview(connection, project_id, settings, args) -> dict:
 
     from sqlalchemy import text as _sql
 
+    from .preview_service import operator_preview_open_url
+
     preview_id = str(args.get("preview_id") or "").strip()
     if not preview_id:
         return {"error": "preview_id is required (prev_...)"}
@@ -529,11 +531,12 @@ def _tool_diagnose_preview(connection, project_id, settings, args) -> dict:
     report: dict = {
         "preview_id": row["id"], "run_id": row["run_id"], "status": row["status"],
         "mode": row["mode"],
-        # The address a PERSON can open. app_previews.url holds the sandbox-internal one
-        # (http://127.0.0.1:43053), reachable from this process and from nowhere a browser
-        # runs. Reporting that column verbatim is exactly how an operator was told to open
-        # http://127.0.0.1:46181 -- true of the machine, useless to them.
-        "open_url": f"/v1/previews/{row['id']}/web/  (on the BOSS API host)",
+        # The address a PERSON can open — /v1/previews/{id}/web/ (absolute when
+        # BOSS_PREVIEW_PUBLIC_BASE is set). app_previews.url holds the sandbox-internal
+        # one (http://127.0.0.1:43053), reachable from this process and from nowhere a
+        # browser runs. Reporting that column verbatim is exactly how an operator was
+        # told to open http://127.0.0.1:46181 -- true of the machine, useless to them.
+        "open_url": operator_preview_open_url(row["id"]),
         "internal_url": row["url"],
         "failure_kind": row["failure_kind"], "error": (row["error"] or "")[:300],
     }

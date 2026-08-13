@@ -30,7 +30,7 @@ Evidence:
 | **BOSS-338** | Edition-aware MC / kernel UI (residual: Enterprise nav still visible) |
 | **BOSS-339** | SIM / improvement-programs honesty on community |
 | **BOSS-340** | Sandbox host.connected=true (rootfs still a follow-on) |
-| **BOSS-341** | Preview publicize code (live View browser proof still Phase B) |
+| **BOSS-341** | Preview publicize + live list contract (absolute `open_url`); View HTML still Phase B |
 | **BOSS-342** | Worker Dockerfile git/tools + contract tests (live shared-tag still Phase A) |
 | **BOSS-343** | GitHub MC wired: connections + bindings + easy-connect (#158) |
 | **BOSS-344** | CI/CD + Monitoring empty-state honesty |

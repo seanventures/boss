@@ -18,7 +18,7 @@
 | 1 | BYOK model + infra keys | **Partial** | Community ProviderOps kernel live 200; env SecretRefs; paste-UX incomplete | One-shot key UX; docs runbook |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
 | 3 | Code → evidence → PR reliable | **Open** | ~41 open DLQ; substrate flaky | Phase A P0-2/3 |
-| 4 | Previews reachable | **Open** | Host ok; View not proven; rootfs gap | P0-3/4 |
+| 4 | Previews reachable | **Partial** | List `open_url` absolute public-base on live (`3e6c906`); 0 running so View HTML unproven | Start a running preview; curl 200 HTML |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (code)** | `ai/grok/community-ga`: hide/badge Account Connect, marketplace, clusters, SIM; **SSO/IdP kept visible** (Community includes self-hosted SSO). Tests: `apps/web/tests/edition-visibility.test.ts`. Live web image may lag until shared-tag redeploy (A1). | Redeploy web; visual dogfood on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live | Factory dual-plane honesty (P0-6) |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
@@ -49,7 +49,7 @@
 | ID | Work | Plane | State |
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Code+checklist** (`PREVIEW_GA_CHECKLIST.md`, `BOSS_PREVIEW_PUBLIC_BASE`); live browser still required |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **List contract PASS live** (absolute `open_url`); View HTML still required (0 running, expired 409) |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | Open |
@@ -84,9 +84,9 @@
 | Field | Value | As of |
 |---|---|---|
 | Edition | community | 2026-08-12 |
-| api image | `boss-api:ccafa13` | **shared tag live** 2026-08-13 |
-| web image | `boss-web:ccafa13` | **shared tag live** 2026-08-13 |
-| worker image | `boss-worker:ccafa13` | **shared tag live** 2026-08-13 |
+| api image | `boss-api:3e6c906` | **shared tag live** 2026-08-13 |
+| web image | `boss-web:3e6c906` | **shared tag live** 2026-08-13 |
+| worker image | `boss-worker:3e6c906` | **shared tag live** 2026-08-13 |
 | main HEAD | `5f2c5d8` | git; GA cut `ai/grok/community-ga` |
 | `qa-live` | **10/10 PASS + Metatron** on `ccafa13` | 2026-08-13T01:05Z |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
@@ -95,7 +95,7 @@
 | GitHub MC | 2 connections, 2 bindings | live |
 | Agent Studio | 13 agents (4 published on 3e6c906; reseed in progress) | 2026-08-13 |
 | Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
-| Previews | 50 expired; `internal_url` 127.0.0.1; `open_url` gateway path | live |
+| Previews | 50 rows (30 expired / 10 failed / 7 stopped / 3 verified / **0 running**); `open_url`=`https://boss-api.local.sean.network/v1/previews/{id}/web/` (37/37 bound); 0 loopback primary; expired View **409** | 2026-08-13 |
 
 ---
 
@@ -107,7 +107,7 @@
 | BOSS-338 | Edition MC honesty | **Done** (partial residual) | Enterprise nav still visible |
 | BOSS-339 | SIM community | **Done** | Ops honesty |
 | BOSS-340 | Sandbox host | **Done** (host) | Rootfs still open work |
-| BOSS-341 | Preview loopback | **Done** (code) | Live View proof pending |
+| BOSS-341 | Preview loopback | **Done** (code + live list) | View HTML still pending (0 running) |
 | BOSS-342 | Worker git/image | **Done** (code) | Live shared-tag pending |
 | BOSS-343 | GitHub MC wire | **Done** | Dual-plane follow-on |
 | BOSS-344 | CI/CD empty honesty | **Done** | |

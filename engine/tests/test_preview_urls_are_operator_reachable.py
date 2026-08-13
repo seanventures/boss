@@ -117,3 +117,107 @@ def test_publicize_uses_settings_preview_public_base():
         settings=settings,
     )
     assert out["url"] == "https://edge.example/v1/previews/prev_set/web/"
+
+
+def test_list_payload_never_returns_loopback_open_url_when_public_base_set():
+    """GET /v1/previews list shape: operator open_url is the public-base absolute
+    gateway URL. Loopback may appear only under internal_url.
+    """
+    base = "https://boss-api.local.sean.network"
+    settings = SimpleNamespace(preview_public_base=base)
+    rows = [
+        {
+            "id": "prev_6bd9728fb32748b5864f",
+            "status": "expired",
+            "url": "http://127.0.0.1:41635",
+        },
+        {
+            "id": "prev_live",
+            "status": "running",
+            "url": "http://127.0.0.1:43053",
+        },
+        {"id": "prev_fail", "status": "failed", "url": None},
+    ]
+    payload = {"previews": [publicize_preview(dict(r), settings=settings) for r in rows]}
+    assert len(payload["previews"]) == 3
+    for item in payload["previews"]:
+        open_url = item.get("open_url")
+        primary = item.get("url")
+        for field in (open_url, primary):
+            if field:
+                assert "127.0.0.1" not in field
+                assert "localhost" not in field
+                assert "::1" not in field
+        if item["status"] == "failed":
+            assert open_url is None
+            continue
+        assert open_url == f"{base}/v1/previews/{item['id']}/web/"
+        assert primary == open_url
+        assert item["internal_url"].startswith("http://127.0.0.1:")
+
+
+def test_list_previews_applies_public_base_and_never_emits_loopback_open_url(monkeypatch):
+    """list_previews (the GET /v1/previews handler) publicizes with settings."""
+    from boss_engine.services import preview_service as ps
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    class _Conn:
+        def execute(self, stmt, params=None):
+            sql = str(stmt)
+            if "expires_at < now()" in sql:
+                return _Result([])
+            return _Result(
+                [
+                    {
+                        "id": "prev_a",
+                        "status": "expired",
+                        "url": "http://127.0.0.1:41635",
+                    },
+                    {
+                        "id": "prev_b",
+                        "status": "stopped",
+                        "url": "http://127.0.0.1:42203",
+                    },
+                ]
+            )
+
+    class _Begin:
+        def __enter__(self):
+            return _Conn()
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(ps, "begin", lambda engine: _Begin())
+    settings = SimpleNamespace(preview_public_base="https://boss-api.local.sean.network")
+    listed = ps.list_previews(object(), "boss-dogfood", 5, settings)
+    assert [p["open_url"] for p in listed] == [
+        "https://boss-api.local.sean.network/v1/previews/prev_a/web/",
+        "https://boss-api.local.sean.network/v1/previews/prev_b/web/",
+    ]
+    assert all("127.0.0.1" not in (p.get("open_url") or "") for p in listed)
+    assert all("127.0.0.1" not in (p.get("url") or "") for p in listed)
+    assert listed[0]["internal_url"] == "http://127.0.0.1:41635"
+
+
+def test_publicize_falls_back_to_env_when_settings_field_empty(monkeypatch):
+    """Live-shaped Settings: field default empty, BOSS_PREVIEW_PUBLIC_BASE set."""
+    monkeypatch.setenv("BOSS_PREVIEW_PUBLIC_BASE", "https://boss-api.local.sean.network")
+    settings = SimpleNamespace(preview_public_base="")
+    out = publicize_preview(
+        {"id": "prev_env", "status": "expired", "url": "http://127.0.0.1:9"},
+        settings=settings,
+    )
+    assert out["open_url"] == (
+        "https://boss-api.local.sean.network/v1/previews/prev_env/web/"
+    )
+    assert "127.0.0.1" not in out["open_url"]

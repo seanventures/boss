@@ -1197,7 +1197,9 @@ export type PreviewRec = {
   id: string;
   run_id?: string | null;
   status: string; // running | stopped | failed | expired
-  /** Operator-reachable gateway path (`/v1/previews/{id}/web/`). Never loopback. */
+  /** Operator-reachable gateway URL. Relative `/v1/previews/{id}/web/` or
+   * `{BOSS_PREVIEW_PUBLIC_BASE}/v1/previews/{id}/web/` when that origin is set.
+   * Never loopback. */
   url?: string | null;
   /** Same as `url` — explicit name for the address a person can open. */
   open_url?: string | null;

@@ -63,13 +63,20 @@ def _preview_public_base(
     """Operator-facing origin for View URLs. Loopback bases are rejected (fail closed
     to relative gateway paths) so a mis-set BOSS_PREVIEW_PUBLIC_BASE cannot reintroduce
     127.0.0.1 into operator-facing URLs.
+
+    An explicit ``public_base`` wins (and a loopback explicit value still fail-closes).
+    Otherwise prefer ``settings.preview_public_base``, then ``BOSS_PREVIEW_PUBLIC_BASE``
+    in the process environment so a Settings object constructed without the field
+    (or with an empty default) cannot hide a live-set public origin.
     """
     if explicit is not None:
         raw = explicit
-    elif settings is not None:
-        raw = getattr(settings, "preview_public_base", None) or ""
     else:
-        raw = os.environ.get("BOSS_PREVIEW_PUBLIC_BASE", "") or ""
+        raw = ""
+        if settings is not None:
+            raw = getattr(settings, "preview_public_base", None) or ""
+        if not str(raw or "").strip():
+            raw = os.environ.get("BOSS_PREVIEW_PUBLIC_BASE", "") or ""
     base = (raw or "").strip().rstrip("/")
     if not base:
         return ""
@@ -1339,7 +1346,12 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     return status, ctype, data, response_headers
 
 
-def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> dict:
+def smoke_test(
+    engine,
+    preview_id: str,
+    checks: Optional[list[dict]] = None,
+    settings: Optional[Settings] = None,
+) -> dict:
     """Tier-3 smoke canary: hit the live preview URL with a set of checks and assert each — proves
     the deployed app actually works, not just that it serves a page. Records a receipt event.
     Each check: {method, path, body?, expect_status?, expect_contains?}. Default: GET / -> 2xx."""
@@ -1389,9 +1401,9 @@ def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> 
                     "ok": all_ok, "results": results})
     return {
         "preview_id": preview_id,
-        "url": operator_preview_open_url(preview_id),
+        "url": operator_preview_open_url(preview_id, settings=settings),
         "internal_url": base,
-        "open_url": operator_preview_open_url(preview_id),
+        "open_url": operator_preview_open_url(preview_id, settings=settings),
         "ok": all_ok,
         "passed": passed,
         "total": len(checks),
