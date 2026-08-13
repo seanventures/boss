@@ -29,6 +29,7 @@ from boss_engine.services.deadletters import (
         ("GitHub API 403: Resource not accessible by integration", "github"),
         ("Failed to mint installation token (422)", "github"),
         ("pull request create failed: bad credentials", "github"),
+        ("Missing credential for SecretRef env:BOSS_DIGITALOCEAN_TOKEN.", "other"),
         ("unexpected NoneType has no attribute get", "other"),
         ("terminal failure", "other"),
     ],

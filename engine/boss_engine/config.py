@@ -957,7 +957,7 @@ class Settings(BaseSettings):
     # 422 (host connectivity may still be reported). Flip after rootfs bake is proven live.
     # See docs/product/SANDBOX_GA_STATUS.md.
     microvm_claims_frozen: bool = Field(
-        default=False, alias="BOSS_MICROVM_CLAIMS_FROZEN"
+        default=True, alias="BOSS_MICROVM_CLAIMS_FROZEN"
     )
     # Root dir under which per-task ephemeral sandboxes are cloned and torn down.
     sandbox_root_path: Optional[Path] = Field(

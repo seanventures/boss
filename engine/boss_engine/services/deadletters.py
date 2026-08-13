@@ -66,7 +66,7 @@ _CLASS_RULES: list[tuple[str, tuple[str, ...]]] = (
             r"too many requests",
             r"usage.?limit",
             r"spend.?limit",
-            r"credit",
+            r"credits?\b",
             r"quota",
             r"resource.?exhausted",
             r"overloaded",
