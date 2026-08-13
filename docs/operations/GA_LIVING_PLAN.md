@@ -19,12 +19,14 @@
 | 2 | CEO command → task + budget path | **Mostly** | `qa-live` command+budget PASS | Seal plan→job path if claimed |
 | 3 | Code → evidence → PR reliable | **Open** | ~41 open DLQ; substrate flaky | Phase A P0-2/3 |
 | 4 | Previews reachable | **Open** | Host ok; View not proven; rootfs gap | P0-3/4 |
-| 5 | Honest unpaid/unconfigured UI | **Partial** | SIM/empty CI improved; Enterprise still shown | Hide Enterprise on community |
+| 5 | Honest unpaid/unconfigured UI | **Mostly (code)** | `ai/grok/community-ga`: hide/badge Account Connect, marketplace, clusters, SIM; **SSO/IdP kept visible** (Community includes self-hosted SSO). Tests: `apps/web/tests/edition-visibility.test.ts`. Live web image may lag until shared-tag redeploy (A1). | Redeploy web; visual dogfood on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live | Factory dual-plane honesty (P0-6) |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
-**DoD score:** **~3.5 / 8** closed · Target for private preview: **6 / 8** (close 3,4,5 substrate/UI) · Target for Community GA: **8 / 8** + 14-day green gate.
+**DoD score:** **~4 / 8** closed (UI honesty code on community-ga; live image lag) · Target for private preview: **6 / 8** (close 3,4,5 substrate/UI) · Target for Community GA: **8 / 8** + 14-day green gate.
+
+**Claims freeze (signed list):** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) — Allowed vs Forbidden; SSO is Community self-hosted.
 
 ---
 
@@ -40,7 +42,7 @@
 | A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Partial** host up | One provision success **or** claim freeze |
 | A5 | DLQ triage top classes; prove no missing-git | BOSS-342 | **Partial** git in image tree | DLQ trend + root causes filed |
 | A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Todo** | Binding drives factory **or** UI label |
-| A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Drafted** in scorecard | Signed in release notes |
+| A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Done (doc)** | [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md); SSO Community self-hosted allowed |
 
 ### Phase B — 1–2 weeks (private preview)
 
@@ -48,7 +50,7 @@
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
 | B2 | Preview View browser proof (non-loopback) | BOSS-341 | Open |
-| B3 | Hide/badge Enterprise on community | BOSS-338 residual | Open |
+| B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | Open |
 | B6 | Deploy SOP requires `qa-live` | BOSS-337 | Open |
@@ -69,7 +71,7 @@
 | Stream | Intent | Status | Closed Plane | Open / residual |
 |---|---|---|---|---|
 | **W0** Community keys | BYOK kernel | **Done (code+live kernel)** | BOSS-350, #157 | A1 redeploy for full main |
-| **W1** UI honesty | Edition/empty | **Mostly** | 338, 339, 344 partial | Enterprise nav; 346 |
+| **W1** UI honesty | Edition/empty | **Mostly (code)** | 338, 339, 344; community-ga U2 | Live web redeploy; 346 residual |
 | **W2** Substrate | Worker/sandbox/preview | **Partial** | 340 host, 341 code, 342 git image | Rootfs; live shared tag; DLQ |
 | **W3** Vertical slice | CEO→PR sealed | **Partial** | 343 GitHub wire, 345 next_move, 349 OpenAPI, 351 gate | Reliable code path 351 |
 | **W4** Product loops | Studio/Assurance/deploy | **Open** | — | 347, 348, 344 deploy optional |
@@ -126,15 +128,19 @@
 
 ## Allowed / forbidden claims (living freeze)
 
+**Canonical freeze document:** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md)  
+(Update that file first; keep this summary in sync.)
+
 ### Allowed after Phase A complete
 
 - Self-hosted governed control plane (tasks, budgets, decisions, receipts)
 - Community BYOK ProviderOps kernel (env SecretRefs)
 - Project GitHub connect + link + test receipts
-- **Self-hosted SSO** (OIDC bearer, SAML SP, SCIM 2.0, IdP registry) on Community
+- **Self-hosted SSO** (OIDC bearer, SAML SP, SCIM 2.0, IdP registry) on Community — not hosted multi-tenant IdP
 - Metatron status Q&A
 - Honest empty CI/CD / monitoring when undeployed
 - Automated `qa-live` gate
+- Mission Control hides/badges paid CTAs on Community (Account Connect, marketplace, clusters, SIM)
 
 ### Forbidden until proven
 
@@ -143,6 +149,8 @@
 - Earned autonomy economy (G1–G3 complete)
 - Sandboxes/previews always work
 - **Hosted** multi-tenant IdP / Account Connect / marketplace as Community features
+- Self-improvement proposal canary/rollout as Community
+- Enterprise cluster packs as Community
 - Zero DLQ / private main protection + Actions green
 
 ---
@@ -189,6 +197,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-12 | U2 Community UI honesty + U5 claims freeze on `ai/grok/community-ga`: hide/badge Account Connect, marketplace, enterprise clusters, SIM; keep self-hosted SSO/IdP visible; `COMMUNITY_GA_CLAIMS_FREEZE.md`; DoD #5 Mostly (code); A7 Done (doc); B3 Done (code) | grok |
 | 2026-08-12 | Plane open-issue honesty pass: YouTube EP1–3 scripts; engine extract checklist; GTM gap reconciliation (+ AI SRE `/v1/oncall-sre`); Cloud 302/303 cancelled as Phase-03 roadmap; Go S1–S3 left Backlog; licensing 300 remains human-blocked; GA umbrellas 314/337 stay In Progress pending Phase A | grok |
 | 2026-08-12 | Multi-agent E2E Cloud bake: AC tests, Easy Connect link+sync, post-link team/marketplace/workers, retention+MC UX; 29 pytest green | agents |
 | 2026-08-12 | Cloud product expansion: comparison/capabilities/workers + complete/unlink; MC Community-safe cloud feed; device pending codes; honest managed workers | codex |

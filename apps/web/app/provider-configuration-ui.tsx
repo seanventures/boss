@@ -1544,8 +1544,9 @@ export function ProviderConfigurationSuite({
             {editionLabel} is fully functional when operators bring their own
             keys: attach model and infra API keys, sync inventory,
             plan/approve/apply ChangeSets, and run local worker pools against
-            infrastructure you manage. Hosted SSO, marketplace, and managed
-            fleets stay on Cloud / Enterprise.
+            infrastructure you manage. Self-hosted SSO is included; hosted
+            Account Connect, marketplace, and managed fleets stay on Cloud /
+            Enterprise.
           </span>
         </div>
       ) : null}

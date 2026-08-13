@@ -63,6 +63,13 @@ import {
   uploadModelCredentialAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
+import {
+  CommunityIncludedBadge,
+  PaidSurfaceGate,
+  PaidTierBadge,
+  SurfaceHeading,
+} from "./edition-ui";
+import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
 import { AgentChat } from "./agent-ui";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
@@ -834,6 +841,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const ccVerifiedToday = receipts.items.filter(
     (receipt) => Date.now() - Date.parse(receipt.createdAt) < 86_400_000,
   ).length;
+  const editionId = normalizeEditionId(
+    commercial.edition?.editionId ?? selfImprovement.editionId,
+  );
+  const communityEdition = isCommunityEdition(editionId);
 
   return (
     <ConsoleShell
@@ -848,6 +859,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         actor: activeActor?.displayName ?? activeActorId,
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
+      editionId={editionId}
       initialArea={requestedArea}
     >
       <div className="frame">
@@ -4031,15 +4043,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" data-area="enterprise" aria-label="Identity providers">
+        <section
+          className="panel-stack"
+          data-area="enterprise"
+          aria-label="Identity providers"
+          data-testid="sso-identity-section"
+          data-community-included="true"
+        >
           <div className="section-head">
-            <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span className="eyebrow">Identity providers</span>
-              <h2>Workforce and developer IdP packs — OIDC, SAML, SCIM blueprints.</h2>
+              {communityEdition ? <CommunityIncludedBadge label="SSO · Community" /> : null}
             </div>
+            <h2>Workforce and developer IdP packs — OIDC, SAML, SCIM blueprints.</h2>
             <p className="status-meta">
               Catalog and dry-run setup for project {activeProjectId}. Secrets stay out of
-              the catalog responses.
+              the catalog responses. Self-hosted SSO is included in Community.
             </p>
           </div>
           <IdentityProvidersCatalogView
@@ -4416,7 +4435,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </span>
                   </div>
 
-                  {commercial.edition.accountConnectOrg ? (
+                  {communityEdition ? (
+                    <div className="feed-row" data-testid="account-connect-edition-gated">
+                      <div>
+                        <h4>Account Connect link controls</h4>
+                        <p className="detail">
+                          Hosted Account Connect link/sync/unlink CTAs are Cloud-only on
+                          this Community edition. Prefer BOSS Cloud Easy Connect above when
+                          you want an optional hosted link — or run fully self-hosted without
+                          Account Connect.
+                        </p>
+                      </div>
+                      <PaidTierBadge surface="account_connect" />
+                    </div>
+                  ) : commercial.edition.accountConnectOrg ? (
                     <div className="feed-row">
                       <div>
                         <h4>{commercial.edition.accountConnectOrg.hostedOrgId}</h4>
@@ -4561,7 +4593,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
+            <PaidSurfaceGate editionId={editionId} surface="account_connect" title="Account Connect">
+            <article className="stack-card" data-testid="account-connect-health-card">
               <h3>Account Connect health</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
@@ -5041,8 +5074,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </>
               )}
             </article>
+            </PaidSurfaceGate>
 
-            <article className="stack-card">
+            <PaidSurfaceGate editionId={editionId} surface="enterprise_clusters" title="Enterprise clusters">
+            <article className="stack-card" data-testid="enterprise-clusters-card">
               <h3>Enterprise cluster records</h3>
               {!enterprise.apiReachable ? (
                 <p className="detail">
@@ -5531,12 +5566,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </>
               )}
             </article>
+            </PaidSurfaceGate>
 
-            <article className="stack-card">
-              <h3>Enterprise identity providers</h3>
+            <article
+              className="stack-card"
+              data-testid="sso-enterprise-identity-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="Self-hosted identity providers"
+                editionId={editionId}
+                communityIncluded
+              />
+              <p className="detail" style={{ marginTop: 8 }}>
+                Self-hosted OIDC, SAML, and SCIM IdP registry — included in Community.
+              </p>
               {!enterprise.apiReachable ? (
                 <p className="detail">
-                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                  {enterprise.blockedReason ?? "Identity provider API is unavailable."}
                 </p>
               ) : (
                 <>
@@ -5652,8 +5699,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Identity rollout policies</h3>
+            <article
+              className="stack-card"
+              data-testid="sso-identity-rollout-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="Identity rollout policies"
+                editionId={editionId}
+                communityIncluded
+              />
               {!enterprise.apiReachable ? (
                 <p className="detail">
                   {enterprise.blockedReason ?? "Enterprise API is unavailable."}
@@ -5753,8 +5808,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>SCIM provisioning</h3>
+            <article
+              className="stack-card"
+              data-testid="sso-scim-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="SCIM provisioning"
+                editionId={editionId}
+                communityIncluded
+              />
               {!enterprise.apiReachable ? (
                 <p className="detail">
                   {enterprise.blockedReason ?? "Enterprise API is unavailable."}
@@ -5879,19 +5942,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" data-area="org" aria-label="Agent marketplace">
           <div className="section-head">
-            <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span className="eyebrow" data-area="org">Agent Marketplace</span>
-              <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
+              {communityEdition ? <PaidTierBadge surface="marketplace" /> : null}
             </div>
+            <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
             <p className="status-meta">
               Modules are installable catalog units that can own a role charter, prompt bundle,
               runtime job kinds, and configuration defaults.
+              {communityEdition
+                ? " Hosted marketplace sync is Cloud-only; local modules remain available."
+                : ""}
             </p>
           </div>
 
-          <article className="stack-card">
+          <PaidSurfaceGate editionId={editionId} surface="marketplace" title="Hosted marketplace catalog">
+          <article className="stack-card" data-testid="hosted-marketplace-card">
             <h3>Hosted marketplace catalog</h3>
             {!agentModules.apiReachable ? (
               <p className="detail">
@@ -6010,6 +6078,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </>
             )}
           </article>
+          </PaidSurfaceGate>
 
           <article className="stack-card">
             <h3>Available agent modules</h3>

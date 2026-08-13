@@ -1,6 +1,6 @@
 "use client";
 
-import {
+import React, {
   useCallback,
   useEffect,
   useMemo,
@@ -40,6 +40,13 @@ import {
   Wrench,
   type Icon,
 } from "@phosphor-icons/react";
+import {
+  communityNavCopy,
+  isCommunityEdition,
+  normalizeEditionId,
+  shouldShowPaidNavBadge,
+} from "../lib/edition";
+import { EditionChip } from "./edition-ui";
 
 type AreaId =
   | "agent"
@@ -165,11 +172,22 @@ export type ConsoleShellProps = {
   };
   scope: { project: string; actor: string };
   org?: { id: string; name: string };
+  /** From GET /v1/edition (or BOSS_EDITION). Defaults to community honesty. */
+  editionId?: string;
   initialArea?: string;
   children: ReactNode;
 };
 
-export default function ConsoleShell({ status, scope, org, initialArea, children }: ConsoleShellProps) {
+export default function ConsoleShell({
+  status,
+  scope,
+  org,
+  editionId,
+  initialArea,
+  children,
+}: ConsoleShellProps) {
+  const resolvedEdition = normalizeEditionId(editionId);
+  const community = isCommunityEdition(resolvedEdition);
   const switchOrg = () => {
     try {
       window.localStorage.removeItem("boss.area");
@@ -286,22 +304,36 @@ export default function ConsoleShell({ status, scope, org, initialArea, children
     }
   }, [paletteOpen]);
 
-  const activeDef = AREAS.find((a) => a.id === active) ?? AREAS[0];
+  const areasForEdition = useMemo(() => {
+    return AREAS.map((area) => {
+      if (!community) return area;
+      const copy = communityNavCopy(area.id);
+      return {
+        ...area,
+        label: copy.label ?? area.label,
+        sub: copy.sub ?? area.sub,
+      };
+    });
+  }, [community]);
+
+  const activeDef = areasForEdition.find((a) => a.id === active) ?? areasForEdition[0];
   const tone = budgetTone(status.budgetState);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return AREAS;
-    return AREAS.filter(
+    if (!q) return areasForEdition;
+    return areasForEdition.filter(
       (a) => a.label.toLowerCase().includes(q) || a.sub.toLowerCase().includes(q),
     );
-  }, [query]);
+  }, [query, areasForEdition]);
 
   const badgeFor = (id: AreaId): number | undefined => {
     if (id === "decisions" && status.pendingDecisions > 0) return status.pendingDecisions;
     if (id === "ops" && status.deadletters > 0) return status.deadletters;
     return undefined;
   };
+
+  const labelFor = (area: AreaDef): string => area.label;
 
   return (
     <div className={`bx-shell${navOpen ? " nav-open" : ""}`}>
@@ -321,23 +353,56 @@ export default function ConsoleShell({ status, scope, org, initialArea, children
           </span>
         </div>
 
-        <nav className="bx-nav" aria-label="Console areas">
+        <nav
+          className="bx-nav"
+          aria-label="Console areas"
+          data-edition={resolvedEdition}
+          data-community={community ? "true" : "false"}
+        >
           {GROUP_ORDER.map((group) => (
             <div key={group}>
               <div className="bx-nav-label">{group}</div>
-              {AREAS.filter((a) => a.group === group).map((a) => {
+              {areasForEdition.filter((a) => a.group === group).map((a) => {
                 const badge = badgeFor(a.id);
                 const Icon = a.icon;
+                const paidBadge = shouldShowPaidNavBadge(a.id, resolvedEdition);
+                const ssoBadge =
+                  community && a.id === "enterprise"
+                    ? communityNavCopy("enterprise").badge
+                    : undefined;
                 return (
                   <button
                     key={a.id}
                     type="button"
                     className={`bx-nav-item${a.id === active ? " active" : ""}`}
                     aria-current={a.id === active ? "page" : undefined}
+                    data-area-nav={a.id}
+                    data-paid-badge={paidBadge ? "true" : undefined}
+                    data-sso-visible={a.id === "enterprise" ? "true" : undefined}
                     onClick={() => go(a.id)}
                   >
                     <Icon size={17} weight={a.id === active ? "fill" : "regular"} aria-hidden />
-                    <span>{a.label}</span>
+                    <span>{labelFor(a)}</span>
+                    {ssoBadge ? (
+                      <span
+                        className="bx-nav-badge"
+                        data-testid="nav-sso-badge"
+                        title="Self-hosted SSO included in Community"
+                        style={{ background: "transparent", border: "1px solid var(--green, #3fb950)", color: "var(--green, #3fb950)" }}
+                      >
+                        {ssoBadge}
+                      </span>
+                    ) : null}
+                    {paidBadge ? (
+                      <span
+                        className="bx-nav-badge"
+                        data-testid={`nav-paid-badge-${a.id}`}
+                        title="Some panels in this area are Cloud / Enterprise only"
+                        style={{ background: "transparent", border: "1px solid #d29922", color: "#d29922" }}
+                      >
+                        Paid
+                      </span>
+                    ) : null}
                     {badge ? <span className="bx-nav-badge">{badge}</span> : null}
                   </button>
                 );
@@ -404,6 +469,8 @@ export default function ConsoleShell({ status, scope, org, initialArea, children
             <span>Jump to</span>
             <kbd>⌘K</kbd>
           </button>
+
+          <EditionChip editionId={resolvedEdition} />
 
           <span className="bx-chip hide-sm" title={`Budget state: ${status.budgetState}`}>
             <span className={`dot ${tone}`} />
