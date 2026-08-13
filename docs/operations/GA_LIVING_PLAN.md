@@ -88,7 +88,7 @@
 | web image | `boss-web:ccafa13` | **shared tag live** 2026-08-13 |
 | worker image | `boss-worker:ccafa13` | **shared tag live** 2026-08-13 |
 | main HEAD | `5f2c5d8` | git; GA cut `ai/grok/community-ga` |
-| `qa-live` | last 10/10 on 968bc47 | re-run after ccafa13 |
+| `qa-live` | **10/10 PASS + Metatron** on `ccafa13` | 2026-08-13T01:05Z |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
 | Open DLQ | 41 open: 18 missing DO creds, 21 claude-143, 1 sandbox 404, 1 missing-git | 2026-08-13 |
