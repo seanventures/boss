@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live openapi-live-qa-parity
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e openapi-live-qa-parity
 
 install: install-node install-python
 
@@ -137,6 +137,48 @@ qa-live:
 		$(if $(BOSS_LIVE_GATE_OUTPUT),--output "$(BOSS_LIVE_GATE_OUTPUT)") \
 		$(if $(SKIP_METATRON),--skip-metatron) \
 		$(if $(SKIP_COMMAND),--skip-command)
+
+# Workflow vertical-slice E2E: health → command propose → tasks → budget status|quote → jobs.
+# Live: BOSS_API_KEY required. Optional: BOSS_API_BASE (or BOSS_API_URL), PROJECT_ID (or BOSS_PROJECT_ID).
+# Structure-only (no network): make qa-workflow-e2e DRY_RUN=1
+# DoD mapping: scripts/qa/ga_dod_checklist.md (criterion 2 + 8).
+qa-workflow-e2e:
+ifeq ($(DRY_RUN),1)
+	$(PYTHON_BOOTSTRAP) scripts/qa/workflow_e2e_gate.py --dry-run \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(BOSS_WORKFLOW_GATE_OUTPUT),--output "$(BOSS_WORKFLOW_GATE_OUTPUT)")
+else
+	@test -n "$$BOSS_API_KEY" || (echo "BOSS_API_KEY is required (never commit it). Or: make qa-workflow-e2e DRY_RUN=1"; exit 2)
+	$(PYTHON_BOOTSTRAP) scripts/qa/workflow_e2e_gate.py \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--api-key "$$BOSS_API_KEY" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(BOSS_WORKFLOW_GATE_OUTPUT),--output "$(BOSS_WORKFLOW_GATE_OUTPUT)")
+endif
+
+# Factory surface E2E: health + factory/wip + code-tasks list (+ optional create).
+# Without BOSS_API_KEY (or with DRY_RUN=1): structural dry-run only, exit 0 if contracts OK.
+# Live read-only: BOSS_API_KEY (+ BOSS_API_BASE, PROJECT_ID).
+# Optional create (budgeted): CREATE_CODE_TASK=1 + BOSS_FACTORY_ALLOW_CREATE=1 +
+#   BOSS_FACTORY_OWNER + BOSS_FACTORY_REPO. See scripts/qa/factory_e2e_gate.py docstring.
+# DoD mapping: scripts/qa/ga_dod_checklist.md (criteria 3 + 8).
+qa-factory-e2e:
+ifeq ($(DRY_RUN),1)
+	$(PYTHON_BOOTSTRAP) scripts/qa/factory_e2e_gate.py --dry-run \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(BOSS_FACTORY_GATE_OUTPUT),--output "$(BOSS_FACTORY_GATE_OUTPUT)")
+else
+	# BOSS_API_KEY is read from the environment by the script (never echoed).
+	# Without a key the script auto dry-runs structural checks. CREATE_CODE_TASK=1
+	# also requires BOSS_FACTORY_ALLOW_CREATE=1 + owner/repo env vars.
+	$(PYTHON_BOOTSTRAP) scripts/qa/factory_e2e_gate.py \
+		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
+		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(filter 1,$(CREATE_CODE_TASK)),--create-code-task,) \
+		$(if $(BOSS_FACTORY_GATE_OUTPUT),--output "$(BOSS_FACTORY_GATE_OUTPUT)")
+endif
 
 openapi-live-qa-parity: install-python
 	PYTHONPATH=.:engine $(PYTHON) scripts/validate_openapi_route_parity.py \

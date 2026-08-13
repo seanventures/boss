@@ -1,6 +1,15 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-12 — Grok — Community GA automated gates (ai/grok/community-ga)
+
+- Added `scripts/qa/workflow_e2e_gate.py` — health → command propose → tasks → budget status|quote → jobs; `--dry-run` structure check; exit 0 only if critical steps 2xx.
+- Added `scripts/qa/factory_e2e_gate.py` — factory WIP + code-tasks list; optional `--create-code-task` (gated by `BOSS_FACTORY_ALLOW_CREATE`); auto dry-run without key.
+- Makefile: `qa-workflow-e2e`, `qa-factory-e2e` (`DRY_RUN=1` supported).
+- DoD map: `scripts/qa/ga_dod_checklist.md` (criteria 1–8 → commands).
+- Unit tests: `scripts/tests/test_workflow_e2e_gate.py`, `test_factory_e2e_gate.py` (19 passed dry-run paths).
+- Plane: `OPS_BASE_URL` unset this session — no issue filed; track on branch.
+
 ## 2026-08-12 — Grok — Platform Ops epic (ai/grok/platform-ops-epic)
 
 Multi-agent swarm delivered API-first, OSS-validated platform capabilities:
