@@ -20,7 +20,7 @@ from ..db import begin, get_engine
 
 router = APIRouter(tags=["providers"])
 
-_MIN_SECRET = ResourcePlaneService.MIN_EASY_CONNECT_SECRET_LENGTH
+_MIN_SECRET = int(getattr(ResourcePlaneService, "MIN_EASY_CONNECT_SECRET_LENGTH", 8))
 _ECHO_FORBIDDEN_KEYS = frozenset(
     {
         "secret_value",
