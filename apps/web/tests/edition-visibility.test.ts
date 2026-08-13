@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -240,6 +243,29 @@ describe("ConsoleShell edition-aware nav", () => {
     // Paid badges on ops/org (self-improvement + marketplace homes)
     expect(html).toContain('data-testid="nav-paid-badge-ops"');
     expect(html).toContain('data-testid="nav-paid-badge-org"');
+  });
+
+  it("Community GA mounts keep SSO visible and never sell Account Connect as Community", () => {
+    const page = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
+    const help = readFileSync(resolve(__dirname, "../app/onboarding-help-card.tsx"), "utf8");
+    const skills = readFileSync(resolve(__dirname, "../app/skills-import-ui.tsx"), "utf8");
+
+    expect(page).toContain("<OnboardingHelpCard");
+    expect(page).toContain("<PreviewsPanel");
+    expect(page).toContain("<DecisionInbox");
+    expect(page).toContain("<SkillImportForm");
+    expect(page).toContain("<PackImportForm");
+    expect(page).toContain("PaidSurfaceGate");
+    expect(page).toContain('surface="account_connect"');
+    expect(page).toContain("IdentityProvidersCatalogView");
+    expect(page).not.toMatch(/Account Connect is (included|available) in Community/i);
+    expect(page).not.toMatch(/Community includes (hosted )?Account Connect/i);
+    expect(help).not.toMatch(/Account Connect/i);
+    expect(help).toMatch(/Community/);
+    expect(help).toMatch(/Cloud/);
+    expect(skills).toMatch(/Hosted marketplace stays\s+hidden on Community/);
+    expect(isCommunitySurfaceVisible("community", "sso_identity")).toBe(true);
+    expect(isPaidSurfaceVisible("community", "account_connect")).toBe(false);
   });
 
   it("does not badge paid nav on enterprise edition and keeps lab + editions areas", () => {

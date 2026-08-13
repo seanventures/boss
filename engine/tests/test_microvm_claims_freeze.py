@@ -124,6 +124,20 @@ def test_make_sandbox_provider_falls_back_to_local_when_microvm_frozen():
         MicroVMProvider(s).run_code_task({"owner": "o", "repo": "r", "task_id": "x"})
 
 
+def test_factory_wip_coding_substrate_field_is_local_when_microvm_frozen():
+    """GET /v1/factory/wip coding_substrate must be local while microVM is frozen.
+
+    Mirrors the factory_wip handler: configured=microvm, effective=make_sandbox_provider.
+    """
+    s = _settings(sandbox_provider="microvm", microvm_claims_frozen=True)
+    configured = (getattr(s, "sandbox_provider", "local") or "local").lower()
+    effective = make_sandbox_provider(s)
+    coding_substrate = getattr(effective, "kind", configured)
+    assert configured == "microvm"
+    assert coding_substrate == "local"
+    assert microvm_claims_are_frozen(s) is True
+
+
 def test_make_sandbox_provider_uses_microvm_when_unfrozen():
     s = _settings(sandbox_provider="microvm", microvm_claims_frozen=False)
     provider = make_sandbox_provider(s)

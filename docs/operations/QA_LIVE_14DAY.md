@@ -7,7 +7,7 @@
 
 | Day | Date (UTC) | Result | Notes |
 |-----|------------|--------|-------|
-| 1 | 2026-08-13 | **PASS 10/10** | First on `3e6c906`; same-day re-run on `cd13067` also 10/10 + Metatron (does not add a day) |
+| 1 | 2026-08-13 | **PASS 10/10** | First on `3e6c906`; same-day re-runs on `cd13067` and `647c742` (~22:44Z) also 10/10 + Metatron (do **not** add a day). Calendar stays Day 1/14. |
 | 2–14 | — | pending | Daily 06:15 UTC |
 
 **Close Community GA (G2.1)** only when this table has **14 consecutive PASS** rows with logs under `/var/lib/boss/qa-live/`.

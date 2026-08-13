@@ -1,7 +1,7 @@
 # BOSS GA living plan
 
 **Status date:** 2026-08-13  
-**Overall GA:** **NOT READY** to stamp. **Working-software bar is the only GA bar:** an operator can drive the factory and open **working software as designed** (not a fixture, not `qa-live` alone). Live 2026-08-13: BugBox preview **running**.  
+**Overall GA:** **NOT READY** to stamp. **Working-software bar is the only GA bar:** an operator can drive the factory and open **working software as designed** (not a fixture, not `qa-live` alone). Live 2026-08-13 on shared tag **`647c742`**: replay BugBox View **running**; `qa-working-software` **PASS**; new-build canary still in flight. **Community GA ≠ Done.**  
 **System of record:** Plane `goldeneye` / BOSS · umbrella **BOSS-337**  
 **Scorecard:** [`ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md`](ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md)  
 **E2E plan (detail):** [`E2E_COMPLETION_PLAN.md`](E2E_COMPLETION_PLAN.md)  
@@ -24,31 +24,35 @@ That means, on dogfood, all of:
 
 Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **necessary but not sufficient**.
 
-| Live proof (2026-08-13) | Result |
+| Live proof (2026-08-13, tag `647c742`) | Result |
 |---|---|
+| Shared tag | **Live** api+worker+web `boss-*:647c742` (boot-fixed SHA; rollback from crashed `64d0e99` already happened). Compose `.env` images match. |
+| Coding substrate | Advertised `coding_substrate=local` while `coding_substrate_configured=microvm` and `microvm_claims_frozen=true` (`GET /v1/factory/wip`) |
 | Completed BugBox `crun_7cc663627f2340dc85ac` | `status=completed`, `tests_passed=true`, `test_command=npm run verify`, `test_exit_code=0`, substrate `local` |
 | PR | https://github.com/paramg/boss-sandbox/pull/83 |
-| Replay preview | `POST /v1/code-tasks/crun_7cc663627f2340dc85ac/preview` → `prev_af60b33719b04082b027` **running** |
-| View HTML | **200** `https://boss-api.local.sean.network/v1/previews/prev_af60b33719b04082b027/web/` title **BugBox — capture, track, resolve** (Vite `root` + assets; not fixture copy) |
-| Repeatable *new* build on current shared tag | **Not yet proven** — worker may still be `BOSS_SANDBOX_PROVIDER=microvm` + frozen. Code now falls back to local when frozen (`make_sandbox_provider`). Deploy that SHA before claiming “we can build again today.” |
+| Replay preview | `prev_4289c3eaad02479daa47` **running** (`mode=process`, `run_id=crun_7cc663627f2340dc85ac`). Prior replay `prev_af60b33719b04082b027` is **expired**. |
+| View HTML | **200** `https://boss-api.local.sean.network/v1/previews/prev_4289c3eaad02479daa47/web/` title **BugBox — capture, track, resolve** (not fixture copy) |
+| `qa-working-software` | **PASS** on that replay BugBox (no new spend required) |
+| `qa-live` | **10/10 PASS** on `647c742` (~22:44Z same-day re-run). 14-day calendar still **Day 1/14**. |
+| Repeatable *new* build on current shared tag | **In flight — do not stamp.** Canary `crun_27b5a74441fc4c0d8ace` (`QA benchmark: BugBox — Mini issue tracker`) `status=running` `phase=write_tests` (started ~22:50Z, reservation `oss_res_eac0b609707c42778c42`). Not completed; no preview yet. |
 | Gate | `make qa-working-software` |
 
-Until a **new** greenfield canary (or equivalent) completes on the current image *and* the working-software gate is green after that deploy, do **not** stamp Community GA.
+Until the **new** greenfield canary completes on `647c742` *and* has a reachable non-fixture preview, do **not** stamp Community GA. Replay + `qa-live` 10/10 are necessary, not sufficient.
 
 ## North star (Community DoD — 8 criteria)
 
 | # | Criterion | Status | Evidence / notes | Next action |
 |---|---|---|---|---|
-| 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `cd13067` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted (401 unauth / 422 empty). Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
+| 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `647c742` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted. Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Mostly (historical + replay)** | BugBox completed on local substrate, verify green, PR #83. New-build on current tag still unproven (frozen microVM until local-fallback SHA deploys). | Deploy local-fallback; run `qa-working-software`; optional new canary |
-| 4 | Previews reachable | **Real app View live (replay)** | Fixture still honest. **Real** BugBox View **200** `prev_af60b33719b04082b027` title “BugBox — capture, track, resolve”. | Keep a running preview; gate `qa-working-software` |
-| 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `cd13067` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
-| 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane` on `cd13067` | Keep bindings healthy |
+| 3 | Code → evidence → PR reliable | **Mostly (replay live on current tag)** | Historical BugBox `crun_7cc663627f2340dc85ac` verify green, PR #83, local substrate. Local-fallback SHA **is** live (`647c742`). `qa-working-software` **PASS** on replay. **New-build still in flight** (`crun_27b5a74441fc4c0d8ace` running `write_tests`) — not a sealed weekly proof. | Wait for canary complete + preview; keep 351 In Progress |
+| 4 | Previews reachable | **Real app View live (replay on `647c742`)** | Fixture honesty unchanged. **Real** BugBox View **200** `prev_4289c3eaad02479daa47` title “BugBox — capture, track, resolve”. Old `prev_af60b33719b04082b027` expired. | Keep a running preview; do not stamp on replay alone |
+| 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `647c742` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
+| 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane=mission_control_binding` on `647c742` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
-**DoD score:** **~6.5 / 8** toward the working-software bar (replay BugBox View live). Target for Community GA: **new build on current tag** + 8/8 + 14-day green gate. Do not stamp on replay alone.
+**DoD score:** **~7 / 8** toward the working-software bar (replay BugBox View + `qa-working-software` **PASS** on current shared tag `647c742`). Target for Community GA: **new build on current tag completed + preview** + 8/8 + 14-day green gate. Do **not** stamp on replay alone. Community GA is **not** Done.
 
 **Claims freeze (signed list):** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) — Allowed vs Forbidden; SSO is Community self-hosted.
 
@@ -60,20 +64,20 @@ Until a **new** greenfield canary (or equivalent) completes on the current image
 
 | ID | Work | Plane | State | Exit |
 |---|---|---|---|---|
-| A1 | Shared-tag redeploy api+worker+web from `main` | BOSS-337, 342 | **Done live** `cd13067` | Images match; no `--env-template`; `.env.bak.3e6c906` kept |
-| A2 | Re-run `make qa-live` | BOSS-351 | **Done live** | **10/10 + Metatron** on `cd13067`; harness catalog **55/55** |
+| A1 | Shared-tag redeploy api+worker+web from `main` | BOSS-337, 342 | **Done live** `647c742` | Images match (rollback from crashed `64d0e99`); no `--env-template` |
+| A2 | Re-run `make qa-live` | BOSS-351 | **Done live (gate)** | **10/10 + Metatron** on `647c742` (~22:44Z); 14-day still Day 1/14. New-build canary is a separate 351 residual |
 | A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Done live** | Seed 200; 13/13 published; catalog-smoke 13/13 passed 2026-08-13 |
 | A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Claim freeze shipped** (`BOSS_MICROVM_CLAIMS_FROZEN`) | Set freeze on dogfood; unfreeze after rootfs bake proof — see `docs/product/SANDBOX_GA_STATUS.md` |
 | A5 | DLQ triage top classes; prove no missing-git | BOSS-342 / **372** | **Partial** git in image + remediations list/retry | Hist 41 still open (TPM + missing DO creds); git 0 new after image. See `qa-dlq-remediations.md` |
-| A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Done live** | `GET /v1/factory/wip` + FactoryScaleCard + Code Tasks advertise `github_plane` on `cd13067` |
+| A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Done live** | `GET /v1/factory/wip` + FactoryScaleCard + Code Tasks advertise `github_plane` on `647c742` |
 | A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Done (doc)** | [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md); SSO Community self-hosted allowed |
 
 ### Phase B — 1–2 weeks (private preview)
 
 | ID | Work | Plane | State |
 |---|---|---|---|
-| B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Real BugBox View PASS live** `prev_af60b33719b04082b027` (plus fixture honesty). New-build still open |
+| B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | **Open / In Progress** — new canary `crun_27b5a74441fc4c0d8ace` running; do not close 351 until complete+preview |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Real BugBox View PASS live** `prev_4289c3eaad02479daa47` (plus fixture honesty). New-build still open |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (nav residual closed)** — Community primary nav is **SSO** (not Enterprise); foundations/components `hide_nav`; Account Connect / marketplace / clusters / SIM stay gated or Paid-badged |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | **Done (code)** |
@@ -108,20 +112,24 @@ Until a **new** greenfield canary (or equivalent) completes on the current image
 | Field | Value | As of |
 |---|---|---|
 | Edition | community | 2026-08-13 |
-| api image | `boss-api:1d5c081` | **shared tag live** 2026-08-13 |
-| web image | `boss-web:1d5c081` | **shared tag live** 2026-08-13 |
-| worker image | `boss-worker:1d5c081` | **shared tag live** 2026-08-13 |
-| branch HEAD | `1d5c081` | `ai/grok/community-ga` |
-| `qa-live` | **10/10 PASS + Metatron** on `cd13067` | 2026-08-13T14:14Z |
+| api image | `boss-api:647c742` | **shared tag live** 2026-08-13 (rollback from crashed `64d0e99`) |
+| web image | `boss-web:647c742` | **shared tag live** 2026-08-13 |
+| worker image | `boss-worker:647c742` | **shared tag live** 2026-08-13 |
+| branch HEAD | `647c742` | `ai/grok/community-ga` — boot-fixed SHA |
+| Coding substrate | advertised `local` (configured `microvm` + `BOSS_MICROVM_CLAIMS_FROZEN=true`) | live `GET /v1/factory/wip` |
+| `qa-live` | **10/10 PASS + Metatron** on `647c742` | ~2026-08-13T22:44Z (same-day re-run; does not add a 14-day day) |
+| `qa-working-software` | **PASS** replay BugBox `prev_4289c3eaad02479daa47` | 2026-08-13 |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
 | Open DLQ | 41 historical still open (TPM + missing DO creds); not the GA bar | 2026-08-13 |
-| Working software | BugBox preview **running** `prev_af60b33719b04082b027` | 2026-08-13 |
-| GitHub MC | 2 connections, 2 bindings | live |
-| Agent Studio | 13 agents (4 published on 3e6c906; reseed in progress) | 2026-08-13 |
-| Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
-| 14-day qa-live | **Day 1/14 PASS** (same-day re-run on `cd13067` also 10/10; does not add a day) | cron 06:15 UTC |
-| Previews | **1 running real app** `prev_af60b33719b04082b027` (BugBox); fixture `prev_8a4947e073c547aab6d9` expired. Public-base URLs; 0 loopback primary | 2026-08-13 |
+| Working software | BugBox preview **running** `prev_4289c3eaad02479daa47` (replay). New canary `crun_27b5a74441fc4c0d8ace` **running** `write_tests` | 2026-08-13 |
+| GitHub MC | 2 connections, 2 bindings (`seanheiney/boss`, `paramg/boss-sandbox`) | live |
+| Agent Studio | 13/13 active + published versions | 2026-08-13 |
+| Sandbox host | connected, 8/8 free, 0 running; claims frozen; rootfs unproven for Firecracker coding | live |
+| 14-day qa-live | **Day 1/14 PASS** (cron 06:15 UTC). Same-day re-runs on later tags do **not** add a day | cron 06:15 UTC |
+| Previews | **1 running real app** `prev_4289c3eaad02479daa47` (BugBox); fixture `prev_8a4947e073c547aab6d9` expired. Public-base URLs; 0 loopback primary | 2026-08-13 |
+| C2 security | **Open** — not Done | [`SECURITY_C2_STATUS.md`](SECURITY_C2_STATUS.md) |
+| BOSS-300 legal | **Human legal/product** — not Done | leave open |
 
 ---
 
@@ -129,23 +137,23 @@ Until a **new** greenfield canary (or equivalent) completes on the current image
 
 | Issue | Topic | State | Notes |
 |---|---|---|---|
-| BOSS-337 | Umbrella QA/GA | **In Progress** | GA assessment filed |
+| BOSS-337 | Umbrella QA/GA | **In Progress** | Do **not** close. Working-software replay PASS on `647c742`; new-build in flight; Community GA ≠ Done |
 | BOSS-338 | Edition MC honesty | **Done** | Community nav: SSO kept; design-system lab hidden; paid surfaces gated/badged |
 | BOSS-339 | SIM community | **Done** | Ops honesty |
-| BOSS-340 | Sandbox host | **Done** (host) | Rootfs still open work |
-| BOSS-341 | Preview loopback | **Done live (replay View)** | Real BugBox HTML 200; new-build still open |
-| BOSS-342 | Worker git/image | **Done** (code) | Live shared-tag pending |
+| BOSS-340 | Sandbox host | **Done** (host) | Rootfs still open work; live coding is local fallback |
+| BOSS-341 | Preview loopback | **Done live (replay View)** | Real BugBox HTML 200 `prev_4289c3eaad02479daa47`; new-build still open |
+| BOSS-342 | Worker git/image | **Done** (code) | Shared tag `647c742` live (api=worker=web) |
 | BOSS-372 | DLQ remediations (342 residual / A5) | **In Progress** | List/create/retry fail-closed; hist 41 still open (TPM + missing DO creds) |
 | BOSS-343 | GitHub MC wire | **Done** | Dual-plane follow-on |
 | BOSS-344 | CI/CD empty honesty | **Done** | |
 | BOSS-345 | next_move glue | **Done** | |
 | BOSS-346 | Hydration #418 | **Open** | Residual pages |
-| BOSS-347 | Agent Studio seed | **In Progress / Open** | Seed on live after A1 |
+| BOSS-347 | Agent Studio seed | **In Progress** | Live 13/13 active + published versions; do not treat as Community GA |
 | BOSS-348 | Earned autonomy | **Open** | Not GA claim |
 | BOSS-349 | OpenAPI parity | **Done** | #161; deploy lag |
 | BOSS-350 | Community keys decision | **Done** | Full kernel #157 |
 | BOSS-369 | BYOK paste-and-connect | **In Progress** | Catalog + easy-connect + MC paste card |
-| BOSS-351 | Live E2E gate | **Done** (gate) | Factory E2E still open |
+| BOSS-351 | Live E2E / working-software | **In Progress** | Control-plane gate 10/10. Stays In Progress until new canary `crun_27b5a74441fc4c0d8ace` completes **and** has a reachable preview |
 | BOSS-314 | GA readiness closure loop | **In Progress** | Children closed this cycle listed in Plane comment; Phase A live still open |
 | BOSS-288–290 | YouTube EP scripts | **Done** (scripts) | Recording is production work outside repo |
 | BOSS-291 | Engine private extract | **Done** (checklist) | Execution of extract still operational work |
@@ -228,6 +236,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | **Live stack `647c742`:** api+worker+web shared tag (boot-fixed; rolled back from crashed `64d0e99`). Advertised coding substrate `local` while configured `microvm` + frozen. `qa-live` 10/10 ~22:44Z. `qa-working-software` **PASS** on replay BugBox `prev_4289c3eaad02479daa47` title “BugBox — capture, track, resolve”. New canary `crun_27b5a74441fc4c0d8ace` running `write_tests`. DoD #3/#4 updated. **Community GA not stamped.** 14-day still Day 1/14. C2 open. BOSS-300 human legal. 351 stays In Progress. | grok |
 | 2026-08-13 | **GA bar restated:** working software through the factory. Live replay: BugBox `crun_7cc663627f2340dc85ac` verify green → preview `prev_af60b33719b04082b027` title “BugBox — capture, track, resolve”. `make qa-working-software`. Frozen microVM now falls back to local coding (`make_sandbox_provider`). Do not stamp GA until a new build on current tag. | grok |
 | 2026-08-13 | A5 DLQ remediations: `GET/POST /v1/deadletters/remediations` + `POST /v1/deadletters/{id}/retry`; credit-vs-credential classifier tests; remaining live classes TPM + missing DO creds. `qa-dlq-remediations.md`. Plane BOSS-372. | grok |
 | 2026-08-13 | C2 local-code: SCIM deprovision org-fallback test (BOSS-320); document in-proc rate limiter Community-ok (no Redis); PyJWT/cryptography already latest — residuals in `SECURITY_C2_STATUS.md`. C2 stays Open. | grok |

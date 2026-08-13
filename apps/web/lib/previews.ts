@@ -98,6 +98,7 @@ export function inventoryPreviews(items: PreviewRec[]): PreviewInventory {
 }
 
 export function previewOperatorHref(preview: PreviewRec): string | null {
+  if (previewFailClosedReason(preview)) return null;
   return operatorPreviewOpenHref(preview);
 }
 

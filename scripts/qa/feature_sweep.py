@@ -361,8 +361,18 @@ def evaluate(
     if expect == EXPECT_2XX_OR_404 and status == 404:
         return True, f"{method} {path} → 404 (edition honesty)"
 
-    if expect == EXPECT_2XX_OR_405 and status in (404, 405):
-        reason = "old image" if status == 404 else "POST-only mounted"
+    if expect == EXPECT_2XX_OR_405 and status in (404, 405, 422):
+        # 404: unmounted / old image, or GET matched a parameterized sibling
+        #      (e.g. GET /v1/packs/{id} for path ".../import").
+        # 405: POST-only route mounted.
+        # 422: GET hit a sibling that requires query/body (647c742 live:
+        #      /v1/packs/import and /v1/providers/easy-connect without
+        #      project_id). Presence, not a fail. Never POST these.
+        reason = {
+            404: "old image",
+            405: "POST-only mounted",
+            422: "GET validation / sibling path",
+        }[status]
         return True, f"{method} {path} → {status} ({reason})"
 
     if expect == EXPECT_2XX_OR_503 and status == 503:

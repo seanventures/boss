@@ -75,14 +75,19 @@ describe("executive console accessibility baseline", () => {
       resolve(__dirname, "../app/page.tsx"),
       "utf8",
     );
+    const inboxSource = readFileSync(
+      resolve(__dirname, "../app/decision-inbox-ui.tsx"),
+      "utf8",
+    );
 
     // Skip link in the console shell + its target landmark (keyboard users
     // reach the decision inbox without tabbing through the whole nav).
     expect(shellSource).toContain('className="skip-link"');
     expect(shellSource).toContain('href="#decision-inbox"');
-    expect(pageSource).toContain('id="decision-inbox"');
-    expect(pageSource).toContain('aria-labelledby="decision-inbox-title"');
-    expect(pageSource).toContain('id="decision-inbox-title"');
+    expect(pageSource).toContain("<DecisionInbox");
+    expect(inboxSource).toContain('id="decision-inbox"');
+    expect(inboxSource).toContain('aria-labelledby="decision-inbox-title"');
+    expect(inboxSource).toContain('id="decision-inbox-title"');
 
     // Landmark roles: a labelled <nav> for the area switcher and a labelled
     // <main> content region.
@@ -90,7 +95,7 @@ describe("executive console accessibility baseline", () => {
     expect(shellSource).toContain('aria-label="Console areas"');
     expect(shellSource).toContain("System Configuration");
     expect(shellSource).toContain(
-      "Connections, providers, resources, health, and FinOps",
+      "Connections, providers, resources, worker scaling, and FinOps",
     );
     expect(shellSource).toContain("<main");
     expect(shellSource).toMatch(/<main[^>]*aria-label=/);

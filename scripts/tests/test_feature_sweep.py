@@ -204,6 +204,24 @@ def test_evaluate_405_on_post_only_presence_is_ok():
     assert evaluate(probe, 500, {})[0] is False
 
 
+def test_evaluate_422_on_post_only_presence_is_ok():
+    """647c742: GET /v1/packs/import and /v1/providers/easy-connect 422.
+
+    FastAPI matches GET /v1/packs/{id} / /v1/providers/{id} and then
+    rejects the missing project_id. That is presence, not a required fail.
+    """
+    for name, path in (
+        ("community.packs-import", "/v1/packs/import"),
+        ("community.providers-easy-connect", "/v1/providers/easy-connect"),
+    ):
+        probe = Probe(name=name, path=path, required=False, expect=EXPECT_2XX_OR_405)
+        ok, detail = evaluate(probe, 422, {"detail": [{"type": "missing", "loc": ["query", "project_id"]}]})
+        assert ok is True, name
+        assert "422" in detail
+        assert "validation" in detail
+        assert evaluate(probe, 500, {})[0] is False
+
+
 def test_evaluate_sandbox_echo_freeze_honest():
     probe = Probe(
         name="community.sandbox-echo",

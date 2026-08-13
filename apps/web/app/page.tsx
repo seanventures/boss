@@ -9,7 +9,6 @@ import {
   createComplianceEvidenceBundleAction,
   createDeadletterIncidentAction,
   createEntitlementConnectionSessionAction,
-  createDecisionDigestAction,
   createOpsDigestAction,
   createDeploymentRunAction,
   completeAccountConnectAuthSessionAction,
@@ -34,7 +33,6 @@ import {
   recordSelfImprovementRolloutAction,
   disconnectEntitlementSourceAction,
   revokeBreakGlassGrantAction,
-  resolveDecisionAction,
   rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
   requeueDeadletterJobAction,
@@ -77,7 +75,6 @@ import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
-import { ClientRelativeTime } from "./client-relative-time";
 import { fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
@@ -87,6 +84,9 @@ import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
+import { PreviewsPanel } from "./previews-ui";
+import { DecisionInbox } from "./decision-inbox-ui";
+import { OnboardingHelpCard } from "./onboarding-help-card";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -124,7 +124,7 @@ import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchCommercialFeed } from "../lib/commercial";
 import { fetchDeadletterFeed } from "../lib/deadletters";
-import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
+import { fetchDecisionFeed, parseDecisionInboxFilter, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchEnterpriseFeed } from "../lib/enterprise";
 import { fetchActivityFeed } from "../lib/events";
@@ -293,71 +293,6 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   return "review required";
 }
 
-// The approval rule that raised this decision (derived from recommendation.action).
-function decisionRuleLabel(decision: DecisionFeedItem): string {
-  const action = typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
-  const tool = typeof decision.recommendation.tool === "string" ? ` (${decision.recommendation.tool})` : "";
-  const map: Record<string, string> = {
-    execute_agent_tool: `Agent tool requires approval${tool}`,
-    resume_agent_run: `Agent action gated — deferred tool${tool}`,
-    review_plan_draft: "Plan ready for review",
-    review_pull_request: "Pull request review",
-    review_deployment: "Deployment review",
-    review_infra_provisioning: "Infrastructure provisioning review",
-    "role.autonomy_change": "Role autonomy change",
-  };
-  if (map[action]) return map[action];
-  if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
-  return "governance gate";
-}
-
-// Plain-English description of what approving a decision actually triggers,
-// keyed off recommendation.action (mirrors decisions._handle_approved_follow_on).
-// Makes the otherwise-silent follow-on legible so "approve did nothing" is clear.
-function approvalEffectLabel(recommendation: Record<string, unknown>): string {
-  const action = typeof recommendation.action === "string" ? recommendation.action : "";
-  // Meeting PRD publish also auto-starts a governed code task.
-  if (
-    action === "execute_agent_tool" &&
-    (recommendation.start_code_task === true || recommendation.tool === "publish_document")
-  ) {
-    return "Approving publishes the PRD and starts a governed code task for this task.";
-  }
-  switch (action) {
-    case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
-    case "resume_code_task": return "Approving resumes the paused code task.";
-    case "review_pull_request": return "Approving authorizes the pull-request merge.";
-    case "review_deployment": return "Approving authorizes the deployment.";
-    case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
-    case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
-    case "resume_agent_run": return "Approving resumes the paused agent run.";
-    case "role.autonomy_change": return "Approving applies the role autonomy change.";
-    case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
-    case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
-    case "self_improvement.begin_canary":
-    case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
-    default: return "Approving records your decision — this type has no automated follow-on (no code task is started).";
-  }
-}
-
-// Decision Queue (handoff format): category chip for what kind of effect the
-// proposal is, colored by the signal palette.
-function decisionImpact(decision: DecisionFeedItem): { label: string; tone: string } {
-  const action =
-    typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
-  if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
-  if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
-  if (action === "review_deployment") return { label: "deploy", tone: "teal" };
-  if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
-  if (action === "role.autonomy_change") return { label: "access", tone: "red" };
-  if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
-  if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
-  if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
-  if (action === "resume_code_task") return { label: "plan", tone: "amber" };
-  const rule = decisionRuleLabel(decision);
-  return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
-}
-
 function roleInitials(name: string): string {
   const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "CP";
@@ -387,14 +322,6 @@ function formatMsDuration(ms?: number): string {
   if (s < 60) return `${s.toFixed(1)}s`;
   const m = Math.floor(s / 60);
   return `${m}m ${Math.round(s % 60)}s`;
-}
-
-function formatDeadline(deadlineAt?: string): string {
-  if (!deadlineAt) {
-    return "No deadline";
-  }
-  // Shared UTC formatter — same string the client islands use (no TZ drift).
-  return formatDateTimeShared(deadlineAt, "No deadline");
 }
 
 function formatDateTime(value?: string): string {
@@ -505,30 +432,6 @@ function routingRejectionSummary(rejectedSources: Array<Record<string, unknown>>
   return summary.length > 0 ? summary.join("; ") : "No rejected-source details recorded.";
 }
 
-function decisionStatusDetail(decision: DecisionFeedItem): string {
-  if (decision.status === "delegated" && decision.delegatedTo) {
-    return `Delegated to ${decision.delegatedTo}${
-      decision.delegatedBy ? ` by ${decision.delegatedBy}` : ""
-    }${decision.delegatedAt ? ` at ${formatDeadline(decision.delegatedAt)}` : ""}.`;
-  }
-  if (decision.status === "revision_requested") {
-    return decision.resolutionNote
-      ? `Revision requested: ${decision.resolutionNote}`
-      : "Revision was requested on this decision.";
-  }
-  if (decision.status === "executed") {
-    return decision.externalRef
-      ? `Executed with evidence: ${decision.externalRef}`
-      : "This decision has been marked executed.";
-  }
-  if (decision.approvedBy) {
-    return `Approved by ${decision.approvedBy} at ${formatDeadline(
-      decision.approvedAt,
-    )}.`;
-  }
-  return "This card remains explicit until it is approved, rejected, delegated, revised, or safely expired.";
-}
-
 type HomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -559,6 +462,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const requestedArea = getParam(resolvedSearchParams?.area);
+  const requestedDecisionFilter = parseDecisionInboxFilter(
+    getParam(resolvedSearchParams?.decision_filter),
+  );
   const requestedWorkTask = getParam(resolvedSearchParams?.task);
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
@@ -1095,6 +1001,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
+        </section>
+
+        <section className="panel-stack" data-area="overview" aria-label="Design-partner setup">
+          <OnboardingHelpCard />
         </section>
 
         <section className="stack-grid" data-area="overview">
@@ -7032,6 +6942,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             githubPlaneLabel={wipStatus?.githubPlaneReason}
             githubFullName={wipStatus?.githubFullName}
           />
+          <article className="stack-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Previews</span>
+                <h3>Operator Views — fixture HTML is not a customer app.</h3>
+              </div>
+            </div>
+            <PreviewsPanel
+              feed={previewFeed}
+              projectId={activeProjectId}
+              actor={activeActorId}
+            />
+          </article>
         </section>
 
         <section data-area="foundations" aria-label="Design foundations">
@@ -7474,282 +7397,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section
-          aria-labelledby="decision-inbox-title"
-          className="panel-stack decision-inbox-section"
-          data-area="decisions"
-          id="decision-inbox"
-          tabIndex={-1}
-        >
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Decision Queue</span>
-              <h2 id="decision-inbox-title">
-                Agents proposed — <span className="dq-you-decide">you decide</span>.
-              </h2>
-            </div>
-            <p className="status-meta">
-              Decisions are served by the control plane API and expire to a safe
-              default when their deadline passes.
-            </p>
-          </div>
-
-          {!decisions.apiReachable ? (
-            <article className="decision-card empty">
-              <h3>Decision API unavailable</h3>
-              <p className="detail">
-                {decisions.blockedReason ??
-                  "The executive console could not reach the decision inbox."}
-              </p>
-            </article>
-          ) : decisions.items.length === 0 ? (
-            <article className="decision-card empty">
-              <h3>No active decisions</h3>
-              <p className="detail">
-                The control plane does not currently need an approval, rejection,
-                or safe-default expiration.
-              </p>
-            </article>
-          ) : (
-            <div className="dq">
-              {decisions.items.map((decision) => {
-                const estimatedCost =
-                  typeof decision.costSummary.estimated_usd_micros === "number"
-                    ? decision.costSummary.estimated_usd_micros
-                    : undefined;
-                const isPending =
-                  decision.status === "pending" || decision.status === "delegated";
-                const isApproved = decision.status === "approved";
-                const linkedTask = decision.taskId
-                  ? tasks.items.find((task) => task.id === decision.taskId)
-                  : undefined;
-                const ownerRole = linkedTask?.ownerRoleId
-                  ? roles.items.find((role) => role.id === linkedTask.ownerRoleId)
-                  : undefined;
-                const who = ownerRole?.displayName ?? "Control plane";
-                const impact = decisionImpact(decision);
-                const rec = decision.recommendation;
-                const why = typeof rec.why === "string" ? rec.why : "";
-                const plan = typeof rec.plan === "string" ? rec.plan : "";
-                const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
-                // The thing being approved. For a PRD publish the entire drafted document
-                // travels in the payload (recommendation.args.markdown) and was never shown:
-                // the card asked "approve publishing the PRD" while withholding the PRD.
-                const recArgs =
-                  rec.args && typeof rec.args === "object"
-                    ? (rec.args as Record<string, unknown>)
-                    : {};
-                const subject =
-                  typeof recArgs.markdown === "string"
-                    ? recArgs.markdown
-                    : typeof recArgs.content === "string"
-                      ? recArgs.content
-                      : "";
-                const subjectTitle =
-                  typeof recArgs.title === "string" ? recArgs.title : "Document to publish";
-
-                return (
-                  <article className="dq-row" key={decision.id}>
-                    <div className="dq-body">
-                      <div className="dq-orb" aria-hidden>{roleInitials(who)}</div>
-                      <div className="dq-main">
-                        <div className="dq-propose">
-                          <span className="dq-who"><b>{who}</b> proposes</span>
-                          <span className={`dq-impact ${impact.tone}`}>{impact.label}</span>
-                        </div>
-                        <h3 className="dq-title">{decision.question}</h3>
-                        <p className="dq-rationale">
-                          {why || formatRecommendation(decision)}
-                        </p>
-                        {subject ? (
-                          <details className="decision-plan-details">
-                            <summary>
-                              Read the full document before approving
-                              <span className="dq-doc-size">
-                                {" · "}
-                                {subject.length.toLocaleString("en-US")} characters
-                              </span>
-                            </summary>
-                            <div className="decision-plan-sec">
-                              <h4>{subjectTitle}</h4>
-                              <pre className="decision-doc">{subject}</pre>
-                            </div>
-                          </details>
-                        ) : null}
-                        {plan || review ? (
-                          <details className="decision-plan-details">
-                            <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
-                            {plan ? (
-                              <div className="decision-plan-sec">
-                                <h4>Technical plan</h4>
-                                <pre>{plan}</pre>
-                              </div>
-                            ) : null}
-                            {review ? (
-                              <div className="decision-plan-sec">
-                                <h4>Automated plan review</h4>
-                                <pre>{review}</pre>
-                              </div>
-                            ) : null}
-                          </details>
-                        ) : null}
-                        <div className="dq-evidence">
-                          <span className="dq-ev-label">evidence</span>
-                          {linkedTask ? (
-                            <span className="dq-ev">
-                              T-{decision.taskId?.slice(-4)} · {linkedTask.title.slice(0, 44)}
-                              {linkedTask.title.length > 44 ? "…" : ""}
-                            </span>
-                          ) : null}
-                          <span className="dq-ev">risk tier {decision.riskTier}</span>
-                          <span className="dq-ev">default {decision.defaultAction ?? "hold"}</span>
-                          {estimatedCost != null ? (
-                            <span className="dq-ev">{formatMicros(estimatedCost)}</span>
-                          ) : null}
-                          <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
-                        </div>
-                        {isPending ? (
-                          <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="dq-foot">
-                      {isPending ? (
-                        <form action={resolveDecisionAction} className="dq-actions">
-                          <input type="hidden" name="decision_id" value={decision.id} />
-                          <input type="hidden" name="project_id" value={activeProjectId} />
-                          <input type="hidden" name="actor" value={activeActorId} />
-                          <SubmitButton className="dq-btn approve" name="action" value="approve">
-                            Approve
-                          </SubmitButton>
-                          <SubmitButton className="dq-btn neutral" name="action" value="revise">
-                            Request changes
-                          </SubmitButton>
-                          <SubmitButton className="dq-btn reject" name="action" value="reject">
-                            Reject
-                          </SubmitButton>
-                          <details className="dq-more">
-                            <summary>Note · delegate</summary>
-                            <div className="dq-more-body">
-                              <textarea
-                                aria-label={`Decision note for ${decision.id}`}
-                                className="textarea decision-note"
-                                name="note"
-                                rows={3}
-                                placeholder="Optional note or required revision request rationale."
-                              />
-                              <input
-                                aria-label={`Delegate target for ${decision.id}`}
-                                className="input"
-                                name="delegate_to"
-                                placeholder="Delegate to role or approver"
-                              />
-                              <SubmitButton className="dq-btn neutral" name="action" value="delegate">
-                                Delegate
-                              </SubmitButton>
-                            </div>
-                          </details>
-                          <span className="dq-waited">
-                            <ClientRelativeTime
-                              iso={decision.createdAt}
-                              empty=""
-                              as="span"
-                            />
-                          </span>
-                        </form>
-                      ) : (
-                        <>
-                          <span
-                            className={`dq-verdict ${
-                              isApproved || decision.status === "executed"
-                                ? "green"
-                                : decision.status === "rejected"
-                                  ? "red"
-                                  : "muted"
-                            }`}
-                          >
-                            {decision.status.toUpperCase()}
-                          </span>
-                          <span className="dq-note">{decisionStatusDetail(decision)}</span>
-                          {isApproved ? (
-                            <details className="dq-more">
-                              <summary>Mark executed</summary>
-                              <form action={resolveDecisionAction} className="dq-more-body">
-                                <input type="hidden" name="decision_id" value={decision.id} />
-                                <input type="hidden" name="project_id" value={activeProjectId} />
-                                <input type="hidden" name="actor" value={activeActorId} />
-                                <textarea
-                                  aria-label={`Execution note for ${decision.id}`}
-                                  className="textarea decision-note"
-                                  name="note"
-                                  rows={2}
-                                  placeholder="Record what was executed."
-                                />
-                                <input
-                                  aria-label={`Execution external reference for ${decision.id}`}
-                                  className="input"
-                                  name="external_ref"
-                                  placeholder="External reference (PR URL, commit SHA, ticket)"
-                                />
-                                <SubmitButton className="dq-btn approve" name="action" value="execute">
-                                  Mark executed
-                                </SubmitButton>
-                              </form>
-                            </details>
-                          ) : null}
-                          <span className="dq-waited">
-                            <ClientRelativeTime
-                              iso={decision.createdAt}
-                              empty=""
-                              as="span"
-                            />
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-
-          {decisions.apiReachable ? (
-            <details className="dq-digest">
-              <summary>Create decision digest</summary>
-              <div className="dq-digest-body">
-                <p className="detail">
-                  Creates a durable digest artifact. Optional channel creates an
-                  outbox draft only; sending still requires a budgeted queue action.
-                </p>
-                <form action={createDecisionDigestAction} className="decision-actions">
-                  <input type="hidden" name="project_id" value={activeProjectId} />
-                  <input type="hidden" name="actor" value={activeActorId} />
-                  <label className="field">
-                    <span>Max items</span>
-                    <input
-                      className="input"
-                      defaultValue={20}
-                      max={100}
-                      min={1}
-                      name="max_items"
-                      type="number"
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Optional outbox channel</span>
-                    <input
-                      className="input"
-                      name="channel"
-                      placeholder="email:founder@example.com or slack:#ops"
-                    />
-                  </label>
-                  <SubmitButton className="button secondary" type="submit">
-                    Create digest
-                  </SubmitButton>
-                </form>
-              </div>
-            </details>
-          ) : null}
+        <section data-area="decisions" aria-label="Decision inbox">
+          <DecisionInbox
+            feed={decisions}
+            tasks={tasks.items}
+            roles={roles.items}
+            projectId={activeProjectId}
+            actorId={activeActorId}
+            orgId={activeOrgId}
+            initialFilter={requestedDecisionFilter}
+          />
         </section>
 
         <section className="panel-stack approval-rules-section" aria-label="Approval rules">

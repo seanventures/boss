@@ -99,3 +99,18 @@ def test_simulated_code_task_with_pr_url_does_not_count_as_live(client, engine):
     assert live["sample_size"] == 0
     assert live["rate"] is None
     assert live["label"] == "unknown / not proven"
+
+
+def test_factory_wip_coding_substrate_is_local_when_microvm_frozen(client, monkeypatch):
+    """Working-software stamp path: frozen Firecracker must advertise local coding."""
+    from apps.api.app import main as api_main
+
+    monkeypatch.setattr(api_main.settings, "sandbox_provider", "microvm")
+    monkeypatch.setattr(api_main.settings, "microvm_claims_frozen", True)
+    response = client.get("/v1/factory/wip", params={"project_id": PID})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["coding_substrate_configured"] == "microvm"
+    assert body["coding_substrate"] == "local"
+    assert body["microvm_claims_frozen"] is True
+    assert body["coding_substrate"] != "microvm"

@@ -2,7 +2,7 @@
 
 **Status date:** 2026-08-13  
 **Plane:** BOSS-341 (code), Phase B2 live View  
-**Live image:** `boss-api:cd13067` (api/worker/web shared tag) · fixture View lands on next shared tag after this commit  
+**Live image:** `boss-api:647c742` (api/worker/web shared tag; boot-fixed rollback from crashed `64d0e99`)  
 **Code:** `engine/boss_engine/services/preview_service.py` (`publicize_preview`, gateway proxy)
 
 ---
@@ -31,13 +31,13 @@ Probed over SSH into `boss-app-api-1` (no secrets printed).
 |---|---|
 | `BOSS_PREVIEW_PUBLIC_BASE` | `https://boss-api.local.sean.network` (set in API process **and** bound on `settings.preview_public_base`) |
 | `GET /v1/previews?project_id=boss-dogfood&limit=50` | **200**, 50 rows |
-| Status mix | expired 30 · failed 10 · stopped 7 · verified 3 · **running 0** |
-| Operator `url` / `open_url` | **37 / 37 bound rows** are `https://boss-api.local.sean.network/v1/previews/{id}/web/` |
-| Relative `open_url` | **0** |
+| Status mix (2026-08-13, `647c742`) | expired 31 (30 process + 1 fixture) · failed 9 · stopped 6 · verified 3 · **running 1** |
+| Operator `url` / `open_url` | Bound rows are `https://boss-api.local.sean.network/v1/previews/{id}/web/` |
+| Relative `open_url` | **0** on bound running/historical process rows |
 | Loopback as `url` / `open_url` | **0** |
-| `internal_url` | 37 × `http://127.0.0.1:<ephemeral>` (expected; proxy-only) |
-| Empty `open_url` | 13 (failed / never-bound; no dead Open link) |
-| `GET /v1/previews/{id}/web/` (expired sample `prev_6bd9728fb32748b5864f`) | **409** `preview not running (status=expired)` |
+| `internal_url` | loopback bind (expected; proxy-only) |
+| Empty `open_url` | failed / never-bound / expired fixture (no dead Open link) |
+| `GET /v1/previews/{id}/web/` (expired sample `prev_af60b33719b04082b027`) | **409** `preview not running (status=expired)` |
 
 ### Operator URL shape (current, proven)
 
@@ -54,8 +54,8 @@ internal_url: http://127.0.0.1:41635
 ```
 
 **List contract: PASS.**  
-**View HTML (real app): PASS live (replay)** — `POST /v1/code-tasks/crun_7cc663627f2340dc85ac/preview` → `prev_af60b33719b04082b027` **running**, GET **200** title `BugBox — capture, track, resolve`. Historical factory run (`npm run verify` exit 0, PR #83). New greenfield build on current tag still unproven.  
-**View HTML (fixture):** **PASS live** on `boss-api:1d5c081` — `POST /v1/previews/fixture` → `prev_8a4947e073c547aab6d9`, honest “fixture — not a sandboxed app”.
+**View HTML (real app): PASS live (replay on `647c742`)** — `prev_4289c3eaad02479daa47` **running** (`mode=process`, `run_id=crun_7cc663627f2340dc85ac`, `build_substrate=local_subprocess`), GET **200** title `BugBox — capture, track, resolve`. Historical factory run (`npm run verify` exit 0, PR #83). `qa-working-software` **PASS**. Prior replay `prev_af60b33719b04082b027` expired. New greenfield canary `crun_27b5a74441fc4c0d8ace` still running — do **not** stamp Community GA.  
+**View HTML (fixture):** historically **PASS** (`prev_8a4947e073c547aab6d9`); that fixture is now **expired** (409). Fixture path remains honest, not the GA bar.
 
 ---
 
@@ -82,7 +82,7 @@ curl -sS -H "Authorization: Bearer $BOSS_API_KEY" \
 
 ### 2. Browser / curl View
 
-Pick a **running** preview id (none on live as of this probe):
+Pick a **running** preview id (`prev_4289c3eaad02479daa47` on `647c742` as of this probe):
 
 ```bash
 PREV=prev_…
@@ -98,7 +98,7 @@ curl -sS -o /tmp/prev.html -w "%{http_code}" \
 - Body is app HTML (not “no longer running” / empty error for a live preview).
 - From a tailnet browser: open the same View URL; page loads without needing a tunnel to 127.0.0.1 on the API host.
 
-**Current freeze:** expired/stopped/failed View returns **409** `preview not running (status=…)`. Do not claim “View opens a live app” until a running preview returns 200 HTML.
+**Current freeze:** expired/stopped/failed View returns **409** `preview not running (status=…)`. Replay View **does** return 200 HTML on `prev_4289c3eaad02479daa47`. Still do not claim “every preview always works” or stamp Community GA until a **new** build on this tag also produces a reachable preview.
 
 ### 3. Console
 
@@ -127,10 +127,11 @@ BOSS_PREVIEW_PUBLIC_BASE=https://boss-api.local.sean.network
 
 ## GA claim language
 
-| Allowed after list-contract green (now) | Forbidden until a **running** preview View is 200 |
+| Allowed now (replay View 200 on `647c742`) | Forbidden until a **new** build on this tag also Views 200 |
 |---|---|
 | “Preview list `open_url` is an API gateway URL operators can copy” | “Every preview is always reachable” |
-| “Loopback binds are internal-only” | “Preview View opens a live app” |
+| “Loopback binds are internal-only” | “Sandboxes/previews always work” / Community GA Done |
 | “`BOSS_PREVIEW_PUBLIC_BASE` makes `open_url` absolute” | Marketing screenshots with `127.0.0.1` as the View link |
+| “A replay BugBox preview opens as designed (`prev_4289c3eaad02479daa47`)” | “New greenfield builds on this tag are proven” |
 
 Related: `docs/product/SANDBOX_GA_STATUS.md`, `docs/operations/PREVIEW_EXECUTION_SUBSTRATES.md`, `docs/operations/COMMUNITY_GA_CLAIMS_FREEZE.md`.

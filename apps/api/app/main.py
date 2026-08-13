@@ -660,6 +660,7 @@ from .services.a2a import (
 )
 from .services.agent_studio import (
     AgentDefinitionNotFoundError,
+    AgentStudioSchemaMissingError,
     AgentStudioService,
     AgentVersionNotFoundError,
     AgentVersionStateError,
@@ -19085,6 +19086,8 @@ def _raise_agent_studio_error(error: Exception) -> None:
         raise HTTPException(status_code=409, detail=str(error)) from error
     if isinstance(error, A2ATransportUnavailable):
         raise HTTPException(status_code=503, detail=str(error)) from error
+    if isinstance(error, AgentStudioSchemaMissingError):
+        raise HTTPException(status_code=503, detail=str(error)) from error
     raise HTTPException(status_code=422, detail=str(error)) from error
 
 
@@ -19145,35 +19148,16 @@ def seed_agent_studio_catalog(
 ) -> dict[str, Any]:
     """Install the reviewed SpecPack starter catalog into one project.
 
-    This is deliberately an explicit, idempotent project setup action. A blank
-    Studio must not silently look like a configured but inactive workforce, and
-    an operator must not have to recreate the maintained BOSS role library by
-    hand. The catalog contains versioned definitions only; this endpoint does
-    not dispatch agents, call models, or create external effects.
+    Delegates to the isolated Community seed router so honesty fields
+    (model_calls/jobs/budget/receipt) and schema-missing 503 stay in one
+    place. FastAPI matches this main.py route first; do not let it shadow
+    the stamp-path contract.
     """
-    with begin(engine) as connection:
-        require_project_actor(
-            connection, payload.project_id, payload.actor, "role_review"
-        )
-        try:
-            seeded = agent_studio.seed_catalog(
-                connection,
-                payload.project_id,
-                actor=payload.actor,
-            )
-            return {
-                "project_id": payload.project_id,
-                "status": "seeded",
-                "agents": seeded["agents"],
-                "panels": seeded["panels"],
-                "skipped": seeded.get("skipped") or [],
-                "agent_count": len(seeded["agents"]),
-                "panel_count": len(seeded["panels"]),
-                "skipped_count": len(seeded.get("skipped") or []),
-                "external_effects": 0,
-            }
-        except Exception as error:  # noqa: BLE001 - typed API mapping
-            _raise_agent_studio_error(error)
+    from .routers.agent_studio_seed import SeedCatalogRequest, _seed_catalog
+
+    return _seed_catalog(
+        SeedCatalogRequest(project_id=payload.project_id, actor=payload.actor)
+    )
 
 
 @app.post("/v1/agent-studio/workflows/validate")

@@ -57,6 +57,17 @@ describe("operatorPreviewOpenHref", () => {
     ).toBe("/v1/previews/prv_run/web/");
   });
 
+  it("fail-closes expired historical open_url so View is not offered", () => {
+    expect(
+      operatorPreviewOpenHref({
+        id: "prv_exp",
+        status: "expired",
+        open_url: "https://boss-api.local.sean.network/v1/previews/prv_exp/web/",
+        url: "http://127.0.0.1:41635",
+      }),
+    ).toBeNull();
+  });
+
   it("rejects loopback as an operator View URL", () => {
     expect(isLoopbackPreviewUrl("http://127.0.0.1:43053")).toBe(true);
     expect(

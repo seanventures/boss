@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -111,6 +114,16 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(markup).toContain("Budget reservations or spend that need a human gate");
     expect(markup).toContain("TPM / credit / model-limit escalations");
     expect(markup).toContain("View resolved history");
+  });
+
+  it("mounts DecisionInbox on Mission Control instead of a raw unfiltered list", () => {
+    const page = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
+    expect(page).toContain("<DecisionInbox");
+    expect(page).toContain("initialFilter={requestedDecisionFilter}");
+    expect(page).toContain("parseDecisionInboxFilter");
+    expect(page).not.toContain('id="decision-inbox"');
+    expect(page).not.toContain("No active decisions");
+    expect(page).not.toMatch(/decisions\.items\.map\(\(decision\)/);
   });
 
   it("does not pretend the API is a clear queue when it is unreachable", () => {

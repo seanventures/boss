@@ -44,9 +44,13 @@ export function isLoopbackPreviewUrl(url: string | null | undefined): boolean {
 export function operatorPreviewOpenHref(
   preview: Pick<PreviewRec, "id" | "status" | "url" | "open_url">,
 ): string | null {
+  const status = (preview.status || "").toLowerCase();
+  if (status === "expired" || status === "stopped" || status === "failed") {
+    return null;
+  }
   const candidate = (preview.open_url || preview.url || "").trim();
   if (candidate && !isLoopbackPreviewUrl(candidate)) return candidate;
-  if (preview.status === "running" && preview.id) {
+  if (status === "running" && preview.id) {
     return `/v1/previews/${encodeURIComponent(preview.id)}/web/`;
   }
   return null;

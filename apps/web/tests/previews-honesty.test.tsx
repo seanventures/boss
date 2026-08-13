@@ -169,6 +169,14 @@ describe("Mission Control Previews honesty", () => {
     const page = readFileSync(join(root, "app/page.tsx"), "utf8");
     expect(page).toContain("<PreviewsPanel");
     expect(page).toContain("fixture HTML is not a customer app");
+    expect(page).toContain('data-area="code_tasks"');
+    const previewsMount = page.slice(
+      page.indexOf('data-area="code_tasks"'),
+      page.indexOf("<PreviewsPanel") + 200,
+    );
+    expect(previewsMount).toContain("<PreviewsPanel");
+    expect(previewsMount).toContain("fixture HTML is not a customer app");
+    expect(page).not.toMatch(/View opens a live app/i);
     const actions = readFileSync(join(root, "app/actions.ts"), "utf8");
     expect(actions).toContain("/v1/previews/fixture");
     expect(actions).toContain("createPreviewFixtureAction");

@@ -10,13 +10,21 @@
 
 | Claim | GA status | Notes |
 |---|---|---|
-| Sandbox **host connectivity** (health probe) | **Allowed** when live host is up | BOSS-340 restored `sandbox-service` on goldeneye |
+| Sandbox **host connectivity** (health probe) | **Allowed** when live host is up | BOSS-340 restored `sandbox-service` on goldeneye. Live `647c742`: host connected, 8/8 free, 0 running. |
 | microVM **echo exercise** (test_mode + engine=echo) | **Proven live** 2026-08-13 | Rootfs baked (`guest-base.ext4` 289M); task `sbx-865940e15a70440a` **done**, diff `SANDBOX_OK.txt`. Coding/claude_code still **not claimed**. |
-| **Local coding** while freeze is on | **Allowed (GA path)** | `make_sandbox_provider` returns `LocalSubprocessProvider` when `BOSS_MICROVM_CLAIMS_FROZEN=true` even if env says `microvm`. BugBox shipped this way. |
+| **Local coding** while freeze is on | **Allowed (GA path) — live** | `make_sandbox_provider` returns `LocalSubprocessProvider` when `BOSS_MICROVM_CLAIMS_FROZEN=true` even if env says `microvm`. Live `GET /v1/factory/wip`: `coding_substrate=local`, `coding_substrate_configured=microvm`, `microvm_claims_frozen=true`. Replay BugBox used this path. |
 | Retained-rootfs preview from microVM build | **Not claimed** | Depends on successful execution + rootfs |
-| Local subprocess coding (`BOSS_SANDBOX_PROVIDER=local`) | **Allowed** | Weaker isolation; needs git/tools in worker image |
+| Local subprocess coding (`BOSS_SANDBOX_PROVIDER=local`) | **Allowed** | Weaker isolation; needs git/tools in worker image. Effective live path while freeze is on. |
+| Firecracker **coding** GA | **Not claimed** | Configured `microvm` + freeze → factory advertises `local`. `GET /v1/diag/sandbox-roundtrip` **422**. |
 
 **Do not market “sandboxes always work” or “Firecracker coding is GA” until a live provision succeeds after rootfs bake.**
+
+### Live dogfood (2026-08-13, shared tag `647c742`)
+
+- Worker/API env still says `BOSS_SANDBOX_PROVIDER=microvm` with `BOSS_MICROVM_CLAIMS_FROZEN=true`.
+- Factory advertises the **local** coding substrate (frozen-microVM fallback). This is the working-software path.
+- New canary `crun_27b5a74441fc4c0d8ace` is running on that local fallback — not a Firecracker coding proof.
+- Do **not** unfreeze claims based on this tag.
 
 ---
 
