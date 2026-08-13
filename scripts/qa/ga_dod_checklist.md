@@ -17,6 +17,7 @@ runnable commands. Use this before claiming Community GA or private preview read
 | Workflow structure only | `make qa-workflow-e2e DRY_RUN=1` | none |
 | Factory E2E (WIP + code-tasks list) | `make qa-factory-e2e` | `BOSS_API_KEY` for live; dry-run if missing |
 | Factory structure only | `make qa-factory-e2e DRY_RUN=1` | none |
+| Factory no-spend fixture | `make qa-factory-e2e CREATE_FIXTURE=1` | `BOSS_API_KEY`; live must advertise `fixture_supported` |
 | Full live dogfood (broader) | `make qa-live` | `BOSS_API_KEY` |
 | OpenAPI factory slice parity | `make openapi-live-qa-parity` | local Python env |
 
@@ -76,9 +77,12 @@ Flow covered by `scripts/qa/workflow_e2e_gate.py`:
 | Check | Command |
 |-------|---------|
 | Factory surfaces up | `make qa-factory-e2e` (live list + WIP) |
+| No-spend fixture (create→evidence) | `make qa-factory-e2e CREATE_FIXTURE=1` |
 | Optional create (budgeted!) | see below |
 | Deadletters trend | `make qa-live` → `deadletters.list`; triage in Plane BOSS-342 |
 | Full factory PR path | manual / weekly sealed run (GA plan B1) — **not** auto-merged by gates |
+
+**No-spend fixture (not a sealed factory path):** there is no `deterministic_brief` / dry-run worker that can complete a real code-task without an LLM. `--create-fixture` POSTs `simulated=true` only when `GET /v1/factory/wip` advertises `fixture_supported` (older APIs ignore unknown keys and would enqueue a real job). GET `/v1/software-factory/proposals/queue` 404/405 is **SKIP** (POST-only route).
 
 **Optional code-task create (spends budget — explicit allow only):**
 

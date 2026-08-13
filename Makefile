@@ -160,6 +160,7 @@ endif
 # Factory surface E2E: health + factory/wip + code-tasks list (+ optional create).
 # Without BOSS_API_KEY (or with DRY_RUN=1): structural dry-run only, exit 0 if contracts OK.
 # Live read-only: BOSS_API_KEY (+ BOSS_API_BASE, PROJECT_ID).
+# Optional no-spend fixture: CREATE_FIXTURE=1 (POST simulated=true if fixture_supported).
 # Optional create (budgeted): CREATE_CODE_TASK=1 + BOSS_FACTORY_ALLOW_CREATE=1 +
 #   BOSS_FACTORY_OWNER + BOSS_FACTORY_REPO. See scripts/qa/factory_e2e_gate.py docstring.
 # DoD mapping: scripts/qa/ga_dod_checklist.md (criteria 3 + 8).
@@ -173,9 +174,11 @@ else
 	# BOSS_API_KEY is read from the environment by the script (never echoed).
 	# Without a key the script auto dry-runs structural checks. CREATE_CODE_TASK=1
 	# also requires BOSS_FACTORY_ALLOW_CREATE=1 + owner/repo env vars.
+	# CREATE_FIXTURE=1 is the no-spend path (mutually exclusive with CREATE_CODE_TASK).
 	$(PYTHON_BOOTSTRAP) scripts/qa/factory_e2e_gate.py \
 		--api-base "$${BOSS_API_BASE:-$${BOSS_API_URL:-https://boss-api.local.sean.network}}" \
 		--project-id "$${PROJECT_ID:-$${BOSS_PROJECT_ID:-boss-dogfood}}" \
+		$(if $(filter 1,$(CREATE_FIXTURE)),--create-fixture,) \
 		$(if $(filter 1,$(CREATE_CODE_TASK)),--create-code-task,) \
 		$(if $(BOSS_FACTORY_GATE_OUTPUT),--output "$(BOSS_FACTORY_GATE_OUTPUT)")
 endif

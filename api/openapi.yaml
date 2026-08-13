@@ -13265,10 +13265,16 @@ paths:
           default: 50
           title: Limit
     post:
-      summary: Queue a budgeted, leased governed code task
+      summary: Queue a budgeted, leased governed code task (or persist a simulated fixture)
+      description: >
+        Default path enqueues a leased `code.task` job and spends budget when a
+        worker runs. Set `simulated=true` to persist a clearly labeled fixture
+        run with evidence and zero spend (no job, no model, no PR). Combined
+        with `open_pr=true` fail-closes 422. Simulated is not a sealed factory
+        path.
       responses:
         '200':
-          description: Code-task run queued
+          description: Code-task run queued, or simulated fixture persisted
           content:
             application/json:
               schema: {}

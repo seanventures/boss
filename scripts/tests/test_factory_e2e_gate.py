@@ -50,12 +50,41 @@ def test_code_task_create_body_shape():
     assert gate.COMMAND_PREFIX in body["instructions"]
 
 
+def test_code_task_fixture_body_is_simulated_no_pr():
+    body = gate.code_task_fixture_body("boss-dogfood", run_tag="fx")
+    assert body["simulated"] is True
+    assert body["open_pr"] is False
+    assert body["owner"] == "_fixture"
+    assert body["repo"] == "_fixture"
+    assert "simulated" in body["instructions"]
+    assert gate.COMMAND_PREFIX in body["title"]
+
+
 def test_structural_endpoints_catalog():
     names = {e["name"] for e in gate.STRUCTURAL_ENDPOINTS}
     assert "health" in names
     assert "factory.wip" in names
     assert "code_tasks.list" in names
     assert "code_tasks.create" in names
+    assert "code_tasks.create_fixture" in names
+
+
+def test_classify_proposals_queue_405_is_skip_not_fail():
+    assert gate.classify_proposals_queue(405) == "skip"
+    assert gate.classify_proposals_queue(404) == "skip"
+    assert gate.classify_proposals_queue(200) == "pass"
+    assert gate.classify_proposals_queue(201) == "pass"
+    assert gate.classify_proposals_queue(500) == "fail"
+    assert gate.classify_proposals_queue(403) == "fail"
+    assert gate.classify_proposals_queue(None) == "fail"
+
+
+def test_fixture_create_allowed_requires_advertised_flag():
+    assert gate.fixture_create_allowed({"fixture_supported": True}) is True
+    assert gate.fixture_create_allowed({"fixture_supported": False}) is False
+    assert gate.fixture_create_allowed({}) is False
+    assert gate.fixture_create_allowed(None) is False
+    assert gate.fixture_create_allowed([]) is False
 
 
 def test_dry_run_structure_passes():
@@ -106,6 +135,21 @@ def test_create_without_key_returns_2(monkeypatch, capsys):
     assert "BOSS_API_KEY" in capsys.readouterr().err
 
 
+def test_create_fixture_without_key_returns_2(monkeypatch, capsys):
+    monkeypatch.delenv("BOSS_API_KEY", raising=False)
+    monkeypatch.delenv("NEXT_PUBLIC_BOSS_API_KEY", raising=False)
+    code = gate.main(["--create-fixture"])
+    assert code == 2
+    assert "BOSS_API_KEY" in capsys.readouterr().err
+
+
+def test_create_fixture_and_create_code_task_mutually_exclusive(monkeypatch, capsys):
+    monkeypatch.setenv("BOSS_API_KEY", "test-key")
+    code = gate.main(["--create-fixture", "--create-code-task"])
+    assert code == 2
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
 def test_allow_create_from_env(monkeypatch):
     monkeypatch.delenv("BOSS_FACTORY_ALLOW_CREATE", raising=False)
     assert gate.allow_create_from_env() is False
@@ -142,3 +186,152 @@ def test_gate_exit_code():
         mode="dry-run",
     )
     assert gate.gate_exit_code(ok) == 0
+
+
+def test_proposals_queue_405_is_skip_not_optional_fail():
+    """GET 405 must print SKIP and must not land in failed_optional_names."""
+    class _Client:
+        def request(self, method, path, **_kwargs):
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                return 200, {"items": [], "fixture_supported": True}, 1
+            if path.startswith("/v1/code-tasks?") or path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 405, {"detail": "Method Not Allowed"}, 1
+            return 500, {}, 1
+
+    checks = gate.run_gate(_Client(), project_id="boss-dogfood")
+    queue = next(c for c in checks if c.name == "factory.proposals_queue")
+    assert queue.skipped is True
+    assert queue.ok is True
+    assert queue.required is False
+    assert queue.status_code == 405
+    assert gate.check_flag(queue) == "SKIP"
+    report = gate.build_report(
+        api_url="u",
+        project_id="p",
+        checks=checks,
+        started_at="a",
+        finished_at="b",
+        duration_ms=1,
+        mode="live+readonly",
+    )
+    assert report["summary"]["passed"] is True
+    assert "factory.proposals_queue" not in report["summary"]["failed_optional_names"]
+    assert "factory.proposals_queue" in report["summary"]["skipped_names"]
+    assert report["summary"]["optional_failed"] == 0
+
+
+def test_proposals_queue_500_is_optional_fail():
+    class _Client:
+        def request(self, method, path, **_kwargs):
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                return 200, {"items": []}, 1
+            if path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 500, {"detail": "boom"}, 1
+            return 500, {}, 1
+
+    checks = gate.run_gate(_Client(), project_id="boss-dogfood")
+    queue = next(c for c in checks if c.name == "factory.proposals_queue")
+    assert queue.skipped is False
+    assert queue.ok is False
+    assert gate.check_flag(queue) == "FAIL"
+    report = gate.build_report(
+        api_url="u",
+        project_id="p",
+        checks=checks,
+        started_at="a",
+        finished_at="b",
+        duration_ms=1,
+        mode="live+readonly",
+    )
+    # Optional fail must not fail the gate, but is recorded (not a skip).
+    assert report["summary"]["passed"] is True
+    assert "factory.proposals_queue" in report["summary"]["failed_optional_names"]
+
+
+def test_create_fixture_skips_when_api_does_not_advertise_support():
+    posts: list[tuple[str, object]] = []
+
+    class _Client:
+        def request(self, method, path, **kwargs):
+            if method == "POST":
+                posts.append((path, kwargs.get("body")))
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                return 200, {"items": []}, 1  # no fixture_supported
+            if path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 405, {}, 1
+            return 500, {}, 1
+
+    checks = gate.run_gate(_Client(), project_id="boss-dogfood", create_fixture=True)
+    fixture = next(c for c in checks if c.name == "code_tasks.create_fixture")
+    assert fixture.skipped is True
+    assert fixture.ok is True
+    assert gate.check_flag(fixture) == "SKIP"
+    assert posts == []
+    assert not any(c.name == "code_tasks.fixture_evidence" for c in checks)
+
+
+def test_create_fixture_posts_and_reads_evidence_when_supported():
+    posts: list[dict] = []
+
+    class _Client:
+        def request(self, method, path, **kwargs):
+            if path.startswith("/health"):
+                return 200, {"status": "ok"}, 1
+            if "/factory/wip" in path:
+                return 200, {"items": [], "fixture_supported": True}, 1
+            if method == "POST" and path == "/v1/code-tasks":
+                body = kwargs.get("body") or {}
+                posts.append(body)
+                assert body.get("simulated") is True
+                return 200, {"status": "simulated", "run_id": "crun_fix", "simulated": True}, 1
+            if path == "/v1/code-tasks/crun_fix":
+                return 200, {
+                    "id": "crun_fix",
+                    "status": "simulated",
+                    "phase": "fixture",
+                    "spec": {"simulated": True},
+                    "usage": {"cost_usd_micros": 0, "simulated": True},
+                }, 1
+            if path.startswith("/v1/code-tasks"):
+                return 200, {"code_tasks": []}, 1
+            if "proposals/queue" in path:
+                return 405, {}, 1
+            return 500, {}, 1
+
+    checks = gate.run_gate(_Client(), project_id="boss-dogfood", create_fixture=True)
+    created = next(c for c in checks if c.name == "code_tasks.create_fixture")
+    evidence = next(c for c in checks if c.name == "code_tasks.fixture_evidence")
+    assert created.ok is True and created.skipped is False
+    assert created.required is True
+    assert evidence.ok is True
+    assert posts and posts[0]["simulated"] is True
+    report = gate.build_report(
+        api_url="u",
+        project_id="p",
+        checks=checks,
+        started_at="a",
+        finished_at="b",
+        duration_ms=1,
+        mode="live+fixture",
+    )
+    assert report["summary"]["passed"] is True
+    assert report["summary"]["required_failed"] == 0
+
+
+def test_check_flag_skip_beats_fail():
+    skip = gate.CheckResult(name="x", ok=True, skipped=True)
+    assert gate.check_flag(skip) == "SKIP"
+    fail = gate.CheckResult(name="y", ok=False)
+    assert gate.check_flag(fail) == "FAIL"

@@ -11,8 +11,11 @@ Two modes:
     1. health
     2. GET /v1/factory/wip
     3. GET /v1/code-tasks?project_id=…
-    4. Optional POST /v1/code-tasks (only with --create-code-task and full env)
-    5. GET /v1/software-factory/proposals/queue (soft if 404)
+    4. Optional POST /v1/code-tasks
+         --create-fixture   no-spend simulated=true (only if wip.fixture_supported)
+         --create-code-task real governed run (budgeted; needs ALLOW_CREATE)
+    5. GET /v1/software-factory/proposals/queue
+         404/405 → SKIP (route is POST-only; GET is expected to 405)
 
 Exit codes:
   0  all required checks passed
@@ -34,11 +37,20 @@ Optional for --create-code-task (queues a real governed run — spends budget):
   BOSS_FACTORY_BASE_BRANCH             base branch (default main)
   BOSS_FACTORY_ALLOW_CREATE=1          hard confirm create is intentional
 
+--create-fixture (no spend):
+  POST /v1/code-tasks with simulated=true. Completes create→persist→GET
+  evidence without a model, reservation, or code.task job.
+  This is NOT a sealed factory path. There is no deterministic_brief /
+  dry-run worker that can finish a real code-task without an LLM.
+  Older APIs ignore unknown keys — the gate only POSTs the fixture when
+  GET /v1/factory/wip advertises fixture_supported=true.
+
 Without create flags, live mode is read-only (list endpoints only).
 
 Examples:
   python3 scripts/qa/factory_e2e_gate.py --dry-run
   BOSS_API_KEY=… make qa-factory-e2e
+  BOSS_API_KEY=… python3 scripts/qa/factory_e2e_gate.py --create-fixture
   BOSS_API_KEY=… BOSS_FACTORY_ALLOW_CREATE=1 \\
     BOSS_FACTORY_OWNER=acme BOSS_FACTORY_REPO=app \\
     python3 scripts/qa/factory_e2e_gate.py --create-code-task
@@ -61,7 +73,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 GATE_NAME = "factory_e2e_gate"
-GATE_VERSION = "1.0.0"
+GATE_VERSION = "1.1.0"
+PROPOSALS_QUEUE_SKIP_STATUSES = frozenset({404, 405})
 DEFAULT_API_URL = "https://boss-api.local.sean.network"
 DEFAULT_PROJECT_ID = "boss-dogfood"
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -106,11 +119,29 @@ STRUCTURAL_ENDPOINTS: list[dict[str, Any]] = [
         ],
     },
     {
+        "name": "code_tasks.create_fixture",
+        "method": "POST",
+        "path": "/v1/code-tasks",
+        "auth": True,
+        "required": False,  # only when --create-fixture and fixture_supported
+        "body_keys": [
+            "project_id",
+            "title",
+            "instructions",
+            "owner",
+            "repo",
+            "base_branch",
+            "simulated",
+        ],
+        "note": "simulated=true no-spend fixture; not a sealed factory path",
+    },
+    {
         "name": "factory.proposals_queue",
         "method": "GET",
         "path": "/v1/software-factory/proposals/queue?project_id={project_id}",
         "auth": True,
-        "required": False,  # soft — older deploys may 404
+        "required": False,  # GET is not mounted — POST-only; 404/405 is SKIP
+        "note": "POST-only route; GET 404/405 is skip, not fail",
     },
     {
         "name": "factory.merge_check",
@@ -134,6 +165,7 @@ class CheckResult:
     name: str
     ok: bool
     required: bool = True
+    skipped: bool = False
     detail: str = ""
     status_code: int | None = None
     duration_ms: int = 0
@@ -191,6 +223,29 @@ def is_2xx(status_code: int | None) -> bool:
     return status_code is not None and 200 <= status_code < 300
 
 
+def classify_proposals_queue(status_code: int | None) -> str:
+    """GET /v1/software-factory/proposals/queue is not a list route.
+
+    The live route is POST-only (queue a propose_pr job). GET therefore
+    returns 405 (or 404 on older editions). That is a skip, not an optional
+    FAIL that dirties the report.
+    """
+    if is_2xx(status_code):
+        return "pass"
+    if status_code in PROPOSALS_QUEUE_SKIP_STATUSES:
+        return "skip"
+    return "fail"
+
+
+def fixture_create_allowed(wip_payload: Any) -> bool:
+    """Only POST simulated=true when the live API advertises support.
+
+    Older APIs ignore unknown body keys and would enqueue a real budgeted
+    ``code.task``. Refusing to POST is the fail-closed choice.
+    """
+    return isinstance(wip_payload, dict) and wip_payload.get("fixture_supported") is True
+
+
 def item_count(payload: Any) -> int | None:
     if isinstance(payload, list):
         return len(payload)
@@ -236,6 +291,31 @@ def code_task_create_body(
         "base_branch": base_branch,
         "profile": "lean",
         "open_pr": False,
+    }
+
+
+def code_task_fixture_body(
+    project_id: str,
+    *,
+    run_tag: str | None = None,
+) -> dict[str, Any]:
+    """No-spend simulated create. Completes without a live LLM."""
+    tag = run_tag or uuid.uuid4().hex[:8]
+    return {
+        "project_id": project_id,
+        "title": f"{COMMAND_PREFIX} simulated fixture {tag}",
+        "instructions": (
+            f"{COMMAND_PREFIX} simulated=true fixture for project {project_id}. "
+            "Must not call a model, reserve budget, enqueue code.task, or open a PR."
+        ),
+        "acceptance_criteria": ["Fixture persists and is readable without spend"],
+        "test_commands": [],
+        "owner": "_fixture",
+        "repo": "_fixture",
+        "base_branch": "main",
+        "profile": "lean",
+        "open_pr": False,
+        "simulated": True,
     }
 
 
@@ -322,6 +402,35 @@ def validate_dry_run_structure(
         )
     )
 
+    fixture = code_task_fixture_body(project_id, run_tag="dry")
+    fixture_need = need | {"simulated"}
+    fixture_missing = fixture_need - set(fixture)
+    checks.append(
+        CheckResult(
+            name="structure.code_task_fixture_body",
+            ok=(
+                not fixture_missing
+                and fixture.get("simulated") is True
+                and fixture.get("open_pr") is False
+            ),
+            detail="ok" if not fixture_missing else f"missing {sorted(fixture_missing)}",
+            evidence={"keys": sorted(fixture.keys()), "simulated": fixture.get("simulated")},
+        )
+    )
+
+    checks.append(
+        CheckResult(
+            name="structure.proposals_queue_skip",
+            ok=(
+                classify_proposals_queue(405) == "skip"
+                and classify_proposals_queue(404) == "skip"
+                and classify_proposals_queue(200) == "pass"
+                and classify_proposals_queue(500) == "fail"
+            ),
+            detail="GET 404/405 on proposals/queue is SKIP (POST-only route)",
+        )
+    )
+
     # helpers
     checks.append(
         CheckResult(
@@ -357,6 +466,9 @@ def validate_dry_run_structure(
                     "BOSS_FACTORY_ALLOW_CREATE=1",
                     "--create-code-task",
                 ],
+                "optional_fixture": [
+                    "--create-fixture (no spend; needs fixture_supported on factory/wip)",
+                ],
             },
         )
     )
@@ -366,17 +478,22 @@ def validate_dry_run_structure(
 
 def summarize_report(checks: list[CheckResult]) -> dict[str, Any]:
     required = [c for c in checks if c.required]
-    failed_required = [c for c in required if not c.ok]
+    failed_required = [c for c in required if not c.ok and not c.skipped]
     optional = [c for c in checks if not c.required]
-    failed_optional = [c for c in optional if not c.ok]
+    skipped = [c for c in checks if c.skipped]
+    failed_optional = [c for c in optional if not c.ok and not c.skipped]
     return {
         "total": len(checks),
         "required_total": len(required),
         "required_passed": len(required) - len(failed_required),
         "required_failed": len(failed_required),
         "optional_total": len(optional),
-        "optional_passed": len(optional) - len(failed_optional),
+        "optional_passed": len(optional) - len(failed_optional) - sum(
+            1 for c in optional if c.skipped
+        ),
         "optional_failed": len(failed_optional),
+        "skipped_total": len(skipped),
+        "skipped_names": [c.name for c in skipped],
         "failed_required_names": [c.name for c in failed_required],
         "failed_optional_names": [c.name for c in failed_optional],
         "passed": len(failed_required) == 0,
@@ -418,6 +535,9 @@ def build_report(
                 "BOSS_FACTORY_BASE_BRANCH (default main)",
                 "BOSS_FACTORY_ALLOW_CREATE=1",
                 "CLI flag --create-code-task",
+            ],
+            "optional_fixture": [
+                "CLI flag --create-fixture (no spend; requires fixture_supported on factory/wip)",
             ],
         },
     }
@@ -508,6 +628,7 @@ def run_gate(
     *,
     project_id: str,
     create_code_task: bool = False,
+    create_fixture: bool = False,
     owner: str | None = None,
     repo: str | None = None,
     base_branch: str = "main",
@@ -540,10 +661,13 @@ def run_gate(
         record(CheckResult(name="health", ok=False, detail=str(error)))
 
     # 2. factory WIP
+    wip_payload: Any = None
     try:
         path = f"/v1/factory/wip?{urlencode({'project_id': project_id, 'wip_limit': 5})}"
         status, payload, duration_ms = client.request("GET", path, auth=True)
         ok = is_2xx(status)
+        if ok:
+            wip_payload = payload
         count = item_count(payload)
         record(
             CheckResult(
@@ -552,7 +676,12 @@ def run_gate(
                 detail=f"status={status} count={count}" if ok else f"factory/wip expected 2xx, got {status}",
                 status_code=status,
                 duration_ms=duration_ms,
-                evidence={"count": count},
+                evidence={
+                    "count": count,
+                    "fixture_supported": (
+                        payload.get("fixture_supported") if isinstance(payload, dict) else None
+                    ),
+                },
             )
         )
     except RuntimeError as error:
@@ -577,7 +706,129 @@ def run_gate(
     except RuntimeError as error:
         record(CheckResult(name="code_tasks.list", ok=False, detail=str(error)))
 
-    # 4. optional create
+    # 4a. optional no-spend fixture (never POSTs unless live API advertises support)
+    if create_fixture:
+        if not fixture_create_allowed(wip_payload):
+            record(
+                CheckResult(
+                    name="code_tasks.create_fixture",
+                    ok=True,
+                    required=False,
+                    skipped=True,
+                    detail=(
+                        "SKIP: live API did not advertise fixture_supported on factory/wip. "
+                        "Refusing to POST simulated=true — older APIs ignore unknown keys "
+                        "and would enqueue a real budgeted code.task. "
+                        "No no-spend worker path exists (no deterministic_brief / dry-run)."
+                    ),
+                    evidence={"why": "no_spend_path_requires_simulated_flag_on_live_api"},
+                )
+            )
+        else:
+            try:
+                body = code_task_fixture_body(project_id)
+                status, payload, duration_ms = client.request(
+                    "POST",
+                    "/v1/code-tasks",
+                    body=body,
+                    auth=True,
+                )
+                run_id = extract_run_id(payload) if is_2xx(status) else None
+                simulated_flag = (
+                    isinstance(payload, dict) and payload.get("simulated") is True
+                )
+                ok = is_2xx(status) and simulated_flag and bool(run_id)
+                record(
+                    CheckResult(
+                        name="code_tasks.create_fixture",
+                        ok=ok,
+                        required=True,
+                        detail=(
+                            f"status={status} run_id={run_id} simulated=true"
+                            if ok
+                            else (
+                                f"fixture create expected 2xx + simulated=true, got {status}"
+                            )
+                        ),
+                        status_code=status,
+                        duration_ms=duration_ms,
+                        evidence={"run_id": run_id, "simulated": simulated_flag},
+                    )
+                )
+                if ok and run_id:
+                    try:
+                        ev_status, ev_payload, ev_ms = client.request(
+                            "GET",
+                            f"/v1/code-tasks/{run_id}",
+                            auth=True,
+                        )
+                        spec = ev_payload.get("spec") if isinstance(ev_payload, dict) else {}
+                        usage = ev_payload.get("usage") if isinstance(ev_payload, dict) else {}
+                        ev_ok = (
+                            is_2xx(ev_status)
+                            and isinstance(ev_payload, dict)
+                            and ev_payload.get("status") == "simulated"
+                            and spec.get("simulated") is True
+                            and int((usage or {}).get("cost_usd_micros") or 0) == 0
+                        )
+                        record(
+                            CheckResult(
+                                name="code_tasks.fixture_evidence",
+                                ok=ev_ok,
+                                required=True,
+                                detail=(
+                                    f"status={ev_status} run_status={ev_payload.get('status')!r} "
+                                    f"cost={((usage or {}).get('cost_usd_micros') if isinstance(usage, dict) else None)}"
+                                    if isinstance(ev_payload, dict)
+                                    else f"status={ev_status}"
+                                ),
+                                status_code=ev_status,
+                                duration_ms=ev_ms,
+                                evidence={
+                                    "run_id": run_id,
+                                    "run_status": (
+                                        ev_payload.get("status")
+                                        if isinstance(ev_payload, dict)
+                                        else None
+                                    ),
+                                    "cost_usd_micros": (
+                                        (usage or {}).get("cost_usd_micros")
+                                        if isinstance(usage, dict)
+                                        else None
+                                    ),
+                                },
+                            )
+                        )
+                    except RuntimeError as error:
+                        record(
+                            CheckResult(
+                                name="code_tasks.fixture_evidence",
+                                ok=False,
+                                required=True,
+                                detail=str(error),
+                            )
+                        )
+            except RuntimeError as error:
+                record(
+                    CheckResult(
+                        name="code_tasks.create_fixture",
+                        ok=False,
+                        required=True,
+                        detail=str(error),
+                    )
+                )
+    else:
+        record(
+            CheckResult(
+                name="code_tasks.create_fixture",
+                ok=True,
+                required=False,
+                skipped=True,
+                detail="skipped (pass --create-fixture for no-spend simulated create)",
+            )
+        )
+
+    # 4b. optional real create
     if create_code_task:
         if not owner or not repo:
             record(
@@ -653,24 +904,28 @@ def run_gate(
             )
         )
 
-    # 5. proposals queue (soft)
+    # 5. proposals queue — GET is not mounted (POST-only). 404/405 = SKIP.
     try:
         path = (
             f"/v1/software-factory/proposals/queue?"
             f"{urlencode({'project_id': project_id})}"
         )
         status, payload, duration_ms = client.request("GET", path, auth=True)
-        ok = is_2xx(status)
-        # 404 is soft — surface may not be mounted on all editions
-        if status == 404:
+        verdict = classify_proposals_queue(status)
+        if verdict == "skip":
             record(
                 CheckResult(
                     name="factory.proposals_queue",
                     ok=True,
                     required=False,
-                    detail="404 — proposals queue not mounted (soft ok)",
+                    skipped=True,
+                    detail=(
+                        f"{status} — GET not supported on proposals/queue "
+                        "(POST-only route; skip, not fail)"
+                    ),
                     status_code=status,
                     duration_ms=duration_ms,
+                    evidence={"verdict": "skip", "reason": "method_not_allowed_or_unmounted"},
                 )
             )
         else:
@@ -678,12 +933,12 @@ def run_gate(
             record(
                 CheckResult(
                     name="factory.proposals_queue",
-                    ok=ok,
+                    ok=verdict == "pass",
                     required=False,
                     detail=f"status={status} count={count}",
                     status_code=status,
                     duration_ms=duration_ms,
-                    evidence={"count": count},
+                    evidence={"count": count, "verdict": verdict},
                 )
             )
     except RuntimeError as error:
@@ -740,7 +995,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Optionally POST /v1/code-tasks (requires BOSS_FACTORY_ALLOW_CREATE=1 "
-            "and owner/repo env)."
+            "and owner/repo env). Spends budget."
+        ),
+    )
+    parser.add_argument(
+        "--create-fixture",
+        action="store_true",
+        help=(
+            "POST /v1/code-tasks with simulated=true (no spend) when the live API "
+            "advertises fixture_supported. Not a sealed factory path."
         ),
     )
     parser.add_argument(
@@ -767,11 +1030,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def check_flag(check: CheckResult) -> str:
+    if check.skipped:
+        return "SKIP"
+    return "PASS" if check.ok else "FAIL"
+
+
 def _print_checks(checks: list[CheckResult], quiet: bool) -> None:
     if quiet:
         return
     for check in checks:
-        flag = "PASS" if check.ok else "FAIL"
+        flag = check_flag(check)
         req = "required" if check.required else "optional"
         code = f" [{check.status_code}]" if check.status_code is not None else ""
         print(f"  {flag}  {check.name} ({req}){code}: {check.detail}")
@@ -793,10 +1062,19 @@ def main(argv: list[str] | None = None) -> int:
     started = datetime.now(timezone.utc)
     started_mono = time.monotonic()
 
+    if args.create_code_task and args.create_fixture:
+        print(
+            "error: --create-code-task and --create-fixture are mutually exclusive. "
+            "Fixture is the no-spend path; create-code-task spends budget.",
+            file=sys.stderr,
+        )
+        return 2
+
     if force_dry:
-        if args.create_code_task and not args.dry_run and not api_key:
+        if (args.create_code_task or args.create_fixture) and not args.dry_run and not api_key:
+            which = "--create-fixture" if args.create_fixture else "--create-code-task"
             print(
-                "error: --create-code-task requires BOSS_API_KEY. "
+                f"error: {which} requires BOSS_API_KEY. "
                 "Use --dry-run for structure-only checks.",
                 file=sys.stderr,
             )
@@ -822,6 +1100,7 @@ def main(argv: list[str] | None = None) -> int:
                 client,
                 project_id=project_id,
                 create_code_task=bool(args.create_code_task),
+                create_fixture=bool(args.create_fixture),
                 owner=owner,
                 repo=repo,
                 base_branch=base_branch,
@@ -834,7 +1113,12 @@ def main(argv: list[str] | None = None) -> int:
                     detail=redact_secrets(str(error), [api_key] if api_key else []),
                 )
             ]
-        mode = "live" + ("+create" if args.create_code_task else "+readonly")
+        if args.create_fixture:
+            mode = "live+fixture"
+        elif args.create_code_task:
+            mode = "live+create"
+        else:
+            mode = "live+readonly"
 
     finished = datetime.now(timezone.utc)
     duration_ms = int((time.monotonic() - started_mono) * 1000)
@@ -848,6 +1132,7 @@ def main(argv: list[str] | None = None) -> int:
         mode=mode,
         meta={
             "create_requested": bool(args.create_code_task),
+            "fixture_requested": bool(args.create_fixture),
             "owner_set": bool(owner),
             "repo_set": bool(repo),
             "allow_create_env": allow_create_from_env(),

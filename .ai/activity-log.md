@@ -1,6 +1,14 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — Factory gate skip + simulated fixture (ai/grok/community-ga)
+
+- `GET /v1/software-factory/proposals/queue` 404/405 is now **SKIP** (POST-only route), not optional FAIL.
+- No no-spend worker path exists (`deterministic_brief` / dry-run does not complete a real code-task).
+- Added fail-closed `POST /v1/code-tasks` `simulated=true`: persist fixture evidence, no job, no budget, no model. Retry/follow-up/open_pr fail-closed.
+- Gate `--create-fixture` POSTs only when `GET /v1/factory/wip` advertises `fixture_supported` (old APIs would ignore the flag and enqueue a real job).
+- Tests: gate skip/fixture + API/service fixture path.
+
 ## 2026-08-13 — Grok — Community GA preview operator URL (ai/grok/community-ga)
 
 - Live SSH `boss-app-api-1` (`boss-api:3e6c906`): `BOSS_PREVIEW_PUBLIC_BASE=https://boss-api.local.sean.network` is set and bound.
