@@ -7,7 +7,7 @@
 
 | Day | Date (UTC) | Result | Notes |
 |-----|------------|--------|-------|
-| 1 | 2026-08-13 | **PASS 10/10** | Shared tag `3e6c906`; also ran ad-hoc 01:05Z and 01:49Z |
+| 1 | 2026-08-13 | **PASS 10/10** | First on `3e6c906`; same-day re-run on `cd13067` also 10/10 + Metatron (does not add a day) |
 | 2–14 | — | pending | Daily 06:15 UTC |
 
 **Close Community GA (G2.1)** only when this table has **14 consecutive PASS** rows with logs under `/var/lib/boss/qa-live/`.

@@ -15,16 +15,16 @@
 
 | # | Criterion | Status | Evidence / notes | Next action |
 |---|---|---|---|---|
-| 1 | BYOK model + infra keys | **Mostly (code)** | Catalog now lists openai/anthropic/openai_compatible/cloudflare/supabase/ssh_host. Community `POST /v1/providers/easy-connect` writes through to local_vault (SecretRef only). Mission Control **Paste and connect** card above pointer-only expert form. Live dogfood still needs redeploy (A1). | Redeploy + paste a real model key on dogfood |
+| 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `cd13067` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted (401 unauth / 422 empty). Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
 | 3 | Code → evidence → PR reliable | **Partial** | Dual-plane advertised on `GET /v1/factory/wip`; fixture create (no spend); 41 hist DLQ | Need live PR success rate |
 | 4 | Previews reachable | **Partial** | List `open_url` absolute public-base; View shown only when URL exists; verified-test without URL is honest (no invented 409) | Start a running preview; curl 200 HTML |
-| 5 | Honest unpaid/unconfigured UI | **Mostly (code)** | `ai/grok/community-ga`: hide/badge Account Connect, marketplace, clusters, SIM; **SSO/IdP kept visible** (Community includes self-hosted SSO). Tests: `apps/web/tests/edition-visibility.test.ts`. Live web image may lag until shared-tag redeploy (A1). | Redeploy web; visual dogfood on `boss.local` |
-| 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP advertises plane (code) | Redeploy so live WIP shows `github_plane` |
+| 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `cd13067` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
+| 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane` on `cd13067` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
-**DoD score:** **~4.5 / 8** closed (BYOK paste-and-connect code on community-ga; live image lag) · Target for private preview: **6 / 8** (close 3,4,5 substrate/UI) · Target for Community GA: **8 / 8** + 14-day green gate.
+**DoD score:** **~5 / 8** closed (A1 shared-tag live; #1/#5 live-mounted; #3/#4 still substrate). Target for private preview: **6 / 8** (close 3 or 4). Target for Community GA: **8 / 8** + 14-day green gate.
 
 **Claims freeze (signed list):** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) — Allowed vs Forbidden; SSO is Community self-hosted.
 
@@ -36,12 +36,12 @@
 
 | ID | Work | Plane | State | Exit |
 |---|---|---|---|---|
-| A1 | Shared-tag redeploy api+worker+web from `main` | BOSS-337, 342 | **Todo** | Images match; no `--env-template` clobber |
-| A2 | Re-run `make qa-live` | BOSS-351 | **Todo** (last PASS on 968bc47) | 10/10 on new tag |
+| A1 | Shared-tag redeploy api+worker+web from `main` | BOSS-337, 342 | **Done live** `cd13067` | Images match; no `--env-template`; `.env.bak.3e6c906` kept |
+| A2 | Re-run `make qa-live` | BOSS-351 | **Done live** | **10/10 + Metatron** on `cd13067`; harness catalog **55/55** |
 | A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Done live** | Seed 200; 13/13 published; catalog-smoke 13/13 passed 2026-08-13 |
 | A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Claim freeze shipped** (`BOSS_MICROVM_CLAIMS_FROZEN`) | Set freeze on dogfood; unfreeze after rootfs bake proof — see `docs/product/SANDBOX_GA_STATUS.md` |
 | A5 | DLQ triage top classes; prove no missing-git | BOSS-342 | **Partial** git in image tree | DLQ trend + root causes filed |
-| A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Done (code)** | `GET /v1/factory/wip` + FactoryScaleCard advertise `github_plane` (binding vs settings). Live image lag until redeploy. |
+| A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Done live** | `GET /v1/factory/wip` + FactoryScaleCard + Code Tasks advertise `github_plane` on `cd13067` |
 | A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Done (doc)** | [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md); SSO Community self-hosted allowed |
 
 ### Phase B — 1–2 weeks (private preview)
@@ -70,9 +70,9 @@
 
 | Stream | Intent | Status | Closed Plane | Open / residual |
 |---|---|---|---|---|
-| **W0** Community keys | BYOK kernel + paste UX | **Mostly (code)** | BOSS-350, #157; BOSS-369 paste | Live paste after A1 redeploy |
-| **W1** UI honesty | Edition/empty | **Mostly (code)** | 338, 339, 344; community-ga U2 | Live web redeploy; 346 residual |
-| **W2** Substrate | Worker/sandbox/preview | **Partial** | 340 host, 341 code, 342 git image | Rootfs; live shared tag; DLQ |
+| **W0** Community keys | BYOK kernel + paste UX | **Mostly (live)** | BOSS-350, #157; BOSS-369 paste | Operator paste one real key |
+| **W1** UI honesty | Edition/empty | **Mostly (live)** | 338, 339, 344; community-ga U2 | Visual badge check; 346 residual |
+| **W2** Substrate | Worker/sandbox/preview | **Partial** | 340 host, 341 code, 342 git image | Rootfs; DLQ |
 | **W3** Vertical slice | CEO→PR sealed | **Partial** | 343 GitHub wire, 345 next_move, 349 OpenAPI, 351 gate | Reliable code path 351 |
 | **W4** Product loops | Studio/Assurance/deploy | **Partial** | W4.5 seed (code) | 347, 348, 344 deploy optional |
 | **W5** Gates + Plane | Live proof only | **Active** | Gate script Done | Mandatory deploy gate |
@@ -83,19 +83,19 @@
 
 | Field | Value | As of |
 |---|---|---|
-| Edition | community | 2026-08-12 |
-| api image | `boss-api:3e6c906` | **shared tag live** 2026-08-13 |
-| web image | `boss-web:3e6c906` | **shared tag live** 2026-08-13 |
-| worker image | `boss-worker:3e6c906` | **shared tag live** 2026-08-13 |
-| main HEAD | `5f2c5d8` | git; GA cut `ai/grok/community-ga` |
-| `qa-live` | **10/10 PASS + Metatron** on `ccafa13` | 2026-08-13T01:05Z |
+| Edition | community | 2026-08-13 |
+| api image | `boss-api:cd13067` | **shared tag live** 2026-08-13 |
+| web image | `boss-web:cd13067` | **shared tag live** 2026-08-13 |
+| worker image | `boss-worker:cd13067` | **shared tag live** 2026-08-13 |
+| branch HEAD | `cd13067` | `ai/grok/community-ga` |
+| `qa-live` | **10/10 PASS + Metatron** on `cd13067` | 2026-08-13T14:14Z |
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
 | Open DLQ | 41 open: 18 missing DO creds, 21 claude-143, 1 sandbox 404, 1 missing-git | 2026-08-13 |
 | GitHub MC | 2 connections, 2 bindings | live |
 | Agent Studio | 13 agents (4 published on 3e6c906; reseed in progress) | 2026-08-13 |
 | Sandbox host | connected, 8/8 free, 0 running; rootfs unproven | live |
-| 14-day qa-live | **Day 1/14 PASS** (`/var/lib/boss/qa-live`) | cron 06:15 UTC |
+| 14-day qa-live | **Day 1/14 PASS** (same-day re-run on `cd13067` also 10/10; does not add a day) | cron 06:15 UTC |
 | Previews | 50 rows (30 expired / 10 failed / 7 stopped / 3 verified / **0 running**); `open_url`=`https://boss-api.local.sean.network/v1/previews/{id}/web/` (37/37 bound); 0 loopback primary; expired View **409** | 2026-08-13 |
 
 ---
@@ -202,6 +202,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | A1/A2 live: shared-tag `cd13067` api+worker+web (no `--env-template`; rollback `.env.bak.3e6c906`). `qa-live` **10/10 + Metatron**. Harness catalog **55/55**, optional schema 500s gone. Provider catalog 11. | grok |
 | 2026-08-13 | Typed `standup` meeting: persist type, no-spend fixture → minutes + actions + Decision; duplicate convene refused. FEATURES meetings ✅. | grok |
 | 2026-08-13 | PRD P1 glue: pack YAML import/export in MC; comms **Dry-run deliver** Receipt (no Slack/email); improvement-program create form (promote stays enterprise-badged). Catalog `built` only when reportable. Code Tasks shows GitHub plane. Deploy SOP (B6) requires `qa-live` after shared-tag bump. | grok |
 | 2026-08-13 | Unified E2E QA harness: `make qa-harness` (preflight + 44-probe settings/features + control + BugBox/HookWatch/ApproveIt). Live catalog **55/55**. Launch gated by `BOSS_QA_ALLOW_CANARIES`. Docs `QA_HARNESS.md`. | grok |
