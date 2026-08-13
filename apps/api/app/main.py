@@ -6335,14 +6335,27 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
             except Exception:  # noqa: BLE001 - a catalog read must never fail on one entry
                 done = None
             if done:
-                app_entry["built"] = {
+                # Only advertise `built` when the run is a real QA-benchmark
+                # artifact (reportable). Name/subject matches are related work,
+                # not certified canaries — listing them as built made Launch
+                # reuse a run whose /report 404s.
+                reportable = done.get("matched_on") in {
+                    "benchmark_id",
+                    "launched_as_benchmark",
+                }
+                payload = {
                     "run_id": done["run_id"],
                     "run_status": done["run_status"],
                     "pull_request_url": done["pull_request_url"],
                     "preview_id": done["preview_id"],
                     "preview_url": done["preview_url"],
                     "matched_on": done["matched_on"],
+                    "reportable": reportable,
                 }
+                if reportable:
+                    app_entry["built"] = payload
+                else:
+                    app_entry["related"] = payload
     return {"benchmark_apps": apps}
 
 

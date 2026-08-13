@@ -159,3 +159,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(provider_easy_connect_router)
     except ImportError:
         pass
+
+    # Community comms dry-run close-the-loop (no Slack/email send)
+    try:
+        from .comms_dry_run import router as comms_dry_run_router
+
+        app.include_router(comms_dry_run_router)
+    except ImportError:
+        pass

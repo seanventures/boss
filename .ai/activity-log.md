@@ -1,6 +1,28 @@
 # BOSS Autonomous Activity Log
 
 
+## 2026-08-13 — Grok — GA loop: catalog honesty + Code Tasks plane + B6 SOP (ai/grok/community-ga)
+
+- Catalog `built` only when `matched_on` is `benchmark_id` or `launched_as_benchmark`; name matches become `related` (stops stale report 404 reuse).
+- Code Tasks home shows factory GitHub plane (MC binding vs settings token).
+- Deploy SOP B6 in `GOLDENEYE_DEPLOYMENT.md`: never `--env-template` on redeploy; `qa-live` + `qa-harness` catalog required after shared-tag bump.
+
+## 2026-08-13 — Grok — Community pack YAML import/export UI (ai/grok/community-ga)
+
+- Mission Control Company Pack: local YAML import (`importPackAction` → `POST /v1/packs/import`) and per-installed-pack export download (`exportPackAction` → `GET /v1/packs/{id}/export`).
+- Island: `apps/web/app/packs-import-ui.tsx` (`data-testid=pack-import` / `pack-export`). Marketplace stays behind PaidSurfaceGate.
+- Client: YAML/text export responses are not JSON-parsed.
+- Tests: `apps/web/tests/packs-import.test.ts`. Plane: `OPS_BASE_URL` unset — track on branch (GAP-PRD-AUDIT-001 UI).
+
+
+## 2026-08-13 — Grok — Constitution §5 comms dry-run close-the-loop (ai/grok/community-ga)
+
+- `dry_run_deliver_outbox` writes a Receipt (`effect_kind=comms`, `delivery_mode=dry_run`) and emits `outbox.dry_run`. Never Slack/email, never `real_send_allowed`, never `comms.outbox.deliver`, no budget reserve.
+- Isolated `POST /v1/comms/outbox/{id}/dry-run` in `comms_dry_run.py` (platform.py only; main.py untouched).
+- Mission Control: **Dry-run deliver** next to Queue send; result copy **dry-run — no provider send**.
+- Tests: API receipt/no-adapter + real path still fail-closed without creds; web button/copy + action does not reserve.
+- Plane: `OPS_BASE_URL` unset — track on branch.
+
 ## 2026-08-13 — Grok — Unified E2E QA harness (ai/grok/community-ga)
 
 - One command: `make qa-harness` — preflight + 44-probe settings/features sweep + control-plane reads + 3 canaries.

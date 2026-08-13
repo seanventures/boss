@@ -2749,6 +2749,12 @@ export type OutboxQueueRequest = {
   created_by_job_id?: string;
 };
 
+export type OutboxDryRunRequest = {
+  project_id: string;
+  actor?: string;
+  dedupe_key?: string;
+};
+
 export type OutboxDeliveryResponse = {
   status: string;
   data_boundary?: DataBoundary;
@@ -2756,6 +2762,15 @@ export type OutboxDeliveryResponse = {
   receipt_id?: string;
   decision_id?: string;
   provider_ref?: string;
+  message?: string;
+};
+
+export type OutboxDryRunResponse = {
+  status: string;
+  message_id?: string;
+  receipt_id?: string;
+  delivery_mode?: string;
+  provider_send?: boolean;
   message?: string;
 };
 
@@ -5337,7 +5352,14 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return undefined as T;
     }
     const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    if (!text) {
+      return undefined as T;
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("yaml") || contentType.includes("text/plain")) {
+      return text as T;
+    }
+    return JSON.parse(text) as T;
   }
 
   return {
@@ -8167,6 +8189,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<OutboxDeliveryResponse>(
         "POST",
         `/v1/comms/outbox/${encodeURIComponent(messageId)}/deliver`,
+        { body: payload },
+      );
+    },
+    dryRunOutboxMessage(messageId: string, payload: OutboxDryRunRequest) {
+      return request<OutboxDryRunResponse>(
+        "POST",
+        `/v1/comms/outbox/${encodeURIComponent(messageId)}/dry-run`,
         { body: payload },
       );
     },

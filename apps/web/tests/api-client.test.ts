@@ -1960,6 +1960,48 @@ describe("createBossApiClient", () => {
     expect(digest.outbox_message_id).toBe("out_digest");
   });
 
+  it("posts outbox dry-run without a reservation or deliver job", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          status: "dry_run",
+          message_id: "out_dry",
+          receipt_id: "rcpt_dry",
+          delivery_mode: "dry_run",
+          provider_send: false,
+          message: "dry-run — no provider send",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+    const client = createBossApiClient({
+      baseUrl: "http://127.0.0.1:8000",
+      fetchImpl,
+    });
+    const result = await client.dryRunOutboxMessage("out_dry", {
+      project_id: "boss-dogfood",
+      actor: "ceo",
+      dedupe_key: "outbox-dry-run-client",
+    });
+    expect(calls[0].url).toBe(
+      "http://127.0.0.1:8000/v1/comms/outbox/out_dry/dry-run",
+    );
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+      project_id: "boss-dogfood",
+      actor: "ceo",
+      dedupe_key: "outbox-dry-run-client",
+    });
+    expect(JSON.parse(String(calls[0].init?.body))).not.toHaveProperty(
+      "reservation_id",
+    );
+    expect(result.status).toBe("dry_run");
+    expect(result.provider_send).toBe(false);
+    expect(result.message).toBe("dry-run — no provider send");
+    expect(result.message?.toLowerCase()).not.toMatch(/\bsent\b/);
+  });
+
   it("manages communications channel rollout policies", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const responses = [

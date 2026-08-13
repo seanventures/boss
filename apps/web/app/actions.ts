@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { DataBoundary, LlmCallRow } from "@boss/api-client";
+import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 
@@ -755,6 +755,82 @@ export async function installPackAction(formData: FormData): Promise<void> {
     actor: getActor(formData),
   });
   revalidatePath("/");
+}
+
+export async function importPackAction(formData: FormData): Promise<void> {
+  const yamlContent = await readPackYaml(formData);
+  try {
+    await client.importPack({
+      project_id: getProjectId(formData),
+      yaml_content: yamlContent,
+      actor: getActor(formData),
+    });
+  } catch (error) {
+    throw packYamlApiError(error, "Pack import failed.");
+  }
+  revalidatePath("/");
+}
+
+export async function exportPackYaml(projectId: string, packId: string): Promise<string> {
+  try {
+    const yaml = await client.exportPack(projectId, packId);
+    if (typeof yaml !== "string" || !yaml) {
+      throw new Error("Pack export returned empty YAML.");
+    }
+    return yaml;
+  } catch (error) {
+    throw packYamlApiError(error, "Pack export failed.");
+  }
+}
+
+export async function exportPackAction(
+  formData: FormData,
+): Promise<{ yaml: string; packId: string }> {
+  const packId = formData.get("pack_id");
+  if (typeof packId !== "string" || !packId.trim()) {
+    throw new Error("pack_id is required");
+  }
+  const yaml = await exportPackYaml(getProjectId(formData), packId.trim());
+  return { yaml, packId: packId.trim() };
+}
+
+async function readPackYaml(formData: FormData): Promise<string> {
+  const pasted = formData.get("yaml");
+  if (typeof pasted === "string" && pasted.trim()) {
+    return pasted;
+  }
+  const uploaded = formData.get("yaml_file");
+  if (uploaded instanceof Blob) {
+    const text = await uploaded.text();
+    if (text.trim()) {
+      return text;
+    }
+  }
+  throw new Error("Pack YAML is required");
+}
+
+function packYamlApiError(error: unknown, fallback: string): Error {
+  if (error instanceof BossApiError) {
+    const detail = extractBossDetail(error.body);
+    return new Error(detail || error.message || fallback);
+  }
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(fallback);
+}
+
+function extractBossDetail(body: unknown): string | undefined {
+  if (typeof body === "string" && body.trim()) {
+    return body;
+  }
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) {
+      return detail;
+    }
+  }
+  return undefined;
 }
 
 export async function installAgentModuleAction(formData: FormData): Promise<void> {
@@ -1651,6 +1727,20 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function dryRunOutboxMessageAction(formData: FormData): Promise<void> {
+  const messageId = formData.get("message_id");
+  if (typeof messageId !== "string" || !messageId) {
+    throw new Error("message_id is required");
+  }
+
+  await client.dryRunOutboxMessage(messageId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    dedupe_key: `outbox-dry-run-${messageId}-${Date.now()}`,
+  });
+  revalidatePath("/");
+}
+
 export async function createDecisionDigestAction(
   formData: FormData,
 ): Promise<void> {
@@ -2410,6 +2500,49 @@ export async function runDeploymentHealthCheckAction(
   await client.runDeploymentHealthCheck(deploymentRunId.trim(), {
     actor: getActor(formData),
   });
+  revalidatePath("/");
+}
+
+export async function createImprovementProgramAction(
+  formData: FormData,
+): Promise<void> {
+  const name = String(formData.get("name") ?? "").trim();
+  const objective = String(formData.get("objective") ?? "").trim();
+  const baselineEvaluationId = String(
+    formData.get("baseline_evaluation_id") ?? "",
+  ).trim();
+  if (!name) {
+    throw new Error("name is required");
+  }
+  if (!objective) {
+    throw new Error("objective is required");
+  }
+  if (!baselineEvaluationId) {
+    throw new Error("baseline_evaluation_id is required");
+  }
+
+  const response = await fetch(`${API_URL}/v1/improvement-programs`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      project_id: getProjectId(formData),
+      name,
+      objective,
+      baseline_evaluation_id: baselineEvaluationId,
+      actor: getActor(formData),
+    }),
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      detail = String((await response.json()).detail ?? "");
+    } catch {
+      detail = "";
+    }
+    throw new Error(
+      detail || `Improvement program create failed (${response.status})`,
+    );
+  }
   revalidatePath("/");
 }
 

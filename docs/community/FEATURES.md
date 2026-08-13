@@ -37,6 +37,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |
+| Pack YAML import / export in Mission Control | ✅ |
 | Managed multi-tenant model gateway | ✦ Cloud |
 | Hosted skill marketplace | ✦ Cloud |
 

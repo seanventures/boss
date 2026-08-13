@@ -1231,7 +1231,7 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   );
 }
 
-export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console" }: {
+export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
@@ -1240,6 +1240,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   previewBlockedReason?: string;
   benchmarks?: QaBenchmarkApp[];
   actor?: string;
+  githubPlane?: string | null;
+  githubPlaneLabel?: string | null;
+  githubFullName?: string | null;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -1315,6 +1318,15 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
       {previewListError}
       <div className="ct-home-bar">
         <span className="ct-home-count">{tasks.length} code task{tasks.length === 1 ? "" : "s"}</span>
+        {githubPlane ? (
+          <span className="detail" data-testid="code-tasks-github-plane">
+            {githubPlane === "mission_control_binding"
+              ? `GitHub: Mission Control binding${githubFullName ? ` (${githubFullName})` : ""}`
+              : githubPlane === "legacy_env"
+                ? `GitHub: settings token${githubFullName ? ` (${githubFullName})` : ""} — connect in GitHub Mission Control for the project binding`
+                : githubPlaneLabel || `GitHub: ${githubPlane}`}
+          </span>
+        ) : null}
         <div className="ct-home-actions">
           <button className="cap-btn primary" onClick={() => setShowNew((v) => !v)}>
             {showNew ? "Close" : "＋ New code task"}

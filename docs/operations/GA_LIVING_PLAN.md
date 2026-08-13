@@ -53,7 +53,7 @@
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | **Done (code)** |
-| B6 | Deploy SOP requires `qa-live` | BOSS-337 | Open |
+| B6 | Deploy SOP requires `qa-live` | BOSS-337 | **Done (doc)** — `GOLDENEYE_DEPLOYMENT.md` redeploy must run `qa-live` + `qa-harness` catalog |
 
 ### Phase C — Community GA
 
@@ -202,6 +202,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | PRD P1 glue: pack YAML import/export in MC; comms **Dry-run deliver** Receipt (no Slack/email); improvement-program create form (promote stays enterprise-badged). Catalog `built` only when reportable. Code Tasks shows GitHub plane. Deploy SOP (B6) requires `qa-live` after shared-tag bump. | grok |
 | 2026-08-13 | Unified E2E QA harness: `make qa-harness` (preflight + 44-probe settings/features + control + BugBox/HookWatch/ApproveIt). Live catalog **55/55**. Launch gated by `BOSS_QA_ALLOW_CANARIES`. Docs `QA_HARNESS.md`. | grok |
 | 2026-08-13 | PRD completeness audit vs current code (not Aug 12 stale): `docs/operations/qa-2026-08-13-prd-audit.md`. Top Community holes: BYOK paste, local base URL, factory plane on factory surfaces, pack import UI, typed meetings, assurance seed, comms dry-run, improvement-program writes. | grok |
 | 2026-08-13 | Community PRD-partials: meetings simulated E2E + evidence; assurance honest empty + `POST /v1/assurance/seed-demo`; local OpenAI-compatible entitlement `base_url`. W4.5 Done (code). FEATURES.md: local URLs + assurance ✅; meetings stay ◐ | grok |

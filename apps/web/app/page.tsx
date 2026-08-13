@@ -27,6 +27,7 @@ import {
   syncCloudAction,
   inviteCloudTeamAction,
   saveCloudRetentionAction,
+  dryRunOutboxMessageAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
@@ -84,6 +85,7 @@ import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
+import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -184,6 +186,7 @@ import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
+import { ImprovementProgramsPanel } from "./improvement-programs-ui";
 import {
   extractSoftwareFactoryArtifactEvidence,
   extractSoftwareFactoryDecisionEvidence,
@@ -3376,46 +3379,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </article>
 
               <article className="stack-card" data-testid="improvement-programs-panel">
-                <h3>Improvement programs</h3>
-                <p className="detail">
-                  Community-class trial ledger at{" "}
-                  <code className="mono">/v1/improvement-programs</code>. Promote into SIM
-                  proposals only when the enterprise surface is mounted.
-                </p>
-                {!selfImprovement.programsApiReachable ? (
-                  <p className="detail">
-                    {selfImprovement.programsBlockedReason ??
-                      "Improvement programs API is unavailable."}
-                  </p>
-                ) : selfImprovement.improvementPrograms.length === 0 ? (
-                  <p className="detail">
-                    No improvement programs recorded yet. Programs pin QA baselines and
-                    deterministic trial policy without requiring enterprise SIM routes.
-                  </p>
-                ) : (
-                  <div className="feed-list">
-                    {selfImprovement.improvementPrograms.map((program) => (
-                      <div className="feed-row" key={program.id}>
-                        <div>
-                          <h4>{program.name}</h4>
-                          <p className="detail">
-                            {program.status}
-                            {program.updatedAt
-                              ? ` / ${formatDateTime(program.updatedAt)}`
-                              : ""}
-                          </p>
-                          <p className="detail">{program.objective}</p>
-                          {program.baselineEvaluationId ? (
-                            <p className="detail">
-                              Baseline: {program.baselineEvaluationId}
-                            </p>
-                          ) : null}
-                        </div>
-                        <code className="mono">{program.id}</code>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <ImprovementProgramsPanel
+                  programs={selfImprovement.improvementPrograms}
+                  programsApiReachable={selfImprovement.programsApiReachable}
+                  programsBlockedReason={selfImprovement.programsBlockedReason}
+                  projectId={activeProjectId}
+                  actor={activeActorId}
+                />
               </article>
             </div>
           ) : (
@@ -3874,31 +3844,46 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {message.channel} / {message.status} / {formatDateTime(message.createdAt)}
                         </p>
                         <p className="detail">
-                          {message.receiptId ?? message.body}
+                          {message.status === "dry_run"
+                            ? "dry-run — no provider send"
+                            : (message.receiptId ?? message.body)}
                         </p>
                       </div>
-                      {message.status === "draft" ? (
-                        <form action={queueOutboxMessageAction}>
-                          <input type="hidden" name="message_id" value={message.id} />
-                          <input type="hidden" name="project_id" value={activeProjectId} />
-                          <input type="hidden" name="actor" value={activeActorId} />
-                          <label className="field">
-                            <span>Urgency</span>
-                            <select
-                              aria-label={`Delivery urgency for ${message.id}`}
-                              className="input"
-                              defaultValue="normal"
-                              name="urgency"
-                            >
-                              <option value="low">Low</option>
-                              <option value="normal">Normal</option>
-                              <option value="urgent">Urgent</option>
-                            </select>
-                          </label>
-                          <SubmitButton className="button secondary" type="submit">
-                            Queue send
-                          </SubmitButton>
-                        </form>
+                      {message.status === "draft" || message.status === "dry_run" ? (
+                        <div>
+                          {message.status === "dry_run" ? (
+                            <p className="detail">dry-run — no provider send</p>
+                          ) : null}
+                          <form action={dryRunOutboxMessageAction}>
+                            <input type="hidden" name="message_id" value={message.id} />
+                            <input type="hidden" name="project_id" value={activeProjectId} />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <SubmitButton className="button secondary" type="submit">
+                              Dry-run deliver
+                            </SubmitButton>
+                          </form>
+                          <form action={queueOutboxMessageAction}>
+                            <input type="hidden" name="message_id" value={message.id} />
+                            <input type="hidden" name="project_id" value={activeProjectId} />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <label className="field">
+                              <span>Urgency</span>
+                              <select
+                                aria-label={`Delivery urgency for ${message.id}`}
+                                className="input"
+                                defaultValue="normal"
+                                name="urgency"
+                              >
+                                <option value="low">Low</option>
+                                <option value="normal">Normal</option>
+                                <option value="urgent">Urgent</option>
+                              </select>
+                            </label>
+                            <SubmitButton className="button secondary" type="submit">
+                              Queue send
+                            </SubmitButton>
+                          </form>
+                        </div>
                       ) : (
                         <code className="mono">{message.id}</code>
                       )}
@@ -3974,7 +3959,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                       </div>
                       {pack.installed ? (
-                        <span className="pill">installed</span>
+                        <div>
+                          <span className="pill">installed</span>
+                          <PackExportButton
+                            projectId={activeProjectId}
+                            packId={pack.packId}
+                            actor={activeActorId}
+                          />
+                        </div>
                       ) : (
                         <form action={installPackAction}>
                           <input type="hidden" name="pack_id" value={pack.packId} />
@@ -3989,6 +3981,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   ))}
                 </div>
               )}
+              <PackImportForm projectId={activeProjectId} actor={activeActorId} />
             </article>
 
             <article className="stack-card">
@@ -6962,6 +6955,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             previewBlockedReason={previewFeed.blockedReason}
             benchmarks={qaBenchmarkApps}
             actor={activeActorId}
+            githubPlane={wipStatus?.githubPlane}
+            githubPlaneLabel={wipStatus?.githubPlaneReason}
+            githubFullName={wipStatus?.githubFullName}
           />
         </section>
 

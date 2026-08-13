@@ -9,6 +9,53 @@ def test_qa_benchmark_catalog_is_exposed_as_a_pinned_contract(client):
     assert all("npm run healthcheck" in app["verification_commands"] for app in apps)
 
 
+def test_catalog_name_match_is_related_not_built(client, monkeypatch):
+    """Name-matched completed runs must not advertise certified `built` (report 404)."""
+
+    def _fake_done(*_args, **_kwargs):
+        return {
+            "run_id": "crun_name_only",
+            "run_status": "completed",
+            "pull_request_url": None,
+            "preview_id": None,
+            "preview_url": None,
+            "matched_on": "name",
+        }
+
+    monkeypatch.setattr(
+        "boss_engine.services.meeting_service.completed_benchmark_build",
+        _fake_done,
+    )
+    response = client.get("/v1/qa/benchmark-apps", params={"project_id": "boss-dogfood"})
+    assert response.status_code == 200, response.text
+    apps = {item["id"]: item for item in response.json()["benchmark_apps"]}
+    assert "built" not in apps["bugbox"]
+    assert apps["bugbox"]["related"]["matched_on"] == "name"
+    assert apps["bugbox"]["related"]["reportable"] is False
+
+
+def test_catalog_benchmark_id_match_is_built(client, monkeypatch):
+    def _fake_done(*_args, **_kwargs):
+        return {
+            "run_id": "crun_bench",
+            "run_status": "completed",
+            "pull_request_url": None,
+            "preview_id": None,
+            "preview_url": None,
+            "matched_on": "benchmark_id",
+        }
+
+    monkeypatch.setattr(
+        "boss_engine.services.meeting_service.completed_benchmark_build",
+        _fake_done,
+    )
+    response = client.get("/v1/qa/benchmark-apps", params={"project_id": "boss-dogfood"})
+    assert response.status_code == 200, response.text
+    apps = {item["id"]: item for item in response.json()["benchmark_apps"]}
+    assert apps["bugbox"]["built"]["run_id"] == "crun_bench"
+    assert apps["bugbox"]["built"]["reportable"] is True
+
+
 def test_simulated_direct_run_is_not_a_certified_pass(client, engine):
     from sqlalchemy import text
 
