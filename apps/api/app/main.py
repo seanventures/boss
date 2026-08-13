@@ -18999,8 +18999,10 @@ def seed_agent_studio_catalog(
                 "status": "seeded",
                 "agents": seeded["agents"],
                 "panels": seeded["panels"],
+                "skipped": seeded.get("skipped") or [],
                 "agent_count": len(seeded["agents"]),
                 "panel_count": len(seeded["panels"]),
+                "skipped_count": len(seeded.get("skipped") or []),
                 "external_effects": 0,
             }
         except Exception as error:  # noqa: BLE001 - typed API mapping

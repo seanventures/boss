@@ -82,17 +82,24 @@ class AgentStudioService:
     ) -> dict[str, list[dict[str, Any]]]:
         agents: list[dict[str, Any]] = []
         panels: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
         for path in sorted((self.settings.specpack_root / "agents").glob("*.yaml")):
             payload = self._load_yaml(path)
-            agents.append(
-                self._seed_agent(connection, project_id, payload, actor, path)
-            )
+            try:
+                agents.append(
+                    self._seed_agent(connection, project_id, payload, actor, path)
+                )
+            except ValueError as error:
+                skipped.append({"path": str(path.name), "error": str(error)})
         for path in sorted((self.settings.specpack_root / "panels").glob("*.yaml")):
             payload = self._load_yaml(path)
-            panels.append(
-                self._seed_panel(connection, project_id, payload, actor, path)
-            )
-        return {"agents": agents, "panels": panels}
+            try:
+                panels.append(
+                    self._seed_panel(connection, project_id, payload, actor, path)
+                )
+            except ValueError as error:
+                skipped.append({"path": str(path.name), "error": str(error)})
+        return {"agents": agents, "panels": panels, "skipped": skipped}
 
     def _seed_agent(
         self,

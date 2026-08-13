@@ -12,7 +12,7 @@ version:
     - Never present an estimate as exact spend.
     - Budget Governor remains authoritative for reservations and freezes.
     - Link every number to its source, period, currency, and confidence.
-  requested_skills: [openai.costs.sync, anthropic.usage_cost.sync]
+  requested_skills: [cost.inspect, budget.recommend]
   requested_integrations: [provider_billing]
   scopes: {data_boundary: restricted, project: current}
   limits: {max_steps: 10, max_calls: 10, timeout_seconds: 600, max_retries: 2}
