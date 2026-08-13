@@ -39,7 +39,7 @@
 | A1 | Shared-tag redeploy api+worker+web from `main` | BOSS-337, 342 | **Todo** | Images match; no `--env-template` clobber |
 | A2 | Re-run `make qa-live` | BOSS-351 | **Todo** (last PASS on 968bc47) | 10/10 on new tag |
 | A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Todo** | Catalog 13/3; seed works (404 on 968bc47) |
-| A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Partial** host up | One provision success **or** claim freeze |
+| A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Claim freeze shipped** (`BOSS_MICROVM_CLAIMS_FROZEN`) | Set freeze on dogfood; unfreeze after rootfs bake proof — see `docs/product/SANDBOX_GA_STATUS.md` |
 | A5 | DLQ triage top classes; prove no missing-git | BOSS-342 | **Partial** git in image tree | DLQ trend + root causes filed |
 | A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Todo** | Binding drives factory **or** UI label |
 | A7 | Claims freeze (allowed/forbidden list) | BOSS-337 | **Done (doc)** | [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md); SSO Community self-hosted allowed |
@@ -49,7 +49,7 @@
 | ID | Work | Plane | State |
 |---|---|---|---|
 | B1 | Weekly sealed command→code→PR→Decision | BOSS-351 | Open |
-| B2 | Preview View browser proof (non-loopback) | BOSS-341 | Open |
+| B2 | Preview View browser proof (non-loopback) | BOSS-341 | **Code+checklist** (`PREVIEW_GA_CHECKLIST.md`, `BOSS_PREVIEW_PUBLIC_BASE`); live browser still required |
 | B3 | Hide/badge paid surfaces on community | BOSS-338 residual | **Done (code on community-ga)** |
 | B4 | Residual hydration #418 | BOSS-346 | Open |
 | B5 | Assurance empty honesty + optional seed | BOSS-337/348 | Open |

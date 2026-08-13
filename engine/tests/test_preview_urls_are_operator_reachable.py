@@ -3,14 +3,20 @@
 app_previews.url holds http://127.0.0.1:<port> — reachable from the API process
 and from nowhere a browser runs. List/start responses must expose the gateway
 path operators can open, and keep the loopback address under internal_url.
+
+When BOSS_PREVIEW_PUBLIC_BASE is set, operator URLs become absolute under that
+origin; a loopback public base is rejected (fail closed to relative paths).
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 from boss_engine.services.preview_service import (
     operator_preview_open_url,
     publicize_preview,
     _is_loopback_url,
+    _preview_public_base,
 )
 
 
@@ -21,7 +27,10 @@ def test_operator_open_url_is_the_api_gateway_path():
 def test_loopback_detection():
     assert _is_loopback_url("http://127.0.0.1:41635")
     assert _is_loopback_url("http://localhost:3000")
+    assert _is_loopback_url("http://0.0.0.0:8080")
+    assert _is_loopback_url("http://[::1]/80")
     assert not _is_loopback_url("/v1/previews/prev_x/web/")
+    assert not _is_loopback_url("https://boss-api.local.sean.network/v1/previews/x/web/")
     assert not _is_loopback_url(None)
 
 
@@ -65,3 +74,46 @@ def test_publicize_list_shape_has_no_loopback_primary_urls():
     ]
     assert all("127." not in u and "localhost" not in u for u in primary)
     assert public[0]["internal_url"] == "http://127.0.0.1:1"
+
+
+def test_publicize_with_public_base_rewrites_loopback_to_absolute():
+    """BOSS_PREVIEW_PUBLIC_BASE → absolute operator URL; internal stays loopback."""
+    base = "https://boss-api.local.sean.network"
+    out = publicize_preview(
+        {
+            "id": "prev_abs",
+            "status": "running",
+            "url": "http://127.0.0.1:41635",
+        },
+        public_base=base,
+    )
+    assert out["url"] == f"{base}/v1/previews/prev_abs/web/"
+    assert out["open_url"] == out["url"]
+    assert out["internal_url"] == "http://127.0.0.1:41635"
+    assert "127.0.0.1" not in out["url"]
+    assert "localhost" not in out["url"]
+
+
+def test_publicize_rejects_loopback_public_base():
+    """A mis-set loopback BOSS_PREVIEW_PUBLIC_BASE must not reintroduce 127.0.0.1."""
+    out = publicize_preview(
+        {
+            "id": "prev_badbase",
+            "status": "running",
+            "url": "http://127.0.0.1:9",
+        },
+        public_base="http://127.0.0.1:8000",
+    )
+    assert out["url"] == "/v1/previews/prev_badbase/web/"
+    assert "127.0.0.1" not in out["url"]
+    assert _preview_public_base("http://localhost:9000") == ""
+    assert _preview_public_base("https://boss-api.example") == "https://boss-api.example"
+
+
+def test_publicize_uses_settings_preview_public_base():
+    settings = SimpleNamespace(preview_public_base="https://edge.example")
+    out = publicize_preview(
+        {"id": "prev_set", "status": "running", "url": "http://127.0.0.1:1"},
+        settings=settings,
+    )
+    assert out["url"] == "https://edge.example/v1/previews/prev_set/web/"

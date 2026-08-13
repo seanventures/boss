@@ -3173,17 +3173,39 @@ def put_cloud_retention(payload: dict) -> dict:
 def diag_sandbox_roundtrip() -> dict:
     """Run a submit->poll round-trip to the sandbox-service FROM INSIDE this container,
     so we can tell (API, not SSH) whether the control plane can actually reach + drive
-    the micro-VM service. Submits a throwaway echo task; polls up to ~40s."""
+    the micro-VM service. Submits a throwaway echo task; polls up to ~40s.
+
+    When BOSS_MICROVM_CLAIMS_FROZEN=true, refuse with 422 (do not claim microVM works).
+    Missing host config returns 503 (fail closed, never 500).
+    """
     import time as _time
 
     import httpx as _httpx
 
-    base = (settings.sandbox_agent_url or "").rstrip("/")
+    from .services.sandbox_provider import (
+        MICROVM_CLAIMS_FROZEN_MESSAGE,
+        microvm_claims_are_frozen,
+        sandbox_host_base,
+    )
+
+    if microvm_claims_are_frozen(settings):
+        raise HTTPException(
+            status_code=422,
+            detail=MICROVM_CLAIMS_FROZEN_MESSAGE,
+        )
+
+    base = sandbox_host_base(settings)
+    if not base:
+        raise HTTPException(
+            status_code=503,
+            detail="sandbox host not configured (BOSS_SANDBOX_AGENT_URL is empty)",
+        )
     headers = {}
     if settings.sandbox_token:
         headers["X-Sandbox-Token"] = settings.sandbox_token
     out: dict = {"url": base, "token_set": bool(settings.sandbox_token),
-                 "provider": settings.sandbox_provider}
+                 "provider": settings.sandbox_provider,
+                 "claims_frozen": False}
     body = {
         "task_id": "diag-roundtrip", "tenant_id": "boss-dogfood",
         "repo": {"owner": settings.target_github_owner, "name": settings.target_github_repo,
@@ -8750,15 +8772,35 @@ def deepen_discovery_endpoint(run_id: str):
 
 
 # --- Execution plane: governed sandbox visibility + console ------------------
+def _raise_sandbox_plane(exc: Exception) -> None:
+    """Map SandboxPlaneError → 4xx/503; never let host failures become 500."""
+    from .services.sandbox_provider import SandboxPlaneError
+
+    if isinstance(exc, SandboxPlaneError):
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    raise exc
+
+
 @app.get("/v1/sandboxes")
 def list_sandboxes_endpoint():
     """The connected micro-VM host + the inspectable (retained) VMs. A failed or
-    incomplete code task leaves its rootfs held ~2h; those show here for root-cause."""
+    incomplete code task leaves its rootfs held ~2h; those show here for root-cause.
+
+    Always reports claims_frozen when BOSS_MICROVM_CLAIMS_FROZEN is set. Host down
+    returns 200 with connected=false (not 500).
+    """
     from .services import sandbox_console
     try:
         result = sandbox_console.list_sandboxes(settings)  # host status
-    except Exception as e:  # sandbox service unreachable
-        result = {"sandboxes": [], "host": {"connected": False}, "unavailable": str(e)[:200]}
+    except Exception as e:  # sandbox service unreachable — fail closed
+        from .services.sandbox_provider import microvm_claims_are_frozen
+
+        frozen = microvm_claims_are_frozen(settings)
+        result = {
+            "sandboxes": [],
+            "host": {"connected": False, "claims_frozen": frozen},
+            "unavailable": str(e)[:200],
+        }
     cards = []
     try:
         with begin(engine) as c:
@@ -8792,31 +8834,63 @@ def list_sandboxes_endpoint():
 def sandbox_helpers_endpoint():
     """The governed helper-command allowlist (runnable without break-glass)."""
     from .services import sandbox_console
+    from .services.sandbox_provider import SandboxPlaneError
+
     try:
         return sandbox_console.list_helpers(settings)
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
     except Exception as e:  # sandbox agent unreachable
-        return {"categories": {}, "commands": [], "unavailable": str(e)[:200]}
+        raise HTTPException(
+            status_code=503,
+            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
+        ) from e
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/tree")
 def sandbox_tree_endpoint(sandbox_id: str):
     from .services import sandbox_console
-    return sandbox_console.get_tree(settings, sandbox_id)
+    from .services.sandbox_provider import SandboxPlaneError
+
+    try:
+        return sandbox_console.get_tree(settings, sandbox_id)
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
+        ) from e
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/file")
 def sandbox_file_endpoint(sandbox_id: str, path: str, actor: str = "operator"):
     """Read a tracked file from a sandbox working tree — audited."""
     from .services import sandbox_console
-    with begin(engine) as c:
-        return sandbox_console.read_file(c, settings, sandbox_id, path, actor=actor)
+    from .services.sandbox_provider import SandboxPlaneError
+
+    try:
+        with begin(engine) as c:
+            return sandbox_console.read_file(c, settings, sandbox_id, path, actor=actor)
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
+        ) from e
 
 
 @app.post("/v1/sandboxes/{sandbox_id}/exec")
 def sandbox_exec_endpoint(sandbox_id: str, payload: dict):
     """Run a command in a sandbox. Allowlisted helpers run freely; a raw shell
-    (break_glass=true) requires a reason and emits an elevated audit event."""
+    (break_glass=true) requires a reason and emits an elevated audit event.
+
+    BOSS_MICROVM_CLAIMS_FROZEN=true → 422 (microVM execution not claimed for GA).
+    """
     from .services import sandbox_console
+    from .services.sandbox_provider import SandboxPlaneError
+
     try:
         with begin(engine) as c:
             return sandbox_console.exec_command(
@@ -8824,8 +8898,10 @@ def sandbox_exec_endpoint(sandbox_id: str, payload: dict):
                 break_glass=bool(payload.get("break_glass")),
                 reason=payload.get("reason"), actor=payload.get("actor", "operator"),
             )
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.get("/v1/sandboxes/{sandbox_id}/stats")
@@ -8839,27 +8915,54 @@ def sandbox_stats_endpoint(sandbox_id: str):
 def sandbox_logs_endpoint(sandbox_id: str):
     """Guest serial console + code-agent log from a retained micro-VM (root-cause)."""
     from .services import sandbox_console
+    from .services.sandbox_provider import SandboxPlaneError
+
     try:
         return sandbox_console.get_logs(settings, sandbox_id)
-    except Exception as e:  # noqa: BLE001
-        return {"serial_tail": "", "agent_log": "", "unavailable": str(e)[:200]}
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
+    except Exception as e:  # noqa: BLE001 — fail closed (no 500)
+        raise HTTPException(
+            status_code=503,
+            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
+        ) from e
 
 
 @app.post("/v1/sandboxes/{sandbox_id}/preserve")
 def sandbox_preserve_endpoint(sandbox_id: str, payload: dict):
     """Hold a retained micro-VM longer for investigation (extends the reaper window)."""
     from .services import sandbox_console
-    with begin(engine) as c:
-        return sandbox_console.hold(
-            c, settings, sandbox_id, hours=int(payload.get("hours", 2)),
-            actor=payload.get("actor", "operator"),
-        )
+    from .services.sandbox_provider import SandboxPlaneError
+
+    try:
+        with begin(engine) as c:
+            return sandbox_console.hold(
+                c, settings, sandbox_id, hours=int(payload.get("hours", 2)),
+                actor=payload.get("actor", "operator"),
+            )
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
+        ) from e
 
 
 @app.delete("/v1/sandboxes/{sandbox_id}")
 def sandbox_destroy_endpoint(sandbox_id: str):
     from .services import sandbox_console
-    return sandbox_console.destroy(settings, sandbox_id)
+    from .services.sandbox_provider import SandboxPlaneError
+
+    try:
+        return sandbox_console.destroy(settings, sandbox_id)
+    except SandboxPlaneError as e:
+        _raise_sandbox_plane(e)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f"sandbox host unavailable: {type(e).__name__}: {e}"[:300],
+        ) from e
 
 
 # Curated catalog of the named service-level approval gates (the ~38 in-code

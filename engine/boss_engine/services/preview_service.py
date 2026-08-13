@@ -41,15 +41,6 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def operator_preview_open_url(preview_id: str) -> str:
-    """Path a browser can open on the BOSS API host (reverse-proxied to the preview).
-
-    The preview process binds 127.0.0.1 inside the API host; only this gateway path is
-    reachable from an operator browser or agent on the tailnet.
-    """
-    return f"/v1/previews/{preview_id}/web/"
-
-
 def _is_loopback_url(url: Optional[str]) -> bool:
     if not url:
         return False
@@ -58,12 +49,61 @@ def _is_loopback_url(url: Optional[str]) -> bool:
         "://127." in lowered
         or "://localhost" in lowered
         or "://[::1]" in lowered
+        or "://0.0.0.0" in lowered
         or lowered.startswith("127.")
         or lowered.startswith("localhost")
+        or lowered.startswith("[::1]")
+        or lowered.startswith("0.0.0.0")
     )
 
 
-def publicize_preview(record: dict) -> dict:
+def _preview_public_base(
+    explicit: Optional[str] = None, *, settings: Optional[Settings] = None
+) -> str:
+    """Operator-facing origin for View URLs. Loopback bases are rejected (fail closed
+    to relative gateway paths) so a mis-set BOSS_PREVIEW_PUBLIC_BASE cannot reintroduce
+    127.0.0.1 into operator-facing URLs.
+    """
+    if explicit is not None:
+        raw = explicit
+    elif settings is not None:
+        raw = getattr(settings, "preview_public_base", None) or ""
+    else:
+        raw = os.environ.get("BOSS_PREVIEW_PUBLIC_BASE", "") or ""
+    base = (raw or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if _is_loopback_url(base):
+        return ""
+    return base
+
+
+def operator_preview_open_url(
+    preview_id: str,
+    *,
+    public_base: Optional[str] = None,
+    settings: Optional[Settings] = None,
+) -> str:
+    """URL a browser can open for the preview (reverse-proxied by the BOSS API).
+
+    The preview process binds 127.0.0.1 inside the API host; only this gateway path is
+    reachable from an operator browser or agent on the tailnet. When
+    ``BOSS_PREVIEW_PUBLIC_BASE`` (or ``public_base``) is set to a non-loopback origin,
+    returns an absolute URL; otherwise a relative gateway path.
+    """
+    path = f"/v1/previews/{preview_id}/web/"
+    base = _preview_public_base(public_base, settings=settings)
+    if base:
+        return f"{base}{path}"
+    return path
+
+
+def publicize_preview(
+    record: dict,
+    *,
+    public_base: Optional[str] = None,
+    settings: Optional[Settings] = None,
+) -> dict:
     """Never hand out the preview's internal address as the primary ``url``.
 
     ``app_previews.url`` holds the sandbox-internal address
@@ -73,6 +113,9 @@ def publicize_preview(record: dict) -> dict:
 
     The internal address is preserved under ``internal_url`` for diagnostics and
     for the in-process reverse proxy, which still probes the loopback port.
+
+    When ``BOSS_PREVIEW_PUBLIC_BASE`` is set, operator-facing ``url`` / ``open_url``
+    become absolute under that origin. A loopback public base is rejected.
     """
     out = dict(record)
     preview_id = out.get("id")
@@ -80,12 +123,25 @@ def publicize_preview(record: dict) -> dict:
     if internal is not None:
         out["internal_url"] = internal
     if not preview_id:
+        # Still strip loopback from primary url if someone handed us a bare record.
+        if _is_loopback_url(out.get("url")):
+            out["url"] = None
         return out
     # Any record that ever had a live bind (or is still marked running) gets a
     # gateway open URL as the primary `url`. Failed/never-started rows with no
     # bind stay url=null so the console does not offer a dead "Open" link.
     if internal is not None or str(out.get("status") or "").lower() == "running":
-        open_url = operator_preview_open_url(str(preview_id))
+        open_url = operator_preview_open_url(
+            str(preview_id), public_base=public_base, settings=settings
+        )
+        out["open_url"] = open_url
+        out["url"] = open_url
+    # Hard invariant: primary operator URL must never be loopback, even if a
+    # non-gateway absolute slipped into the DB column without publicize rewrite.
+    if _is_loopback_url(out.get("url")):
+        open_url = operator_preview_open_url(
+            str(preview_id), public_base=public_base, settings=settings
+        )
         out["open_url"] = open_url
         out["url"] = open_url
     return out
@@ -721,7 +777,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
         "build_substrate": build_substrate,
-    })
+    }, settings=settings)
 
 
 def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> int:
@@ -866,7 +922,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
         "build_substrate": build_substrate,
-    })
+    }, settings=settings)
 
 
 def start_rootfs_preview(
@@ -932,7 +988,7 @@ def start_rootfs_preview(
         "build_substrate": build_substrate, "sandbox_task_id": sandbox_id,
         "expires_at": expires.isoformat(), "run_id": run_id,
         "repo": f"{owner}/{repo}", "branch": branch,
-    })
+    }, settings=settings)
 
 
 def _process_alive(pid: Optional[int]) -> bool:
@@ -1397,7 +1453,7 @@ def list_previews(
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     # Publicize at the boundary: DB keeps loopback for the proxy; callers get open_url.
-    return [publicize_preview(dict(r)) for r in rows]
+    return [publicize_preview(dict(r), settings=settings) for r in rows]
 
 
 def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:

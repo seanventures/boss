@@ -22,6 +22,63 @@ from ..schemas import FileChange
 from .core import make_id
 from .sandbox import DiffSummary, EphemeralSandbox
 
+# Honest Community GA message when BOSS_MICROVM_CLAIMS_FROZEN=true.
+# Kept as a module constant so API, provider, and tests share one string.
+MICROVM_CLAIMS_FROZEN_MESSAGE = (
+    "microVM execution is not claimed for Community GA "
+    "(BOSS_MICROVM_CLAIMS_FROZEN=true). Host connectivity may still be reported; "
+    "use BOSS_SANDBOX_PROVIDER=local for coding, or clear the freeze after a "
+    "proven rootfs bake. See docs/product/SANDBOX_GA_STATUS.md."
+)
+
+
+class SandboxPlaneError(RuntimeError):
+    """Fail-closed sandbox plane error mapped to 4xx/503 by the API (never 500).
+
+    Subclasses of RuntimeError so code_task_service marks the run failed visibly
+    instead of crashing the worker.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 503,
+        code: str = "sandbox_unavailable",
+    ):
+        super().__init__(message)
+        self.message = message
+        self.status_code = int(status_code)
+        self.code = code
+
+
+class MicroVMClaimsFrozen(SandboxPlaneError):
+    """BOSS_MICROVM_CLAIMS_FROZEN blocks microVM execution claims."""
+
+    def __init__(self, message: str = MICROVM_CLAIMS_FROZEN_MESSAGE):
+        super().__init__(message, status_code=422, code="microvm_claims_frozen")
+
+
+class SandboxHostUnavailable(SandboxPlaneError):
+    """Sandbox host unreachable or not configured — fail closed with 503."""
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=503, code="sandbox_host_unavailable")
+
+
+def microvm_claims_are_frozen(settings) -> bool:
+    return bool(getattr(settings, "microvm_claims_frozen", False))
+
+
+def ensure_microvm_execution_allowed(settings) -> None:
+    """Raise MicroVMClaimsFrozen when Community GA has frozen microVM claims."""
+    if microvm_claims_are_frozen(settings):
+        raise MicroVMClaimsFrozen()
+
+
+def sandbox_host_base(settings) -> str:
+    return (getattr(settings, "sandbox_agent_url", "") or "").strip().rstrip("/")
+
 
 @runtime_checkable
 class Sandbox(Protocol):
@@ -89,12 +146,23 @@ class MicroVMProvider:
     def _headers(self) -> dict:
         return {"X-Sandbox-Token": self.settings.sandbox_token} if self.settings.sandbox_token else {}
 
+    def _require_base(self) -> str:
+        base = sandbox_host_base(self.settings)
+        if not base:
+            raise SandboxHostUnavailable(
+                "sandbox host not configured (BOSS_SANDBOX_AGENT_URL is empty)"
+            )
+        return base
+
     def release(self, sandbox_task_id: Optional[str]) -> None:
         """Destroy a VM (best-effort). Called on SUCCESS to free capacity; failed VMs
         are intentionally NOT released so the service retains the rootfs for inspection."""
         if not sandbox_task_id:
             return
-        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        try:
+            base = self._require_base()
+        except SandboxHostUnavailable:
+            return
         try:
             import httpx
             with httpx.Client(timeout=15.0) as client:
@@ -106,7 +174,10 @@ class MicroVMProvider:
         """Bound retention explicitly so a successful build can back a rootfs preview."""
         if not sandbox_task_id:
             return False
-        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        try:
+            base = self._require_base()
+        except SandboxHostUnavailable:
+            return False
         try:
             import httpx
             with httpx.Client(timeout=15.0) as client:
@@ -124,7 +195,8 @@ class MicroVMProvider:
         self, sandbox_task_id: str, *, ttl_seconds: int, command: str = ""
     ) -> dict:
         """Ask the sandbox service to boot the app in the retained build rootfs."""
-        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        ensure_microvm_execution_allowed(self.settings)
+        base = self._require_base()
         import httpx
         try:
             with httpx.Client(timeout=45.0) as client:
@@ -136,7 +208,9 @@ class MicroVMProvider:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"retained-rootfs preview unavailable: {exc}") from exc
+            raise SandboxHostUnavailable(
+                f"retained-rootfs preview unavailable at {base}: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def acquire(self, *, task_id: str, tenant_id: Optional[str] = None) -> Sandbox:
         raise NotImplementedError(
@@ -165,7 +239,9 @@ class MicroVMProvider:
         from .code_agent import CodeAgentResult
         from .sandbox import CommandResult, DiffSummary
 
-        base = (self.settings.sandbox_agent_url or "").rstrip("/")
+        # Community GA honesty: never claim microVM execution while frozen.
+        ensure_microvm_execution_allowed(self.settings)
+        base = self._require_base()
         headers = {}
         if self.settings.sandbox_token:
             headers["X-Sandbox-Token"] = self.settings.sandbox_token
@@ -175,25 +251,34 @@ class MicroVMProvider:
 
         data = None
         last_status = None
+        sid = None
         with httpx.Client(timeout=60.0) as client:
             try:
                 r = client.post(f"{base}/v1/sandbox/tasks", json=body, headers=headers)
                 r.raise_for_status()
             except httpx.HTTPError as exc:
-                # Fail fast + loud instead of hanging: the control plane can't reach the
-                # sandbox-service (bad URL, network, or auth). Surfaces as a failed run.
-                raise RuntimeError(
+                # Fail fast + loud: control plane can't reach sandbox-service.
+                # SandboxHostUnavailable maps to HTTP 503 (not 500) at the API boundary.
+                raise SandboxHostUnavailable(
                     f"cannot reach sandbox-service at {base}: {type(exc).__name__}: {exc}"
                 ) from exc
             sid = r.json().get("sandbox_task_id")
             if not sid:
-                raise RuntimeError("sandbox-service did not return a sandbox_task_id")
+                raise SandboxHostUnavailable(
+                    "sandbox-service did not return a sandbox_task_id"
+                )
             self.last_sandbox_task_id = sid  # expose so the control plane can retain/inspect
             deadline = time.monotonic() + timeout_s
             while time.monotonic() < deadline:
                 time.sleep(poll)
-                pr = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
-                pr.raise_for_status()
+                try:
+                    pr = client.get(f"{base}/v1/sandbox/tasks/{sid}", headers=headers)
+                    pr.raise_for_status()
+                except httpx.HTTPError as exc:
+                    raise SandboxHostUnavailable(
+                        f"lost contact with sandbox-service at {base}: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
                 pdata = pr.json()
                 last_status = pdata.get("status")
                 if last_status in ("done", "failed", "timeout"):

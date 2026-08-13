@@ -953,12 +953,23 @@ class Settings(BaseSettings):
     # Coding-agent engine that runs INSIDE the sandbox (echo | openai | claude_code).
     # openai = native agent on the raw model API (no CLI/keychain — works headless).
     sandbox_guest_engine: str = Field(default="openai", alias="BOSS_SANDBOX_GUEST_ENGINE")
+    # Community GA honesty gate: when true, refuse microVM *execution* claims with a clear
+    # 422 (host connectivity may still be reported). Flip after rootfs bake is proven live.
+    # See docs/product/SANDBOX_GA_STATUS.md.
+    microvm_claims_frozen: bool = Field(
+        default=False, alias="BOSS_MICROVM_CLAIMS_FROZEN"
+    )
     # Root dir under which per-task ephemeral sandboxes are cloned and torn down.
     sandbox_root_path: Optional[Path] = Field(
         default=None, alias="BOSS_SANDBOX_ROOT_PATH"
     )
     # Shallow-clone depth for the ephemeral sandbox.
     sandbox_clone_depth: int = Field(default=1, alias="BOSS_SANDBOX_CLONE_DEPTH")
+    # Absolute operator-facing origin for preview View URLs (e.g.
+    # https://boss-api.local.sean.network). When set, publicize_preview rewrites
+    # loopback binds to {base}/v1/previews/{id}/web/ and rejects a loopback base.
+    # Relative gateway paths are used when empty. See docs/product/PREVIEW_GA_CHECKLIST.md.
+    preview_public_base: str = Field(default="", alias="BOSS_PREVIEW_PUBLIC_BASE")
 
     # --- GitHub App (Phase 2: developer impersonation, revocable) ------------
     # When set, github_app_adapter mints short-lived, repo-scoped installation
