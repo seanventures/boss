@@ -11,6 +11,12 @@ This is a private design-partner program, not a promise that the engine is
 publicly available or that hosted BOSS services are configured. The public
 release remains gated by the licensing decision and the public-flip checklist.
 
+Evaluating the **full monorepo** (Mission Control, `make dev` / `make smoke` /
+`make qa-live`, Community BYOK, GitHub bind)? Use
+[`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](../docs/operations/DESIGN_PARTNER_ONBOARDING.md)
+and `make onboard` from the repository root. This file stays the engine-only
+contract so it still works after extract.
+
 ## 1. Request access and establish the boundary
 
 The BOSS owner supplies:

@@ -38,6 +38,10 @@ BOSS Community is a fully functional, self-hosted product — not a crippled tri
 
 ## Start here
 
+Private design-partner invite: [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](../operations/DESIGN_PARTNER_ONBOARDING.md)
+(`make onboard`). That path does not claim a public repository or that
+sandboxes always work.
+
 **One-line (recommended):**
 
 ```bash

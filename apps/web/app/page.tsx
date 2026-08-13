@@ -63,6 +63,7 @@ import {
   uploadModelCredentialAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
+import { OnboardingHelpCard } from "./onboarding-help-card";
 import { AgentChat } from "./agent-ui";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
@@ -982,6 +983,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="stack-grid" data-area="overview">
+          <OnboardingHelpCard />
           <article className="stack-card">
             <div className="section-head">
               <div>

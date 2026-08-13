@@ -44,6 +44,7 @@ nav:
   - Architecture:
       - Governed autonomous improvement: architecture/AUTONOMOUS_IMPROVEMENT_LOOP.md
   - Operations:
+      - Design-partner onboarding: operations/DESIGN_PARTNER_ONBOARDING.md
       - Infrastructure runbook: operations/INFRA_RUNBOOK.md
       - Webhooks: operations/WEBHOOKS.md
 

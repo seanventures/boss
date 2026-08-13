@@ -33,6 +33,9 @@ BOSS is built around a few non-negotiable controls:
   traceability ledger.
 - Read the [product requirements](product/PRD-v2.0.md) and
   [technical specification](product/TECHNICAL_SPEC-v2.0.md).
+- Invited as a private design partner? Follow
+  [design-partner onboarding](operations/DESIGN_PARTNER_ONBOARDING.md)
+  (`make onboard`). Access remains a human GitHub invite.
 - Operate the reactive substrate with the [webhook runbook](operations/WEBHOOKS.md).
 - Review the [roadmap](product/ROADMAP-v2.0.md) for planned and blocked work.
 

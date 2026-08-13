@@ -99,6 +99,17 @@ If a required credential is missing, the API must fail closed and create visible
 - `OPENAI_API_KEY`
 - Optional ProviderOps credentials for read-only connection tests, inventory sync, and billing sync: `BOSS_DIGITALOCEAN_TOKEN`, `BOSS_CLOUDFLARE_API_TOKEN`, `BOSS_SUPABASE_ACCESS_TOKEN`, `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY`, and `ANTHROPIC_API_KEY` or `ANTHROPIC_ADMIN_KEY`. Supabase project creation ChangeSets should reference a local env-backed `SecretRef` such as `env:BOSS_SUPABASE_PROJECT_DB_PASS` for the database password.
 
+## Design partners (private repository)
+
+If you were invited onto this **private** repo, start here — do not assume a
+public clone or Cloud tenant exists:
+
+- Checkable week-1 path: [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](docs/operations/DESIGN_PARTNER_ONBOARDING.md)
+- Engine-only Docker/MCP pack: [`engine/DESIGN_PARTNER_ONBOARDING.md`](engine/DESIGN_PARTNER_ONBOARDING.md)
+- Pointer with no secret values: `make onboard`
+
+Access is still a human GitHub invite. This is not the public OSS flip.
+
 ## Setup
 
 1. Copy `.env.example` to `.env` and fill in the required secrets.
@@ -111,8 +122,10 @@ To opt into signed GitHub issue triage and pull-request review, install the repo
 
 ## Commands
 
+- `make onboard`: print the private design-partner week-1 path (no secrets)
 - `make dev`: start Postgres, web, API, and worker
 - `make test`: run web and Python tests
+- `make qa-live`: live control-plane gate against a running API (`BOSS_API_KEY` required; never printed)
 - `make lint`: run TypeScript and Python checks
 - `make build`: run the production web build
 - `make seed`: apply schema and seed the dogfood org/workspace/project
