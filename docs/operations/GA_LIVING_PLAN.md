@@ -38,7 +38,7 @@
 |---|---|---|---|---|
 | A1 | Shared-tag redeploy api+worker+web from `main` | BOSS-337, 342 | **Todo** | Images match; no `--env-template` clobber |
 | A2 | Re-run `make qa-live` | BOSS-351 | **Todo** (last PASS on 968bc47) | 10/10 on new tag |
-| A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Todo** | Catalog 13/3; seed works (404 on 968bc47) |
+| A3 | Agent Studio seed + one deterministic run | BOSS-347 | **Done live** | Seed 200; 13/13 published; catalog-smoke 13/13 passed 2026-08-13 |
 | A4 | Sandbox rootfs bake **or** drop microVM claims | BOSS-340 | **Claim freeze shipped** (`BOSS_MICROVM_CLAIMS_FROZEN`) | Set freeze on dogfood; unfreeze after rootfs bake proof — see `docs/product/SANDBOX_GA_STATUS.md` |
 | A5 | DLQ triage top classes; prove no missing-git | BOSS-342 | **Partial** git in image tree | DLQ trend + root causes filed |
 | A6 | Factory vs MC GitHub dual-plane honesty | BOSS-343 follow-on | **Todo** | Binding drives factory **or** UI label |
