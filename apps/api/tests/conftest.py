@@ -61,6 +61,9 @@ def clean_tables(engine):
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
         for tbl in [
+            "metatron_watch_ticks",
+            "metatron_memories",
+            "metatron_goals",
             "agent_group_member_runs",
             "agent_key_leases",
             "agent_key_grants",

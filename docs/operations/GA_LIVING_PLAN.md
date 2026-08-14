@@ -100,7 +100,7 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 | **W1** UI honesty | Edition/empty | **Mostly (live)** | 338, 339, 344; community-ga U2 | Visual badge check; 346 residual |
 | **W2** Substrate | Worker/sandbox/preview | **Partial** | 340 host, 341 code, 342 git image | Rootfs; DLQ |
 | **W3** Vertical slice | CEO→PR sealed | **Partial** | 343 GitHub wire, 345 next_move, 349 OpenAPI, 351 gate | Reliable code path 351 |
-| **W4** Product loops | Studio/Assurance/deploy | **Partial** | W4.5 seed (code) | 347, 348, 344 deploy optional |
+| **W4** Product loops | Studio/Assurance/deploy | **Partial** | W4.5 seed (code) | 347, 348, 344 deploy optional; Metatron captain watch/drive is Community code, not a public GA stamp |
 | **W5** Gates + Plane | Live proof only | **Active** | Gate script Done | Mandatory deploy gate |
 
 ---
@@ -234,6 +234,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-14 | W4 residual: Metatron captain watch/drive is Community code (FEATURES.md ◐), not a public GA stamp. No live dogfood of captain drive. | grok |
 | 2026-08-14 | **HookWatch working software:** `crun_911888eefbd14166bce6` completed, verify exit 0, PR #86. View `prev_78b214cfb8fa4fbf8d08` title “HookWatch — temporary webhook inboxes”; `/api/health` JSON; `GET/POST /api/inboxes` (201). All 3 canaries now serve backends. `qa-working-software` 4/4. Not public/C1–C4 GA. | grok |
 | 2026-08-14 | **Sample-app Views serve backends:** `f5def77` shared-tag deploy. Resolver prefers owning `scripts.start` over `web/index.html`. BugBox `prev_d06b4eabe8f3471cb2c0` `/health`+`/api/issues` JSON. ApproveIt `prev_7ad80927147e4ab3b8f3` `/health`+`/api/users` JSON. Worker read timeout 7200s. HookWatch `crun_911888eefbd14166bce6` implement. `qa-live` 10/10, working-software 4/4, harness 56/56. Not public/C1–C4 GA. | grok |
 | 2026-08-13 | **Working-software bar MET:** `crun_9acc1e5f44e0464099be` verify green; View `prev_bd861455f95f4bb2b183` title “BugBox — Console Platform issue tracker”; `/health` ok; `/api/issues` live. Review-timeout residual (run failed after verify). Not public/C1–C4 GA. | grok |

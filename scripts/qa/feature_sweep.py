@@ -139,6 +139,8 @@ def build_probes(
         Probe("workforce.workflows", "/v1/workflows", query=q),
         Probe("workforce.meetings", "/v1/meetings", query=q),
         Probe("workforce.benchmark-apps", "/v1/qa/benchmark-apps", query=q),
+        Probe("workforce.metatron-goals", "/v1/metatron/goals", query=q, required=False),
+        Probe("workforce.metatron-session", "/v1/metatron/session", query=q, required=False),
         # Identity — Community catalog, must be 2xx not 404
         Probe("identity.identity-providers", "/v1/identity-providers"),
         # Paid expected 404 on Community (edition honesty). 500 fails.

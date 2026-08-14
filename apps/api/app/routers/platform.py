@@ -207,3 +207,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(agent_studio_seed_router)
     except ImportError:
         pass
+
+    # Metatron captain: persistent session, goals, watch, proposal-only drive
+    try:
+        from .metatron_captain import router as metatron_captain_router
+
+        app.include_router(metatron_captain_router)
+    except ImportError:
+        pass

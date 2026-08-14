@@ -87,6 +87,7 @@ import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
 import { PreviewsPanel } from "./previews-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
 import { OnboardingHelpCard } from "./onboarding-help-card";
+import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -1104,6 +1105,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             )}
           </article>
+          <MetatronCaptain
+            projectId={activeProjectId}
+            actor={activeActorId}
+          />
         </section>
 
         <section className="grid" data-area="overview">

@@ -2876,6 +2876,57 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_created
   ON agent_messages(thread_id, created_at, id);
 
+-- Metatron Captain: goals, durable memory, watch ticks (always-on oversight).
+-- Chat persistence reuses agent_threads (surface=chat, external_ref=metatron:captain).
+CREATE TABLE IF NOT EXISTS metatron_goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  target JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_score NUMERIC,
+  last_measured_at TIMESTAMPTZ,
+  last_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  auto_drive BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('working_software', 'budget', 'queue', 'quality', 'custom')),
+  CHECK (status IN ('active', 'paused', 'achieved', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_goals_project
+  ON metatron_goals(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS metatron_memories (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  content TEXT NOT NULL,
+  salience NUMERIC NOT NULL DEFAULT 0.5,
+  source TEXT NOT NULL DEFAULT 'chat',
+  refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('fact', 'decision', 'lesson', 'goal_note', 'watch')),
+  CHECK (salience >= 0 AND salience <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_memories_project
+  ON metatron_memories(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS metatron_watch_ticks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  proposed_moves JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_watch_project
+  ON metatron_watch_ticks(project_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

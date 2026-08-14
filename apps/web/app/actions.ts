@@ -3718,3 +3718,65 @@ export async function createPreviewFixtureAction(
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+export async function metatronCaptainTurnAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const message = String(formData.get("message") ?? "").trim();
+  if (!message) {
+    return { ok: false, error: "Enter a captain message." };
+  }
+  const result = await postJsonReturn("/v1/metatron/session", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
+    message,
+  });
+  revalidatePath("/");
+  return result;
+}
+
+export async function metatronCaptainWatchAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const result = await postJsonReturn("/v1/metatron/watch", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+  return result;
+}
+
+export async function metatronCaptainDriveAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const result = await postJsonReturn("/v1/metatron/drive", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    auto: false,
+  });
+  revalidatePath("/");
+  return result;
+}
+
+export async function metatronCaptainAddGoalAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) {
+    return { ok: false, error: "Goal title is required." };
+  }
+  const result = await postJsonReturn("/v1/metatron/goals", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    title,
+    kind: String(formData.get("kind") ?? "custom").trim() || "custom",
+    description: String(formData.get("description") ?? "").trim(),
+  });
+  revalidatePath("/");
+  return result;
+}

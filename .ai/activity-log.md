@@ -1,5 +1,28 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Metatron Captain engine + idle watch
+
+- Engine `MetatronCaptain`: persistent `agent_threads` session (`external_ref=metatron:captain`), `metatron_memories`, `metatron_goals` (scored from control-plane snapshot), `metatron_watch_ticks` with Receipt `metatron:watch:{project}:{minute}`.
+- Routes: POST/GET `/v1/metatron/session`, GET/POST `/v1/metatron/goals`, POST `/v1/metatron/watch`, GET `/v1/metatron/watch/latest`, POST `/v1/metatron/drive`. Drive is **proposal-only** — never applies BOSS self-mod, never starts a code.task.
+- Worker idle tick every 180s (`tick_metatron_watch`) is no-LLM / no-spend.
+- Tests: `engine/tests/test_metatron_captain.py` 5 passed; web `metatron-captain.test.ts` 2 passed.
+- **Do not stamp public GA.** Captain is Community code.
+
+## 2026-08-14 — Grok — Metatron Captain Community UI island
+
+- Added `apps/web/app/metatron-captain-ui.tsx` on `ai/grok/community-ga` and mounted it on Mission Control overview beside Status Query. Existing `POST /v1/metatron/query` form is unchanged.
+- Island: persistent chat → `/v1/metatron/session`, goals + add-goal, last watch findings, proposal-only **Propose next moves** (`auto: false`). 404/unavailable is honest — no invented session.
+- Tests: `apps/web/tests/metatron-captain.test.ts` (mount, fields, 404 copy, no loopback operator URL).
+- W4 residual: Community code, not a public GA stamp. Do not close BOSS-337.
+
+## 2026-08-14 — Grok — Metatron captain expansion (docs; no silent autonomy)
+
+- Product direction: Metatron becomes the always-on captain — persistent chat with memory, goal register+measure, watch ticks, and proposal-only drive of governed work.
+- **Live (cited):** scoped `POST /v1/metatron/query` (`engine/boss_engine/services/metatron.py`, Mission Control card in `apps/web/lib/metatron.ts` / `page.tsx`); `metatron_operator_v1` (command.propose / decision.create, autonomy 1, must not bypass approvals); `POST /v1/commands/propose` intake creates task/plan with `dedupe_key` (`intake.py`).
+- **Not live / mid-flight:** persistent session+memory, goal register+measure, watch ticks, captain drive loop. FEATURES.md Workforce row is **◐**.
+- **No-silent-autonomy rule:** Metatron must **not** autonomously self-modify BOSS. Every drive effect needs a Decision or existing intake/job path **plus** a Receipt with a unique `dedupe_key`. Never silent-apply.
+- W4 residual: captain watch/drive is Community code, not a public GA stamp. Plane BOSS-337 comment skipped (`plane.local.sean.network` is a private IP; no POST from this agent). Issue stays In Progress — do not close. **Do not stamp public GA.**
+
 ## 2026-08-14 — Grok — HookWatch View live; all 3 canaries work
 
 - HookWatch `crun_911888eefbd14166bce6` **completed** (`npm run verify` exit 0, 11 impl files, PR paramg/boss-sandbox#86).

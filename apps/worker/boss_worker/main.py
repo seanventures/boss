@@ -14,8 +14,10 @@ QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
 # The shepherd watches in-flight work. Often enough that a duplicate is killed before it
 # costs anything real, rare enough that it is never the busiest thing on the box.
 SHEPHERD_WATCH_INTERVAL_SECONDS = 120
+METATRON_WATCH_INTERVAL_SECONDS = 180
 _last_shepherd_watch_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
+_last_metatron_watch_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -70,6 +72,28 @@ def _watch_running_tasks(client: ControlPlaneClient) -> None:
                         result.get("in_flight"))
     except Exception:  # noqa: BLE001
         LOGGER.debug("shepherd_watch_failed", exc_info=True)
+
+
+def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
+    """Always-on Metatron captain watch while the worker is idle.
+
+    No LLM. No new code.task. Records a Receipt-backed tick and findings.
+    Swallowed like the shepherd: a captain that kills the worker is worse than none.
+    """
+    global _last_metatron_watch_monotonic
+    now = time.monotonic()
+    if now - _last_metatron_watch_monotonic < METATRON_WATCH_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        client.tick_metatron_watch(str(project_id))
+        _last_metatron_watch_monotonic = now
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("metatron_watch_failed", exc_info=True)
 
 
 def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
@@ -142,6 +166,7 @@ def main() -> None:
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)
+                _tick_metatron_watch(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:

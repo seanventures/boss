@@ -82,10 +82,13 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
+| Metatron captain (persistent session / goals / watch) | ◐ Community Mission Control island + `/v1/metatron/session|goals|watch|drive`. Drive is proposal-only (no silent self-modify). Live dogfood of captain drive still residual. |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
+
+Metatron is expanding toward an always-on captain. **Live today** is one-shot, reference-backed status Q&A (`POST /v1/metatron/query`) plus a Community Mission Control captain island over `/v1/metatron/session|goals|watch|drive`. Drive is proposal-only. **Not claimed live:** a captain drive that starts work by itself. Drive effects must use a Decision or the existing intake/job path and leave a Receipt with a unique `dedupe_key`. Metatron must not autonomously self-modify BOSS.
 
 ## Open-core boundary
 

@@ -1,5 +1,10 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-14 Metatron Captain Community UI
+
+- `ai/grok/community-ga` now mounts a Community-safe captain island on Mission Control overview beside the existing Status Query. Chat/goals/watch/drive post to `/v1/metatron/*`. Drive is proposal-only. HTTP 404 is honest unavailable — no invented session.
+- W4 residual / BOSS-337 stays In Progress. Do not stamp public GA.
+
 ## 2026-08-08 BOSS-333 toolchain intake status
 
 - `ai/codex/model-agnostic-agent-toolchain` implements sanitized, model-agnostic
