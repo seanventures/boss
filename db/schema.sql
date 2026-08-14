@@ -2930,6 +2930,49 @@ CREATE TABLE IF NOT EXISTS metatron_watch_ticks (
 CREATE INDEX IF NOT EXISTS idx_metatron_watch_project
   ON metatron_watch_ticks(project_id, created_at DESC);
 
+-- Focused always-on agents (thin builder + duty loop; Studio stays the full registry).
+CREATE TABLE IF NOT EXISTS focused_agents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  focus TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  mode TEXT NOT NULL DEFAULT 'hybrid',
+  interval_seconds INTEGER NOT NULL DEFAULT 120,
+  wake_on JSONB NOT NULL DEFAULT '[]'::jsonb,
+  allowed_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_tick_at TIMESTAMPTZ,
+  last_wake_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_score NUMERIC,
+  last_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, agent_key)
+);
+CREATE INDEX IF NOT EXISTS idx_focused_agents_project
+  ON focused_agents(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS focused_agent_ticks (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES focused_agents(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  trigger TEXT NOT NULL,
+  observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  planned JSONB NOT NULL DEFAULT '[]'::jsonb,
+  validation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rejected JSONB NOT NULL DEFAULT '[]'::jsonb,
+  verify JSONB NOT NULL DEFAULT '{}'::jsonb,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_focused_agent_ticks_agent
+  ON focused_agent_ticks(agent_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

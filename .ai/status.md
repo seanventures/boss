@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-14 Focused always-on agents
+
+- Builder + duty loop: `POST /v1/focused-agents`, worker `tick-all` every 60s, Wake now.
+- Templates: preview keeper, queue helper, factory driver, reviewer, custom.
+- Same validate-then-apply gates as captain. FEATURES ◐. Not GA.
+
 ## 2026-08-14 Metatron Captain always-on overwatch
 
 - Shared tag `3f1d2cf` live. Worker overwatch every 60s: observe → measure → validate → apply-safe → verify.

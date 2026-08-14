@@ -82,6 +82,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
+| Focused always-on agents | ◐ Builder + duty loop in code (`/v1/focused-agents`). Worker ticks due always-on/hybrid agents every 60s; Wake now for on-demand. Same validate-then-apply gates as captain. **Not GA** until live dogfood. |
 | Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch on shared tag `3f1d2cf`. Worker every 60s: observe → measure → validate → apply-safe → verify. Live dogfood: first tick applied a preview restart (`app_preview.started` 17:32:16Z, verify ok). Decisions/DLQ stay human. **Not public GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |

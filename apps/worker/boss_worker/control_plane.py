@@ -219,6 +219,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_focused_agents(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+        """Always-on / hybrid focused agents whose interval elapsed or a wake event arrived."""
+        response = self._client.post(
+            "/v1/focused-agents/tick-all",
+            json={"project_id": project_id, "actor": actor},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def sweep_qa_benchmark_evaluations(self) -> dict[str, Any]:
         """Persist changed terminal benchmark reports as tuning evidence snapshots.
 

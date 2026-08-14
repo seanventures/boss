@@ -64,6 +64,8 @@ def clean_tables(engine):
             "metatron_watch_ticks",
             "metatron_memories",
             "metatron_goals",
+            "focused_agent_ticks",
+            "focused_agents",
             "agent_group_member_runs",
             "agent_key_leases",
             "agent_key_grants",

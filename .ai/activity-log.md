@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Focused always-on agent builder
+
+- Thin builder at Agent Studio: pick template (preview keeper / queue helper / factory driver / reviewer / custom), set focus, mode (always_on / hybrid / on_demand), start.
+- Runtime `FocusedAgentService`: observe → plan → validate → apply allowed actions → verify. Worker `tick-all` every 60s; hybrid also wakes on matching events; Wake now for on-demand.
+- Same captain gates: no DLQ/decision apply, budget, no duplicate factory, preview needs verify-green. Receipts `focused:{id}:{minute}:{trigger}`.
+- **Not GA.** FEATURES ◐ until live dogfood of a focused-agent apply.
+
 ## 2026-08-14 — Grok — Live always-on overwatch dogfood
 
 - Shared-tag deploy api+worker+web `3f1d2cf`. No `--env-template`.

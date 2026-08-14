@@ -215,3 +215,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(metatron_captain_router)
     except ImportError:
         pass
+
+    # Focused always-on agents: builder + validated duty loop
+    try:
+        from .focused_agents import router as focused_agents_router
+
+        app.include_router(focused_agents_router)
+    except ImportError:
+        pass

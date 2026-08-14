@@ -80,6 +80,7 @@ import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
+import { FocusedAgents } from "./focused-agents-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
@@ -840,6 +841,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
+          <FocusedAgents
+            projectId={activeProjectId}
+            actor={activeActorId}
+          />
           <AgentStudio
             feed={agentStudioFeed}
             roles={roles.items}

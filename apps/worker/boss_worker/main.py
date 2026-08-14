@@ -15,9 +15,11 @@ QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
 # costs anything real, rare enough that it is never the busiest thing on the box.
 SHEPHERD_WATCH_INTERVAL_SECONDS = 120
 METATRON_WATCH_INTERVAL_SECONDS = 60
+FOCUSED_AGENT_INTERVAL_SECONDS = 60
 _last_shepherd_watch_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
+_last_focused_agent_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -106,6 +108,27 @@ def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("metatron_overwatch_failed", exc_info=True)
 
 
+def _tick_focused_agents(client: ControlPlaneClient, settings) -> None:
+    """Always-on focused agents. Fail-closed apply. Never kill the worker."""
+    global _last_focused_agent_monotonic
+    now = time.monotonic()
+    if now - _last_focused_agent_monotonic < FOCUSED_AGENT_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.tick_focused_agents(str(project_id))
+        _last_focused_agent_monotonic = now
+        ran = result.get("ran") if isinstance(result, dict) else None
+        if ran:
+            LOGGER.info("focused_agents ran=%s active=%s", len(ran), (result or {}).get("active"))
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("focused_agents_failed", exc_info=True)
+
+
 def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
     """Keep the benchmark evidence ledger current while the worker is idle.
 
@@ -174,6 +197,7 @@ def main() -> None:
                 time.sleep(settings.poll_interval_seconds)
                 continue
             _tick_metatron_watch(client, settings)
+            _tick_focused_agents(client, settings)
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)

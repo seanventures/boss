@@ -140,6 +140,7 @@ Status legend: **shipped** · **partial** · **planned** · **Cloud/Enterprise**
 | Capability | Status | Notes |
 |---|---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | shipped | Specpack roles |
+| Focused always-on agents | partial | Builder + `/v1/focused-agents` duty loop. Validated apply only. Not GA. |
 | Metatron captain (session / goals / watch / drive / overwatch) | partial | Always-on overwatch validates every action then may apply preview restart or a governed `code.task`. Decisions/DLQ stay human. No live dogfood. Not GA. |
 | Work orchestration / portfolio | shipped | Priorities, quotas, leases |
 | Meetings / multi-agent panels | partial | Runtime present; expand packs |

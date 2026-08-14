@@ -148,7 +148,7 @@ const AREAS: AreaDef[] = [
   { id: "github", label: "GitHub", sub: "Repositories, branch truth, sync, conflict resolution, and merges", group: "Platform", icon: ICONS.github },
   { id: "infra", label: "System Configuration", sub: "Connections, providers, resources, worker scaling, and FinOps", group: "Platform", icon: ICONS.infra },
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
-  { id: "studio", label: "Agent Studio", sub: "Build, test, compose, and observe agents working together", group: "Platform", icon: ICONS.studio },
+  { id: "studio", label: "Agent Studio", sub: "Build focused always-on agents, then compose full studio roles", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
   {
     id: "enterprise",

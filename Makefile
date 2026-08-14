@@ -211,8 +211,8 @@ endif
 # Captain NL + island contract only. Not live dogfood. Does not stamp GA.
 # Overwatch/apply stay fail-closed; this target never spends or self-modifies BOSS.
 qa-metatron-captain: install-python install-node
-	PYTHONPATH=.:engine $(PYTHON) -m pytest engine/tests/test_metatron_captain.py scripts/tests/test_metatron_tui.py -q
-	pnpm --filter boss-web test -- tests/metatron-captain.test.ts tests/edition-visibility.test.ts tests/platform-ops-ui.test.ts
+	PYTHONPATH=.:engine $(PYTHON) -m pytest engine/tests/test_metatron_captain.py engine/tests/test_focused_agents.py scripts/tests/test_metatron_tui.py -q
+	pnpm --filter boss-web test -- tests/metatron-captain.test.ts tests/focused-agents.test.ts tests/edition-visibility.test.ts tests/platform-ops-ui.test.ts
 
 # Community GA bar: completed factory app + reachable non-fixture preview.
 # Never launches a new budgeted code.task. DRY_RUN=1 structure only.
