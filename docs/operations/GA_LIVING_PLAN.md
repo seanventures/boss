@@ -237,6 +237,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-13 | **Working-software bar MET:** `crun_9acc1e5f44e0464099be` verify green; View `prev_bd861455f95f4bb2b183` title “BugBox — Console Platform issue tracker”; `/health` ok; `/api/issues` live. Review-timeout residual (run failed after verify). Not public/C1–C4 GA. | grok |
 | 2026-08-13 | **Live stack `647c742`:** api+worker+web shared tag (boot-fixed; rolled back from crashed `64d0e99`). Advertised coding substrate `local` while configured `microvm` + frozen. `qa-live` 10/10 ~22:44Z. `qa-working-software` **PASS** on replay BugBox `prev_4289c3eaad02479daa47` title “BugBox — capture, track, resolve”. New canary `crun_27b5a74441fc4c0d8ace` running `write_tests`. DoD #3/#4 updated. **Community GA not stamped.** 14-day still Day 1/14. C2 open. BOSS-300 human legal. 351 stays In Progress. | grok |
 | 2026-08-13 | **GA bar restated:** working software through the factory. Live replay: BugBox `crun_7cc663627f2340dc85ac` verify green → preview `prev_af60b33719b04082b027` title “BugBox — capture, track, resolve”. `make qa-working-software`. Frozen microVM now falls back to local coding (`make_sandbox_provider`). Do not stamp GA until a new build on current tag. | grok |
 | 2026-08-13 | A5 DLQ remediations: `GET/POST /v1/deadletters/remediations` + `POST /v1/deadletters/{id}/retry`; credit-vs-credential classifier tests; remaining live classes TPM + missing DO creds. `qa-dlq-remediations.md`. Plane BOSS-372. | grok |
