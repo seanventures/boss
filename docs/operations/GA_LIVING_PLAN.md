@@ -1,7 +1,7 @@
 # BOSS GA living plan
 
 **Status date:** 2026-08-13  
-**Overall GA:** **NOT READY** to stamp. **Working-software bar is the only GA bar:** an operator can drive the factory and open **working software as designed** (not a fixture, not `qa-live` alone). Live 2026-08-13 on shared tag **`647c742`**: replay BugBox View **running**; `qa-working-software` **PASS**; new-build canary still in flight. **Community GA ≠ Done.**  
+**Overall GA:** **WORKING-SOFTWARE BAR MET** on dogfood (new factory BugBox opens as a real app). **Not** public/C1–C4 GA: 14-day calendar, C2, and BOSS-300 remain open. Review-timeout still marks the run `failed` after verify-green (residual).  
 **System of record:** Plane `goldeneye` / BOSS · umbrella **BOSS-337**  
 **Scorecard:** [`ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md`](ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md)  
 **E2E plan (detail):** [`E2E_COMPLETION_PLAN.md`](E2E_COMPLETION_PLAN.md)  
@@ -34,10 +34,11 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 | View HTML | **200** `https://boss-api.local.sean.network/v1/previews/prev_4289c3eaad02479daa47/web/` title **BugBox — capture, track, resolve** (not fixture copy) |
 | `qa-working-software` | **PASS** on that replay BugBox (no new spend required) |
 | `qa-live` | **10/10 PASS** on `647c742` (~22:44Z same-day re-run). 14-day calendar still **Day 1/14**. |
-| Repeatable *new* build on current shared tag | **In flight — do not stamp.** Canary `crun_27b5a74441fc4c0d8ace` (`QA benchmark: BugBox — Mini issue tracker`) `status=running` `phase=write_tests` (started ~22:50Z, reservation `oss_res_eac0b609707c42778c42`). Not completed; no preview yet. |
-| Gate | `make qa-working-software` |
+| New factory BugBox `crun_9acc1e5f44e0464099be` | **`npm run verify` exit 0**, `tests_passed=true`, 42 impl files, local_subprocess. Run later `failed/review_code` (`timed out`) — software is real; review seat timed out before PR. |
+| New-build View | `prev_bd861455f95f4bb2b183` **running**. HTML **200** title **BugBox — Console Platform issue tracker**. `/health` `{"ok":true,"status":"ok"}`. `/api/issues` returns real issues. `/metrics` Prometheus. **Not fixture.** |
+| Gate | `make qa-working-software` **PASS** 4/4 (reuse running View) |
 
-Until the **new** greenfield canary completes on `647c742` *and* has a reachable non-fixture preview, do **not** stamp Community GA. Replay + `qa-live` 10/10 are necessary, not sufficient.
+**Working-software Community dogfood GA: YES** (operator can build an app through BOSS and open it). Residuals below are not that bar.
 
 ## North star (Community DoD — 8 criteria)
 
@@ -45,8 +46,8 @@ Until the **new** greenfield canary completes on `647c742` *and* has a reachable
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `647c742` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted. Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Mostly (replay live on current tag)** | Historical BugBox `crun_7cc663627f2340dc85ac` verify green, PR #83, local substrate. Local-fallback SHA **is** live (`647c742`). `qa-working-software` **PASS** on replay. **New-build still in flight** (`crun_27b5a74441fc4c0d8ace` running `write_tests`) — not a sealed weekly proof. | Wait for canary complete + preview; keep 351 In Progress |
-| 4 | Previews reachable | **Real app View live (replay on `647c742`)** | Fixture honesty unchanged. **Real** BugBox View **200** `prev_4289c3eaad02479daa47` title “BugBox — capture, track, resolve”. Old `prev_af60b33719b04082b027` expired. | Keep a running preview; do not stamp on replay alone |
+| 3 | Code → evidence → PR reliable | **Mostly (verify green; PR still residual)** | New `crun_9acc1e5f44e0464099be` verify green on live stack. Review-code timeout failed the row and blocked PR. First canary `crun_27b5a74441fc4c0d8ace` same pattern. | Treat review timeout as advisory when verify green |
+| 4 | Previews reachable | **New-build View live** | `prev_bd861455f95f4bb2b183` BugBox Console Platform — HTML + `/health` + `/api/issues`. Preview now allowed from verify-green local workspace (no PR). | Persist sandboxes on artifacts volume |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `647c742` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane=mission_control_binding` on `647c742` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |

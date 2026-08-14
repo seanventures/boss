@@ -959,7 +959,9 @@ class Settings(BaseSettings):
     microvm_claims_frozen: bool = Field(
         default=True, alias="BOSS_MICROVM_CLAIMS_FROZEN"
     )
-    # Root dir under which per-task ephemeral sandboxes are cloned and torn down.
+    # Root dir for ephemeral sandboxes. Production must set this to a volume
+    # (e.g. /var/lib/boss/artifacts/sandboxes) so API recreates do not destroy
+    # verify-green workspaces needed for preview.
     sandbox_root_path: Optional[Path] = Field(
         default=None, alias="BOSS_SANDBOX_ROOT_PATH"
     )
