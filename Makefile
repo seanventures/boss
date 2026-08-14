@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron
 
 install: install-node install-python
 
@@ -37,6 +37,12 @@ dev: install
 	docker compose -f infra/docker-compose.yml up -d db
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) pnpm dev
+
+# Stdlib Metatron captain TUI. Reads BOSS_API_URL + BOSS_API_KEY + BOSS_PROJECT_ID.
+# Never prints the API key. Does not require the venv (stdlib only).
+metatron:
+	@test -n "$$BOSS_API_KEY" || (echo "BOSS_API_KEY is required (never print the key)."; exit 2)
+	$(PYTHON_BOOTSTRAP) scripts/metatron_tui.py
 
 test: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
@@ -203,10 +209,10 @@ else
 endif
 
 # Captain NL + island contract only. Not live dogfood. Does not stamp GA.
-# Drive stays proposal-only; this target never spends or self-modifies BOSS.
+# Overwatch/apply stay fail-closed; this target never spends or self-modifies BOSS.
 qa-metatron-captain: install-python install-node
-	PYTHONPATH=.:engine $(PYTHON) -m pytest engine/tests/test_metatron_captain.py -q
-	pnpm --filter boss-web test -- tests/metatron-captain.test.ts
+	PYTHONPATH=.:engine $(PYTHON) -m pytest engine/tests/test_metatron_captain.py scripts/tests/test_metatron_tui.py -q
+	pnpm --filter boss-web test -- tests/metatron-captain.test.ts tests/edition-visibility.test.ts tests/platform-ops-ui.test.ts
 
 # Community GA bar: completed factory app + reachable non-fixture preview.
 # Never launches a new budgeted code.task. DRY_RUN=1 structure only.

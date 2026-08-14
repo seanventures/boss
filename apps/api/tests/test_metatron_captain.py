@@ -60,3 +60,21 @@ def test_captain_watch_and_drive_are_proposal_only(client):
 def test_captain_session_requires_project(client):
     missing = client.post("/v1/metatron/session", json={"actor": "ceo", "message": "watch"})
     assert missing.status_code == 422
+
+
+def test_captain_overwatch_validates_and_verifies(client):
+    cycle = client.post(
+        "/v1/metatron/overwatch",
+        json={"project_id": "boss-dogfood", "actor": "ceo"},
+    )
+    assert cycle.status_code == 200, cycle.text
+    body = cycle.json()
+    assert body.get("status") in {"verified", "needs_attention", "applied", "applied_unverified", "proposed"}
+    assert "verify" in body
+    assert isinstance(body.get("applied"), list)
+    assert (body.get("validation") or {}).get("ok") is True
+    for move in body.get("applied") or []:
+        assert (move.get("validation") or {}).get("ok") is True
+    for move in (body.get("drive") or {}).get("moves") or []:
+        if move.get("kind") in {"escalate_decision", "propose_deadletter_review"}:
+            assert move.get("status") != "applied"

@@ -51,6 +51,7 @@ const { MetatronCaptain, MetatronCaptainView } = await import(
 const {
   sendMetatronCaptainMessageAction,
   proposeMetatronCaptainDriveAction,
+  runMetatronCaptainOverwatchAction,
 } = await import("../app/metatron-captain-actions");
 
 const islandSource = readFileSync(
@@ -58,6 +59,10 @@ const islandSource = readFileSync(
   "utf8",
 );
 const pageSource = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
+const shellSource = readFileSync(
+  resolve(__dirname, "../app/ConsoleShell.tsx"),
+  "utf8",
+);
 const actionsSource = readFileSync(
   resolve(__dirname, "../app/metatron-captain-actions.ts"),
   "utf8",
@@ -70,7 +75,7 @@ function html(node: React.ReactElement) {
 }
 
 describe("Metatron Captain island", () => {
-  it("mounts on Mission Control overview beside the existing Status Query", () => {
+  it("keeps Status Query on overview and mounts the captain island at data-area=metatron", () => {
     expect(pageSource).toContain(
       'import { MetatronCaptain } from "./metatron-captain-ui"',
     );
@@ -80,12 +85,15 @@ describe("Metatron Captain island", () => {
     expect(pageSource).toContain('name="q"');
     expect(pageSource.split("<MetatronCaptain").length - 1).toBe(1);
 
-    const overview = pageSource.slice(
+    const mount = pageSource.slice(
       pageSource.lastIndexOf("<section", pageSource.indexOf("<MetatronCaptain")),
       pageSource.indexOf("<MetatronCaptain") + 160,
     );
-    expect(overview).toContain('data-area="overview"');
-    expect(overview).toContain("Status Query");
+    expect(mount).toContain('data-area="metatron"');
+    expect(mount).not.toContain('data-area="overview"');
+    expect(shellSource).toContain('id: "metatron"');
+    expect(shellSource).toContain('label: "Metatron"');
+    expect(shellSource).toContain('group: "Run"');
   });
 
   it("renders chat, goal, watch, and proposal-only drive fields", () => {
@@ -111,10 +119,13 @@ describe("Metatron Captain island", () => {
     expect(markup).toContain("working_software");
     expect(markup).toContain('data-testid="metatron-captain-watch"');
     expect(markup).toContain("Refresh watch");
+    expect(markup).toContain('data-testid="metatron-captain-overwatch"');
+    expect(markup).toContain("Run overwatch now");
+    expect(markup).toContain("Always-on overwatch");
     expect(markup).toContain('data-testid="metatron-captain-drive"');
     expect(markup).toContain("Propose next moves");
     expect(markup).toContain("Launch validated work");
-    expect(markup).toContain("validated first");
+    expect(markup).toContain("validate every action");
     expect(markup).toContain("Loading captain session");
     expect(markup).not.toMatch(/silently (apply|change)/i);
     expect(markup).not.toMatch(/community ga|public ga|captain is ga/i);
@@ -177,8 +188,8 @@ describe("Metatron Captain island", () => {
     );
 
     expect(markup).toContain('data-testid="metatron-captain-empty-chat"');
-    expect(markup).toContain("does not start work");
-    expect(markup).toContain("prioritize phrasing is recognized");
+    expect(markup).toContain("Every action is validated");
+    expect(markup).toContain("overwatch");
     expect(markup).toContain('data-testid="metatron-captain-empty-goals"');
     expect(markup).toContain('data-testid="metatron-captain-empty-watch"');
     expect(markup).not.toContain('data-testid="metatron-captain-unavailable"');
@@ -211,6 +222,7 @@ describe("Metatron Captain island", () => {
     expect(actionsSource).toContain('"/v1/metatron/goals"');
     expect(actionsSource).toContain('"/v1/metatron/watch"');
     expect(actionsSource).toContain('"/v1/metatron/drive"');
+    expect(actionsSource).toContain('"/v1/metatron/overwatch"');
   });
 });
 
@@ -295,5 +307,27 @@ describe("Metatron Captain actions", () => {
     expect(
       JSON.parse(String((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).body)),
     ).toMatchObject({ auto: true });
+  });
+
+  it("posts overwatch to /v1/metatron/overwatch", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "verified", applied: [], verify: { ok: true } }),
+    });
+    const form = new FormData();
+    form.set("project_id", "boss-dogfood");
+    form.set("actor", "ceo");
+    const result = await runMetatronCaptainOverwatchAction(form);
+    expect(result.ok).toBe(true);
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe(
+      "https://boss-api.test/v1/metatron/overwatch",
+    );
+    expect(
+      JSON.parse(String((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).body)),
+    ).toEqual({
+      project_id: "boss-dogfood",
+      actor: "ceo",
+    });
   });
 });

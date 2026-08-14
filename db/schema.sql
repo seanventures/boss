@@ -2922,7 +2922,10 @@ CREATE TABLE IF NOT EXISTS metatron_watch_ticks (
   findings JSONB NOT NULL DEFAULT '[]'::jsonb,
   proposed_moves JSONB NOT NULL DEFAULT '[]'::jsonb,
   receipt_id TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cycle TEXT NOT NULL DEFAULT 'watch',
+  verify JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS idx_metatron_watch_project
   ON metatron_watch_ticks(project_id, created_at DESC);

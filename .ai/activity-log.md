@@ -1,5 +1,21 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Always-on validated overwatch
+
+- Worker ticks `POST /v1/metatron/overwatch` every 60s even while a job is leased.
+- Cycle: observe → measure goals → validate every action → apply only safe moves → verify snapshot.
+- `validate_action` covers remember / set_goal / drive / overwatch; `validate_move` still gates apply.
+- Preview-gap working_software goals restart preview; they do not also enqueue a factory job.
+- Decisions/DLQ stay human. BOSS self-change is a PR. FEATURES stays ◐. **Not GA.**
+
+## 2026-08-14 — Grok — Metatron captain TUI + Run area
+
+- Stdlib TUI `scripts/metatron_tui.py` (optional `python -m boss_engine.cli.metatron`). Env: `BOSS_API_URL` + `BOSS_API_KEY` + `BOSS_PROJECT_ID`. Never prints the key.
+- REPL: NL → POST `/v1/metatron/session`. Slash: `/watch` `/drive` `/goals` `/quit`. `/drive auto` or `go` → POST drive `auto=true` (proposal-only on the server).
+- `make metatron` launches the TUI. Tests: `scripts/tests/test_metatron_tui.py` (mocked HTTP, no live API).
+- ConsoleShell AreaId `metatron` labeled "Metatron" under Run; island moved from overview to `data-area="metatron"`. Status Query stays on overview with an "Open captain" link. `EXISTING_AREA_IDS` updated.
+- **Not GA.** Do not deploy. Do not close BOSS-337.
+
 ## 2026-08-14 — Grok — Captain drive validates every action
 
 - Every drive move runs `validate_move` before apply: kind, human-only block, budget not red/orange, preview has verify-green target, factory launch has no in-flight duplicate.

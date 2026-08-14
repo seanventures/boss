@@ -234,6 +234,8 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-14 | Always-on Metatron overwatch: worker every 60s observe→measure→validate→apply-safe→verify. TUI `/overwatch`. Every action validated. FEATURES ◐. Not GA. | grok |
+| 2026-08-14 | W4 residual leftovers: expanded `interpret_turn` tests for build/prioritize (parent parse landed). FEATURES.md captain stays ◐ **Not GA**. Added `make qa-metatron-captain` (unit/island only — not live dogfood). | grok |
 | 2026-08-14 | W4 residual: Metatron captain watch/drive is Community code (FEATURES.md ◐), not a public GA stamp. No live dogfood of captain drive. | grok |
 | 2026-08-14 | **HookWatch working software:** `crun_911888eefbd14166bce6` completed, verify exit 0, PR #86. View `prev_78b214cfb8fa4fbf8d08` title “HookWatch — temporary webhook inboxes”; `/api/health` JSON; `GET/POST /api/inboxes` (201). All 3 canaries now serve backends. `qa-working-software` 4/4. Not public/C1–C4 GA. | grok |
 | 2026-08-14 | **Sample-app Views serve backends:** `f5def77` shared-tag deploy. Resolver prefers owning `scripts.start` over `web/index.html`. BugBox `prev_d06b4eabe8f3471cb2c0` `/health`+`/api/issues` JSON. ApproveIt `prev_7ad80927147e4ab3b8f3` `/health`+`/api/users` JSON. Worker read timeout 7200s. HookWatch `crun_911888eefbd14166bce6` implement. `qa-live` 10/10, working-software 4/4, harness 56/56. Not public/C1–C4 GA. | grok |

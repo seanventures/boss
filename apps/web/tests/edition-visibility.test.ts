@@ -114,6 +114,7 @@ describe("community nav honesty helpers", () => {
     expect(isCommunityPrimaryNavVisible("components", "community")).toBe(false);
     expect(isCommunityPrimaryNavVisible("enterprise", "community")).toBe(true);
     expect(isCommunityPrimaryNavVisible("overview", "community")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("metatron", "community")).toBe(true);
     expect(isCommunityPrimaryNavVisible("ops", "community")).toBe(true);
     expect(isCommunityPrimaryNavVisible("org", "community")).toBe(true);
     expect(isCommunityPrimaryNavVisible("foundations", "enterprise")).toBe(true);

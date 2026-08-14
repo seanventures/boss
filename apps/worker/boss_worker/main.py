@@ -14,7 +14,7 @@ QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
 # The shepherd watches in-flight work. Often enough that a duplicate is killed before it
 # costs anything real, rare enough that it is never the busiest thing on the box.
 SHEPHERD_WATCH_INTERVAL_SECONDS = 120
-METATRON_WATCH_INTERVAL_SECONDS = 180
+METATRON_WATCH_INTERVAL_SECONDS = 60
 _last_shepherd_watch_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
@@ -75,10 +75,11 @@ def _watch_running_tasks(client: ControlPlaneClient) -> None:
 
 
 def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
-    """Always-on Metatron captain watch while the worker is idle.
+    """Always-on Metatron overwatch: observe, measure, validate, apply safe, verify.
 
-    No LLM. No new code.task. Records a Receipt-backed tick and findings.
-    Swallowed like the shepherd: a captain that kills the worker is worse than none.
+    Runs even while a job is leased so goals keep being scored. Apply is still
+    fail-closed (budget, duplicates, human-only kinds). Swallowed like the
+    shepherd: a captain that kills the worker is worse than none.
     """
     global _last_metatron_watch_monotonic
     now = time.monotonic()
@@ -90,10 +91,19 @@ def _tick_metatron_watch(client: ControlPlaneClient, settings) -> None:
         or "boss-dogfood"
     )
     try:
-        client.tick_metatron_watch(str(project_id))
+        result = client.tick_metatron_overwatch(str(project_id))
         _last_metatron_watch_monotonic = now
+        applied = result.get("applied") if isinstance(result, dict) else None
+        verify = (result or {}).get("verify") if isinstance(result, dict) else None
+        if applied or (isinstance(verify, dict) and verify.get("ok") is False):
+            LOGGER.info(
+                "metatron_overwatch status=%s applied=%s verify_ok=%s",
+                (result or {}).get("status"),
+                len(applied or []),
+                (verify or {}).get("ok"),
+            )
     except Exception:  # noqa: BLE001
-        LOGGER.debug("metatron_watch_failed", exc_info=True)
+        LOGGER.debug("metatron_overwatch_failed", exc_info=True)
 
 
 def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
@@ -163,10 +173,10 @@ def main() -> None:
                 )
                 time.sleep(settings.poll_interval_seconds)
                 continue
+            _tick_metatron_watch(client, settings)
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)
-                _tick_metatron_watch(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:

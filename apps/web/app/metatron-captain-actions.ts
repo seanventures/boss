@@ -144,7 +144,6 @@ export async function createMetatronCaptainGoalAction(
     title,
     kind,
     description,
-    auto_drive: false,
   });
 }
 
@@ -175,5 +174,19 @@ export async function proposeMetatronCaptainDriveAction(
     project_id: projectId,
     actor: actor || "executive_console",
     auto,
+  });
+}
+
+export async function runMetatronCaptainOverwatchAction(
+  formData: FormData,
+): Promise<MetatronCaptainActionResult> {
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const actor = String(formData.get("actor") ?? "").trim();
+  if (!projectId) {
+    return { ok: false, error: "project_id is required." };
+  }
+  return captainPost("/v1/metatron/overwatch", {
+    project_id: projectId,
+    actor: actor || "executive_console",
   });
 }

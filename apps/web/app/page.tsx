@@ -777,6 +777,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
           <AgentChat projectId={activeProjectId} actor={activeActorId} initialTaskId={requestedWorkTask || undefined} />
         </section>
+        <section className="panel-stack" data-area="metatron" aria-label="Metatron captain">
+          <MetatronCaptain
+            projectId={activeProjectId}
+            actor={activeActorId}
+          />
+        </section>
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
             <div>
@@ -1015,6 +1021,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <span className="eyebrow">Metatron</span>
                 <h2>Status Query</h2>
               </div>
+              <AreaLink className="ov-action" area="metatron" orgId={activeOrgId}>
+                Open captain
+              </AreaLink>
             </div>
             <form method="get" className="composer">
               <input type="hidden" name="project_id" value={activeProjectId} />
@@ -1105,10 +1114,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             )}
           </article>
-          <MetatronCaptain
-            projectId={activeProjectId}
-            actor={activeActorId}
-          />
         </section>
 
         <section className="grid" data-area="overview">

@@ -208,7 +208,7 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
-    # Metatron captain: persistent session, goals, watch, proposal-only drive
+    # Metatron captain: persistent session, goals, watch, validated drive, overwatch
     try:
         from .metatron_captain import router as metatron_captain_router
 

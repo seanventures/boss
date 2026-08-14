@@ -1,4 +1,4 @@
-"""Metatron Captain — intent, scoring, and proposal-only drive.
+"""Metatron Captain — intent, scoring, validation, and overwatch.
 
 These pin the captain contract: watch is evidence-only, drive never silently
 applies BOSS self-modifications, and goals are scored from observed snapshots.
@@ -9,7 +9,9 @@ from boss_engine.services.metatron_captain import (
     interpret_turn,
     measure_from_snapshot,
     proposed_moves_from_findings,
+    validate_action,
     validate_move,
+    verify_from_snapshots,
 )
 
 
@@ -19,6 +21,7 @@ def test_interpret_turn_remember_goal_watch_drive():
     assert parsed["intent"] == "set_goal"
     assert parsed["kind"] == "working_software"
     assert "HookWatch" in parsed["text"]
+    assert interpret_turn("overwatch")["intent"] == "overwatch"
     assert interpret_turn("watch")["intent"] == "watch"
     assert interpret_turn("drive")["intent"] == "drive"
     assert interpret_turn("drive")["auto"] is False
@@ -55,6 +58,7 @@ def test_interpret_turn_build_and_prioritize():
     assert interpret_turn("measure")["intent"] == "measure"
     assert interpret_turn("goals")["intent"] == "goals"
     assert interpret_turn("memory")["intent"] == "memory"
+    assert interpret_turn("run overwatch")["intent"] == "overwatch"
 
 
 def test_working_software_goal_needs_preview_and_verify():
@@ -134,6 +138,73 @@ def test_every_action_is_validated_before_apply():
     )
     assert preview_miss["ok"] is False
     assert "verify_green_target" in preview_miss["failed"]
+
+
+def test_every_chat_action_is_validated():
+    empty = validate_action("remember", {"text": ""})
+    assert empty["ok"] is False
+    assert "nonempty_content" in empty["failed"]
+
+    remembered = validate_action("remember", {"text": "sandbox root is a volume"})
+    assert remembered["ok"] is True
+
+    bad_goal = validate_action("set_goal", {"text": "", "kind": "working_software"})
+    assert bad_goal["ok"] is False
+    assert "nonempty_title" in bad_goal["failed"]
+
+    goal = validate_action("set_goal", {"text": "Ship HookWatch", "kind": "working_software"})
+    assert goal["ok"] is True
+
+    unknown = validate_action("explode_prod", {})
+    assert unknown["ok"] is False
+    assert "known_kind" in unknown["failed"]
+
+    overwatch = validate_action("overwatch", {}, auto=True, budget_state="red")
+    assert overwatch["ok"] is True, "overwatch still observes when budget is red"
+
+    drive_red = validate_action("drive", {}, auto=True, budget_state="red")
+    assert drive_red["ok"] is False
+    assert "budget_not_red" in drive_red["failed"]
+
+
+def test_overwatch_skips_factory_when_preview_restart_covers_working_software():
+    findings = findings_from_snapshot(
+        {"running_previews": 0, "completed_verify_green": 1, "deadletters": 0, "pending_decisions": 0},
+        [{"id": "g1", "title": "Canaries work", "kind": "working_software", "status": "active"}],
+    )
+    ids = {f["id"] for f in findings}
+    assert "preview_expired" in ids
+    assert "goal:g1" not in ids
+
+    factory = findings_from_snapshot(
+        {"running_previews": 0, "completed_verify_green": 0, "deadletters": 0, "pending_decisions": 0},
+        [{"id": "g2", "title": "Build HookWatch", "kind": "working_software", "status": "active"}],
+    )
+    pursue = next(f for f in factory if f["id"] == "goal:g2")
+    assert pursue["action"] == "pursue_goal"
+    assert pursue["auto_safe"] is True
+
+
+def test_verify_from_snapshots_requires_applied_work_to_be_visible():
+    before = {"running_previews": 0, "in_flight": 0, "completed_verify_green": 1}
+    ok = verify_from_snapshots(
+        before,
+        {"running_previews": 1, "in_flight": 0, "completed_verify_green": 1},
+        [{"kind": "restart_preview", "receipt_id": "rcpt_1"}],
+    )
+    assert ok["ok"] is True
+
+    missing = verify_from_snapshots(
+        before,
+        {"running_previews": 0, "in_flight": 0, "completed_verify_green": 1},
+        [{"kind": "restart_preview"}],
+    )
+    assert missing["ok"] is False
+    assert "preview_running" in missing["failed"]
+
+    observe = verify_from_snapshots(before, before, [])
+    assert observe["ok"] is True
+    assert any(c["name"] == "observe_only" for c in observe["checks"])
 
 
 def test_steady_watch_has_hold_finding():

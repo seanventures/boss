@@ -1,16 +1,16 @@
-"""Metatron Captain — always-on oversight, memory, goals, and governed drive.
+"""Metatron Captain — always-on overwatch, memory, goals, and governed drive.
 
 Metatron's historical surface is a one-shot status query. The captain keeps a
-durable session, remembers operator facts, registers measurable goals, watches
-the control plane on a no-spend tick, and proposes (never silently applies)
-the next governed move.
+durable session, remembers operator facts, registers measurable goals, and
+runs a constant observe → measure → validate → apply-safe → verify cycle.
 
 Hard rules:
-  * Every drive action is validated before apply (budget, target, no-duplicate,
-    human-only kinds). Failed checks stay on the move.
+  * Every action is validated before it runs (chat, goals, watch, drive,
+    overwatch apply). Failed checks stay visible. Nothing applies without
+    a passing verdict.
   * Decisions and deadletters never auto-apply.
   * BOSS self-change launches a governed PR, never a silent write.
-  * Watch is no-LLM. Spendy apply needs a Receipt with a unique dedupe_key.
+  * Watch/overwatch are no-LLM. Spendy apply needs a Receipt + dedupe_key.
   * Every failure is visible: validation, events, findings, or a Decision.
 """
 
@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS metatron_watch_ticks (
 );
 CREATE INDEX IF NOT EXISTS idx_metatron_watch_project
   ON metatron_watch_ticks(project_id, created_at DESC);
+ALTER TABLE metatron_watch_ticks ADD COLUMN IF NOT EXISTS cycle TEXT NOT NULL DEFAULT 'watch';
+ALTER TABLE metatron_watch_ticks ADD COLUMN IF NOT EXISTS verify JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE metatron_watch_ticks ADD COLUMN IF NOT EXISTS applied JSONB NOT NULL DEFAULT '[]'::jsonb;
 """
 
 
@@ -91,7 +94,9 @@ def interpret_turn(message: str) -> dict[str, Any]:
         return {"intent": "help", "text": ""}
     if lowered in {"help", "?", "what can you do"}:
         return {"intent": "help", "text": raw}
-    if lowered in {"watch", "overwatch", "scan", "tick"}:
+    if lowered in {"overwatch", "run overwatch", "overwatch now", "keep watch"}:
+        return {"intent": "overwatch", "text": raw}
+    if lowered in {"watch", "scan", "tick"}:
         return {"intent": "watch", "text": raw}
     if lowered in {"measure", "score", "how are we doing"}:
         return {"intent": "measure", "text": raw}
@@ -185,7 +190,11 @@ def findings_from_snapshot(snapshot: dict[str, Any], goals: list[dict[str, Any]]
             "action": "open_decision_inbox",
             "auto_safe": False,
         })
-    if int(snapshot.get("running_previews") or 0) == 0 and int(snapshot.get("completed_verify_green") or 0) > 0:
+    preview_gap = (
+        int(snapshot.get("running_previews") or 0) == 0
+        and int(snapshot.get("completed_verify_green") or 0) > 0
+    )
+    if preview_gap:
         findings.append({
             "id": "preview_expired",
             "severity": "medium",
@@ -204,16 +213,24 @@ def findings_from_snapshot(snapshot: dict[str, Any], goals: list[dict[str, Any]]
     for goal in goals:
         if goal.get("status") != "active":
             continue
-        measured = measure_from_snapshot(str(goal.get("kind") or "custom"), snapshot, goal.get("target") or {})
-        if measured.get("score") is not None and int(measured["score"]) < 80:
-            findings.append({
-                "id": f"goal:{goal.get('id')}",
-                "severity": "medium",
-                "title": f"Goal '{goal.get('title')}' is at {measured['score']}",
-                "action": "pursue_goal",
-                "auto_safe": False,
-                "goal_id": goal.get("id"),
-            })
+        kind = str(goal.get("kind") or "custom")
+        measured = measure_from_snapshot(kind, snapshot, goal.get("target") or {})
+        if measured.get("score") is None or int(measured["score"]) >= 80:
+            continue
+        # Missing preview is already a restart_preview finding — do not also
+        # enqueue a factory job for the same working_software gap.
+        if kind == "working_software" and preview_gap:
+            continue
+        if kind not in {"working_software", "quality"}:
+            continue
+        findings.append({
+            "id": f"goal:{goal.get('id')}",
+            "severity": "medium",
+            "title": f"Goal '{goal.get('title')}' is at {measured['score']}",
+            "action": "pursue_goal",
+            "auto_safe": True,
+            "goal_id": goal.get("id"),
+        })
     if not findings:
         findings.append({
             "id": "steady",
@@ -283,6 +300,141 @@ BLOCKED_APPLY_KINDS = frozenset({
     "propose_deadletter_review",
     "propose",
 })
+
+# Chat / overwatch / drive kinds that validate_action recognizes.
+ACTION_KINDS = frozenset({
+    "remember", "set_goal", "watch", "measure", "goals", "memory",
+    "drive", "overwatch", "act", "prioritize", "help", "status", "status_query",
+    "restart_preview", "launch_factory_job",
+    "escalate_decision", "propose_deadletter_review", "propose",
+})
+
+# Mutating intents that must pass validation before session_turn runs them.
+MUTATING_INTENTS = frozenset({
+    "remember", "set_goal", "drive", "act", "prioritize", "overwatch",
+})
+
+
+def validate_action(
+    kind: str,
+    payload: Optional[dict[str, Any]] = None,
+    *,
+    snapshot: Optional[dict[str, Any]] = None,
+    auto: bool = False,
+    in_flight: int = 0,
+    budget_state: str = "unknown",
+    verify_green_run_id: Optional[str] = None,
+    self_mod_repo: str = "",
+) -> dict[str, Any]:
+    """Fail-closed validation for any captain action. Pure: never spends."""
+    payload = payload or {}
+    snapshot = snapshot or {}
+    action = str(kind or payload.get("kind") or payload.get("intent") or "")
+    if action in {
+        "restart_preview", "launch_factory_job", "escalate_decision",
+        "propose_deadletter_review", "propose",
+    }:
+        return validate_move(
+            {**payload, "kind": action},
+            snapshot,
+            auto=auto,
+            in_flight=in_flight,
+            budget_state=budget_state,
+            verify_green_run_id=verify_green_run_id,
+            self_mod_repo=self_mod_repo,
+        )
+
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    check("has_kind", bool(action), "action declares a kind" if action else "action has no kind")
+    check(
+        "known_kind",
+        action in ACTION_KINDS,
+        f"kind={action}" if action in ACTION_KINDS else f"unknown kind {action!r}",
+    )
+    if action == "remember":
+        content = str(payload.get("content") or payload.get("text") or "").strip()
+        check("nonempty_content", bool(content), "memory has content" if content else "empty memory")
+        check("content_bounded", len(content) <= 2000, f"len={len(content)}")
+    elif action == "set_goal":
+        title = str(payload.get("title") or payload.get("text") or "").strip()
+        goal_kind = str(payload.get("kind") or "custom")
+        check("nonempty_title", bool(title), "goal has a title" if title else "empty goal title")
+        check(
+            "known_goal_kind",
+            goal_kind in GOAL_KINDS,
+            f"kind={goal_kind}" if goal_kind in GOAL_KINDS else f"unknown goal kind {goal_kind}",
+        )
+    elif action in {"drive", "act", "prioritize"} and auto:
+        check(
+            "budget_not_red",
+            budget_state not in {"red", "orange"},
+            f"budget_state={budget_state}",
+        )
+    ok = all(c["ok"] for c in checks)
+    return {
+        "ok": ok,
+        "checks": checks,
+        "failed": [c["name"] for c in checks if not c["ok"]],
+    }
+
+
+def verify_from_snapshots(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    applied: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Re-check that applied work is visible in a fresh snapshot. Pure."""
+    checks: list[dict[str, Any]] = []
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    check("snapshot_refreshed", bool(after), "fresh snapshot gathered")
+    for move in applied:
+        kind = str(move.get("kind") or "")
+        if kind == "restart_preview":
+            running = int(after.get("running_previews") or 0)
+            check(
+                "preview_running",
+                running > 0,
+                f"running_previews={running}",
+            )
+        elif kind == "launch_factory_job":
+            run_id = move.get("run_id")
+            inflight = int(after.get("in_flight") or 0)
+            check(
+                "factory_visible",
+                bool(run_id) or inflight > 0,
+                f"run_id={run_id} in_flight={inflight}",
+            )
+            check(
+                "receipt_recorded",
+                bool(move.get("receipt_id")),
+                f"receipt_id={move.get('receipt_id')}",
+            )
+    if not applied:
+        check("observe_only", True, "no apply this cycle; observation verified")
+    ok = all(c["ok"] for c in checks)
+    return {
+        "ok": ok,
+        "checks": checks,
+        "failed": [c["name"] for c in checks if not c["ok"]],
+        "before": {
+            "running_previews": before.get("running_previews"),
+            "in_flight": before.get("in_flight"),
+            "completed_verify_green": before.get("completed_verify_green"),
+        },
+        "after": {
+            "running_previews": after.get("running_previews"),
+            "in_flight": after.get("in_flight"),
+            "completed_verify_green": after.get("completed_verify_green"),
+            "budget_state": after.get("budget_state"),
+        },
+    }
 
 
 def validate_move(
@@ -382,14 +534,52 @@ class MetatronCaptain:
         actions: list[dict[str, Any]] = []
         reply = ""
         watch = None
+        snapshot = self.gather_snapshot(connection, project_id)
+        action_verdict = validate_action(
+            parsed["intent"],
+            parsed,
+            snapshot=snapshot,
+            auto=bool(parsed.get("auto")) or parsed["intent"] in {"act", "prioritize", "overwatch"},
+            in_flight=int(snapshot.get("in_flight") or 0),
+            budget_state=str(snapshot.get("budget_state") or "unknown"),
+        )
+        if parsed["intent"] in MUTATING_INTENTS and not action_verdict["ok"]:
+            failed = ", ".join(action_verdict["failed"]) or "validation"
+            reply = (
+                f"Rejected `{parsed['intent']}` — validation failed: {failed}. "
+                "Nothing was applied."
+            )
+            actions.append({
+                "kind": "rejected",
+                "intent": parsed["intent"],
+                "validation": action_verdict,
+            })
+            assistant = self.agents.append_message(
+                connection, thread_id=thread["id"], role="assistant", content=reply, actions=actions
+            )
+            emit_event(
+                connection, project_id, "metatron.captain.turn", actor, "agent_thread",
+                thread["id"], {"intent": parsed["intent"], "action_count": len(actions), "rejected": True},
+            )
+            return {
+                "thread_id": thread["id"],
+                "reply": reply,
+                "intent": parsed["intent"],
+                "actions": actions,
+                "validation": action_verdict,
+                "memories": self.list_memories(connection, project_id, limit=8),
+                "goals": self.list_goals(connection, project_id),
+                "watch": self.latest_watch(connection, project_id),
+                "messages": self.agents.list_messages(connection, thread["id"])[-20:],
+                "assistant_message_id": assistant.get("id"),
+            }
         if parsed["intent"] == "help":
             reply = (
-                "I am Metatron, captain of this project. I remember facts, track goals, "
-                "watch the control plane, and can launch validated factory work. "
-                "Decisions stay human. BOSS self-change is a PR. Every action is validated "
-                "before it runs.\n"
-                "Try: remember … · set goal … · watch · measure · drive · drive auto · "
-                "build … · goals · memory"
+                "I am Metatron, captain of this project. I stay on overwatch: observe, "
+                "measure goals, validate every action, apply only safe moves, then verify. "
+                "Decisions stay human. BOSS self-change is a PR.\n"
+                "Try: remember … · set goal … · watch · overwatch · measure · drive · "
+                "drive auto · build … · goals · memory"
             )
         elif parsed["intent"] == "remember":
             mem = self.remember(connection, project_id=project_id, thread_id=thread["id"],
@@ -435,8 +625,20 @@ class MetatronCaptain:
                 "kind": "act",
                 "applied": len(drive.get("applied") or []),
                 "rejected": len(drive.get("rejected") or []),
+                "validation": action_verdict,
             })
             reply = self._render_drive(drive)
+        elif parsed["intent"] == "overwatch":
+            cycle = self.overwatch_once(connection, project_id=project_id, actor=actor)
+            watch = cycle.get("watch")
+            actions.append({
+                "kind": "overwatch",
+                "applied": len(cycle.get("applied") or []),
+                "rejected": len(cycle.get("rejected") or []),
+                "verify_ok": bool((cycle.get("verify") or {}).get("ok")),
+                "validation": action_verdict,
+            })
+            reply = self._render_overwatch(cycle)
         else:
             query = self.metatron.answer_query(connection, project_id, parsed["text"] or message)
             reply = query["answer"]
@@ -473,6 +675,7 @@ class MetatronCaptain:
             "memories": self.list_memories(connection, project_id, limit=20),
             "goals": self.list_goals(connection, project_id),
             "watch": self.latest_watch(connection, project_id),
+            "last_overwatch": self.latest_overwatch(connection, project_id),
         }
 
     def remember(
@@ -500,10 +703,12 @@ class MetatronCaptain:
     def set_goal(
         self, connection: Connection, *, project_id: str, actor: str,
         title: str, kind: str = "custom", description: str = "",
-        target: Optional[dict] = None, auto_drive: bool = False,
+        target: Optional[dict] = None, auto_drive: Optional[bool] = None,
     ) -> dict[str, Any]:
         self.ensure_schema(connection)
         resolved = kind if kind in GOAL_KINDS else "custom"
+        if auto_drive is None:
+            auto_drive = resolved in {"working_software", "quality"}
         row = connection.execute(
             text(
                 """
@@ -654,6 +859,148 @@ class MetatronCaptain:
             {"p": project_id},
         ).mappings().first()
         return self._row(row) if row else None
+
+    def latest_overwatch(self, connection: Connection, project_id: str) -> Optional[dict[str, Any]]:
+        self.ensure_schema(connection)
+        try:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT * FROM metatron_watch_ticks
+                    WHERE project_id=:p AND cycle='overwatch'
+                    ORDER BY created_at DESC LIMIT 1
+                    """
+                ),
+                {"p": project_id},
+            ).mappings().first()
+        except Exception:
+            return None
+        return self._row(row) if row else None
+
+    def overwatch_once(
+        self, connection: Connection, *, project_id: str, actor: str,
+    ) -> dict[str, Any]:
+        """Always-on cycle: observe → measure → validate → apply safe → verify."""
+        self.ensure_schema(connection)
+        before = self.gather_snapshot(connection, project_id)
+        cycle_verdict = validate_action(
+            "overwatch",
+            {"project_id": project_id},
+            snapshot=before,
+            auto=True,
+            in_flight=int(before.get("in_flight") or 0),
+            budget_state=str(before.get("budget_state") or "unknown"),
+        )
+        watch = self.watch_once(connection, project_id=project_id, actor=actor)
+        # Budget-red overwatch still observes and verifies; it must not apply.
+        drive = self.drive(
+            connection, project_id=project_id, actor=actor,
+            auto=bool(cycle_verdict["ok"]),
+        )
+        applied = list(drive.get("applied") or [])
+        rejected = list(drive.get("rejected") or [])
+        verify = self.verify_cycle(
+            connection, project_id, before=before, applied=applied,
+        )
+        try:
+            connection.execute(
+                text(
+                    """
+                    UPDATE metatron_watch_ticks
+                    SET cycle='overwatch',
+                        verify=CAST(:v AS JSONB),
+                        applied=CAST(:a AS JSONB)
+                    WHERE id=:id
+                    """
+                ),
+                {
+                    "v": json.dumps(verify),
+                    "a": json.dumps(applied),
+                    "id": watch.get("id"),
+                },
+            )
+        except Exception:
+            pass
+        scope = self._scope(connection, project_id)
+        minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+        receipt, _ = self.receipts.create_or_reuse(
+            connection, scope["org_id"], scope["workspace_id"], project_id,
+            f"metatron:overwatch:{project_id}:{minute}",
+            "metatron.overwatch",
+            {"project_id": project_id},
+            {
+                "applied": len(applied),
+                "rejected": len(rejected),
+                "verify_ok": bool(verify.get("ok")),
+                "watch_id": watch.get("id"),
+            },
+        )
+        self.remember(
+            connection,
+            project_id=project_id,
+            content=(
+                f"Overwatch: applied={len(applied)} rejected={len(rejected)} "
+                f"verify={'ok' if verify.get('ok') else 'needs_attention'}"
+            ),
+            kind="watch",
+            source="overwatch",
+            salience=0.7,
+            refs=[{"object_type": "metatron_watch_tick", "object_id": watch.get("id")}],
+        )
+        emit_event(
+            connection, project_id, "metatron.overwatch.completed", actor,
+            "metatron_watch_tick", watch.get("id") or "none",
+            {
+                "applied": len(applied),
+                "rejected": len(rejected),
+                "verify_ok": bool(verify.get("ok")),
+                "receipt_id": receipt.get("id"),
+            },
+        )
+        status = "verified" if verify.get("ok") else "needs_attention"
+        if applied:
+            status = "applied" if verify.get("ok") else "applied_unverified"
+        return {
+            "status": status,
+            "validation": cycle_verdict,
+            "watch": watch,
+            "drive": drive,
+            "verify": verify,
+            "applied": applied,
+            "rejected": rejected,
+            "goals": self.list_goals(connection, project_id),
+            "receipt_id": receipt.get("id"),
+            "note": (
+                f"Overwatch validated then "
+                f"{'applied' if cycle_verdict['ok'] else 'held'} "
+                f"{len(applied)} move(s); verify "
+                f"{'ok' if verify.get('ok') else 'failed'}. "
+                "Decisions and deadletters stay human."
+            ),
+        }
+
+    def verify_cycle(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        before: dict[str, Any],
+        applied: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        after = self.gather_snapshot(connection, project_id)
+        goals = self.measure_all(connection, project_id)
+        result = verify_from_snapshots(before, after, applied)
+        result["goals"] = [
+            {
+                "id": g.get("id"),
+                "title": g.get("title"),
+                "kind": g.get("kind"),
+                "last_score": g.get("last_score"),
+                "status": g.get("status"),
+            }
+            for g in goals
+        ]
+        return result
 
     def drive(
         self, connection: Connection, *, project_id: str, actor: str,
@@ -869,6 +1216,22 @@ class MetatronCaptain:
                 except Exception:
                     pass
         return out
+
+    @staticmethod
+    def _render_overwatch(cycle: dict[str, Any]) -> str:
+        verify = cycle.get("verify") or {}
+        lines = [
+            cycle.get("note") or "Overwatch cycle complete.",
+            f"Verify: {'ok' if verify.get('ok') else 'needs attention'}.",
+        ]
+        for move in (cycle.get("applied") or [])[:6]:
+            lines.append(f"- applied {move.get('kind')}: {move.get('status')}")
+        for move in (cycle.get("rejected") or [])[:4]:
+            failed = (move.get("validation") or {}).get("failed") or []
+            lines.append(f"- rejected {move.get('kind')}: {', '.join(failed) or move.get('error')}")
+        if not cycle.get("applied") and not cycle.get("rejected"):
+            lines.append("No apply this cycle. Still watching.")
+        return "\n".join(lines)
 
     @staticmethod
     def _render_watch(watch: dict[str, Any]) -> str:

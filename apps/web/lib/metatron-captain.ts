@@ -1,9 +1,9 @@
 /**
  * Metatron Captain UI contracts.
  *
- * The captain is Community-ok (self-hosted). Drive is proposal-only — this
- * mapper never invents a successful session, goal, or watch when the API is
- * missing. Loopback hosts are never operator URLs.
+ * The captain is Community-ok (self-hosted). Every action is validated; this
+ * mapper never invents a successful session, goal, watch, or overwatch when
+ * the API is missing. Loopback hosts are never operator URLs.
  */
 
 export const CAPTAIN_UNAVAILABLE_404 =
@@ -53,9 +53,11 @@ export type MetatronWatchFinding = {
 export type MetatronWatchTick = {
   id?: string;
   createdAt?: string;
+  cycle?: string;
   findings: MetatronWatchFinding[];
   proposedMoves: Array<{ kind?: string; status?: string; detail?: string }>;
   receiptId?: string;
+  verifyOk?: boolean | null;
 };
 
 export type MetatronDriveResult = {
@@ -81,6 +83,7 @@ export type MetatronCaptainState = {
   goals: MetatronCaptainGoal[];
   watch: MetatronWatchTick | null;
   lastDrive: MetatronDriveResult | null;
+  lastOverwatch: MetatronDriveResult | null;
 };
 
 export function emptyMetatronCaptain(): MetatronCaptainState {
@@ -91,6 +94,7 @@ export function emptyMetatronCaptain(): MetatronCaptainState {
     goals: [],
     watch: null,
     lastDrive: null,
+    lastOverwatch: null,
   };
 }
 
@@ -163,6 +167,9 @@ export function mapMetatronCaptainSession(
     goals: asGoals(payload.goals),
     watch: asWatch(payload.watch),
     lastDrive: null,
+    lastOverwatch: payload.last_overwatch
+      ? mapMetatronDriveResult(payload.last_overwatch as Record<string, unknown>)
+      : null,
   };
 }
 
@@ -277,9 +284,14 @@ function asWatch(value: unknown): MetatronWatchTick | null {
   return {
     id: asString(row.id),
     createdAt: asString(row.created_at),
+    cycle: asString(row.cycle),
     findings,
     proposedMoves: asMoves(row.proposed_moves),
     receiptId: asString(row.receipt_id),
+    verifyOk:
+      row.verify && typeof row.verify === "object"
+        ? (row.verify as { ok?: unknown }).ok === true
+        : null,
   };
 }
 

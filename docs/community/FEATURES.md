@@ -82,13 +82,13 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
-| Metatron captain (persistent session / goals / watch) | ◐ Session/goals/watch live in code. Drive **validates every action** then may apply preview restart or enqueue a governed `code.task` (`auto=true`). Decisions/DLQ stay human. BOSS self-change is a PR. Live dogfood residual until shared-tag deploy. **Not GA.** |
+| Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch (`POST /v1/metatron/overwatch`, worker every 60s): observe → measure → validate → apply-safe → verify. Every action is validated. Decisions/DLQ stay human. BOSS self-change is a PR. Live dogfood residual until shared-tag deploy. **Not GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 
-Metatron captain: one-shot `POST /v1/metatron/query` plus `/v1/metatron/session|goals|watch|drive`. **`drive auto` / “Launch validated work”** applies only moves that pass `validate_move` (budget, target, no duplicate). Decisions and deadletters never auto-apply. BOSS self-change opens a PR — never a silent write. **Not GA** until live dogfood of a validated apply on the shared tag.
+Metatron captain: one-shot `POST /v1/metatron/query` plus `/v1/metatron/session|goals|watch|drive|overwatch`. Worker overwatch is always on. Every action (chat, goal, drive, apply) runs `validate_action` / `validate_move` first. Decisions and deadletters never auto-apply. BOSS self-change opens a PR — never a silent write. **Not GA** until live dogfood of a validated apply on the shared tag.
 
 ## Open-core boundary
 

@@ -16,6 +16,7 @@ import {
   loadMetatronCaptainSessionAction,
   proposeMetatronCaptainDriveAction,
   refreshMetatronCaptainWatchAction,
+  runMetatronCaptainOverwatchAction,
   sendMetatronCaptainMessageAction,
 } from "./metatron-captain-actions";
 import { SubmitButton } from "./submit-button";
@@ -141,6 +142,33 @@ export function MetatronCaptain({
           );
         });
       }}
+      onOverwatch={(formData) => {
+        setError(null);
+        startTransition(async () => {
+          const result = await runMetatronCaptainOverwatchAction(formData);
+          if (result.ok && result.data) {
+            setState((prev) => ({
+              ...prev,
+              apiReachable: true,
+              lastOverwatch: mapMetatronDriveResult(result.data ?? {}),
+              lastDrive: mapMetatronDriveResult(
+                (result.data?.drive as Record<string, unknown> | undefined) ??
+                  result.data ??
+                  {},
+              ),
+              watch: mapMetatronWatchTick(
+                (result.data?.watch as Record<string, unknown> | undefined) ??
+                  result.data,
+              ) ?? prev.watch,
+            }));
+            return;
+          }
+          applyFailure(
+            result.error ?? "Overwatch failed.",
+            result.unavailable,
+          );
+        });
+      }}
     />
   );
 }
@@ -156,6 +184,7 @@ export function MetatronCaptainView({
   onAddGoal,
   onWatch,
   onDrive,
+  onOverwatch,
 }: {
   projectId: string;
   actor: string;
@@ -167,6 +196,7 @@ export function MetatronCaptainView({
   onAddGoal: (formData: FormData) => void;
   onWatch: (formData: FormData) => void;
   onDrive: (formData: FormData) => void;
+  onOverwatch?: (formData: FormData) => void;
 }) {
   const unavailable = !loading && !state.apiReachable;
   const blocked =
@@ -183,9 +213,9 @@ export function MetatronCaptainView({
         </div>
       </div>
       <p className="detail">
-        Community self-hosted captain. Persistent chat, goals, and a no-spend
-        watch. Launch is validated first. Decisions stay human. BOSS
-        self-change is a PR, never a silent write.
+        Community self-hosted captain. Always-on overwatch: observe, measure
+        goals, validate every action, apply only safe moves, then verify.
+        Decisions stay human. BOSS self-change is a PR, never a silent write.
       </p>
 
       {loading ? (
@@ -215,8 +245,8 @@ export function MetatronCaptainView({
         {!loading && state.apiReachable && state.messages.length === 0 ? (
           <p className="empty-state" data-testid="metatron-captain-empty-chat">
             No captain messages yet. Send a message to start a persistent
-            thread. Try: remember … · set goal … · watch · drive. Build /
-            prioritize phrasing is recognized but does not start work.
+            thread. Try: remember … · set goal … · watch · overwatch · drive.
+            Every action is validated before it runs.
           </p>
         ) : null}
         {state.messages.map((message, index) => (
@@ -330,10 +360,10 @@ export function MetatronCaptainView({
         </SubmitButton>
       </form>
 
-      <h4>Last watch</h4>
+      <h4>Last watch / overwatch</h4>
       <p className="detail">
-        Watch is a no-model, no-spend scan. Findings are evidence, not applied
-        work.
+        The worker runs overwatch about once a minute: observe, measure,
+        validate, apply safe work, verify. Watch alone is observe-only.
       </p>
       {!loading && state.apiReachable && !state.watch ? (
         <p className="empty-state" data-testid="metatron-captain-empty-watch">
@@ -369,6 +399,20 @@ export function MetatronCaptainView({
           Refresh watch
         </SubmitButton>
       </form>
+      {onOverwatch ? (
+        <form data-testid="metatron-captain-overwatch" action={onOverwatch}>
+          <input type="hidden" name="project_id" value={projectId} />
+          <input type="hidden" name="actor" value={actor} />
+          <SubmitButton className="button" type="submit" disabled={pending}>
+            Run overwatch now
+          </SubmitButton>
+        </form>
+      ) : null}
+      {state.lastOverwatch ? (
+        <div data-testid="metatron-captain-overwatch-result">
+          <p className="detail">{state.lastOverwatch.note}</p>
+        </div>
+      ) : null}
 
       <h4>Drive</h4>
       <p className="detail">

@@ -29,6 +29,7 @@ export const PLATFORM_OPS_AREA_NESTING = {
 
 const EXISTING_AREA_IDS = new Set([
   "agent",
+  "metatron",
   "dashboard",
   "overview",
   "decisions",

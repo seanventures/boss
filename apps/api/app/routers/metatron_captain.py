@@ -1,4 +1,4 @@
-"""Metatron Captain HTTP surface — persistent session, goals, watch, drive."""
+"""Metatron Captain HTTP surface — session, goals, watch, drive, overwatch."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -28,7 +28,7 @@ class GoalCreateRequest(BaseModel):
     title: str
     kind: str = "custom"
     description: str = ""
-    auto_drive: bool = False
+    auto_drive: Optional[bool] = None
 
 
 class WatchRequest(BaseModel):
@@ -39,7 +39,10 @@ class WatchRequest(BaseModel):
 class DriveRequest(BaseModel):
     project_id: str
     actor: str = "executive_console"
-    auto: bool = Field(default=False, description="Still proposal-only for high-risk findings.")
+    auto: bool = Field(
+        default=False,
+        description="Apply only moves that pass validate_move. Decisions/DLQ stay human.",
+    )
 
 
 def _captain() -> MetatronCaptain:
@@ -133,4 +136,15 @@ def captain_drive(payload: DriveRequest) -> dict[str, Any]:
             project_id=payload.project_id,
             actor=payload.actor,
             auto=payload.auto,
+        )
+
+
+@router.post("/v1/metatron/overwatch")
+def captain_overwatch(payload: WatchRequest) -> dict[str, Any]:
+    if not payload.project_id.strip():
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(get_engine()) as connection:
+        _require(connection, payload.project_id, payload.actor)
+        return _captain().overwatch_once(
+            connection, project_id=payload.project_id, actor=payload.actor
         )

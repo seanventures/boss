@@ -17,6 +17,7 @@ import {
   ChatsCircle,
   CheckCircle,
   Code,
+  Crown,
   Database,
   Gauge,
   GitBranch,
@@ -51,6 +52,7 @@ import { EditionChip } from "./edition-ui";
 
 type AreaId =
   | "agent"
+  | "metatron"
   | "dashboard"
   | "overview"
   | "decisions"
@@ -89,6 +91,7 @@ type AreaDef = {
 
 const ICONS = {
   agent: Robot,
+  metatron: Crown,
   dashboard: Gauge,
   overview: House,
   decisions: CheckCircle,
@@ -123,6 +126,7 @@ const AREAS: AreaDef[] = [
   { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
+  { id: "metatron", label: "Metatron", sub: "Always-on captain: chat, goals, validated overwatch", group: "Run", icon: ICONS.metatron },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },

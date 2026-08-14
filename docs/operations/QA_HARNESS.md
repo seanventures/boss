@@ -194,8 +194,8 @@ fail or skip — never a silent green.
 | 14-day calendar | cron on goldeneye | Consecutive daily `qa-live` — **separate** |
 
 There is **no** live `qa-metatron-captain` dogfood gate. The make target
-runs `engine/tests/test_metatron_captain.py` (NL `build`/`prioritize` parse,
-proposal-only drive) plus the Mission Control island tests. Optional
+runs `engine/tests/test_metatron_captain.py` (NL parse, validate_action,
+overwatch verify) plus the Mission Control island tests. Optional
 harness probes `GET /v1/metatron/goals` and `GET /v1/metatron/session` stay
 `required=false`. A green contract run does **not** stamp Community GA.
 
