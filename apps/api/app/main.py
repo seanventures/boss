@@ -8455,6 +8455,7 @@ async def preview_web_proxy(preview_id: str, request: Request, path: str = ""):
     status, ctype, data, headers = proxy_preview(
         engine, preview_id, path, request.method, request.url.query,
         body or None, request.headers.get("content-type"), settings.sandbox_token,
+        incoming_headers=dict(request.headers),
     )
     return Response(content=data, status_code=status, media_type=ctype, headers=headers)
 

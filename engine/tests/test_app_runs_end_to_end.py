@@ -22,6 +22,7 @@ import pytest
 from boss_engine.services.preview_service import (
     _detect_command,
     _node_server_dir,
+    forwarded_preview_headers,
     resolve_app_entry,
 )
 from boss_engine.services.scaffold_service import scaffold_project
@@ -263,3 +264,24 @@ def test_sample_app_web_index_does_not_shadow_its_start_server(tmp_path):
 
     # Sibling static app this task built must not be stolen by bugbox's start.
     assert resolve_app_entry(tmp_path, ["web-nqueens/index.html"]) == ("static", "web-nqueens")
+
+
+def test_preview_proxy_forwards_acting_user_and_strips_boss_secrets():
+    """ApproveIt /api/requests 401'd because the gateway dropped X-Acting-User-Id."""
+    got = forwarded_preview_headers(
+        {
+            "X-Acting-User-Id": "usr_morgan",
+            "Authorization": "Bearer boss-control-plane-secret",
+            "X-Boss-Api-Key": "also-secret",
+            "Accept": "application/json",
+            "Cookie": "boss_session=nope",
+        },
+        content_type="application/json",
+    )
+    lowered = {k.lower(): v for k, v in got.items()}
+    assert lowered["x-acting-user-id"] == "usr_morgan"
+    assert lowered["accept"] == "application/json"
+    assert lowered["content-type"] == "application/json"
+    assert "authorization" not in lowered
+    assert "x-boss-api-key" not in lowered
+    assert "cookie" not in lowered

@@ -1482,10 +1482,44 @@ def _inject_shim(html: bytes, prefix: str) -> bytes:
         return html
 
 
+# Headers the sample app is allowed to see. Never forward BOSS control-plane
+# secrets (Authorization / X-Boss-Api-Key) into the tenant process.
+_PREVIEW_FORWARD_HEADER_NAMES = (
+    "x-acting-user-id",
+    "accept",
+    "x-requested-with",
+    "x-csrf-token",
+)
+
+
+def forwarded_preview_headers(
+    incoming: Optional[dict] = None,
+    *,
+    content_type: Optional[str] = None,
+) -> dict[str, str]:
+    """Allowlist of hop headers a preview app may receive.
+
+    ApproveIt requires ``X-Acting-User-Id``. The gateway used to drop every
+    incoming header except Content-Type, so /api/requests always 401'd even
+    when the SPA (or an operator probe) sent the acting user.
+    """
+    out: dict[str, str] = {}
+    for key, value in (incoming or {}).items():
+        if value is None:
+            continue
+        name = str(key).strip()
+        if name.lower() in _PREVIEW_FORWARD_HEADER_NAMES:
+            out[name] = str(value)
+    if content_type and "content-type" not in {k.lower() for k in out}:
+        out["Content-Type"] = content_type
+    return out
+
+
 def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   query_string: str = "", body: Optional[bytes] = None,
                   content_type: Optional[str] = None,
-                  sandbox_token: str = ""):
+                  sandbox_token: str = "",
+                  incoming_headers: Optional[dict] = None):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes).
     Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's own
     (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim."""
@@ -1507,8 +1541,10 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     if query_string:
         target += "?" + query_string
     req = urllib.request.Request(target, data=body or None, method=method)
-    if content_type:
-        req.add_header("Content-Type", content_type)
+    for header_name, header_value in forwarded_preview_headers(
+        incoming_headers, content_type=content_type
+    ).items():
+        req.add_header(header_name, header_value)
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
     response_headers: dict[str, str] = {}
