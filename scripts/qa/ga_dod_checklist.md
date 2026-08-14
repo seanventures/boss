@@ -20,6 +20,7 @@ runnable commands. Use this before claiming Community GA or private preview read
 | Factory no-spend fixture | `make qa-factory-e2e CREATE_FIXTURE=1` | `BOSS_API_KEY`; live must advertise `fixture_supported` |
 | Unified E2E harness (settings/features + 3 canaries) | `make qa-harness` | `BOSS_API_KEY` for live; `DRY_RUN=1` structure; `CANARY_MODE=catalog/reuse/fixture/launch` (`launch` needs `BOSS_QA_ALLOW_CANARIES=1`) |
 | Full live dogfood (broader) | `make qa-live` | `BOSS_API_KEY` |
+| Metatron captain contract (NL parse + island) | `make qa-metatron-captain` | local env only — **not** live dogfood, **not** a GA stamp |
 | OpenAPI factory slice parity | `make openapi-live-qa-parity` | local Python env |
 
 Default live API base: `https://boss-api.local.sean.network`  

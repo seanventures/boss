@@ -170,9 +170,10 @@ export async function proposeMetatronCaptainDriveAction(
   if (!projectId) {
     return { ok: false, error: "project_id is required." };
   }
+  const auto = String(formData.get("auto") ?? "").trim() === "true";
   return captainPost("/v1/metatron/drive", {
     project_id: projectId,
     actor: actor || "executive_console",
-    auto: false,
+    auto,
   });
 }

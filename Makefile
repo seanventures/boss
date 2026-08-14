@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software public-flip-check openapi-live-qa-parity
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity
 
 install: install-node install-python
 
@@ -201,6 +201,12 @@ else
 		--canary-mode "$(or $(CANARY_MODE),catalog)" \
 		$(if $(BOSS_HARNESS_OUTPUT),--output "$(BOSS_HARNESS_OUTPUT)")
 endif
+
+# Captain NL + island contract only. Not live dogfood. Does not stamp GA.
+# Drive stays proposal-only; this target never spends or self-modifies BOSS.
+qa-metatron-captain: install-python install-node
+	PYTHONPATH=.:engine $(PYTHON) -m pytest engine/tests/test_metatron_captain.py -q
+	pnpm --filter boss-web test -- tests/metatron-captain.test.ts
 
 # Community GA bar: completed factory app + reachable non-fixture preview.
 # Never launches a new budgeted code.task. DRY_RUN=1 structure only.

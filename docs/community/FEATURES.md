@@ -82,13 +82,13 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
-| Metatron captain (persistent session / goals / watch) | ◐ Community Mission Control island + `/v1/metatron/session|goals|watch|drive`. Drive is proposal-only (no silent self-modify). Live dogfood of captain drive still residual. |
+| Metatron captain (persistent session / goals / watch) | ◐ Session/goals/watch live in code. Drive **validates every action** then may apply preview restart or enqueue a governed `code.task` (`auto=true`). Decisions/DLQ stay human. BOSS self-change is a PR. Live dogfood residual until shared-tag deploy. **Not GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 
-Metatron is expanding toward an always-on captain. **Live today** is one-shot, reference-backed status Q&A (`POST /v1/metatron/query`) plus a Community Mission Control captain island over `/v1/metatron/session|goals|watch|drive`. Drive is proposal-only. **Not claimed live:** a captain drive that starts work by itself. Drive effects must use a Decision or the existing intake/job path and leave a Receipt with a unique `dedupe_key`. Metatron must not autonomously self-modify BOSS.
+Metatron captain: one-shot `POST /v1/metatron/query` plus `/v1/metatron/session|goals|watch|drive`. **`drive auto` / “Launch validated work”** applies only moves that pass `validate_move` (budget, target, no duplicate). Decisions and deadletters never auto-apply. BOSS self-change opens a PR — never a silent write. **Not GA** until live dogfood of a validated apply on the shared tag.
 
 ## Open-core boundary
 

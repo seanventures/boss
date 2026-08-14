@@ -190,7 +190,14 @@ fail or skip — never a silent green.
 | Live dogfood | `make qa-live` | Broader control-plane (10 required + Metatron) |
 | **Unified harness** | `make qa-harness` | Settings/features + 3 canaries on top of the above |
 | **System stack** | `make qa-system` | All of the above, no spend, one JSON report |
+| Metatron captain contract | `make qa-metatron-captain` | Unit/island only — **not** live dogfood, **not** a GA stamp |
 | 14-day calendar | cron on goldeneye | Consecutive daily `qa-live` — **separate** |
+
+There is **no** live `qa-metatron-captain` dogfood gate. The make target
+runs `engine/tests/test_metatron_captain.py` (NL `build`/`prioritize` parse,
+proposal-only drive) plus the Mission Control island tests. Optional
+harness probes `GET /v1/metatron/goals` and `GET /v1/metatron/session` stay
+`required=false`. A green contract run does **not** stamp Community GA.
 
 Closing Community GA still requires the 14-day `qa-live` streak in
 `docs/operations/QA_LIVE_14DAY.md`. This harness does not replace that

@@ -184,8 +184,8 @@ export function MetatronCaptainView({
       </div>
       <p className="detail">
         Community self-hosted captain. Persistent chat, goals, and a no-spend
-        watch. Drive is proposal-only — it does not apply changes or
-        self-modify BOSS.
+        watch. Launch is validated first. Decisions stay human. BOSS
+        self-change is a PR, never a silent write.
       </p>
 
       {loading ? (
@@ -215,7 +215,8 @@ export function MetatronCaptainView({
         {!loading && state.apiReachable && state.messages.length === 0 ? (
           <p className="empty-state" data-testid="metatron-captain-empty-chat">
             No captain messages yet. Send a message to start a persistent
-            thread. Try: remember … · set goal … · watch · drive.
+            thread. Try: remember … · set goal … · watch · drive. Build /
+            prioritize phrasing is recognized but does not start work.
           </p>
         ) : null}
         {state.messages.map((message, index) => (
@@ -371,8 +372,8 @@ export function MetatronCaptainView({
 
       <h4>Drive</h4>
       <p className="detail">
-        Propose next moves only. Resolving decisions, retrying deadletters, or
-        launching a code task still goes through existing governed paths.
+        Every launch is validated first (budget, no duplicate, target exists).
+        Decisions and deadletters stay human. BOSS self-change opens a PR.
       </p>
       {state.lastDrive ? (
         <div data-testid="metatron-captain-drive-result">
@@ -395,8 +396,17 @@ export function MetatronCaptainView({
       <form data-testid="metatron-captain-drive" action={onDrive}>
         <input type="hidden" name="project_id" value={projectId} />
         <input type="hidden" name="actor" value={actor} />
-        <SubmitButton className="button" type="submit" disabled={pending}>
+        <input type="hidden" name="auto" value="false" />
+        <SubmitButton className="button secondary" type="submit" disabled={pending}>
           Propose next moves
+        </SubmitButton>
+      </form>
+      <form data-testid="metatron-captain-drive-auto" action={onDrive}>
+        <input type="hidden" name="project_id" value={projectId} />
+        <input type="hidden" name="actor" value={actor} />
+        <input type="hidden" name="auto" value="true" />
+        <SubmitButton className="button" type="submit" disabled={pending}>
+          Launch validated work
         </SubmitButton>
       </form>
     </article>

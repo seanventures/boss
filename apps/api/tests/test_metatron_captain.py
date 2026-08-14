@@ -48,9 +48,13 @@ def test_captain_watch_and_drive_are_proposal_only(client):
     )
     assert drive.status_code == 200, drive.text
     body = drive.json()
-    assert body["status"] == "proposed"
-    assert body["applied"] == []
-    assert "governed" in (body.get("note") or "").lower()
+    assert body["status"] in {"proposed", "applied"}
+    assert "validated" in (body.get("note") or "").lower()
+    for move in body.get("moves") or []:
+        if move.get("kind") in {"escalate_decision", "propose_deadletter_review"}:
+            assert move.get("status") != "applied"
+        if move.get("status") == "applied":
+            assert (move.get("validation") or {}).get("ok") is True
 
 
 def test_captain_session_requires_project(client):

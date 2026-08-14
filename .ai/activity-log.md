@@ -1,5 +1,20 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Captain drive validates every action
+
+- Every drive move runs `validate_move` before apply: kind, human-only block, budget not red/orange, preview has verify-green target, factory launch has no in-flight duplicate.
+- Decisions and deadletters never apply. Failed checks stay on the move (`validation.failed`).
+- Auto-drive (`go` / Launch validated work) may start a preview or enqueue a governed `code.task` with Receipt. BOSS self-change is a PR (`open_pr=True`).
+- Tests: engine captain 7 passed; web captain 8 passed.
+
+## 2026-08-14 — Grok — Captain NL leftovers (tests/docs/QA)
+
+- Parent landed `interpret_turn` `act`/`prioritize`/`drive auto`. Did **not** edit `metatron_captain.py`.
+- Tests: `test_interpret_turn_build_and_prioritize` (implement/ship/fix, question stays status, prioritize/p0/p1, drive auto vs propose next).
+- FEATURES.md + Community spec stay ◐ / partial. Claims freeze forbids autonomous build/prioritize. **Not GA.**
+- `make qa-metatron-captain` is unit/island only; documented in `QA_HARNESS.md` + `ga_dod_checklist.md` as not live dogfood.
+- UI empty-chat copy: build/prioritize phrasing is recognized but does not start work.
+
 ## 2026-08-14 — Grok — Metatron Captain engine + idle watch
 
 - Engine `MetatronCaptain`: persistent `agent_threads` session (`external_ref=metatron:captain`), `metatron_memories`, `metatron_goals` (scored from control-plane snapshot), `metatron_watch_ticks` with Receipt `metatron:watch:{project}:{minute}`.

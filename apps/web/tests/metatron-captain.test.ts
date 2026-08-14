@@ -113,9 +113,11 @@ describe("Metatron Captain island", () => {
     expect(markup).toContain("Refresh watch");
     expect(markup).toContain('data-testid="metatron-captain-drive"');
     expect(markup).toContain("Propose next moves");
-    expect(markup).toContain("proposal-only");
+    expect(markup).toContain("Launch validated work");
+    expect(markup).toContain("validated first");
     expect(markup).toContain("Loading captain session");
-    expect(markup).not.toMatch(/applied automatically|silently (apply|change)/i);
+    expect(markup).not.toMatch(/silently (apply|change)/i);
+    expect(markup).not.toMatch(/community ga|public ga|captain is ga/i);
     expect(islandSource).toContain('data-testid="metatron-captain"');
   });
 
@@ -175,9 +177,12 @@ describe("Metatron Captain island", () => {
     );
 
     expect(markup).toContain('data-testid="metatron-captain-empty-chat"');
+    expect(markup).toContain("does not start work");
+    expect(markup).toContain("prioritize phrasing is recognized");
     expect(markup).toContain('data-testid="metatron-captain-empty-goals"');
     expect(markup).toContain('data-testid="metatron-captain-empty-watch"');
     expect(markup).not.toContain('data-testid="metatron-captain-unavailable"');
+    expect(markup).not.toMatch(/applied automatically|community ga/i);
   });
 
   it("never claims a loopback operator URL", () => {
@@ -273,5 +278,22 @@ describe("Metatron Captain actions", () => {
     expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe(
       "https://boss-api.test/v1/metatron/drive",
     );
+  });
+
+  it("posts launch with auto true only when the form asks", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "applied", auto: true, applied: [], rejected: [] }),
+    });
+    const form = new FormData();
+    form.set("project_id", "boss-dogfood");
+    form.set("actor", "ceo");
+    form.set("auto", "true");
+    const result = await proposeMetatronCaptainDriveAction(form);
+    expect(result.ok).toBe(true);
+    expect(
+      JSON.parse(String((fetchMock.mock.calls.at(-1)?.[1] as RequestInit).body)),
+    ).toMatchObject({ auto: true });
   });
 });

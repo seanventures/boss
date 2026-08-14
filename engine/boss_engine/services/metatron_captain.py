@@ -6,11 +6,12 @@ the control plane on a no-spend tick, and proposes (never silently applies)
 the next governed move.
 
 Hard rules:
-  * No autonomous self-modification of BOSS. Drive emits proposals / Decisions
-    / intake commands. It does not edit this repo or apply config diffs.
-  * Watch is no-LLM and no-spend. Drive of spendy work requires a reservation
-    and a Receipt with a unique dedupe_key.
-  * Every failure is visible: events, findings, or a Decision.
+  * Every drive action is validated before apply (budget, target, no-duplicate,
+    human-only kinds). Failed checks stay on the move.
+  * Decisions and deadletters never auto-apply.
+  * BOSS self-change launches a governed PR, never a silent write.
+  * Watch is no-LLM. Spendy apply needs a Receipt with a unique dedupe_key.
+  * Every failure is visible: validation, events, findings, or a Decision.
 """
 
 from __future__ import annotations
@@ -108,8 +109,14 @@ def interpret_turn(message: str) -> dict[str, Any]:
             kind = m.group(1).lower()
             rest = (rest[: m.start()] + rest[m.end() :]).strip()
         return {"intent": "set_goal", "text": rest, "kind": kind}
+    if lowered in {"drive auto", "go", "launch", "execute", "do it", "run it"} or lowered.startswith("drive auto"):
+        return {"intent": "drive", "text": raw, "auto": True}
     if lowered.startswith("drive") or lowered in {"propose next", "next move"}:
         return {"intent": "drive", "text": raw, "auto": False}
+    if re.search(r"\b(build|implement|fix|change|refactor|add|update|ship)\b", lowered) and not lowered.endswith("?"):
+        return {"intent": "act", "text": raw}
+    if re.search(r"\b(prioriti[sz]e|p0|p1|p2)\b", lowered):
+        return {"intent": "prioritize", "text": raw}
     return {"intent": "status", "text": raw}
 
 
@@ -241,12 +248,23 @@ def proposed_moves_from_findings(findings: list[dict[str, Any]], *, auto: bool) 
                 "finding_id": finding["id"],
             })
             continue
-        if action == "restart_preview" and auto and finding.get("auto_safe"):
+        if action == "restart_preview" and finding.get("auto_safe"):
             moves.append({
-                "kind": "propose_preview_restart",
-                "status": "proposed",
+                "kind": "restart_preview",
+                "status": "queued" if auto else "proposed",
                 "detail": "Restart verify-green previews (no new code.task).",
                 "finding_id": finding["id"],
+                "apply": bool(auto),
+            })
+            continue
+        if action == "pursue_goal":
+            moves.append({
+                "kind": "launch_factory_job",
+                "status": "queued" if auto else "proposed",
+                "detail": finding["title"],
+                "finding_id": finding["id"],
+                "goal_id": finding.get("goal_id"),
+                "apply": bool(auto),
             })
             continue
         moves.append({
@@ -257,6 +275,71 @@ def proposed_moves_from_findings(findings: list[dict[str, Any]], *, auto: bool) 
             "requires_human": not finding.get("auto_safe"),
         })
     return moves
+
+
+# Every captain action — even auto-drive — must pass these gates before apply.
+BLOCKED_APPLY_KINDS = frozenset({
+    "escalate_decision",
+    "propose_deadletter_review",
+    "propose",
+})
+
+
+def validate_move(
+    move: dict[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    auto: bool,
+    in_flight: int = 0,
+    budget_state: str = "unknown",
+    verify_green_run_id: Optional[str] = None,
+    self_mod_repo: str = "",
+) -> dict[str, Any]:
+    """Fail-closed validation for one drive move. Pure: never spends.
+
+    A move is valid to APPLY only when every check passes. Failed checks stay
+    visible on the move so the operator can see why it did not launch.
+    """
+    checks: list[dict[str, Any]] = []
+    kind = str(move.get("kind") or "")
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    check("has_kind", bool(kind), "move declares a kind" if kind else "move has no kind")
+    check(
+        "not_human_only",
+        kind not in BLOCKED_APPLY_KINDS and not move.get("requires_human")
+        and move.get("status") != "needs_human",
+        "high-risk actions (decisions, DLQ, budget) stay human",
+    )
+    check(
+        "budget_not_red",
+        budget_state not in {"red", "orange"},
+        f"budget_state={budget_state}",
+    )
+    if kind == "restart_preview":
+        check(
+            "verify_green_target",
+            bool(verify_green_run_id),
+            f"run={verify_green_run_id}" if verify_green_run_id else "no completed verify-green run",
+        )
+    if kind == "launch_factory_job":
+        check("no_duplicate_inflight", int(in_flight) == 0, f"in_flight={in_flight}")
+        check("auto_requested", bool(auto), "factory launch requires auto=true")
+        check(
+            "self_mod_is_pr_only",
+            True,
+            "BOSS self-change launches a governed PR, never a silent write",
+        )
+        if self_mod_repo:
+            check("repo_bound", bool(self_mod_repo), f"repo={self_mod_repo}")
+    ok = all(c["ok"] for c in checks)
+    return {
+        "ok": ok,
+        "checks": checks,
+        "failed": [c["name"] for c in checks if not c["ok"]],
+    }
 
 
 class MetatronCaptain:
@@ -302,9 +385,11 @@ class MetatronCaptain:
         if parsed["intent"] == "help":
             reply = (
                 "I am Metatron, captain of this project. I remember facts, track goals, "
-                "watch the control plane, and propose governed next moves. I will not "
-                "silently change BOSS or spend without a reservation.\n"
-                "Try: remember … · set goal … kind=working_software · watch · measure · drive · goals · memory"
+                "watch the control plane, and can launch validated factory work. "
+                "Decisions stay human. BOSS self-change is a PR. Every action is validated "
+                "before it runs.\n"
+                "Try: remember … · set goal … · watch · measure · drive · drive auto · "
+                "build … · goals · memory"
             )
         elif parsed["intent"] == "remember":
             mem = self.remember(connection, project_id=project_id, thread_id=thread["id"],
@@ -329,8 +414,28 @@ class MetatronCaptain:
         elif parsed["intent"] == "memory":
             reply = self._render_memories(self.list_memories(connection, project_id)) or "No memories yet."
         elif parsed["intent"] == "drive":
-            drive = self.drive(connection, project_id=project_id, actor=actor, auto=False)
-            actions.append({"kind": "drive", "moves": len(drive.get("moves") or [])})
+            drive = self.drive(
+                connection, project_id=project_id, actor=actor,
+                auto=bool(parsed.get("auto")),
+            )
+            actions.append({
+                "kind": "drive",
+                "auto": bool(parsed.get("auto")),
+                "moves": len(drive.get("moves") or []),
+                "applied": len(drive.get("applied") or []),
+                "rejected": len(drive.get("rejected") or []),
+            })
+            reply = self._render_drive(drive)
+        elif parsed["intent"] in {"act", "prioritize"}:
+            drive = self.drive(
+                connection, project_id=project_id, actor=actor, auto=True,
+                directive=parsed["text"],
+            )
+            actions.append({
+                "kind": "act",
+                "applied": len(drive.get("applied") or []),
+                "rejected": len(drive.get("rejected") or []),
+            })
             reply = self._render_drive(drive)
         else:
             query = self.metatron.answer_query(connection, project_id, parsed["text"] or message)
@@ -551,34 +656,189 @@ class MetatronCaptain:
         return self._row(row) if row else None
 
     def drive(
-        self, connection: Connection, *, project_id: str, actor: str, auto: bool = False,
+        self, connection: Connection, *, project_id: str, actor: str,
+        auto: bool = False, directive: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Propose next moves. Never applies a BOSS self-mod. Never spends without a reservation."""
+        """Validate every move, then apply only those that pass.
+
+        Decisions, deadletters, and budget-red never apply. Preview restart and
+        factory launch apply only when validation (target, budget, no duplicate)
+        passes. BOSS self-change is a governed PR, never a silent write.
+        """
         self.ensure_schema(connection)
         watch = self.latest_watch(connection, project_id) or self.watch_once(
             connection, project_id=project_id, actor=actor
         )
-        findings = watch.get("findings") or []
+        findings = list(watch.get("findings") or [])
+        snapshot = watch.get("observed") or self.gather_snapshot(connection, project_id)
+        if directive:
+            findings.append({
+                "id": "directive",
+                "severity": "medium",
+                "title": directive,
+                "action": "pursue_goal",
+                "auto_safe": False,
+            })
         moves = proposed_moves_from_findings(findings, auto=bool(auto))
-        # High-risk always stays a proposal. auto_safe preview restart is still a proposal
-        # unless a future operator-approved adapter exists — captain does not start jobs here.
-        human = [m for m in moves if m.get("requires_human") or m.get("status") == "needs_human"]
+        verify_run = self._latest_verify_green_without_preview(connection, project_id)
+        in_flight = int(snapshot.get("in_flight") or 0)
+        budget_state = str(snapshot.get("budget_state") or "unknown")
+        repo = f"{self.settings.target_github_owner}/{self.settings.target_github_repo}"
+        applied: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        for move in moves:
+            verdict = validate_move(
+                move, snapshot, auto=bool(auto), in_flight=in_flight,
+                budget_state=budget_state, verify_green_run_id=verify_run,
+                self_mod_repo=repo,
+            )
+            move["validation"] = verdict
+            if not (auto and move.get("apply") and verdict["ok"]):
+                if not verdict["ok"] and move.get("apply"):
+                    move["status"] = "rejected"
+                    rejected.append(move)
+                continue
+            result = self._apply_validated_move(
+                connection, project_id=project_id, actor=actor,
+                move=move, verify_run=verify_run, directive=directive,
+            )
+            move.update(result)
+            if result.get("status") == "applied":
+                applied.append(move)
+                if move.get("kind") == "launch_factory_job":
+                    in_flight += 1
+            else:
+                rejected.append(move)
+        human = [m for m in moves if m.get("status") == "needs_human" or m.get("requires_human")]
         emit_event(
-            connection, project_id, "metatron.drive.proposed", actor, "metatron_watch_tick",
+            connection, project_id, "metatron.drive.completed", actor, "metatron_watch_tick",
             watch.get("id") or "none",
-            {"moves": moves, "auto": bool(auto), "human_required": len(human)},
+            {
+                "auto": bool(auto), "applied": len(applied), "rejected": len(rejected),
+                "human_required": len(human),
+            },
         )
+        status = "applied" if applied else "proposed"
         return {
-            "status": "proposed",
+            "status": status,
             "auto": bool(auto),
-            "applied": [],
+            "applied": applied,
+            "rejected": rejected,
             "moves": moves,
             "watch_id": watch.get("id"),
             "note": (
-                "Captain proposes only. Resolving decisions, retrying deadletters, "
-                "or launching a code.task still goes through the existing governed paths."
+                f"Validated {len(moves)} move(s): {len(applied)} applied, "
+                f"{len(rejected)} rejected, {len(human)} need a human. "
+                "Decisions and deadletters are never auto-applied. "
+                "BOSS self-change opens a PR."
             ),
         }
+
+    def _latest_verify_green_without_preview(self, connection: Connection, project_id: str) -> Optional[str]:
+        try:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT r.id FROM code_task_runs r
+                    WHERE r.project_id=:p AND r.status='completed'
+                      AND COALESCE((r.state->>'tests_passed')::boolean, false)
+                      AND NOT EXISTS (
+                        SELECT 1 FROM app_previews p
+                        WHERE p.run_id=r.id AND p.status='running'
+                          AND COALESCE(p.mode,'') <> 'fixture'
+                      )
+                    ORDER BY r.updated_at DESC LIMIT 1
+                    """
+                ),
+                {"p": project_id},
+            ).mappings().first()
+        except Exception:
+            return None
+        return str(row["id"]) if row else None
+
+    def _apply_validated_move(
+        self, connection: Connection, *, project_id: str, actor: str,
+        move: dict[str, Any], verify_run: Optional[str], directive: Optional[str],
+    ) -> dict[str, Any]:
+        kind = move.get("kind")
+        scope = self._scope(connection, project_id)
+        if kind == "restart_preview":
+            if not verify_run:
+                return {"status": "rejected", "error": "no verify-green run to preview"}
+            try:
+                from .preview_service import start_preview_for_run
+                engine = connection.engine
+                preview = start_preview_for_run(engine, self.settings, verify_run, ttl_minutes=60)
+            except Exception as exc:  # noqa: BLE001
+                return {"status": "rejected", "error": f"preview failed: {type(exc).__name__}"}
+            ok = preview.get("status") == "running"
+            receipt, _ = self.receipts.create_or_reuse(
+                connection, scope["org_id"], scope["workspace_id"], project_id,
+                f"metatron:preview:{verify_run}",
+                "metatron.preview_restart",
+                {"run_id": verify_run},
+                {"preview": preview.get("id"), "status": preview.get("status")},
+            )
+            return {
+                "status": "applied" if ok else "rejected",
+                "preview_id": preview.get("id"),
+                "run_id": verify_run,
+                "receipt_id": receipt.get("id"),
+                "error": None if ok else preview.get("error"),
+            }
+        if kind == "launch_factory_job":
+            from .code_task_service import start_code_task
+            from .jobs import JobLeaseService
+            jobs = JobLeaseService(self.settings)
+            title = (directive or move.get("detail") or "Captain factory launch")[:200]
+            self_mod = "boss" in title.lower() or "self-improv" in title.lower()
+            owner = self.settings.target_github_owner
+            repo = self.settings.target_github_repo
+            if self_mod:
+                owner = getattr(self.settings, "github_owner", None) or owner
+                repo = "boss"
+            try:
+                run_id = start_code_task(
+                    connection,
+                    project_id=project_id,
+                    task_id=None,
+                    title=f"Captain: {title}",
+                    instructions=(
+                        (directive or move.get("detail") or title)
+                        + ("\n\nThis is a BOSS self-improvement change. Open a PR only. "
+                           "Do not apply to production in place." if self_mod else "")
+                    ),
+                    acceptance_criteria=["npm run verify or equivalent exits 0"],
+                    test_commands=["npm run verify"] if not self_mod else [],
+                    owner=owner,
+                    repo=repo,
+                    base_branch="main",
+                    finalize_ctx={
+                        "source": "metatron_captain",
+                        "actor": actor,
+                        "self_mod": bool(self_mod),
+                        "open_pr": True,
+                    },
+                    jobs=jobs,
+                    open_pr=True,
+                    risk_tier=1 if self_mod else 0,
+                )
+            except Exception as exc:  # noqa: BLE001
+                return {"status": "rejected", "error": f"factory launch failed: {exc}"}
+            receipt, _ = self.receipts.create_or_reuse(
+                connection, scope["org_id"], scope["workspace_id"], project_id,
+                f"metatron:factory:{run_id}",
+                "metatron.factory_launch",
+                {"run_id": run_id, "self_mod": self_mod},
+                {"title": title},
+            )
+            return {
+                "status": "applied",
+                "run_id": run_id,
+                "receipt_id": receipt.get("id"),
+                "self_mod": bool(self_mod),
+            }
+        return {"status": "rejected", "error": f"no apply path for {kind}"}
 
     def _scope(self, connection: Connection, project_id: str) -> dict[str, str]:
         row = connection.execute(
