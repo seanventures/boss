@@ -2973,6 +2973,57 @@ CREATE TABLE IF NOT EXISTS focused_agent_ticks (
 CREATE INDEX IF NOT EXISTS idx_focused_agent_ticks_agent
   ON focused_agent_ticks(agent_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_process_templates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  process_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  spec JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, process_key)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_process_templates_project
+  ON agent_process_templates(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_process_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  template_id TEXT NOT NULL REFERENCES agent_process_templates(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  actor TEXT NOT NULL,
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  context JSONB NOT NULL DEFAULT '{}'::jsonb,
+  current_steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_process_runs_project
+  ON agent_process_runs(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_process_steps (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES agent_process_runs(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  step_key TEXT NOT NULL,
+  role_key TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  input JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output JSONB NOT NULL DEFAULT '{}'::jsonb,
+  handoff_from TEXT,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_process_steps_run
+  ON agent_process_steps(run_id, created_at);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

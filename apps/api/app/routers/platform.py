@@ -223,3 +223,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(focused_agents_router)
     except ImportError:
         pass
+
+    # Agent process / handoff workflows (PRD → review → build → certify → accept)
+    try:
+        from .agent_processes import router as agent_processes_router
+
+        app.include_router(agent_processes_router)
+    except ImportError:
+        pass

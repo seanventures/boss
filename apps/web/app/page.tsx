@@ -82,6 +82,7 @@ import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
 import { FocusedAgents } from "./focused-agents-ui";
+import { AgentProcesses } from "./agent-process-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
@@ -6861,6 +6862,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               meetings={meetingRooms.items.map((item) => ({ id: item.id, title: item.title }))}
             />
           </div>
+        </section>
+
+        <section className="panel-stack" data-area="processes" aria-label="Agent processes">
+          <AgentProcesses projectId={activeProjectId} actor={activeActorId} />
         </section>
 
         <section className="panel-stack" data-area="delivery" aria-label="CI/CD">

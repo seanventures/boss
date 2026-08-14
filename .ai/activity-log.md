@@ -1,5 +1,14 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Agent process handoffs
+
+- New runtime `AgentProcessService`: templates + runs + recorded handoffs.
+- Default `prd_to_accepted_work`: PRD intake → architect/CTO/VP-PM review → improve → captain build → QA → UX → captain verify → panel certify → captain accept.
+- Simulated mode never enqueues a budgeted code.task. Auto-build is opt-in.
+- Worker ticks `/v1/agent-processes/tick-all`. Mission Control area **Agent processes**.
+- **Not GA.**
+
+
 ## 2026-08-14 — Grok — Factory quality loop documented
 
 - After green authoritative verify, BOSS may run one quality improve pass when UI/UX evidence is thin (missing loading/empty/error states, no e2e, almost no a11y markers).

@@ -87,6 +87,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch on shared tag `3f1d2cf`. Worker every 60s: observe → measure → validate → apply-safe → verify. Live dogfood: first tick applied a preview restart (`app_preview.started` 17:32:16Z, verify ok). Decisions/DLQ stay human. **Not public GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
+| Agent process handoffs | ◐ Authorable role sequences. Default: PRD → architect/CTO/VP-PM review → improve → captain build → QA → UI/UX → captain verify → panel certify → captain accept. Simulated completes without spend. **Not GA.** |
 | Assurance / ground-truth runtime | ✅ |
 | Self-improvement automation routes | ✦ Enterprise mount |
 

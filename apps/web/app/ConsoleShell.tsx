@@ -34,6 +34,7 @@ import {
   Rows,
   SlidersHorizontal,
   TerminalWindow,
+  TreeStructure,
   UserCircle,
   Users,
   UsersThree,
@@ -60,6 +61,7 @@ type AreaId =
   | "portfolio"
   | "discovery"
   | "meetings"
+  | "processes"
   | "code_tasks"
   | "shepherd"
   | "delivery"
@@ -109,6 +111,7 @@ const ICONS = {
   reports: ChartBar,
   capabilities: Wrench,
   meetings: UsersThree,
+  processes: TreeStructure,
   code_tasks: Code,
   shepherd: Code,
   delivery: Code,
@@ -133,6 +136,7 @@ const AREAS: AreaDef[] = [
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
+  { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
   { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },

@@ -1001,6 +1001,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active="work"] .frame > section:is([data-area="work"], :has([data-area="work"])),
 .bx-content[data-active="portfolio"] .frame > section:is([data-area="portfolio"], :has([data-area="portfolio"])),
 .bx-content[data-active="meetings"] .frame > section:is([data-area="meetings"], :has([data-area="meetings"])),
+.bx-content[data-active="processes"] .frame > section:is([data-area="processes"], :has([data-area="processes"])),
 .bx-content[data-active="code_tasks"] .frame > section:is([data-area="code_tasks"], :has([data-area="code_tasks"])),
 .bx-content[data-active="shepherd"] .frame > section:is([data-area="shepherd"], :has([data-area="shepherd"])),
 .bx-content[data-active="delivery"] .frame > section:is([data-area="delivery"], :has([data-area="delivery"])),

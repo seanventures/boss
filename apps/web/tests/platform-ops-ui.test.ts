@@ -37,6 +37,7 @@ const EXISTING_AREA_IDS = new Set([
   "portfolio",
   "discovery",
   "meetings",
+  "processes",
   "code_tasks",
   "shepherd",
   "delivery",
