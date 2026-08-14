@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-14 Factory quality loop (docs)
+
+- One improve pass after green verify when UI/UX evidence is thin. Frozen tests stay frozen; failed pass restores last green impl.
+- Workspace scan attaches `ui_evidence` / `ux_evidence` / `capability_evidence` for scorecard v1.1. Unknown JTBD outcomes and unknown `a11y_violations` stay `not_scored`.
+- FEATURES stays ◐. Do not stamp public GA.
+
 ## 2026-08-14 Focused always-on agents
 
 - Builder + duty loop: `POST /v1/focused-agents`, worker `tick-all` every 60s, Wake now.

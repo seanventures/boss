@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Factory quality loop documented
+
+- After green authoritative verify, BOSS may run one quality improve pass when UI/UX evidence is thin (missing loading/empty/error states, no e2e, almost no a11y markers).
+- Frozen tests are not edited. If the pass breaks tests, the previous green impl is restored.
+- Workspace scan attaches `ui_evidence` / `ux_evidence` / `capability_evidence` for scorecard v1.1. Unknown JTBD outcomes and unknown `a11y_violations` stay `not_scored` — never invented.
+- FEATURES.md factory quality row is ◐. **Do not stamp public GA.**
+
 ## 2026-08-14 — Grok — Focused always-on agent builder
 
 - Thin builder at Agent Studio: pick template (preview keeper / queue helper / factory driver / reviewer / custom), set focus, mode (always_on / hybrid / on_demand), start.

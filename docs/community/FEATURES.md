@@ -49,6 +49,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Spec / architecture / implement / test phases | ✅ |
 | Sandbox execution plane | ✅ |
 | Evidence-backed completion | ✅ |
+| Factory quality pass after green verify | ◐ One improve pass if UI/UX evidence is thin. Frozen tests stay frozen; failed pass restores last green impl. Unknown JTBD / `a11y_violations` stay `not_scored`. Stays partial. **Not public GA.** |
 | PR / review packets (with GitHub) | ✅ |
 | Browser / automated test evidence | ✅ |
 | Deployment targets and runs | ✅ |

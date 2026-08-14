@@ -264,7 +264,7 @@ def _evidence_blob(run: dict[str, Any], *names: str) -> dict[str, Any]:
 def _score_ui(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
     parts: list[int] = []
     notes: list[str] = []
-    if "a11y_violations" in evidence:
+    if evidence.get("a11y_violations") is not None:
         violations = max(0, int(evidence.get("a11y_violations") or 0))
         parts.append(max(0, 100 - min(100, violations * 20)))
         notes.append(f"{violations} a11y violation(s)")
@@ -274,7 +274,7 @@ def _score_ui(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
         covered = {str(item).strip().lower() for item in states if item}
         parts.append(round(100 * len(covered & required) / len(required)))
         notes.append(f"states={sorted(covered & required)}")
-    if "contrast_ok" in evidence:
+    if evidence.get("contrast_ok") is not None:
         parts.append(100 if evidence.get("contrast_ok") else 40)
         notes.append(f"contrast_ok={bool(evidence.get('contrast_ok'))}")
     if not parts:
@@ -287,9 +287,14 @@ def _score_ux(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
     notes: list[str] = []
     jtbd = evidence.get("jtbd") or evidence.get("walkthroughs") or []
     if isinstance(jtbd, list) and jtbd:
-        passed = sum(1 for item in jtbd if isinstance(item, dict) and item.get("passed"))
-        parts.append(round(100 * passed / len(jtbd)))
-        notes.append(f"jtbd {passed}/{len(jtbd)} passed")
+        known = [
+            item for item in jtbd
+            if isinstance(item, dict) and item.get("passed") in {True, False}
+        ]
+        if known:
+            passed = sum(1 for item in known if item.get("passed") is True)
+            parts.append(round(100 * passed / len(known)))
+            notes.append(f"jtbd {passed}/{len(known)} passed")
     rubric = evidence.get("rubric") or {}
     if isinstance(rubric, dict) and rubric:
         keys = ("task_success", "clarity", "trust", "delight", "accessibility")

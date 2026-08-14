@@ -45,14 +45,54 @@ implementation effort (4%), independently assessed innovation (4%), and reliabil
 changed files.
 
 Scores are evidence-aware: build/verification, phase timing, cost, token telemetry,
-turns/files, repair attempts, quality gates, UI evidence (`a11y_violations`,
-`states_covered`, `contrast_ok`), and UX evidence (JTBD walkthroughs plus a 1–5
-rubric for task-success, clarity, trust, delight, accessibility) are calculated
-from durable run records. Capability-to-test mapping, browser-state evidence, UI,
-UX, and innovation review remain **not scored** until cited evidence exists.
-Overall scores are provisional until the full 100% weight has evidence. This lets
-operators tune workflow profile, model route, repair budget, and test strategy
-from measured regressions rather than vague impressions.
+turns/files, repair attempts, quality gates, and any attached UI/UX/capability
+blobs are calculated from durable run records. A field that was never measured
+is not filled in. Capability-to-test mapping, browser-state evidence, UI craft,
+UX / task success, and innovation review remain **`not_scored`** until cited
+evidence exists. Unknown JTBD outcomes and unknown `a11y_violations` stay
+`not_scored` — they are never invented. Overall scores are provisional until
+the full 100% weight has evidence. This lets operators tune workflow profile,
+model route, repair budget, and test strategy from measured regressions rather
+than vague impressions.
+
+## Factory quality loop
+
+After the authoritative verification command is green, the factory may run
+**one** quality improve pass. That pass is not a second product scorecard, not
+an ImprovementProgram trial, and not a GA stamp. It exists only when workspace
+UI/UX evidence is thin.
+
+Thin evidence means at least one of:
+
+- fewer than three of `loading` / `empty` / `error` / `ok` states detected in the tree
+- no e2e script or e2e/playwright path, and no JTBD names extracted from tests
+- almost no a11y markers (fewer than two `aria-` / `role=` / `alt=` / axe / sr-only
+  hits) and no a11y/axe package script
+
+The improve prompt may add implementation only. Frozen tests are not edited,
+deleted, or weakened. If the pass fails the frozen test command, or raises, the
+previous green implementation files are restored and the run stays green on that
+prior evidence. The recorded event is `code_task.quality_pass` with reason
+`thin_ui_ux_evidence`. `quality_passes` on the run is at most `1`.
+
+A green verify plus a quality pass is still a governed code-task result. It does
+not stamp public Community GA.
+
+## UI/UX evidence attachment
+
+A deterministic workspace scan attaches `ui_evidence`, `ux_evidence`, and
+`capability_evidence` onto the code-task run so scorecard **v1.1** can see them.
+
+| Blob | Attached from the tree | Left unknown |
+| --- | --- | --- |
+| `ui_evidence` | `states_covered` (heuristic hits), `a11y_markers` (count), `has_a11y_script` | `a11y_violations`, `contrast_ok` |
+| `ux_evidence` | `has_e2e`, `jtbd` ids sourced from test names | `jtbd[].passed`, rubric 1–5 |
+| `capability_evidence` | `scenario_mapping` from test paths (`tested: true`) | `passed` |
+
+Unknown JTBD outcomes and unknown `a11y_violations` stay **`not_scored`**. The
+scan never invents pass/fail, violation counts, contrast judgments, or rubric
+scores. The scorecard remains provisional until those fields are actually
+observed.
 
 ## Developer runner and evidence export
 

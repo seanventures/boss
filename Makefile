@@ -182,6 +182,7 @@ else
 endif
 
 # Factory surface E2E: health + factory/wip + code-tasks list (+ optional create).
+# Dry-run also proves quality-loop module + scorecard v1.1 ui/ux; never POSTs a budgeted code.task.
 # Without BOSS_API_KEY (or with DRY_RUN=1): structural dry-run only, exit 0 if contracts OK.
 # Live read-only: BOSS_API_KEY (+ BOSS_API_BASE, PROJECT_ID).
 # Optional no-spend fixture: CREATE_FIXTURE=1 (POST simulated=true if fixture_supported).

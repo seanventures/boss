@@ -4,8 +4,9 @@
 Two modes:
 
   --dry-run (default when BOSS_API_KEY missing)
-    Structural validation of factory / code-task endpoint contracts.
-    No network. Exit 0 if structure is coherent.
+    Structural validation of factory / code-task endpoint contracts,
+    factory quality-loop exports, scorecard v1.1 ui/ux dimensions, and
+    the no-budgeted-POST rule. No network. Exit 0 if structure is coherent.
 
   live (credentials present)
     1. health
@@ -59,8 +60,10 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -73,7 +76,15 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 GATE_NAME = "factory_e2e_gate"
-GATE_VERSION = "1.2.0"
+GATE_VERSION = "1.3.0"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+QUALITY_LOOP_RELPATH = "engine/boss_engine/services/factory_quality_loop.py"
+BENCHMARK_APPS_RELPATH = "engine/boss_engine/services/benchmark_apps.py"
+QUALITY_LOOP_EXPORTS = (
+    "should_run_quality_pass",
+    "collect_workspace_evidence",
+    "quality_improve_prompt",
+)
 PROPOSALS_QUEUE_SKIP_STATUSES = frozenset({404, 405})
 DEFAULT_API_URL = "https://boss-api.local.sean.network"
 DEFAULT_PROJECT_ID = "boss-dogfood"
@@ -409,6 +420,222 @@ def honesty_from_wip(wip_payload: Any) -> dict[str, Any]:
     }
 
 
+def _ensure_engine_on_path(root: Path | None = None) -> None:
+    engine = str((root or REPO_ROOT) / "engine")
+    if engine not in sys.path:
+        sys.path.insert(0, engine)
+
+
+def _try_import_engine(module_name: str) -> Any | None:
+    """Import a boss_engine module when PYTHONPATH allows; otherwise None."""
+    try:
+        _ensure_engine_on_path()
+        return importlib.import_module(module_name)
+    except Exception:
+        return None
+
+
+def _export_in_source(name: str, source: str) -> bool:
+    return bool(
+        re.search(rf"^def {re.escape(name)}\s*\(", source, re.M)
+        or re.search(rf"^{re.escape(name)}\s*=", source, re.M)
+    )
+
+
+def inspect_quality_loop() -> dict[str, Any]:
+    """Prove the factory quality-loop module exists and exports the public API.
+
+    Prefers a real import; falls back to file-text inspection so dry-run
+    stays offline and does not require engine on PYTHONPATH.
+    """
+    path = REPO_ROOT / QUALITY_LOOP_RELPATH
+    exists = path.is_file()
+    source = ""
+    if exists:
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            source = ""
+    module = _try_import_engine("boss_engine.services.factory_quality_loop") if exists else None
+    exports: dict[str, bool] = {}
+    for name in QUALITY_LOOP_EXPORTS:
+        if module is not None:
+            exports[name] = callable(getattr(module, name, None))
+        else:
+            exports[name] = _export_in_source(name, source)
+    return {
+        "exists": exists,
+        "imported": module is not None,
+        "path": str(path),
+        "exports": exports,
+    }
+
+
+def inspect_quality_loop_contract() -> dict[str, Any]:
+    """Max 1 quality pass; never invent scores; do not edit frozen tests."""
+    path = REPO_ROOT / QUALITY_LOOP_RELPATH
+    source = ""
+    if path.is_file():
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            source = ""
+    module = _try_import_engine("boss_engine.services.factory_quality_loop")
+    max_passes: int | None = None
+    prompt_text = ""
+    if module is not None:
+        raw = getattr(module, "MAX_QUALITY_PASSES", None)
+        if isinstance(raw, int):
+            max_passes = raw
+        prompt_fn = getattr(module, "quality_improve_prompt", None)
+        if callable(prompt_fn):
+            try:
+                prompt_text = str(prompt_fn({}, title="factory-e2e-gate"))
+            except Exception:
+                prompt_text = ""
+    if max_passes is None:
+        match = re.search(r"^MAX_QUALITY_PASSES\s*=\s*(\d+)\s*$", source, re.M)
+        if match:
+            max_passes = int(match.group(1))
+    haystack = f"{source}\n{prompt_text}"
+    return {
+        "max_quality_passes": max_passes,
+        "never_invent_scores": bool(re.search(r"(never invent|do not invent)", haystack, re.I)),
+        "do_not_edit_frozen_tests": bool(
+            re.search(r"frozen test", haystack, re.I)
+            and re.search(r"(do not edit|must not edit)", haystack, re.I)
+        ),
+    }
+
+
+def inspect_scorecard_v11() -> dict[str, Any]:
+    """Scorecard v1.1 must include dedicated ui and ux dimensions."""
+    path = REPO_ROOT / BENCHMARK_APPS_RELPATH
+    module = _try_import_engine("boss_engine.services.benchmark_apps")
+    version: str | None = None
+    dim_ids: list[str] = []
+    imported = False
+    if module is not None:
+        imported = True
+        raw_version = getattr(module, "SCORECARD_VERSION", None)
+        version = raw_version if isinstance(raw_version, str) else None
+        for item in getattr(module, "SCORING_DIMENSIONS", ()) or ():
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                dim_ids.append(item["id"])
+    elif path.is_file():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        match = re.search(r'^SCORECARD_VERSION\s*=\s*["\']([^"\']+)["\']', text, re.M)
+        version = match.group(1) if match else None
+        block = re.search(r"SCORING_DIMENSIONS\s*=\s*\(", text)
+        blob = text[block.end() : block.end() + 4000] if block else text
+        dim_ids = re.findall(r'["\']id["\']\s*:\s*["\']([a-z0-9_]+)["\']', blob)
+    return {
+        "version": version,
+        "dimension_ids": dim_ids,
+        "has_ui": "ui" in dim_ids,
+        "has_ux": "ux" in dim_ids,
+        "imported": imported,
+        "path": str(path),
+    }
+
+
+def factory_catalog_paths() -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for endpoint in STRUCTURAL_ENDPOINTS:
+        raw = str(endpoint.get("path") or "").split("?", 1)[0]
+        if raw and raw not in seen:
+            seen.add(raw)
+            paths.append(raw)
+    return paths
+
+
+def quality_surface_checks() -> list[CheckResult]:
+    """No-network proofs of the factory quality loop + remaining endpoints."""
+    checks: list[CheckResult] = []
+
+    loop = inspect_quality_loop()
+    missing = [name for name, present in loop["exports"].items() if not present]
+    checks.append(
+        CheckResult(
+            name="structure.quality_loop_module",
+            ok=bool(loop["exists"]) and not missing,
+            detail=(
+                f"exports={sorted(loop['exports'])} imported={loop['imported']}"
+                if loop["exists"] and not missing
+                else f"missing module or exports {missing} exists={loop['exists']}"
+            ),
+            evidence={
+                "path": loop["path"],
+                "exists": loop["exists"],
+                "imported": loop["imported"],
+                "exports": loop["exports"],
+            },
+        )
+    )
+
+    card = inspect_scorecard_v11()
+    checks.append(
+        CheckResult(
+            name="structure.scorecard_v11_ui_ux",
+            ok=card["version"] == "1.1" and card["has_ui"] and card["has_ux"],
+            detail=f"version={card['version']} dims={card['dimension_ids']}",
+            evidence={
+                "version": card["version"],
+                "dimension_ids": card["dimension_ids"],
+                "imported": card["imported"],
+            },
+        )
+    )
+
+    paths = factory_catalog_paths()
+    checks.append(
+        CheckResult(
+            name="structure.factory_endpoints_remain",
+            ok="/v1/factory/wip" in paths and "/v1/code-tasks" in paths,
+            detail=f"paths={paths}",
+            evidence={"paths": paths},
+        )
+    )
+
+    contract = inspect_quality_loop_contract()
+    checks.append(
+        CheckResult(
+            name="structure.quality_loop_contract",
+            ok=(
+                contract["max_quality_passes"] == 1
+                and contract["never_invent_scores"] is True
+                and contract["do_not_edit_frozen_tests"] is True
+            ),
+            detail=(
+                f"MAX_QUALITY_PASSES={contract['max_quality_passes']} "
+                "never invent scores; do not edit frozen tests"
+            ),
+            evidence=contract,
+        )
+    )
+
+    create = next(e for e in STRUCTURAL_ENDPOINTS if e["name"] == "code_tasks.create")
+    checks.append(
+        CheckResult(
+            name="structure.no_budgeted_code_task",
+            ok=create.get("required") is False and create.get("method") == "POST",
+            detail=(
+                "dry-run and default live never POST a budgeted code.task; "
+                "create stays opt-in"
+            ),
+            evidence={
+                "create_required": bool(create.get("required")),
+                "create_method": create.get("method"),
+            },
+        )
+    )
+    return checks
+
+
 def validate_dry_run_structure(
     *,
     api_base: str = DEFAULT_API_URL,
@@ -522,6 +749,8 @@ def validate_dry_run_structure(
             ),
         )
     )
+
+    checks.extend(quality_surface_checks())
 
     # document live env requirements in evidence for operators reading dry-run report
     checks.append(
@@ -1106,6 +1335,10 @@ def run_gate(
                 ),
             )
         )
+
+    # Structure + contract proofs also run in live read-only (no extra POSTs).
+    for extra in quality_surface_checks():
+        record(extra)
 
     return checks
 

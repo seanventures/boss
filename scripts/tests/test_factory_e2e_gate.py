@@ -96,6 +96,12 @@ def test_dry_run_structure_passes():
     required = [c for c in checks if c.required]
     assert required
     assert all(c.ok for c in required)
+    names = {c.name for c in checks}
+    assert "structure.quality_loop_module" in names
+    assert "structure.scorecard_v11_ui_ux" in names
+    assert "structure.factory_endpoints_remain" in names
+    assert "structure.quality_loop_contract" in names
+    assert "structure.no_budgeted_code_task" in names
     # env docs check present as optional
     docs = next(c for c in checks if c.name == "structure.live_env_docs")
     assert docs.ok
@@ -458,3 +464,135 @@ def test_allow_live_pr_from_env(monkeypatch):
     assert gate.allow_live_pr_from_env() is False
     monkeypatch.setenv("BOSS_QA_ALLOW_CANARIES", "1")
     assert gate.allow_live_pr_from_env() is True
+
+
+# ---------------------------------------------------------------------------
+# Factory quality surface (structure + live read-only)
+# ---------------------------------------------------------------------------
+
+QUALITY_EXPORTS = (
+    "should_run_quality_pass",
+    "collect_workspace_evidence",
+    "quality_improve_prompt",
+)
+
+
+def test_quality_loop_module_exists_and_exports():
+    inspection = gate.inspect_quality_loop()
+    assert inspection["exists"] is True
+    assert inspection["path"].endswith("engine/boss_engine/services/factory_quality_loop.py")
+    for name in QUALITY_EXPORTS:
+        assert inspection["exports"][name] is True, name
+
+
+def test_scorecard_v11_includes_ui_and_ux_dimensions():
+    card = gate.inspect_scorecard_v11()
+    assert card["version"] == "1.1"
+    assert "ui" in card["dimension_ids"]
+    assert "ux" in card["dimension_ids"]
+
+
+def test_factory_endpoints_remain_in_catalog():
+    paths = gate.factory_catalog_paths()
+    assert "/v1/factory/wip" in paths
+    assert "/v1/code-tasks" in paths
+
+
+def test_quality_loop_contract_max_one_pass_never_invent_no_edit_tests():
+    contract = gate.inspect_quality_loop_contract()
+    assert contract["max_quality_passes"] == 1
+    assert contract["never_invent_scores"] is True
+    assert contract["do_not_edit_frozen_tests"] is True
+
+
+def test_inspect_falls_back_to_file_text_when_import_fails(monkeypatch):
+    """Dry-run must still prove the contract if engine is not on PYTHONPATH."""
+    monkeypatch.setattr(gate, "_try_import_engine", lambda _name: None)
+    inspection = gate.inspect_quality_loop()
+    assert inspection["imported"] is False
+    assert inspection["exists"] is True
+    for name in QUALITY_EXPORTS:
+        assert inspection["exports"][name] is True, name
+    card = gate.inspect_scorecard_v11()
+    assert card["imported"] is False
+    assert card["version"] == "1.1"
+    assert card["has_ui"] is True
+    assert card["has_ux"] is True
+    contract = gate.inspect_quality_loop_contract()
+    assert contract["max_quality_passes"] == 1
+    assert contract["never_invent_scores"] is True
+    assert contract["do_not_edit_frozen_tests"] is True
+
+
+def test_dry_run_structure_includes_quality_surface_checks():
+    checks = gate.validate_dry_run_structure(
+        api_base="https://boss-api.example",
+        project_id="boss-dogfood",
+    )
+    by_name = {c.name: c for c in checks}
+    loop = by_name["structure.quality_loop_module"]
+    assert loop.ok is True
+    assert loop.required is True
+    for name in QUALITY_EXPORTS:
+        assert loop.evidence["exports"][name] is True
+    card = by_name["structure.scorecard_v11_ui_ux"]
+    assert card.ok is True
+    assert card.evidence["version"] == "1.1"
+    assert "ui" in card.evidence["dimension_ids"]
+    assert "ux" in card.evidence["dimension_ids"]
+    endpoints = by_name["structure.factory_endpoints_remain"]
+    assert endpoints.ok is True
+    assert "/v1/factory/wip" in endpoints.evidence["paths"]
+    assert "/v1/code-tasks" in endpoints.evidence["paths"]
+    contract = by_name["structure.quality_loop_contract"]
+    assert contract.ok is True
+    assert contract.evidence["max_quality_passes"] == 1
+    assert contract.evidence["never_invent_scores"] is True
+    assert contract.evidence["do_not_edit_frozen_tests"] is True
+    no_post = by_name["structure.no_budgeted_code_task"]
+    assert no_post.ok is True
+    assert no_post.evidence["create_required"] is False
+
+
+def test_dry_run_never_posts_budgeted_code_task(monkeypatch, tmp_path):
+    """--dry-run --create-code-task must stay offline and must not POST."""
+    monkeypatch.delenv("BOSS_API_KEY", raising=False)
+    monkeypatch.delenv("NEXT_PUBLIC_BOSS_API_KEY", raising=False)
+    monkeypatch.delenv("BOSS_FACTORY_ALLOW_CREATE", raising=False)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("dry-run must not open the network")
+
+    monkeypatch.setattr(gate, "urlopen", boom)
+    out = tmp_path / "factory-no-post.json"
+    code = gate.main(
+        ["--dry-run", "--create-code-task", "--output", str(out), "--quiet"]
+    )
+    assert code == 0
+    report = json.loads(out.read_text())
+    assert report["mode"] == "dry-run"
+    names = {c["name"] for c in report["checks"]}
+    assert "structure.no_budgeted_code_task" in names
+    assert "structure.quality_loop_module" in names
+    assert report["summary"]["passed"] is True
+    assert report["meta"]["create_requested"] is True
+
+
+def test_live_readonly_includes_quality_surface_and_does_not_post():
+    checks = gate.run_gate(_readonly_client(), project_id="boss-dogfood")
+    by_name = {c.name: c for c in checks}
+    assert by_name["structure.quality_loop_module"].ok is True
+    assert by_name["structure.scorecard_v11_ui_ux"].ok is True
+    assert by_name["structure.factory_endpoints_remain"].ok is True
+    assert by_name["structure.quality_loop_contract"].ok is True
+    assert by_name["structure.no_budgeted_code_task"].ok is True
+    report = gate.build_report(
+        api_url="u",
+        project_id="p",
+        checks=checks,
+        started_at="a",
+        finished_at="b",
+        duration_ms=1,
+        mode="live+readonly",
+    )
+    assert report["summary"]["passed"] is True

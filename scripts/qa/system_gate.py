@@ -8,6 +8,8 @@ Compose (never spends; never prints BOSS_API_KEY):
   2. scripts/qa/live_dogfood_gate.py when key set
   3. scripts/qa/workflow_e2e_gate.py (dry-run without key, live with key)
   4. scripts/qa/factory_e2e_gate.py --dry-run
+     (factory/wip + code-tasks, quality-loop exports, scorecard v1.1 ui/ux;
+     never a budgeted code.task POST)
      live factory follows when key set; --create-fixture only if
      GET /v1/factory/wip advertises fixture_supported
   5. Optional preview fixture POST /v1/previews/fixture + GET .../web/

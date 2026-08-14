@@ -27,6 +27,9 @@ from .metatron_captain import (
     MetatronCaptain,
     findings_from_snapshot,
     proposed_moves_from_findings,
+    quality_improve_directive,
+    scorecard_from_snapshot,
+    scorecard_quality_gaps,
     validate_move,
     verify_from_snapshots,
 )
@@ -251,6 +254,24 @@ def plan_moves(
             "requires_human": True,
             "apply": False,
         })
+    gaps = scorecard_quality_gaps(scorecard_from_snapshot(snapshot))
+    if gaps and "launch_factory_job" in allowed_actions:
+        directive = quality_improve_directive(gaps, focus=focus)
+        stamped = False
+        for move in planned:
+            if move.get("kind") == "launch_factory_job":
+                move["detail"] = directive
+                move["directive"] = directive
+                stamped = True
+        if not stamped:
+            planned.append({
+                "kind": "launch_factory_job",
+                "status": "queued" if auto else "proposed",
+                "detail": directive,
+                "directive": directive,
+                "finding_id": "scorecard_gaps",
+                "apply": bool(auto),
+            })
     return planned
 
 
@@ -490,9 +511,15 @@ class FocusedAgentService:
                     move["status"] = "rejected"
                     rejected.append(move)
                 continue
+            focus = str(agent.get("focus") or "")
+            move_directive = str(move.get("directive") or "")
+            if move.get("kind") == "launch_factory_job" and move_directive:
+                apply_directive = move_directive
+            else:
+                apply_directive = focus
             result = self.captain._apply_validated_move(
                 connection, project_id=project_id, actor=actor,
-                move=move, verify_run=verify_run, directive=str(agent.get("focus") or ""),
+                move=move, verify_run=verify_run, directive=apply_directive,
             )
             move.update(result)
             if result.get("status") == "applied":

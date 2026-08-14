@@ -48,6 +48,12 @@ from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
+from .factory_quality_loop import (
+    collect_workspace_evidence_from_root,
+    quality_improve_prompt,
+    quality_pass_record,
+    should_run_quality_pass,
+)
 from .pipeline_profiles import (
     apply_budget_pressure,
     infer_risk_tier,
@@ -2235,6 +2241,80 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             else:
                 evidence_text = f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}"
 
+        # QUALITY LOOP — one bounded improve pass after a green authoritative test run
+        # when UI/UX evidence is thin. Frozen tests stay frozen. If the pass breaks
+        # tests, restore the last green implementation files.
+        workspace_evidence: dict = {}
+        quality_passes_used = 0
+        try:
+            workspace_evidence = collect_workspace_evidence_from_root(root)
+        except Exception:  # noqa: BLE001
+            workspace_evidence = {}
+        if should_run_quality_pass(
+            workspace_evidence, tests_passed=bool(tests_passed and impl_files),
+        ):
+            snapshot = {}
+            for _qp in impl_files:
+                _qf = root / _qp
+                if _qf.is_file():
+                    try:
+                        snapshot[_qp] = _qf.read_text(encoding="utf-8")
+                    except OSError:
+                        pass
+            q_prompt = quality_improve_prompt(workspace_evidence, title=title)
+            with _transaction(engine) as c:
+                emit_event(
+                    c, project_id, "code_task.quality_pass", "boss",
+                    "code_task_run", run_id,
+                    {"reason": "thin_ui_ux_evidence", "attempt": 1},
+                )
+            q_ok = tests_passed
+            try:
+                if use_microvm:
+                    qres = _guest_stage(
+                        "quality", "implement", q_prompt, test_cmds=[test_cmd],
+                        stage_title=f"SE: quality — {title}",
+                    )
+                    q_changes = [fc for fc in qres.diff if not _is_test_path(fc.path)]
+                    _commit_stage(q_changes, f"governed: quality — {title[:60]}")
+                    q_ok = bool(qres.tests_passed)
+                    if q_ok:
+                        tests_passed = True
+                        test_exit_code = qres.tests[0].exit_code if qres.tests else test_exit_code
+                        impl_files = [p for p in accumulated if not _is_test_path(p)] or impl_files
+                else:
+                    set_llm_context(stage="quality")
+                    qa, qm = _route("implement")
+                    qa.run_role(q_prompt, root, model=qm)
+                    q_test = sandbox.run(test_cmd)
+                    q_ok = bool(q_test.ok)
+                    if q_ok:
+                        tests_passed = True
+                        test_exit_code = q_test.exit_code
+                        impl_files = [
+                            fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)
+                        ] or impl_files
+            except Exception:  # noqa: BLE001 — quality pass must not sink a green run
+                q_ok = False
+            reverted = False
+            if not q_ok and snapshot:
+                for _qp, _qc in snapshot.items():
+                    try:
+                        (root / _qp).write_text(_qc, encoding="utf-8")
+                    except OSError:
+                        pass
+                reverted = True
+                tests_passed = True
+            quality_passes_used = 1
+            repair_log.append(quality_pass_record(
+                attempt=1, tests_passed=q_ok and not reverted, reverted=reverted,
+                gaps=[{"dimension": "ui"}, {"dimension": "ux"}],
+            ))
+            try:
+                workspace_evidence = collect_workspace_evidence_from_root(root)
+            except Exception:  # noqa: BLE001
+                pass
+
         # REVIEW PANEL (tier >= 2). The read-only checks — adversarial review, security review, and
         # the full-suite regression run — are independent, so they run CONCURRENTLY, bounded by
         # code_agent_max_concurrency (the lane capacity: extra checks wait for a free slot, and any
@@ -2683,6 +2763,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # (0 = passed/failed first try) and the per-attempt outcome trail.
             "repair_attempts": repair_attempts, "repair_max": max_repair,
             "repair_log": repair_log, "impl_escalated_recovered": escalated_recovered,
+            "quality_passes": quality_passes_used,
+            "ui_evidence": (workspace_evidence or {}).get("ui_evidence") or {},
+            "ux_evidence": (workspace_evidence or {}).get("ux_evidence") or {},
+            "capability_evidence": (workspace_evidence or {}).get("capability_evidence") or {},
+            "interface_evidence": (workspace_evidence or {}).get("interface_evidence") or {},
             "qa_summary": r1.get("summary", "")[:400],
             "impl_summary": r2.get("summary", "")[:400],
             "review_summary": r3.get("summary", "")[:4000],

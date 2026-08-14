@@ -214,3 +214,114 @@ def test_steady_watch_has_hold_finding():
     )
     assert findings[0]["action"] == "hold"
     assert proposed_moves_from_findings(findings, auto=False) == []
+
+
+def _gapped_scorecard(ui=None, ux=None, capability=None):
+    def dim(dim_id, score):
+        if score is None:
+            return {"id": dim_id, "status": "not_scored", "score": None, "reason": "missing evidence"}
+        return {"id": dim_id, "status": "scored", "score": score}
+
+    return {
+        "version": "1.1",
+        "dimensions": [dim("ui", ui), dim("ux", ux), dim("capability", capability)],
+    }
+
+
+def test_working_software_does_not_treat_scorecard_gaps_as_done():
+    """Verify + preview is not a 100 when the attached scorecard still has UI/UX gaps."""
+    measured = measure_from_snapshot(
+        "working_software",
+        {
+            "completed_verify_green": 2,
+            "running_previews": 1,
+            "scorecard": _gapped_scorecard(ui=None, ux=40, capability=90),
+        },
+    )
+    assert measured["score"] is not None
+    assert measured["score"] < 80
+    assert measured["status"] == "active"
+    evidence = measured["evidence"]
+    assert "ui" in str(evidence).lower()
+    assert "ux" in str(evidence).lower()
+
+
+def test_working_software_missing_scorecard_does_not_invent_quality_scores():
+    """No scorecard on the snapshot must not invent ui/ux/capability = 100."""
+    measured = measure_from_snapshot(
+        "working_software",
+        {"completed_verify_green": 2, "running_previews": 1},
+    )
+    assert measured["score"] == 100
+    evidence = measured["evidence"]
+    assert not evidence.get("scorecard_gaps")
+    assert "ui" not in evidence
+    assert evidence.get("ui") != 100
+    assert evidence.get("ux") != 100
+    assert evidence.get("capability") != 100
+
+
+def test_working_software_findings_pursue_named_scorecard_gaps():
+    snapshot = {
+        "running_previews": 1,
+        "completed_verify_green": 1,
+        "deadletters": 0,
+        "pending_decisions": 0,
+        "budget_state": "green",
+        "scorecard": _gapped_scorecard(ui=None, ux=42, capability=65),
+    }
+    findings = findings_from_snapshot(
+        snapshot,
+        [{"id": "g-ship", "title": "Ship HookWatch", "kind": "working_software", "status": "active"}],
+    )
+    pursue = [item for item in findings if item.get("action") == "pursue_goal"]
+    assert pursue, "working_software must keep pursuing measured quality gaps"
+    blob = " ".join(str(item.get("title") or "") for item in pursue).lower()
+    assert "ui" in blob
+    assert "ux" in blob
+    assert "capability" in blob
+    assert "not_scored" in blob
+    assert "42" in blob or "65" in blob
+    moves = proposed_moves_from_findings(findings, auto=True)
+    factory = next(move for move in moves if move["kind"] == "launch_factory_job")
+    assert factory["apply"] is True
+    assert "ui" in str(factory["detail"]).lower()
+
+
+def test_scorecard_gaps_still_pursue_when_preview_restart_also_applies():
+    """Preview restart covers reachability; quality gaps still need a factory improve."""
+    findings = findings_from_snapshot(
+        {
+            "running_previews": 0,
+            "completed_verify_green": 1,
+            "deadletters": 0,
+            "pending_decisions": 0,
+            "scorecard": _gapped_scorecard(ui=10, ux=None, capability=90),
+        },
+        [{"id": "g1", "title": "Canaries work", "kind": "working_software", "status": "active"}],
+    )
+    ids = {item["id"] for item in findings}
+    assert "preview_expired" in ids
+    pursue = [item for item in findings if item.get("action") == "pursue_goal"]
+    assert pursue
+    assert "ui" in pursue[0]["title"].lower()
+
+
+def test_scorecard_gap_findings_never_auto_apply_decisions():
+    findings = findings_from_snapshot(
+        {
+            "running_previews": 1,
+            "completed_verify_green": 1,
+            "deadletters": 1,
+            "pending_decisions": 2,
+            "scorecard": _gapped_scorecard(ui=None, ux=None, capability=None),
+        },
+        [{"id": "g-q", "title": "Ship it", "kind": "working_software", "status": "active"}],
+    )
+    decision = next(item for item in findings if item["id"] == "decisions")
+    assert decision["auto_safe"] is False
+    moves = proposed_moves_from_findings(findings, auto=True)
+    human = [move for move in moves if move.get("status") == "needs_human" or move.get("requires_human")]
+    assert human
+    assert all(move.get("status") != "applied" for move in moves)
+    assert any(move["kind"] == "launch_factory_job" for move in moves)

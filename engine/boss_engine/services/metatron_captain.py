@@ -37,6 +37,11 @@ CAPTAIN_SURFACE = "chat"
 
 GOAL_KINDS = frozenset({"working_software", "budget", "queue", "quality", "custom"})
 
+# v1.1 craft dimensions factory_driver / working_software should keep chasing.
+# Functionality (npm verify) is not enough. Missing evidence is never 100.
+SCORECARD_QUALITY_DIMS = ("ui", "ux", "capability")
+SCORECARD_QUALITY_FLOOR = 70
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS metatron_goals (
   id TEXT PRIMARY KEY,
@@ -125,6 +130,90 @@ def interpret_turn(message: str) -> dict[str, Any]:
     return {"intent": "status", "text": raw}
 
 
+def scorecard_from_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return an attached v1.1 scorecard. Missing stays None — never invent one."""
+    if not isinstance(snapshot, dict):
+        return None
+    nested: list[Any] = [snapshot.get("scorecard")]
+    for key in ("run", "latest_run", "completion_report"):
+        blob = snapshot.get(key)
+        if isinstance(blob, dict):
+            nested.append(blob.get("scorecard"))
+    for source in nested:
+        if isinstance(source, dict) and source:
+            return source
+    return None
+
+
+def scorecard_quality_gaps(
+    scorecard: dict[str, Any] | None,
+    *,
+    floor: int = SCORECARD_QUALITY_FLOOR,
+) -> list[dict[str, Any]]:
+    """ui/ux/capability gaps from a real scorecard.
+
+    A missing scorecard produces no gaps and no invented 100s. A carried
+    scorecard that omits those dimensions is not_scored, not done.
+    """
+    if not isinstance(scorecard, dict) or not scorecard:
+        return []
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in scorecard.get("dimensions") or []:
+        if isinstance(item, dict) and item.get("id"):
+            by_id[str(item["id"])] = item
+    if "dimensions" not in scorecard and not scorecard.get("version") and not by_id:
+        return []
+    gaps: list[dict[str, Any]] = []
+    for dim in SCORECARD_QUALITY_DIMS:
+        item = by_id.get(dim)
+        score = None if item is None else item.get("score")
+        if item is None or item.get("status") == "not_scored" or score is None:
+            gaps.append({
+                "dimension": dim,
+                "status": "not_scored",
+                "score": None,
+                "reason": (item or {}).get("reason") or "missing evidence",
+            })
+            continue
+        if isinstance(score, (int, float)) and int(score) < floor:
+            gaps.append({
+                "dimension": dim,
+                "status": "scored",
+                "score": int(score),
+                "reason": f"below floor {floor}",
+            })
+    return gaps
+
+
+def format_scorecard_gaps(gaps: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for gap in gaps:
+        dim = str(gap.get("dimension") or "")
+        if not dim:
+            continue
+        if gap.get("status") == "not_scored" or gap.get("score") is None:
+            parts.append(f"{dim}=not_scored")
+        else:
+            parts.append(f"{dim}={int(gap['score'])}")
+    return ", ".join(parts)
+
+
+def quality_improve_directive(gaps: list[dict[str, Any]], *, focus: str = "") -> str:
+    """Governed factory prompt: name measured gaps, never invent scores."""
+    named = format_scorecard_gaps(gaps) or "ui/ux/capability"
+    head = "QUALITY IMPROVE PASS"
+    if focus:
+        head += f" for {focus!r}"
+    return (
+        f"{head}. Measured scorecard gaps: {named}. "
+        "Do not invent ui/ux/capability scores. "
+        "Do not treat missing evidence as 100. "
+        "Do not edit frozen tests. "
+        "Close the named gaps with the smallest honest UI/UX/capability change. "
+        "Leave npm run verify green."
+    )
+
+
 def measure_from_snapshot(kind: str, snapshot: dict[str, Any], target: dict[str, Any] | None = None) -> dict[str, Any]:
     """Score one goal against an already-gathered watch snapshot. Pure."""
     tgt = target or {}
@@ -136,10 +225,23 @@ def measure_from_snapshot(kind: str, snapshot: dict[str, Any], target: dict[str,
             score += 50
         if previews:
             score += 50
+        evidence: dict[str, Any] = {
+            "completed_verify_green": completed,
+            "running_previews": previews,
+        }
+        gaps = scorecard_quality_gaps(scorecard_from_snapshot(snapshot))
+        if gaps:
+            evidence["scorecard_gaps"] = [
+                {"dimension": item["dimension"], "status": item["status"], "score": item["score"]}
+                for item in gaps
+            ]
+            # Verify-green + preview is not a product scorecard. Cap below the
+            # pursue threshold so factory_driver keeps improving measured gaps.
+            score = min(score, SCORECARD_QUALITY_FLOOR - 1)
         return {
             "score": score,
             "status": "achieved" if score >= 100 else "active",
-            "evidence": {"completed_verify_green": completed, "running_previews": previews},
+            "evidence": evidence,
         }
     if kind == "budget":
         state = str(snapshot.get("budget_state") or "unknown")
@@ -210,26 +312,53 @@ def findings_from_snapshot(snapshot: dict[str, Any], goals: list[dict[str, Any]]
             "action": "reduce_spend_or_raise_cap",
             "auto_safe": False,
         })
+    quality_gaps = scorecard_quality_gaps(scorecard_from_snapshot(snapshot))
     for goal in goals:
         if goal.get("status") != "active":
             continue
         kind = str(goal.get("kind") or "custom")
         measured = measure_from_snapshot(kind, snapshot, goal.get("target") or {})
-        if measured.get("score") is None or int(measured["score"]) >= 80:
+        pursue_quality = kind in {"working_software", "quality"} and bool(quality_gaps)
+        if measured.get("score") is None and not pursue_quality:
+            continue
+        if (
+            measured.get("score") is not None
+            and int(measured["score"]) >= 80
+            and not pursue_quality
+        ):
             continue
         # Missing preview is already a restart_preview finding — do not also
-        # enqueue a factory job for the same working_software gap.
-        if kind == "working_software" and preview_gap:
+        # enqueue a factory job for the same working_software gap. Measured
+        # UI/UX/capability gaps are a different job and still launch.
+        if kind == "working_software" and preview_gap and not pursue_quality:
             continue
         if kind not in {"working_software", "quality"}:
             continue
-        findings.append({
+        title = f"Goal '{goal.get('title')}' is at {measured['score']}"
+        if pursue_quality:
+            title = quality_improve_directive(quality_gaps, focus=str(goal.get("title") or ""))
+        finding: dict[str, Any] = {
             "id": f"goal:{goal.get('id')}",
             "severity": "medium",
-            "title": f"Goal '{goal.get('title')}' is at {measured['score']}",
+            "title": title,
             "action": "pursue_goal",
             "auto_safe": True,
             "goal_id": goal.get("id"),
+        }
+        if pursue_quality:
+            finding["directive"] = title
+            finding["gaps"] = quality_gaps
+        findings.append(finding)
+    if quality_gaps and not any(item.get("action") == "pursue_goal" for item in findings):
+        title = quality_improve_directive(quality_gaps)
+        findings.append({
+            "id": "scorecard_gaps",
+            "severity": "medium",
+            "title": title,
+            "action": "pursue_goal",
+            "auto_safe": True,
+            "directive": title,
+            "gaps": quality_gaps,
         })
     if not findings:
         findings.append({
@@ -779,7 +908,51 @@ class MetatronCaptain:
                 "AND status IN ('running','queued','repairing')"
             ),
             "top_risks": health.get("top_risks") or [],
+            "scorecard": self._latest_run_scorecard(connection, project_id),
         }
+
+    def _latest_run_scorecard(self, connection: Connection, project_id: str) -> dict[str, Any] | None:
+        """Attach the newest completed run's v1.1 card. Missing stays None."""
+        try:
+            row = connection.execute(
+                text(
+                    """
+                    SELECT state, finalize_ctx, status
+                    FROM code_task_runs
+                    WHERE project_id=:p AND status='completed'
+                    ORDER BY updated_at DESC LIMIT 1
+                    """
+                ),
+                {"p": project_id},
+            ).mappings().first()
+        except Exception:
+            return None
+        if not row:
+            return None
+        state = row.get("state") or {}
+        if not isinstance(state, dict):
+            return None
+        evidence = {
+            "ui_evidence": state.get("ui_evidence") or {},
+            "ux_evidence": state.get("ux_evidence") or {},
+            "capability_evidence": state.get("capability_evidence") or {},
+            "interface_evidence": state.get("interface_evidence") or {},
+        }
+        if not any(evidence.values()) and state.get("tests_passed") is None:
+            return None
+        try:
+            from .factory_quality_loop import score_run_with_workspace
+
+            return score_run_with_workspace(
+                {
+                    "status": row.get("status"),
+                    "state": state,
+                    "finalize_ctx": row.get("finalize_ctx") or {},
+                },
+                evidence,
+            )
+        except Exception:
+            return None
 
     def measure_all(self, connection: Connection, project_id: str) -> list[dict[str, Any]]:
         self.ensure_schema(connection)
