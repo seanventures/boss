@@ -3278,7 +3278,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                          f"QualityGate {qg_id} PASS.\n\n{r2.get('summary','')}"),
                 files=([FileChange(path=p, content=content) for p, content in accumulated.items()]
                        if use_microvm else sandbox.diff()),
-                created_by_job_id=job_id, actual_usd_micros=cost)
+                created_by_job_id=job_id, actual_usd_micros=cost,
+                evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
 
         status = proposal.get("status")
         # RETRY THE PR ITSELF. A transient GitHub error, an expired reservation, a network
@@ -3302,7 +3303,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         files=([FileChange(path=p, content=content)
                                 for p, content in accumulated.items()]
                                if use_microvm else sandbox.diff()),
-                        created_by_job_id=job_id, actual_usd_micros=cost)
+                        created_by_job_id=job_id, actual_usd_micros=cost,
+                        evidence=evidence, quality_gate_id=qg_id, run_id=run_id)
                     status = proposal.get("status")
                 except Exception as exc:  # noqa: BLE001
                     emit_event(c, project_id, "code_task.pr_retry_failed", "boss",

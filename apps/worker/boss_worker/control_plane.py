@@ -237,6 +237,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_process_manager(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+        """Always-on Project Manager steward cycle. Fail-closed; never invents scores."""
+        response = self._client.post(
+            "/v1/process-manager/tick",
+            json={"project_id": project_id, "actor": actor},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def sweep_qa_benchmark_evaluations(self) -> dict[str, Any]:
         """Persist changed terminal benchmark reports as tuning evidence snapshots.
 

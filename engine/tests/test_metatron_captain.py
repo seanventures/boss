@@ -5,8 +5,12 @@ applies BOSS self-modifications, and goals are scored from observed snapshots.
 """
 
 from boss_engine.services.metatron_captain import (
+    ACTION_KINDS,
+    HELP_REPLY,
+    MUTATING_INTENTS,
     findings_from_snapshot,
     interpret_turn,
+    matches_default_process_story,
     measure_from_snapshot,
     proposed_moves_from_findings,
     validate_action,
@@ -59,6 +63,83 @@ def test_interpret_turn_build_and_prioritize():
     assert interpret_turn("goals")["intent"] == "goals"
     assert interpret_turn("memory")["intent"] == "memory"
     assert interpret_turn("run overwatch")["intent"] == "overwatch"
+
+
+def test_interpret_turn_process_phrases_before_generic_build():
+    """Process authoring beats generic build/act. Settings-page build stays act."""
+    built = interpret_turn("build a process for PRD to accepted work")
+    assert built["intent"] == "build_process"
+    assert "prd" in built["text"].lower()
+
+    workflow = interpret_turn("create a workflow for architect and CTO review")
+    assert workflow["intent"] == "build_process"
+    assert "architect" in workflow["text"].lower()
+
+    defined = interpret_turn("define a process for QA review")
+    assert defined["intent"] == "build_process"
+    assert "QA" in defined["text"] or "qa" in defined["text"].lower()
+
+    handoff = interpret_turn("handoff process PRD to accepted")
+    assert handoff["intent"] == "build_process"
+    assert "PRD" in handoff["text"] or "prd" in handoff["text"].lower()
+
+    started = interpret_turn("start process prd_to_accepted_work")
+    assert started["intent"] == "start_process"
+    assert started.get("process_key") == "prd_to_accepted_work"
+
+    run_prd = interpret_turn("run the prd process")
+    assert run_prd["intent"] == "start_process"
+    assert run_prd.get("process_key") == "prd_to_accepted_work"
+    assert run_prd.get("auto_build") is False
+
+    auto = interpret_turn("start process hookwatch auto_build")
+    assert auto["intent"] == "start_process"
+    assert auto.get("process_key") == "hookwatch"
+    assert auto.get("auto_build") is True
+
+    listed = interpret_turn("list processes")
+    assert listed["intent"] == "list_processes"
+
+    # Existing contracts: generic product build vs question Q&A.
+    assert interpret_turn("build a settings page")["intent"] == "act"
+    assert interpret_turn("should we build this?")["intent"] == "status"
+
+
+def test_validate_action_process_intents():
+    empty = validate_action("build_process", {"text": ""})
+    assert empty["ok"] is False
+    assert "nonempty_text" in empty["failed"]
+
+    authored = validate_action("build_process", {"text": "PRD to accepted work"})
+    assert authored["ok"] is True
+
+    default_start = validate_action("start_process", {})
+    assert default_start["ok"] is True
+
+    listed = validate_action("list_processes", {})
+    assert listed["ok"] is True
+
+    assert "build_process" in ACTION_KINDS
+    assert "start_process" in ACTION_KINDS
+    assert "list_processes" in ACTION_KINDS
+    assert "build_process" in MUTATING_INTENTS
+    assert "start_process" in MUTATING_INTENTS
+    assert "list_processes" not in MUTATING_INTENTS
+
+    auto_red = validate_action(
+        "start_process",
+        {"process_key": "prd_to_accepted_work", "auto_build": True},
+        auto=True,
+        budget_state="red",
+    )
+    assert auto_red["ok"] is False
+    assert "budget_not_red" in auto_red["failed"]
+
+    assert matches_default_process_story("for PRD to accepted work")
+    assert not matches_default_process_story("")
+    assert "process" in HELP_REPLY.lower()
+    assert "build a process" in HELP_REPLY
+    assert "list processes" in HELP_REPLY
 
 
 def test_working_software_goal_needs_preview_and_verify():

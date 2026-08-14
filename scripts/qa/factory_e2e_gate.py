@@ -5,8 +5,11 @@ Two modes:
 
   --dry-run (default when BOSS_API_KEY missing)
     Structural validation of factory / code-task endpoint contracts,
-    factory quality-loop exports, scorecard v1.1 ui/ux dimensions, and
-    the no-budgeted-POST rule. No network. Exit 0 if structure is coherent.
+    factory quality-loop exports, scorecard v1.1 ui/ux dimensions,
+    agent_process existence, optional process_compiler/process_manager
+    (skip if absent), scorecard honesty (never invent a11y_violations
+    or contrast_ok; unknown JTBD stays not_scored), and the
+    no-budgeted-POST rule. No network. Exit 0 if structure is coherent.
 
   live (credentials present)
     1. health
@@ -76,14 +79,46 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 GATE_NAME = "factory_e2e_gate"
-GATE_VERSION = "1.3.0"
+GATE_VERSION = "1.4.0"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 QUALITY_LOOP_RELPATH = "engine/boss_engine/services/factory_quality_loop.py"
 BENCHMARK_APPS_RELPATH = "engine/boss_engine/services/benchmark_apps.py"
+AGENT_PROCESS_RELPATH = "engine/boss_engine/services/agent_process.py"
 QUALITY_LOOP_EXPORTS = (
     "should_run_quality_pass",
     "collect_workspace_evidence",
     "quality_improve_prompt",
+)
+AGENT_PROCESS_EXPORTS = (
+    "validate_process_spec",
+    "review_prd",
+    "improve_prd",
+    "AgentProcessService",
+)
+OPTIONAL_PROCESS_MODULES = (
+    ("process_compiler", "engine/boss_engine/services/process_compiler.py"),
+    ("process_manager", "engine/boss_engine/services/process_manager.py"),
+)
+PROCESS_HANDOFF_RELPATH = "engine/boss_engine/services/agent_process.py"
+PROCESS_ROUTER_RELPATH = "apps/api/app/routers/agent_processes.py"
+SEALED_CONTRACT_RELPATH = "engine/boss_engine/services/sealed_e2e_contract.py"
+FACTORY_SERVICE_RELPATH = "engine/boss_engine/services/software_factory.py"
+GOVERNED_SERVICE_RELPATH = "engine/boss_engine/services/governed_code_task_service.py"
+PROCESS_HANDOFF_EXPORTS = (
+    "AgentProcessService",
+    "PRD_TO_ACCEPTED_SPEC",
+)
+PROCESS_HANDOFF_ENDPOINTS = (
+    "/v1/agent-processes/templates",
+    "/v1/agent-processes/runs",
+    "/v1/agent-processes/tick-all",
+)
+SEALED_CONTRACT_EXPORTS = (
+    "attach_sealed_evidence",
+    "attach_sealed_receipt_result",
+    "validate_sealed_receipt",
+    "validate_sealed_decision",
+    "validate_evidence_attach",
 )
 PROPOSALS_QUEUE_SKIP_STATUSES = frozenset({404, 405})
 DEFAULT_API_URL = "https://boss-api.local.sean.network"
@@ -438,6 +473,7 @@ def _try_import_engine(module_name: str) -> Any | None:
 def _export_in_source(name: str, source: str) -> bool:
     return bool(
         re.search(rf"^def {re.escape(name)}\s*\(", source, re.M)
+        or re.search(rf"^class {re.escape(name)}\b", source, re.M)
         or re.search(rf"^{re.escape(name)}\s*=", source, re.M)
     )
 
@@ -542,6 +578,120 @@ def inspect_scorecard_v11() -> dict[str, Any]:
     }
 
 
+def _read_repo_text(relpath: str) -> str:
+    path = REPO_ROOT / relpath
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def inspect_agent_process() -> dict[str, Any]:
+    """Prove the agent-process runtime exists. Missing file is a required fail."""
+    path = REPO_ROOT / AGENT_PROCESS_RELPATH
+    exists = path.is_file()
+    source = _read_repo_text(AGENT_PROCESS_RELPATH) if exists else ""
+    module = _try_import_engine("boss_engine.services.agent_process") if exists else None
+    exports: dict[str, bool] = {}
+    for name in AGENT_PROCESS_EXPORTS:
+        if module is not None:
+            exports[name] = getattr(module, name, None) is not None
+        else:
+            exports[name] = _export_in_source(name, source)
+    return {
+        "exists": exists,
+        "imported": module is not None,
+        "path": str(path),
+        "exports": exports,
+    }
+
+
+def inspect_optional_process_module(name: str) -> dict[str, Any]:
+    """Honest existence check. Absent compiler/manager files are skipped, never invented."""
+    rel = next((relpath for key, relpath in OPTIONAL_PROCESS_MODULES if key == name), None)
+    if rel is None:
+        rel = f"engine/boss_engine/services/{name}.py"
+    path = REPO_ROOT / rel
+    exists = path.is_file()
+    return {
+        "name": name,
+        "path": str(path),
+        "exists": exists,
+        "skipped": not exists,
+        "imported": False,
+    }
+
+
+def _honesty_from_imports() -> dict[str, Any] | None:
+    """Run the real collectors when engine import works. None = fall back to text."""
+    loop = _try_import_engine("boss_engine.services.factory_quality_loop")
+    bench = _try_import_engine("boss_engine.services.benchmark_apps")
+    if loop is None or bench is None:
+        return None
+    collect = getattr(loop, "collect_workspace_evidence", None)
+    report_fn = getattr(bench, "completion_report", None)
+    if not callable(collect) or not callable(report_fn):
+        return None
+    try:
+        evidence = collect(
+            {"src/App.tsx": "export function App() { return <main>dashboard</main> }"}
+        )
+        report = report_fn(
+            {
+                "id": "factory-e2e-honesty",
+                "status": "completed",
+                "state": {
+                    "ux_evidence": {"jtbd": [{"id": "unknown-job", "passed": None}]},
+                },
+            }
+        )
+    except Exception:
+        return None
+    ui = (evidence or {}).get("ui_evidence") or {}
+    dims = {
+        item.get("id"): item
+        for item in ((report or {}).get("scorecard") or {}).get("dimensions") or []
+        if isinstance(item, dict)
+    }
+    ux = dims.get("ux") or {}
+    return {
+        "invents_a11y_violations": "a11y_violations" in ui,
+        "invents_contrast_ok": "contrast_ok" in ui,
+        "unknown_jtbd_not_scored": ux.get("status") == "not_scored",
+        "imported": True,
+    }
+
+
+def _honesty_from_source() -> dict[str, Any]:
+    """File-text fallback: collector must not mint a11y/contrast; unknown JTBD is ignored."""
+    loop_src = _read_repo_text(QUALITY_LOOP_RELPATH)
+    bench_src = _read_repo_text(BENCHMARK_APPS_RELPATH)
+    ui_block = re.search(r"ui_evidence\s*=\s*\{(.+?)\}", loop_src, re.S)
+    ui_blob = ui_block.group(1) if ui_block else ""
+    invents_a11y = bool(re.search(r"[\"']a11y_violations[\"']\s*:", ui_blob))
+    invents_contrast = bool(re.search(r"[\"']contrast_ok[\"']\s*:", ui_blob))
+    unknown_jtbd_not_scored = bool(
+        re.search(r'["\']passed["\']\)\s+in\s+\{True,\s*False\}', bench_src)
+        and re.search(r'"passed": None', loop_src)
+    )
+    return {
+        "invents_a11y_violations": invents_a11y,
+        "invents_contrast_ok": invents_contrast,
+        "unknown_jtbd_not_scored": unknown_jtbd_not_scored,
+        "imported": False,
+    }
+
+
+def inspect_scorecard_honesty() -> dict[str, Any]:
+    """Never invent a11y_violations=0 or contrast_ok. Unknown JTBD stays not_scored."""
+    imported = _honesty_from_imports()
+    if imported is not None:
+        return imported
+    return _honesty_from_source()
+
+
 def factory_catalog_paths() -> list[str]:
     paths: list[str] = []
     seen: set[str] = set()
@@ -551,6 +701,293 @@ def factory_catalog_paths() -> list[str]:
             seen.add(raw)
             paths.append(raw)
     return paths
+
+
+def inspect_process_handoff() -> dict[str, Any]:
+    """Prove the process-handoff module, router, and no-spend simulated path."""
+    module_path = REPO_ROOT / PROCESS_HANDOFF_RELPATH
+    router_path = REPO_ROOT / PROCESS_ROUTER_RELPATH
+    module_src = ""
+    router_src = ""
+    if module_path.is_file():
+        try:
+            module_src = module_path.read_text(encoding="utf-8")
+        except OSError:
+            module_src = ""
+    if router_path.is_file():
+        try:
+            router_src = router_path.read_text(encoding="utf-8")
+        except OSError:
+            router_src = ""
+    module = _try_import_engine("boss_engine.services.agent_process") if module_path.is_file() else None
+    exports: dict[str, bool] = {}
+    for name in PROCESS_HANDOFF_EXPORTS:
+        if module is not None:
+            exports[name] = getattr(module, name, None) is not None
+        else:
+            exports[name] = bool(
+                _export_in_source(name, module_src)
+                or re.search(rf"^class {re.escape(name)}\b", module_src, re.M)
+                or re.search(rf"^{re.escape(name)}\s*[:=]", module_src, re.M)
+            )
+    endpoints = {path: path in router_src for path in PROCESS_HANDOFF_ENDPOINTS}
+    spec_steps: list[str] = []
+    if module is not None:
+        spec = getattr(module, "PRD_TO_ACCEPTED_SPEC", {}) or {}
+        spec_steps = [
+            str(item.get("id"))
+            for item in spec.get("steps") or []
+            if isinstance(item, dict)
+        ]
+    else:
+        spec_steps = re.findall(r'"id":\s*"([a-z_]+)"', module_src)
+    simulated_no_spend = (
+        "No budgeted code.task" in module_src
+        and "start_code_task" in module_src
+        and bool(re.search(r"if inp\.get\(\"simulated\"\) or not inp\.get\(\"auto_build\"\)", module_src))
+    )
+    return {
+        "exists": module_path.is_file() and router_path.is_file(),
+        "imported": module is not None,
+        "exports": exports,
+        "endpoints": endpoints,
+        "steps": spec_steps,
+        "simulated_no_spend": simulated_no_spend,
+        "receipt_columns": "receipt_id" in module_src,
+        "path": str(module_path),
+        "router_path": str(router_path),
+    }
+
+
+def inspect_sealed_contract() -> dict[str, Any]:
+    """Prove receipt / decision-hold / evidence-attach helpers exist."""
+    path = REPO_ROOT / SEALED_CONTRACT_RELPATH
+    source = ""
+    if path.is_file():
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            source = ""
+    module = (
+        _try_import_engine("boss_engine.services.sealed_e2e_contract")
+        if path.is_file()
+        else None
+    )
+    exports: dict[str, bool] = {}
+    for name in SEALED_CONTRACT_EXPORTS:
+        if module is not None:
+            exports[name] = callable(getattr(module, name, None))
+        else:
+            exports[name] = _export_in_source(name, source)
+    receipt_ok = False
+    decision_ok = False
+    evidence_ok = False
+    if module is not None:
+        validate_receipt = getattr(module, "validate_sealed_receipt", None)
+        validate_decision = getattr(module, "validate_sealed_decision", None)
+        validate_evidence = getattr(module, "validate_evidence_attach", None)
+        attach = getattr(module, "attach_sealed_receipt_result", None)
+        if callable(validate_receipt) and callable(attach):
+            complete = {
+                "dedupe_key": "code:task:dry",
+                "effect_kind": "github.pull_request.create",
+                "status": "succeeded",
+                "result": attach(
+                    {
+                        "decision_id": "dec_dry",
+                        "pull_request_url": "https://example.test/pull/1",
+                        "receipt_id": "rcpt_dry",
+                        "artifact_id": "art_dry",
+                    }
+                ),
+            }
+            incomplete = {
+                "dedupe_key": "code:task:dry",
+                "effect_kind": "github.pull_request.create",
+                "status": "succeeded",
+                "result": {"pull_request_url": "https://example.test/pull/1"},
+            }
+            receipt_ok = (
+                validate_receipt(complete).get("ok") is True
+                and validate_receipt(incomplete).get("ok") is False
+                and validate_receipt(complete).get("proven_live") is False
+            )
+        if callable(validate_decision) and callable(getattr(module, "attach_sealed_evidence", None)):
+            rec = {
+                "action": "review_pull_request",
+                "receipt_id": "rcpt_dry",
+                "no_auto_merge": True,
+                **module.attach_sealed_evidence({}),
+            }
+            decision_ok = (
+                validate_decision(
+                    {
+                        "status": "pending",
+                        "default_action": "hold",
+                        "reason": "merge_decision_required",
+                        "recommendation": rec,
+                    }
+                ).get("ok")
+                is True
+                and validate_decision({"default_action": "approve", "recommendation": rec}).get("ok")
+                is False
+            )
+        if callable(validate_evidence):
+            evidence_ok = (
+                validate_evidence(module.attach_sealed_evidence({})).get("ok") is True
+                and validate_evidence({}).get("ok") is False
+            )
+    else:
+        receipt_ok = "result.decision_id" in source and "proven_live" in source
+        decision_ok = "merge_decision_required" in source and "default_action" in source
+        evidence_ok = "ui_evidence" in source and "ux_evidence" in source
+    factory_src = ""
+    governed_src = ""
+    factory_path = REPO_ROOT / FACTORY_SERVICE_RELPATH
+    governed_path = REPO_ROOT / GOVERNED_SERVICE_RELPATH
+    if factory_path.is_file():
+        try:
+            factory_src = factory_path.read_text(encoding="utf-8")
+        except OSError:
+            factory_src = ""
+    if governed_path.is_file():
+        try:
+            governed_src = governed_path.read_text(encoding="utf-8")
+        except OSError:
+            governed_src = ""
+    return {
+        "exists": path.is_file(),
+        "imported": module is not None,
+        "exports": exports,
+        "receipt_fail_closed": receipt_ok,
+        "decision_hold_fail_closed": decision_ok,
+        "evidence_attach_fail_closed": evidence_ok,
+        "factory_wires_receipt": (
+            "create_or_reuse" in factory_src
+            and "github.pull_request.create" in factory_src
+            and "attach_sealed_receipt_result" in factory_src
+        ),
+        "factory_wires_decision": (
+            "create_blocking" in factory_src and "merge_decision_required" in factory_src
+        ),
+        "governed_passes_evidence": (
+            "evidence=" in governed_src and "quality_gate_id=" in governed_src
+        ),
+        "path": str(path),
+    }
+
+
+def sealed_surface_checks() -> list[CheckResult]:
+    """No-network proofs of process handoff + sealed receipt/decision/evidence."""
+    checks: list[CheckResult] = []
+    process = inspect_process_handoff()
+    missing_exports = [name for name, present in process["exports"].items() if not present]
+    missing_endpoints = [path for path, present in process["endpoints"].items() if not present]
+    needed_steps = {
+        "intake_prd",
+        "captain_build",
+        "qa_check",
+        "ux_review",
+        "captain_verify",
+        "panel_certify",
+        "captain_accept",
+    }
+    missing_steps = sorted(needed_steps - set(process["steps"]))
+    checks.append(
+        CheckResult(
+            name="structure.process_handoff_module",
+            ok=bool(process["exists"]) and not missing_exports and not missing_steps,
+            detail=(
+                f"exports={sorted(process['exports'])} steps={process['steps']}"
+                if process["exists"] and not missing_exports and not missing_steps
+                else f"missing exports={missing_exports} steps={missing_steps}"
+            ),
+            evidence={
+                "path": process["path"],
+                "exists": process["exists"],
+                "exports": process["exports"],
+                "steps": process["steps"],
+            },
+        )
+    )
+    checks.append(
+        CheckResult(
+            name="structure.process_handoff_endpoints",
+            ok=not missing_endpoints,
+            detail=f"paths={sorted(process['endpoints'])}",
+            evidence={"endpoints": process["endpoints"], "router": process["router_path"]},
+        )
+    )
+    checks.append(
+        CheckResult(
+            name="structure.process_simulated_no_spend",
+            ok=process["simulated_no_spend"] is True,
+            detail=(
+                "simulated / auto_build=false never enqueues a budgeted code.task"
+                if process["simulated_no_spend"]
+                else "process build path does not fail-closed on simulated"
+            ),
+            evidence={"simulated_no_spend": process["simulated_no_spend"]},
+        )
+    )
+    sealed = inspect_sealed_contract()
+    missing_sealed = [name for name, present in sealed["exports"].items() if not present]
+    checks.append(
+        CheckResult(
+            name="structure.sealed_receipt_contract",
+            ok=(
+                sealed["exists"]
+                and not missing_sealed
+                and sealed["receipt_fail_closed"] is True
+                and sealed["factory_wires_receipt"] is True
+            ),
+            detail=(
+                "PR receipt requires dedupe_key + decision_id + evidence; "
+                "missing fields fail closed; not a live PR proof"
+            ),
+            evidence={
+                "path": sealed["path"],
+                "exports": sealed["exports"],
+                "receipt_fail_closed": sealed["receipt_fail_closed"],
+                "factory_wires_receipt": sealed["factory_wires_receipt"],
+            },
+        )
+    )
+    checks.append(
+        CheckResult(
+            name="structure.sealed_decision_hold",
+            ok=(
+                sealed["decision_hold_fail_closed"] is True
+                and sealed["factory_wires_decision"] is True
+            ),
+            detail=(
+                "PR decision is hold-default merge_decision_required; "
+                "auto-approve fails closed"
+            ),
+            evidence={
+                "decision_hold_fail_closed": sealed["decision_hold_fail_closed"],
+                "factory_wires_decision": sealed["factory_wires_decision"],
+            },
+        )
+    )
+    checks.append(
+        CheckResult(
+            name="structure.sealed_evidence_attach",
+            ok=(
+                sealed["evidence_attach_fail_closed"] is True
+                and sealed["governed_passes_evidence"] is True
+            ),
+            detail=(
+                "ui/ux/capability evidence keys attach to receipt+decision; "
+                "empty is honest; governed pipeline passes evidence"
+            ),
+            evidence={
+                "evidence_attach_fail_closed": sealed["evidence_attach_fail_closed"],
+                "governed_passes_evidence": sealed["governed_passes_evidence"],
+            },
+        )
+    )
+    return checks
 
 
 def quality_surface_checks() -> list[CheckResult]:
@@ -633,6 +1070,68 @@ def quality_surface_checks() -> list[CheckResult]:
             },
         )
     )
+
+    process = inspect_agent_process()
+    process_missing = [name for name, present in process["exports"].items() if not present]
+    checks.append(
+        CheckResult(
+            name="structure.agent_process_module",
+            ok=bool(process["exists"]) and not process_missing,
+            detail=(
+                f"exports={sorted(process['exports'])} imported={process['imported']}"
+                if process["exists"] and not process_missing
+                else f"missing module or exports {process_missing} exists={process['exists']}"
+            ),
+            evidence={
+                "path": process["path"],
+                "exists": process["exists"],
+                "imported": process["imported"],
+                "exports": process["exports"],
+            },
+        )
+    )
+
+    for key, _rel in OPTIONAL_PROCESS_MODULES:
+        optional = inspect_optional_process_module(key)
+        if optional["skipped"]:
+            checks.append(
+                CheckResult(
+                    name=f"structure.{key}_module",
+                    ok=True,
+                    required=False,
+                    skipped=True,
+                    detail=f"{key}.py not present — skipped honestly",
+                    evidence=optional,
+                )
+            )
+        else:
+            checks.append(
+                CheckResult(
+                    name=f"structure.{key}_module",
+                    ok=True,
+                    required=False,
+                    detail=f"{key}.py present at {optional['path']}",
+                    evidence=optional,
+                )
+            )
+
+    honesty = inspect_scorecard_honesty()
+    checks.append(
+        CheckResult(
+            name="structure.scorecard_honesty",
+            ok=(
+                honesty["invents_a11y_violations"] is False
+                and honesty["invents_contrast_ok"] is False
+                and honesty["unknown_jtbd_not_scored"] is True
+            ),
+            detail=(
+                "collector does not mint a11y_violations=0 or contrast_ok; "
+                "unknown JTBD stays not_scored"
+            ),
+            evidence=honesty,
+        )
+    )
+    checks.extend(sealed_surface_checks())
     return checks
 
 

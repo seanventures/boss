@@ -231,3 +231,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(agent_processes_router)
     except ImportError:
         pass
+
+    # Project Manager steward: operate / test / validate / propose
+    try:
+        from .process_manager import router as process_manager_router
+
+        app.include_router(process_manager_router)
+    except ImportError:
+        pass

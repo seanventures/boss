@@ -54,9 +54,11 @@ def build_manifest(
 ) -> CapabilityManifest:
     """Build the truthful, per-turn capability view from the canonical catalog.
 
-    The five orchestration initiators are explicit because they have callable
-    tools. The rest of the feature catalog is included as informational context,
-    not silently promoted into an actuator.
+    Orchestration initiators are explicit because they have callable tools.
+    Agent process is both informational (listed in the truthful catalog) and an
+    initiator (create_agent_process / start_agent_process). The rest of the
+    feature catalog is included as informational context, not silently promoted
+    into an actuator.
     """
     model_available = bool(settings.openai_api_key)
     code_target_available = bool(
@@ -99,6 +101,13 @@ def build_manifest(
             "Multi-phase command",
             "Propose a dependency-sequenced plan and dispatch only after confirmation.",
             "propose_command",
+            True,
+        ),
+        Capability(
+            "agent_process",
+            "Agent process",
+            "Author a role-handoff process or start one from a PRD (simulated by default).",
+            "create_agent_process",
             True,
         ),
     ]

@@ -28,9 +28,10 @@ make qa-harness DRY_RUN=1
 python3 scripts/qa/harness.py --dry-run
 ```
 
-Dry-run prints the feature catalog (63 probes: original required
-settings/features plus optional Community add-ons) and the three canary
-contracts (BugBox, HookWatch, ApproveIt). No network, no secrets.
+Dry-run prints the feature catalog (69 probes: original required
+settings/features plus optional Community and workforce add-ons) and the
+three canary contracts (BugBox, HookWatch, ApproveIt). No network, no
+secrets.
 
 ### Against local BOSS
 
@@ -84,7 +85,8 @@ mounted route. `GET /v1/edition` always sends `project_id`.
 | Required settings/features | 41 (includes `resource-receipts`) | 2xx (paid 2xx/404) |
 | Optional schema extras | 4 (token-efficiency, elastic, worker-autoscaling, cloud status) | 2xx or 503 WARN |
 | Optional Community add-ons | 18 | 2xx, or 404/405 on older tags |
-| **Catalog total** | **63** | optional fails do not fail the gate |
+| Optional workforce catalog | 6 (focused-agents, process templates/runs, metatron goals/session, process-manager) | 2xx = pass; 404 = **skip** (not invented pass); 500 = fail |
+| **Catalog total** | **69** | optional fails do not fail the gate |
 
 Community add-ons (all `required=false`):
 
@@ -102,6 +104,16 @@ Community add-ons (all `required=false`):
 | comms outbox + dry-run | `GET /v1/comms/outbox`, `GET …/dry-run` | 405/404 ok; never delivers |
 | easy-connect | `GET` providers / github / cloud easy-connect | 405/404 ok; never POSTs a secret |
 | local openai-compatible | `GET …/sources/approved_local_model_host/openai-compatible` | 405/404 ok; never writes a source |
+
+Workforce catalog (all `required=false`, GET only, never create/wake/tick/drive):
+
+| Probe | Method / path | Honesty |
+|-------|---------------|---------|
+| focused agents | `GET /v1/focused-agents` | 2xx pass; 404 skip (old image) |
+| agent-process templates | `GET /v1/agent-processes/templates` | 2xx pass; 404 skip |
+| agent-process runs | `GET /v1/agent-processes/runs` | 2xx pass; 404 skip; never POSTs a run |
+| metatron goals / session | `GET /v1/metatron/goals`, `GET /v1/metatron/session` | 2xx pass; 404 skip; never POSTs chat/drive |
+| process-manager | `GET /v1/process-manager` | **not mounted yet** (BOSS-378). 404 = skip, not pass |
 
 The original live **55/55** figure is harness *required* checks
 (preflight + required features + control + 3 catalog canaries), not the
@@ -165,6 +177,11 @@ fail or skip — never a silent green.
   import/export, standup / simulated-run, assurance seed-demo, preview
   fixture, comms dry-run, easy-connect, and local openai-compatible
   source. Presence is proven with GET (405 = POST-only mounted).
+- Workforce catalog add-ons (`/v1/focused-agents`,
+  `/v1/agent-processes/templates|runs`, `/v1/metatron/goals|session`,
+  `/v1/process-manager`) are `required=false`. **404 is skip, not
+  pass.** 500 is fail. The sweep never POSTs create / wake / tick /
+  session / drive / overwatch / process start.
 - `POST /v1/diag/sandbox-echo` is freeze-honest: 422 frozen or 503 no
   host is **not** a required fail. The sweep never POSTs easy-connect,
   skill/pack import, standup create, preview fixture, or comms deliver.

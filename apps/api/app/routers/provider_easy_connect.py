@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.exc import ProgrammingError
 
 from boss_engine.services.resource_plane import ResourcePlaneService
@@ -34,11 +34,14 @@ _ECHO_FORBIDDEN_KEYS = frozenset(
 
 
 class ProviderEasyConnectRequest(BaseModel):
-    project_id: str
-    actor: str
-    provider: str
-    account_label: str
-    secret_value: str = Field(min_length=1)
+    # Defaults keep FastAPI from echoing the pasted secret_value in 422 `input`.
+    model_config = ConfigDict(extra="ignore")
+
+    project_id: str = ""
+    actor: str = ""
+    provider: str = ""
+    account_label: str = ""
+    secret_value: str = ""
     slot: Optional[str] = None
     auth_method: Optional[str] = None
     base_url: Optional[str] = None
@@ -118,6 +121,16 @@ def _unavailable_http_error(error: BaseException) -> HTTPException:
 def easy_connect_provider(payload: ProviderEasyConnectRequest) -> dict[str, Any]:
     from apps.api.app.main import require_project_actor, resource_plane
 
+    missing = [
+        name
+        for name in ("project_id", "actor", "provider", "account_label")
+        if not str(getattr(payload, name) or "").strip()
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid easy-connect payload",
+        )
     cleaned_secret = _validate_secret_value(payload.secret_value)
     try:
         with begin(get_engine()) as connection:
@@ -147,7 +160,30 @@ def easy_connect_provider(payload: ProviderEasyConnectRequest) -> dict[str, Any]
         raise HTTPException(status_code=422, detail=str(error)) from error
     except (SecretUnavailable, OSError, ProgrammingError) as error:
         raise _unavailable_http_error(error) from error
-    return _redact_secret_echo(result, cleaned_secret)
+    return _finalize_result(result, cleaned_secret)
+
+
+def _finalize_result(result: Any, secret_value: str) -> dict[str, Any]:
+    redacted = _redact_secret_echo(result, secret_value)
+    if not isinstance(redacted, dict):
+        raise HTTPException(
+            status_code=503,
+            detail="Secret backend or schema is unavailable.",
+        )
+    secret = redacted.get("secret") if isinstance(redacted.get("secret"), dict) else {}
+    secret_ref_id = str(
+        redacted.get("secret_ref_id") or secret.get("secret_ref_id") or ""
+    )
+    if not secret_ref_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Provider connected but no secret_ref was returned.",
+        )
+    redacted["secret_ref_id"] = secret_ref_id
+    redacted["raw_secret_stored"] = False
+    redacted.setdefault("replaced", False)
+    redacted.setdefault("rotated", False)
+    return redacted
 
 
 __all__ = [

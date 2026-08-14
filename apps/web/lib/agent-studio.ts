@@ -160,7 +160,19 @@ export async function fetchAgentStudioFeed(
       { headers: authHeaders(), cache: "no-store" },
     );
     if (!response.ok) {
-      return emptyFeed(resolved, `Agent Studio API returned ${response.status}.`);
+      let detail: string | undefined;
+      try {
+        const errorBody = (await response.json()) as Record<string, unknown>;
+        if (typeof errorBody.detail === "string" && errorBody.detail.trim()) {
+          detail = errorBody.detail.trim();
+        }
+      } catch {
+        detail = undefined;
+      }
+      return emptyFeed(
+        resolved,
+        detail ?? `Agent Studio API returned ${response.status}.`,
+      );
     }
     const payload = (await response.json()) as Record<string, unknown>;
     const a2a = (payload.a2a ?? {}) as Record<string, unknown>;

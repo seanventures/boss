@@ -2123,9 +2123,15 @@ export async function enqueueGitHubMergeAction(
   revalidatePath("/");
 }
 
+const MIN_EASY_CONNECT_SECRET_LENGTH = 8;
+
+export type EasyConnectProviderResult = {
+  secret_ref_id: string;
+};
+
 export async function easyConnectProviderAction(
   formData: FormData,
-): Promise<void> {
+): Promise<EasyConnectProviderResult> {
   const provider = formData.get("provider");
   const accountLabel = formData.get("account_label");
   const secretValue = formData.get("secret_value");
@@ -2138,12 +2144,17 @@ export async function easyConnectProviderAction(
   if (typeof secretValue !== "string" || !secretValue.trim()) {
     throw new Error("secret_value is required");
   }
+  if (secretValue.trim().length < MIN_EASY_CONNECT_SECRET_LENGTH) {
+    throw new Error(
+      `secret_value is too short (minimum ${MIN_EASY_CONNECT_SECRET_LENGTH} characters)`,
+    );
+  }
   const body: Record<string, unknown> = {
     project_id: getProjectId(formData),
     actor: getActor(formData),
     provider: provider.trim(),
     account_label: accountLabel.trim(),
-    secret_value: secretValue,
+    secret_value: secretValue.trim(),
     backend: "local_vault",
     read_only: true,
   };
@@ -2156,11 +2167,27 @@ export async function easyConnectProviderAction(
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
+  const out = (await response.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
   if (!response.ok) {
-    const out = await response.json().catch(() => ({}));
-    throw new Error(failureText(out?.detail, response.status));
+    const message = failureText(out?.detail, response.status).replaceAll(
+      secretValue,
+      "[redacted]",
+    );
+    throw new Error(message);
+  }
+  const secret = (out.secret ?? {}) as Record<string, unknown>;
+  const secretRefId =
+    (typeof out.secret_ref_id === "string" && out.secret_ref_id) ||
+    (typeof secret.secret_ref_id === "string" && secret.secret_ref_id) ||
+    "";
+  if (!secretRefId) {
+    throw new Error("Provider connected but no secret_ref was returned.");
   }
   revalidatePath("/");
+  return { secret_ref_id: secretRefId };
 }
 
 export async function createProviderAccountAction(

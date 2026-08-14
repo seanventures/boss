@@ -423,6 +423,23 @@ class AgentProcessService:
         ).mappings().one()
         emit_event(connection, project_id, "agent_process.started", actor,
                    "agent_process_run", run["id"], {"process_key": template.get("process_key")})
+        receipt = self._record_process_receipt(
+            connection,
+            project_id=project_id,
+            run_id=run["id"],
+            step_key="start",
+            payload={
+                "process_key": template.get("process_key"),
+                "simulated": bool(simulated),
+                "auto_build": bool(auto_build),
+                "title": run["title"],
+            },
+        )
+        if receipt.get("id"):
+            connection.execute(
+                text("UPDATE agent_process_runs SET receipt_id=:r WHERE id=:id"),
+                {"r": receipt["id"], "id": run["id"]},
+            )
         return self.advance(connection, project_id=project_id, actor=actor, run_id=run["id"])
 
     def get_run(self, connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
@@ -595,7 +612,10 @@ class AgentProcessService:
             self._patch_context(connection, run["id"], {"prd": improved, "prd_improved": True})
             return {"status": "succeeded", "verdict": "improved", "prd": improved}
         if action == "build":
-            return self._execute_build(connection, project_id=project_id, actor=actor, run=run, ctx=ctx, inp=inp)
+            return self._execute_build(
+                connection, project_id=project_id, actor=actor, run=run, ctx=ctx, inp=inp,
+                process_run_id=str(run.get("id") or ""),
+            )
         if action == "qa_review":
             return self._qa_review(ctx)
         if action == "ux_review":
@@ -620,11 +640,15 @@ class AgentProcessService:
     def _execute_build(
         self, connection: Connection, *, project_id: str, actor: str,
         run: dict[str, Any], ctx: dict[str, Any], inp: dict[str, Any],
+        process_run_id: str = "",
     ) -> dict[str, Any]:
-        if ctx.get("run_id") and ctx.get("build_status") in {"queued", "running"}:
-            return self._refresh_build(connection, project_id, ctx)
+        process_run_id = process_run_id or str(run.get("id") or "")
+        if ctx.get("run_id") and ctx.get("build_status") in {"queued", "running", "repairing"}:
+            return self._refresh_build(
+                connection, project_id, ctx, process_run_id=process_run_id,
+            )
         if inp.get("simulated") or not inp.get("auto_build"):
-            self._patch_context(connection, run["id"], {
+            self._patch_context(connection, process_run_id, {
                 "build_status": "planned",
                 "run_id": None,
                 "simulated": bool(inp.get("simulated")),
@@ -650,18 +674,26 @@ class AgentProcessService:
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
                 base_branch="main",
-                finalize_ctx={"source": "agent_process", "process_run_id": run["id"], "actor": actor},
+                finalize_ctx={"source": "agent_process", "process_run_id": process_run_id, "actor": actor},
                 jobs=JobLeaseService(self.settings),
                 open_pr=True,
                 risk_tier=1,
             )
         except Exception as exc:  # noqa: BLE001
             return {"status": "failed", "verdict": "blocked", "reason": f"factory launch failed: {exc}"}
-        self._patch_context(connection, run["id"], {"run_id": run_id, "build_status": "queued"})
+        self._patch_context(connection, process_run_id, {
+            "run_id": run_id,
+            "build_status": "queued",
+            "process_run_id": process_run_id,
+        })
         return {"status": "waiting", "verdict": "queued", "run_id": run_id}
 
-    def _refresh_build(self, connection: Connection, project_id: str, ctx: dict[str, Any]) -> dict[str, Any]:
+    def _refresh_build(
+        self, connection: Connection, project_id: str, ctx: dict[str, Any],
+        process_run_id: str = "",
+    ) -> dict[str, Any]:
         run_id = ctx.get("run_id")
+        process_run_id = process_run_id or str(ctx.get("process_run_id") or "")
         try:
             row = connection.execute(
                 text("SELECT status, state FROM code_task_runs WHERE id=:id AND project_id=:p"),
@@ -680,15 +712,29 @@ class AgentProcessService:
                 state = {}
         if status in {"queued", "running", "repairing"}:
             return {"status": "waiting", "verdict": status, "run_id": run_id}
-        tests_passed = bool(state.get("tests_passed"))
-        self._patch_context(connection, ctx.get("process_run_id") or "", {})  # no-op if empty
+        raw_tests = state.get("tests_passed")
+        if isinstance(raw_tests, bool):
+            tests_passed = raw_tests
+        elif raw_tests is None:
+            tests_passed = None
+        else:
+            tests_passed = bool(raw_tests)
+        ui_evidence = state.get("ui_evidence") or {}
+        ux_evidence = state.get("ux_evidence") or {}
+        self._patch_context(connection, process_run_id, {
+            "tests_passed": tests_passed,
+            "ui_evidence": ui_evidence,
+            "ux_evidence": ux_evidence,
+            "build_status": status,
+        })
         return {
             "status": "succeeded" if status == "completed" else "failed",
             "verdict": status,
             "run_id": run_id,
             "tests_passed": tests_passed,
-            "ui_evidence": state.get("ui_evidence") or {},
-            "ux_evidence": state.get("ux_evidence") or {},
+            "ui_evidence": ui_evidence,
+            "ux_evidence": ux_evidence,
+            "build_status": status,
         }
 
     @staticmethod
@@ -728,18 +774,95 @@ class AgentProcessService:
         return {"status": "succeeded", "verdict": "verified", "tests_passed": tests}
 
     @staticmethod
+    def _step_payload(done: dict[str, dict[str, Any]], key: str) -> dict[str, Any]:
+        item = done.get(key) or {}
+        output = item.get("output")
+        merged = dict(item)
+        if isinstance(output, dict):
+            merged.update(output)
+        return merged
+
+    @staticmethod
+    def _panel_checklist(done: dict[str, dict[str, Any]], ctx: dict[str, Any]) -> list[dict[str, Any]]:
+        """Observed evidence only. No invented scores."""
+        prd = str(ctx.get("prd") or "")
+        improved = AgentProcessService._step_payload(done, "improve_prd")
+        qa = AgentProcessService._step_payload(done, "qa_check")
+        ux = AgentProcessService._step_payload(done, "ux_review")
+        verify = AgentProcessService._step_payload(done, "captain_verify")
+        prd_improved = bool(
+            ctx.get("prd_improved")
+            or improved.get("verdict") == "improved"
+            or "Improvements required by review" in prd
+            or "Review outcome" in prd
+            or bool(prd.strip())
+        )
+        return [
+            {
+                "name": "improved_prd",
+                "ok": bool(prd.strip()) and prd_improved,
+                "detail": "improved PRD present" if prd.strip() else "PRD missing",
+            },
+            {
+                "name": "qa_output",
+                "ok": qa.get("status") == "succeeded",
+                "verdict": qa.get("verdict"),
+                "tests_passed": qa.get("tests_passed"),
+                "detail": qa.get("detail") or qa.get("verdict"),
+            },
+            {
+                "name": "ux_output",
+                "ok": ux.get("status") == "succeeded",
+                "states_covered": ux.get("states_covered") or [],
+                "has_e2e": ux.get("has_e2e"),
+                "detail": ux.get("detail") or ux.get("verdict"),
+            },
+            {
+                "name": "verify_output",
+                "ok": verify.get("status") == "succeeded",
+                "verdict": verify.get("verdict"),
+                "tests_passed": verify.get("tests_passed"),
+                "detail": verify.get("detail") or verify.get("verdict"),
+            },
+            {
+                "name": "tests_passed",
+                "ok": ctx.get("tests_passed") is True,
+                "value": ctx.get("tests_passed"),
+            },
+        ]
+
+    @staticmethod
     def _panel_certify(done: dict[str, dict[str, Any]], ctx: dict[str, Any]) -> dict[str, Any]:
         required = ["qa_check", "ux_review", "captain_verify"]
         missing = [key for key in required if (done.get(key) or {}).get("status") != "succeeded"]
+        checklist = AgentProcessService._panel_checklist(done, ctx)
         if missing:
-            return {"status": "failed", "verdict": "not_certified", "missing": missing}
+            return {
+                "status": "failed",
+                "verdict": "not_certified",
+                "missing": missing,
+                "checklist": checklist,
+            }
         if ctx.get("simulated") or ctx.get("build_status") == "planned":
             return {
                 "status": "succeeded",
                 "verdict": "certified_planned",
                 "detail": "Panel certified the process evidence. Simulated builds are not live software certification.",
+                "checklist": checklist,
             }
-        return {"status": "succeeded", "verdict": "certified", "roles": ["chief_architect", "cto", "qa", "ux_engineer"]}
+        if ctx.get("tests_passed") is not True:
+            return {
+                "status": "failed",
+                "verdict": "not_certified",
+                "reason": "live certification requires tests_passed",
+                "checklist": checklist,
+            }
+        return {
+            "status": "succeeded",
+            "verdict": "certified",
+            "roles": ["chief_architect", "cto", "qa", "ux_engineer"],
+            "checklist": checklist,
+        }
 
     def _record_step(
         self, connection: Connection, *, run: dict[str, Any], step: dict[str, Any],
@@ -749,6 +872,18 @@ class AgentProcessService:
             text("SELECT id FROM agent_process_steps WHERE run_id=:r AND step_key=:k"),
             {"r": run["id"], "k": step["id"]},
         ).scalar_one_or_none()
+        receipt = self._record_process_receipt(
+            connection,
+            project_id=run["project_id"],
+            run_id=run["id"],
+            step_key=step["id"],
+            payload={
+                "action": step["action"],
+                "role": step.get("role"),
+                "status": result.get("status"),
+                "verdict": result.get("verdict"),
+            },
+        )
         payload = {
             "id": existing or make_id("apstep"),
             "r": run["id"],
@@ -758,26 +893,27 @@ class AgentProcessService:
             "action": step["action"],
             "st": result.get("status") or "failed",
             "out": json.dumps(result),
+            "rid": receipt.get("id"),
         }
         if existing:
             row = connection.execute(
                 text(
                     """
                     UPDATE agent_process_steps
-                    SET status=:st, output=CAST(:out AS JSONB), updated_at=now()
+                    SET status=:st, output=CAST(:out AS JSONB), receipt_id=:rid, updated_at=now()
                     WHERE id=:id
                     RETURNING *
                     """
                 ),
-                {"st": payload["st"], "out": payload["out"], "id": existing},
+                {"st": payload["st"], "out": payload["out"], "rid": payload["rid"], "id": existing},
             ).mappings().one()
         else:
             row = connection.execute(
                 text(
                     """
                     INSERT INTO agent_process_steps
-                      (id, run_id, project_id, step_key, role_key, action, status, output, handoff_from)
-                    VALUES (:id, :r, :p, :k, :role, :action, :st, CAST(:out AS JSONB), :hf)
+                      (id, run_id, project_id, step_key, role_key, action, status, output, handoff_from, receipt_id)
+                    VALUES (:id, :r, :p, :k, :role, :action, :st, CAST(:out AS JSONB), :hf, :rid)
                     RETURNING *
                     """
                 ),
@@ -786,9 +922,9 @@ class AgentProcessService:
         emit_event(
             connection, run["project_id"], "agent_process.handoff", actor,
             "agent_process_step", row["id"],
-            {"step": step["id"], "role": step.get("role"), "action": step["action"], "status": result.get("status")},
+            {"step": step["id"], "role": step.get("role"), "action": step["action"], "status": result.get("status"), "receipt_id": receipt.get("id")},
         )
-        if result.get("run_id") or result.get("prd"):
+        if result.get("run_id") or result.get("prd") or result.get("build_status"):
             patch = {}
             if result.get("run_id"):
                 patch["run_id"] = result["run_id"]
@@ -798,9 +934,46 @@ class AgentProcessService:
                 patch["ui_evidence"] = result["ui_evidence"]
             if result.get("ux_evidence"):
                 patch["ux_evidence"] = result["ux_evidence"]
+            if result.get("build_status"):
+                patch["build_status"] = result["build_status"]
             if patch:
                 self._patch_context(connection, run["id"], patch)
         return self._row(row)
+
+    def _record_process_receipt(
+        self, connection: Connection, *, project_id: str, run_id: str,
+        step_key: str, payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        scope = self._scope(connection, project_id)
+        dedupe_key = f"agent_process:{run_id}:{step_key}"
+        receipt, _created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            dedupe_key,
+            f"agent_process.{step_key}",
+            {"run_id": run_id, "step_key": step_key},
+            payload,
+        )
+        return receipt
+
+    def _scope(self, connection: Connection, project_id: str) -> dict[str, str]:
+        row = connection.execute(
+            text(
+                """
+                SELECT p.id AS project_id, w.id AS workspace_id, o.id AS org_id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                JOIN orgs o ON o.id = w.org_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).mappings().first()
+        if row is None:
+            return {"project_id": project_id, "workspace_id": "workspace_unknown", "org_id": "org_unknown"}
+        return dict(row)
 
     def _patch_context(self, connection: Connection, run_id: str, patch: dict[str, Any]) -> None:
         if not run_id or not patch:

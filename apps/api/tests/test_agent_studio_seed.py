@@ -168,3 +168,18 @@ def test_isolated_seed_router_is_mounted_on_app(client):
     assert missing.status_code == 422
     assert client.get("/v1/agent-studio/catalog/seed").status_code == 405
     assert client.get("/v1/agent-studio/seed").status_code == 405
+
+
+def test_catalog_get_fails_closed_503_when_tables_missing(client, monkeypatch):
+    monkeypatch.setattr(
+        AgentStudioService,
+        "_catalog_tables_ready",
+        lambda *_a, **_k: (False, ["agent_definitions"]),
+    )
+    response = client.get(
+        "/v1/agent-studio/catalog",
+        params={"project_id": PROJECT_ID},
+    )
+    assert response.status_code == 503, response.text
+    assert response.status_code != 500
+    assert "agent_definitions" in response.json()["detail"]

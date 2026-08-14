@@ -34,6 +34,16 @@ from .receipts import ReceiptService
 
 CAPTAIN_EXTERNAL_REF = "metatron:captain"
 CAPTAIN_SURFACE = "chat"
+HELP_REPLY = (
+    "I am Metatron, captain of this project. I stay on overwatch: observe, "
+    "measure goals, validate every action, apply only safe moves, then verify. "
+    "Decisions stay human. BOSS self-change is a PR. "
+    "I can author and start agent processes (PRD handoffs) from chat; "
+    "simulated starts never spend.\n"
+    "Try: remember … · set goal … · watch · overwatch · measure · drive · "
+    "drive auto · build … · build a process … · start process … · "
+    "list processes · goals · memory"
+)
 
 GOAL_KINDS = frozenset({"working_software", "budget", "queue", "quality", "custom"})
 
@@ -123,11 +133,75 @@ def interpret_turn(message: str) -> dict[str, Any]:
         return {"intent": "drive", "text": raw, "auto": True}
     if lowered.startswith("drive") or lowered in {"propose next", "next move"}:
         return {"intent": "drive", "text": raw, "auto": False}
+    process = _interpret_process_turn(raw, lowered)
+    if process is not None:
+        return process
     if re.search(r"\b(build|implement|fix|change|refactor|add|update|ship)\b", lowered) and not lowered.endswith("?"):
         return {"intent": "act", "text": raw}
     if re.search(r"\b(prioriti[sz]e|p0|p1|p2)\b", lowered):
         return {"intent": "prioritize", "text": raw}
     return {"intent": "status", "text": raw}
+
+
+_BUILD_PROCESS_PREFIX = re.compile(
+    r"^(?:build a process|create a workflow|define a process|handoff process)\b[:\s]*(.*)$",
+    re.I,
+)
+_START_PROCESS_PREFIX = re.compile(r"^start process\b(.*)$", re.I)
+_RUN_PRD_PROCESS = re.compile(r"\brun the prd process\b", re.I)
+_PROCESS_KEY_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_]{0,79}$")
+DEFAULT_PROCESS_KEY = "prd_to_accepted_work"
+_DEFAULT_PROCESS_MARKERS = (
+    "prd",
+    "accepted work",
+    "prd_to_accepted",
+    "handoff",
+    "architect",
+    "cto",
+    "vp product",
+)
+
+
+def _interpret_process_turn(raw: str, lowered: str) -> dict[str, Any] | None:
+    """Recognize process authoring/start/list before generic build/act."""
+    if lowered in {"list processes", "list process"} or re.search(r"\blist processes\b", lowered):
+        return {"intent": "list_processes", "text": raw}
+    build = _BUILD_PROCESS_PREFIX.match(raw.strip())
+    if build:
+        return {"intent": "build_process", "text": (build.group(1) or "").strip()}
+    start = _START_PROCESS_PREFIX.match(raw.strip())
+    if start or _RUN_PRD_PROCESS.search(lowered):
+        rest = (start.group(1) or "").strip() if start else ""
+        auto_build = bool(re.search(r"\bauto[_\s-]?build\b", lowered))
+        process_key = DEFAULT_PROCESS_KEY
+        text = rest
+        if rest:
+            tokens = rest.split()
+            head = tokens[0].lower()
+            if head in {"auto_build", "autobuild", "auto-build"}:
+                text = " ".join(tokens[1:]).strip()
+            elif _PROCESS_KEY_TOKEN.match(head) and head not in {"auto", "the"}:
+                process_key = head
+                text = " ".join(tokens[1:]).strip()
+                if text.lower() in {"auto_build", "autobuild", "auto-build"}:
+                    text = ""
+                elif text.lower().endswith(" auto_build"):
+                    text = text[: -len(" auto_build")].strip()
+        return {
+            "intent": "start_process",
+            "text": text,
+            "process_key": process_key,
+            "auto_build": auto_build,
+        }
+    return None
+
+
+def matches_default_process_story(text: str) -> bool:
+    """True when NL describes the shipped PRD-to-accepted-work handoff."""
+    blob = (text or "").lower()
+    if not blob:
+        return False
+    return any(marker in blob for marker in _DEFAULT_PROCESS_MARKERS)
 
 
 def scorecard_from_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -436,11 +510,14 @@ ACTION_KINDS = frozenset({
     "drive", "overwatch", "act", "prioritize", "help", "status", "status_query",
     "restart_preview", "launch_factory_job",
     "escalate_decision", "propose_deadletter_review", "propose",
+    "build_process", "start_process", "list_processes",
 })
 
 # Mutating intents that must pass validation before session_turn runs them.
+# list_processes is read-only.
 MUTATING_INTENTS = frozenset({
     "remember", "set_goal", "drive", "act", "prioritize", "overwatch",
+    "build_process", "start_process",
 })
 
 
@@ -497,6 +574,19 @@ def validate_action(
             goal_kind in GOAL_KINDS,
             f"kind={goal_kind}" if goal_kind in GOAL_KINDS else f"unknown goal kind {goal_kind}",
         )
+    elif action == "build_process":
+        description = str(payload.get("text") or payload.get("description") or "").strip()
+        check("nonempty_text", bool(description), "process has a description" if description else "empty process description")
+        check("content_bounded", len(description) <= 4000, f"len={len(description)}")
+    elif action == "start_process":
+        process_key = str(payload.get("process_key") or DEFAULT_PROCESS_KEY).strip()
+        check("has_process_key", bool(process_key), f"process_key={process_key or DEFAULT_PROCESS_KEY}")
+        if payload.get("auto_build"):
+            check(
+                "budget_not_red",
+                budget_state not in {"red", "orange"},
+                f"budget_state={budget_state}",
+            )
     elif action in {"drive", "act", "prioritize"} and auto:
         check(
             "budget_not_red",
@@ -703,13 +793,7 @@ class MetatronCaptain:
                 "assistant_message_id": assistant.get("id"),
             }
         if parsed["intent"] == "help":
-            reply = (
-                "I am Metatron, captain of this project. I stay on overwatch: observe, "
-                "measure goals, validate every action, apply only safe moves, then verify. "
-                "Decisions stay human. BOSS self-change is a PR.\n"
-                "Try: remember … · set goal … · watch · overwatch · measure · drive · "
-                "drive auto · build … · goals · memory"
-            )
+            reply = HELP_REPLY
         elif parsed["intent"] == "remember":
             mem = self.remember(connection, project_id=project_id, thread_id=thread["id"],
                                 content=parsed["text"], source="chat", kind="fact")
@@ -768,6 +852,26 @@ class MetatronCaptain:
                 "validation": action_verdict,
             })
             reply = self._render_overwatch(cycle)
+        elif parsed["intent"] == "build_process":
+            built = self._build_process(
+                connection, project_id=project_id, actor=actor, description=parsed.get("text") or "",
+            )
+            actions.append(built)
+            reply = built.get("reply") or "Process template unchanged."
+        elif parsed["intent"] == "start_process":
+            started = self._start_process(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                parsed=parsed,
+                action_verdict=action_verdict,
+            )
+            actions.append(started)
+            reply = started.get("reply") or "Process start unchanged."
+        elif parsed["intent"] == "list_processes":
+            listed = self._list_processes(connection, project_id=project_id)
+            actions.append(listed)
+            reply = listed.get("reply") or "No process templates or runs."
         else:
             query = self.metatron.answer_query(connection, project_id, parsed["text"] or message)
             reply = query["answer"]
@@ -1359,6 +1463,231 @@ class MetatronCaptain:
                 "self_mod": bool(self_mod),
             }
         return {"status": "rejected", "error": f"no apply path for {kind}"}
+
+    def _process_service(self):
+        from .agent_process import AgentProcessService
+
+        return AgentProcessService(self.settings)
+
+    def _compile_process_spec(self, description: str) -> dict[str, Any] | None:
+        """Use process_compiler when present. Missing compiler is not an error."""
+        try:
+            from . import process_compiler as compiler_mod
+        except ImportError:
+            return None
+        candidates = []
+        for name in ("compile_process", "compile", "compile_process_text"):
+            fn = getattr(compiler_mod, name, None)
+            if callable(fn):
+                candidates.append(fn)
+        cls = getattr(compiler_mod, "ProcessCompiler", None)
+        if cls is not None:
+            try:
+                inst = cls(self.settings) if getattr(cls, "__init__", None) else cls()
+            except TypeError:
+                inst = cls()
+            for name in ("compile", "compile_process"):
+                fn = getattr(inst, name, None)
+                if callable(fn):
+                    candidates.append(fn)
+        for fn in candidates:
+            try:
+                compiled = fn(description)
+            except TypeError:
+                try:
+                    compiled = fn(text=description)
+                except Exception:
+                    continue
+            except Exception:
+                continue
+            if isinstance(compiled, dict) and compiled:
+                return compiled
+        return None
+
+    def _build_process(
+        self, connection: Connection, *, project_id: str, actor: str, description: str,
+    ) -> dict[str, Any]:
+        """Publish a process template. Simulated authoring never spends."""
+        from .agent_process import PRD_TO_ACCEPTED_SPEC
+
+        svc = self._process_service()
+        svc.ensure_schema(connection)
+        compiled = self._compile_process_spec(description)
+        spec: dict[str, Any] | None = None
+        if isinstance(compiled, dict) and compiled.get("steps"):
+            spec = compiled
+        elif matches_default_process_story(description):
+            spec = dict(PRD_TO_ACCEPTED_SPEC)
+        if spec is None:
+            return {
+                "kind": "build_process",
+                "status": "needs_compiler",
+                "reply": (
+                    "I can publish the default PRD-to-accepted-work process from that "
+                    "description, or compile a custom one when the process compiler is "
+                    "available. Try: build a process for PRD to accepted work."
+                ),
+            }
+        process_key = str(spec.get("key") or DEFAULT_PROCESS_KEY)
+        name = str(spec.get("name") or description or process_key)[:160]
+        existing = svc.get_template_by_key(connection, project_id, process_key)
+        if existing:
+            template = existing
+            created = False
+        else:
+            try:
+                template = svc.create_template(
+                    connection,
+                    project_id=project_id,
+                    actor=actor,
+                    process_key=process_key,
+                    name=name,
+                    description=description or spec.get("description") or "",
+                    spec=spec,
+                )
+            except ValueError as exc:
+                return {
+                    "kind": "build_process",
+                    "status": "rejected",
+                    "process_key": process_key,
+                    "reply": f"Process spec was rejected: {exc}",
+                }
+            created = True
+        scope = self._scope(connection, project_id)
+        receipt, _ = self.receipts.create_or_reuse(
+            connection, scope["org_id"], scope["workspace_id"], project_id,
+            f"metatron:process:{project_id}:{process_key}",
+            "metatron.process_template",
+            {"process_key": process_key, "simulated": True},
+            {"template_id": template.get("id"), "created": created},
+        )
+        verb = "Published" if created else "Already have"
+        return {
+            "kind": "build_process",
+            "status": "applied" if created else "reused",
+            "template_id": template.get("id"),
+            "process_key": process_key,
+            "receipt_id": receipt.get("id"),
+            "reply": (
+                f"{verb} process '{name}' ({process_key}). "
+                "Simulated authoring — no budget spend. "
+                f"Start it with: start process {process_key} <prd>."
+            ),
+        }
+
+    def _start_process(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        parsed: dict[str, Any],
+        action_verdict: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Start a process run. Chat defaults to simulated; auto_build needs validation."""
+        prd = str(parsed.get("text") or "").strip()
+        process_key = str(parsed.get("process_key") or DEFAULT_PROCESS_KEY).strip() or DEFAULT_PROCESS_KEY
+        auto_requested = bool(parsed.get("auto_build"))
+        auto_ok = bool(auto_requested and action_verdict.get("ok"))
+        if not prd:
+            return {
+                "kind": "start_process",
+                "status": "needs_prd",
+                "process_key": process_key,
+                "reply": (
+                    f"Need PRD text to start `{process_key}`. "
+                    f"Try: start process {process_key} <prd text>. "
+                    "Chat starts are simulated unless you say auto_build and validation passes."
+                ),
+            }
+        svc = self._process_service()
+        try:
+            run = svc.start_run(
+                connection,
+                project_id=project_id,
+                actor=actor,
+                prd=prd,
+                title=prd[:80],
+                process_key=process_key,
+                simulated=not auto_ok,
+                auto_build=auto_ok,
+            )
+        except ValueError as exc:
+            return {
+                "kind": "start_process",
+                "status": "rejected",
+                "process_key": process_key,
+                "reply": f"Could not start process `{process_key}`: {exc}",
+            }
+        mode = "live auto_build" if auto_ok else "simulated (no code.task)"
+        status = run.get("status")
+        return {
+            "kind": "start_process",
+            "status": "applied",
+            "run_id": run.get("id"),
+            "process_key": run.get("process_key") or process_key,
+            "run_status": status,
+            "simulated": not auto_ok,
+            "auto_build": auto_ok,
+            "reply": (
+                f"Started `{process_key}` as {mode}. Run {run.get('id')} is {status}. "
+                "Decisions stay human. Simulated starts never spend."
+            ),
+        }
+
+    def _list_processes(self, connection: Connection, *, project_id: str) -> dict[str, Any]:
+        """List templates + recent runs. Honest empty — do not seed a default."""
+        svc = self._process_service()
+        try:
+            svc.ensure_schema(connection)
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, process_key, name, status, updated_at
+                    FROM agent_process_templates
+                    WHERE project_id=:p
+                    ORDER BY updated_at DESC
+                    """
+                ),
+                {"p": project_id},
+            ).mappings().all()
+            templates = [svc._row(row) for row in rows]
+            runs = svc.list_runs(connection, project_id, limit=8)
+        except Exception:
+            templates = []
+            runs = []
+        if not templates and not runs:
+            return {
+                "kind": "list_processes",
+                "status": "empty",
+                "templates": [],
+                "runs": [],
+                "reply": (
+                    "No process templates or runs yet. "
+                    "Author one with: build a process for PRD to accepted work."
+                ),
+            }
+        lines = ["Process templates:"]
+        for item in templates[:12]:
+            lines.append(f"- {item.get('name')} ({item.get('process_key')}) {item.get('status')}")
+        if not templates:
+            lines.append("- (none)")
+        lines.append("Recent runs:")
+        if runs:
+            for item in runs[:8]:
+                lines.append(
+                    f"- {item.get('id')} {item.get('template_name') or item.get('process_key')} "
+                    f"{item.get('status')}"
+                )
+        else:
+            lines.append("- (none)")
+        return {
+            "kind": "list_processes",
+            "status": "ok",
+            "templates": templates,
+            "runs": runs,
+            "reply": "\n".join(lines),
+        }
 
     def _scope(self, connection: Connection, project_id: str) -> dict[str, str]:
         row = connection.execute(

@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useEffect, useState, useTransition, ReactNode } from 'react';
+import React, { useEffect, useRef, useState, useTransition, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+
+import { pasteConnectSuccessCopy } from '../lib/paste-connect';
 
 // Server actions are importable from client modules in Next.js (they run on server).
 import {
@@ -213,15 +215,63 @@ export function ProviderCreateForm({ children, className }: { children: ReactNod
 }
 
 export function ProviderEasyConnectForm({ children, className }: { children: ReactNode; className?: string }) {
+  const [isPending, startTransition] = useTransition();
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [secretRefId, setSecretRefId] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const router = useRouter();
+
+  const handleAction = (formData: FormData) => {
+    setLocalError(null);
+    startTransition(async () => {
+      try {
+        const result = await easyConnectProviderAction(formData);
+        formRef.current?.reset();
+        setSecretRefId(result.secret_ref_id);
+        showToast("success", pasteConnectSuccessCopy(result.secret_ref_id));
+        router.refresh();
+      } catch (err: unknown) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : "Action failed (check budget, permissions, or provider state). See decision inbox and event feed.";
+        setLocalError(msg);
+        setSecretRefId(null);
+        showToast("error", msg);
+      }
+    });
+  };
+
   return (
-    <ActionForm
-      action={easyConnectProviderAction}
-      successMessage="Key written to the local vault. BOSS stored only a SecretRef."
+    <form
+      ref={formRef}
+      action={handleAction}
       className={className}
       data-testid="provider-paste-connect-form"
+      aria-busy={isPending}
     >
       {children}
-    </ActionForm>
+      {isPending && (
+        <p className="loading" role="status" aria-live="polite" aria-atomic="true">
+          Writing key to the local vault…
+        </p>
+      )}
+      {secretRefId ? (
+        <p
+          className="provider-notice"
+          role="status"
+          aria-live="polite"
+          data-testid="provider-paste-connect-success"
+        >
+          {pasteConnectSuccessCopy(secretRefId)}
+        </p>
+      ) : null}
+      {localError && (
+        <p className="error-banner" role="alert" aria-atomic="true">
+          {localError}
+        </p>
+      )}
+    </form>
   );
 }
 

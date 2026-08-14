@@ -273,7 +273,22 @@ function PasteAndConnect({
   }, [pasteable, provider]);
 
   if (pasteable.length === 0) {
-    return null;
+    return (
+      <div
+        className="provider-empty compact"
+        data-testid="provider-paste-connect-empty"
+        role="status"
+      >
+        <Key size={22} aria-hidden />
+        <div>
+          <strong>Paste-and-connect unavailable</strong>
+          <p>
+            The provider catalog did not return any pasteable credential slots.
+            Check the catalog error above or bind a SecretRef pointer below.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -328,6 +343,7 @@ function PasteAndConnect({
           autoComplete="new-password"
           placeholder="Paste key — written to the local vault"
           required
+          minLength={8}
           disabled={!canManage}
         />
       </label>

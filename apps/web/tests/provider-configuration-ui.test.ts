@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { pasteConnectSuccessCopy } from "../lib/paste-connect";
 import {
   accountFreshness,
   costByProvider,
@@ -193,5 +194,43 @@ describe("provider configuration workspace", () => {
     expect(forms).toContain('data-testid="provider-create-form"');
     expect(forms).toContain("easyConnectProviderAction");
     expect(forms).toContain("createProviderAccountAction");
+    expect(source).toContain("minLength={8}");
+    expect(source).toContain('type="password"');
+    expect(source).toContain('data-testid="provider-paste-connect-empty"');
+    expect(forms).toContain("pasteConnectSuccessCopy");
+    expect(forms).toContain("formRef.current?.reset()");
+    expect(forms).toContain("secret_ref_id");
+    expect(forms).toContain('data-testid="provider-paste-connect-success"');
+    expect(forms).not.toContain("secret_value}");
+    expect(forms).not.toContain("Key written to the local vault. BOSS stored only a SecretRef.");
+  });
+
+  it("success copy shows secret_ref only and never interpolates a raw key", () => {
+    const raw = "sk-test-easy-connect-never-leak-xyz";
+    const copy = pasteConnectSuccessCopy("sref_abc123");
+    expect(copy).toBe(
+      "Stored as secret_ref sref_abc123. The raw key is not kept in BOSS.",
+    );
+    expect(copy).toContain("secret_ref sref_abc123");
+    expect(copy).not.toContain(raw);
+    expect(copy).not.toContain("sk-");
+  });
+
+  it("keeps the paste card on the Community ProviderOps surface", () => {
+    const page = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
+    const suiteCall = page.indexOf("<ProviderConfigurationSuite");
+    const paidGateAfter = page.indexOf("<PaidSurfaceGate", suiteCall);
+    expect(suiteCall).toBeGreaterThan(-1);
+    expect(sourceContainsCommunityPasteCard(page)).toBe(true);
+    if (paidGateAfter !== -1) {
+      expect(suiteCall).toBeLessThan(paidGateAfter);
+    }
   });
 });
+
+function sourceContainsCommunityPasteCard(pageSource: string): boolean {
+  return (
+    pageSource.includes("<ProviderConfigurationSuite") &&
+    !pageSource.includes('surface="providerops"')
+  );
+}

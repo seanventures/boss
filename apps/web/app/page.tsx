@@ -83,6 +83,7 @@ import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
 import { FocusedAgents } from "./focused-agents-ui";
 import { AgentProcesses } from "./agent-process-ui";
+import { ProcessManager } from "./process-manager-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
@@ -6866,6 +6867,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">
           <AgentProcesses projectId={activeProjectId} actor={activeActorId} />
+          <ProcessManager projectId={activeProjectId} actor={activeActorId} />
         </section>
 
         <section className="panel-stack" data-area="delivery" aria-label="CI/CD">

@@ -5395,3 +5395,42 @@ CREATE TABLE IF NOT EXISTS agent_key_leases (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_key_leases_agent
   ON agent_key_leases(project_id, agent_id, expires_at);
+
+-- BOSS-378 slice 6: Project Manager steward (operate / test / validate / propose)
+CREATE TABLE IF NOT EXISTS process_managers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_tick_at TIMESTAMPTZ,
+  last_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id)
+);
+CREATE INDEX IF NOT EXISTS idx_process_managers_project
+  ON process_managers(project_id, status);
+
+CREATE TABLE IF NOT EXISTS process_manager_ticks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  planned JSONB NOT NULL DEFAULT '[]'::jsonb,
+  applied JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rejected JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_process_manager_ticks_project
+  ON process_manager_ticks(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS process_manager_proposals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  spec_diff JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_process_manager_proposals_project
+  ON process_manager_proposals(project_id, created_at DESC);

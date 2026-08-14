@@ -19097,26 +19097,34 @@ def get_agent_studio_catalog(
     project_id: str = Query(...),
 ) -> dict[str, Any]:
     with begin(engine) as connection:
-        return {
-            "project_id": project_id,
-            "agents": agent_studio.list_agents(connection, project_id),
-            "panels": agent_studio.list_panels(connection, project_id),
-            "workflows": workflow_runtime.list_definition_details(
-                connection, project_id, include_retired=False
-            ),
-            "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
-            "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),
-            "workflow_runs": workflow_runtime.list_runs(
-                connection, project_id, status=None, limit=50
-            ),
-            "tests": agent_studio.list_agent_tests(connection, project_id, 50),
-            "a2a": {
-                "channels": a2a.list_channels(connection, project_id),
-                "subscriptions": a2a.list_subscriptions(connection, project_id),
-                "messages": a2a.list_messages(connection, project_id, limit=100),
-                "health": a2a.health(connection, project_id),
-            },
-        }
+        try:
+            ready, missing = agent_studio._catalog_tables_ready(connection)
+            if not ready:
+                raise AgentStudioSchemaMissingError(missing)
+            return {
+                "project_id": project_id,
+                "agents": agent_studio.list_agents(connection, project_id),
+                "panels": agent_studio.list_panels(connection, project_id),
+                "workflows": workflow_runtime.list_definition_details(
+                    connection, project_id, include_retired=False
+                ),
+                "agent_runs": agent_studio.list_agent_runs(connection, project_id, 50),
+                "panel_runs": agent_studio.list_panel_runs(connection, project_id, 50),
+                "workflow_runs": workflow_runtime.list_runs(
+                    connection, project_id, status=None, limit=50
+                ),
+                "tests": agent_studio.list_agent_tests(connection, project_id, 50),
+                "a2a": {
+                    "channels": a2a.list_channels(connection, project_id),
+                    "subscriptions": a2a.list_subscriptions(connection, project_id),
+                    "messages": a2a.list_messages(connection, project_id, limit=100),
+                    "health": a2a.health(connection, project_id),
+                },
+            }
+        except (AgentStudioSchemaMissingError, ProgrammingError) as error:
+            from .routers.agent_studio_seed import _schema_http_error
+
+            raise _schema_http_error(error) from error
 
 
 @app.post("/v1/agent-studio/catalog-smoke")

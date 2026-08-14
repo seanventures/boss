@@ -32,6 +32,7 @@ from .claude_cli_adapter import make_chat_adapter
 from .openai_adapter import OpenAIAdapter, estimate_cost_usd_micros  # noqa: F401
 from .pipeline_adapter import make_pipeline_adapter
 from .receipts import ReceiptService
+from .sealed_e2e_contract import attach_sealed_evidence, attach_sealed_receipt_result
 from .sandbox_validation import (
     SandboxValidationAdapter,
     SandboxValidationConfigurationError,
@@ -1531,6 +1532,9 @@ class SoftwareFactoryService:
         created_by_job_id: Optional[str] = None,
         agent_module_id: Optional[str] = None,
         actual_usd_micros: Optional[int] = None,
+        evidence: Optional[dict] = None,
+        quality_gate_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ) -> dict:
         # Prefer Mission Control primary binding credentials when present (P0-6).
         # Surface github_plane on every return path so dual-path is never silent.
@@ -1984,6 +1988,7 @@ class SoftwareFactoryService:
             },
             created_by_job_id=created_by_job_id,
         )
+        sealed_evidence = attach_sealed_evidence(evidence)
         decision_id = self.decisions.create_blocking(
             connection,
             project_id,
@@ -2014,25 +2019,37 @@ class SoftwareFactoryService:
                 "agent_module_id": (
                     module_spec.get("id") if isinstance(module_spec, dict) else None
                 ),
+                "quality_gate_id": quality_gate_id,
+                "run_id": run_id,
+                "no_auto_merge": True,
+                **sealed_evidence,
             },
             {},
             "merge_decision_required",
         )
-        result = {
-            "artifact_id": artifact_id,
-            "diff_artifact_id": diff_artifact_id,
-            "test_report_artifact_id": test_report_artifact_id,
-            "security_review_artifact_id": security_review_artifact_id,
-            "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
-            "decision_id": decision_id,
-            "pull_request_url": pr.url,
-            "pull_request_number": pr.number,
-            "branch_name": branch_name,
-            "validation_status": validation_status,
-            "validation_summary": validation_summary,
-            "validation_sources": validation_sources,
-            "local_validation_receipt_id": local_validation_receipt_id,
-        }
+        result = attach_sealed_receipt_result(
+            {
+                "artifact_id": artifact_id,
+                "diff_artifact_id": diff_artifact_id,
+                "test_report_artifact_id": test_report_artifact_id,
+                "security_review_artifact_id": security_review_artifact_id,
+                "release_go_no_go_artifact_id": release_go_no_go_artifact_id,
+                "decision_id": decision_id,
+                "pull_request_url": pr.url,
+                "pull_request_number": pr.number,
+                "branch_name": branch_name,
+                "validation_status": validation_status,
+                "validation_summary": validation_summary,
+                "validation_sources": validation_sources,
+                "local_validation_receipt_id": local_validation_receipt_id,
+                "receipt_id": pr_receipt["id"],
+            },
+            evidence=sealed_evidence,
+            decision_id=decision_id,
+            receipt_id=pr_receipt["id"],
+            quality_gate_id=quality_gate_id,
+            run_id=run_id,
+        )
         self.receipts.mark_succeeded(connection, pr_receipt["id"], pr.url, result)
         self.budget.settle(
             connection,

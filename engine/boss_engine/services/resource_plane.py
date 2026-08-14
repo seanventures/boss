@@ -748,6 +748,9 @@ class ResourcePlaneService:
         )
         return self._serialize_provider_account(row)
 
+    MIN_EASY_CONNECT_SECRET_LENGTH = 8
+    COMMUNITY_EASY_CONNECT_BACKENDS = frozenset({"local_vault"})
+
     def easy_connect(
         self,
         connection: Connection,
@@ -768,13 +771,24 @@ class ResourcePlaneService:
 
         The raw value is handed to the secret backend and dropped. Postgres keeps
         only a pointer plus last4/fingerprint metadata. Agents never receive the
-        material.
+        material. Re-pasting the same provider+label replaces or rotates.
         """
         from .secrets_service import put_secret
 
-        if not str(secret_value or "").strip():
+        cleaned_secret = str(secret_value or "").strip()
+        if not cleaned_secret:
             raise ValueError("secret_value is required")
+        if len(cleaned_secret) < self.MIN_EASY_CONNECT_SECRET_LENGTH:
+            raise ValueError(
+                "secret_value is too short "
+                f"(minimum {self.MIN_EASY_CONNECT_SECRET_LENGTH} characters)"
+            )
         backend_key = (backend or "local_vault").strip().lower() or "local_vault"
+        if backend_key not in self.COMMUNITY_EASY_CONNECT_BACKENDS:
+            raise ValueError(
+                "Community paste-and-connect uses local_vault only; "
+                "hosted KMS is not available on this edition."
+            )
         normalized_provider = self._normalize_provider(provider)
         normalized_label = self._require_text(account_label, "account_label")
         profile = PROVIDER_CONNECTION_PROFILES.get(normalized_provider)
@@ -823,7 +837,7 @@ class ResourcePlaneService:
             self.settings,
             project_id=project_id,
             name=f"{normalized_provider}_{normalized_label}_{slot_key}",
-            value=secret_value,
+            value=cleaned_secret,
             secret_kind=secret_kind,
             backend=backend_key,
             actor=actor,
@@ -837,21 +851,121 @@ class ResourcePlaneService:
         cleaned_base = str(base_url or "").strip()
         if cleaned_base:
             metadata["base_url"] = cleaned_base.rstrip("/")
-        account = self.create_provider_account(
-            connection,
-            project_id=project_id,
-            provider=normalized_provider,
-            account_label=normalized_label,
-            auth_method=method_key,
-            credential_refs={slot_key: pointer},
-            connection_metadata=metadata or None,
-            scopes=[],
-            read_only=bool(read_only),
-            deploy_capable=False,
-            billing_readable=False,
-            destructive_actions_disabled=True,
-            actor=actor,
-        )
+
+        existing_row = connection.execute(
+            text(
+                """
+                SELECT id, status, credential_refs, credential_ref
+                FROM provider_accounts
+                WHERE project_id = :project_id
+                  AND provider = :provider
+                  AND account_label = :account_label
+                """
+            ),
+            {
+                "project_id": project_id,
+                "provider": normalized_provider,
+                "account_label": normalized_label,
+            },
+        ).mappings().first()
+
+        replaced = False
+        rotated = False
+        if existing_row:
+            existing_status = str(existing_row["status"] or "")
+            if existing_status in {"disabled", "revoked"}:
+                raise ValueError(
+                    f"Provider account is {existing_status}; "
+                    "use the explicit lifecycle endpoint."
+                )
+            existing_refs = dict(
+                existing_row["credential_refs"]
+                or (
+                    {"primary": existing_row["credential_ref"]}
+                    if existing_row["credential_ref"]
+                    else {}
+                )
+            )
+            if existing_refs.get(slot_key) == pointer and all(
+                key == slot_key or existing_refs.get(key)
+                for key in existing_refs
+            ):
+                connection.execute(
+                    text(
+                        """
+                        UPDATE provider_accounts
+                        SET credential_version = credential_version + 1,
+                            credential_rotated_at = now(),
+                            connection_metadata = CASE
+                                WHEN CAST(:has_metadata AS BOOLEAN)
+                                THEN CAST(:connection_metadata AS JSONB)
+                                ELSE connection_metadata
+                            END,
+                            last_test_status = NULL,
+                            last_tested_at = NULL,
+                            last_error = NULL,
+                            updated_at = now()
+                        WHERE id = :provider_account_id
+                          AND project_id = :project_id
+                        """
+                    ),
+                    {
+                        "provider_account_id": existing_row["id"],
+                        "project_id": project_id,
+                        "has_metadata": bool(metadata),
+                        "connection_metadata": json.dumps(metadata),
+                    },
+                )
+                account = self.get_provider_account(
+                    connection, project_id, existing_row["id"]
+                )
+                replaced = True
+            else:
+                next_refs = dict(existing_refs)
+                next_refs[slot_key] = pointer
+                rotated_payload = self.rotate_provider_credentials(
+                    connection,
+                    project_id=project_id,
+                    provider_account_id=existing_row["id"],
+                    credential_ref=None,
+                    credential_refs=next_refs,
+                    overlap_minutes=0,
+                    actor=actor,
+                )
+                account = rotated_payload["provider_account"]
+                if metadata:
+                    account = self.update_provider_account(
+                        connection,
+                        project_id=project_id,
+                        provider_account_id=account["id"],
+                        account_label=None,
+                        scopes=None,
+                        read_only=None,
+                        deploy_capable=None,
+                        billing_readable=None,
+                        destructive_actions_disabled=None,
+                        connection_metadata=metadata,
+                        owner_actor=None,
+                        actor=actor,
+                    )
+                rotated = True
+        else:
+            account = self.create_provider_account(
+                connection,
+                project_id=project_id,
+                provider=normalized_provider,
+                account_label=normalized_label,
+                auth_method=method_key,
+                credential_refs={slot_key: pointer},
+                connection_metadata=metadata or None,
+                scopes=[],
+                read_only=bool(read_only),
+                deploy_capable=False,
+                billing_readable=False,
+                destructive_actions_disabled=True,
+                actor=actor,
+            )
+
         emit_event(
             connection,
             project_id,
@@ -868,6 +982,9 @@ class ResourcePlaneService:
                 "last4": stored.get("last4"),
                 "raw_secret_stored": False,
                 "has_base_url": bool(cleaned_base),
+                "replaced": replaced,
+                "rotated": rotated,
+                "credential_version": int(account.get("credential_version") or 1),
             },
         )
         test_payload: Optional[dict[str, Any]] = None
@@ -888,16 +1005,20 @@ class ResourcePlaneService:
                 account = self.get_provider_account(
                     connection, project_id, account["id"]
                 )
+        secret_summary = {
+            "secret_ref_id": stored["secret_ref_id"],
+            "last4": stored.get("last4"),
+            "fingerprint": stored.get("fingerprint"),
+            "raw_secret_stored": False,
+            "backend": backend_key,
+        }
         return {
             "provider_account": account,
-            "secret": {
-                "secret_ref_id": stored["secret_ref_id"],
-                "last4": stored.get("last4"),
-                "fingerprint": stored.get("fingerprint"),
-                "raw_secret_stored": False,
-                "backend": backend_key,
-            },
+            "secret": secret_summary,
+            "secret_ref_id": stored["secret_ref_id"],
             "raw_secret_stored": False,
+            "replaced": replaced,
+            "rotated": rotated,
             "test": test_payload,
         }
 

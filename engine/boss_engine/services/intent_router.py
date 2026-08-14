@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from ..config import Settings
+from .agent_process import AgentProcessService
 from .budget import BudgetGovernor
 from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
@@ -104,6 +105,44 @@ _TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {"command": {"type": "string"}},
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_agent_process",
+            "description": (
+                "Compile natural-language process/workflow/handoff authoring into "
+                "a validated agent-process template. Use this when the user is "
+                "defining a role chain, not asking to build an app."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "start_agent_process",
+            "description": (
+                "Start an agent-process run against a PRD. Simulated by default. "
+                "Never enable auto_build unless the user explicitly asked."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prd": {"type": "string"},
+                    "process_key": {"type": "string"},
+                    "simulated": {"type": "boolean"},
+                },
+                "required": ["prd"],
             },
         },
     },
@@ -234,6 +273,8 @@ class IntentRouter:
             "create_prd": "prd",
             "run_discovery": "discovery",
             "propose_command": "multi_phase_command",
+            "create_agent_process": "agent_process",
+            "start_agent_process": "agent_process",
         }[name]
         capability = manifest.get(capability_id)
         if capability is None or not capability.enabled:
@@ -599,6 +640,85 @@ class IntentRouter:
                 pending_confirmation=pending,
                 tool_calls=[{"name": name, "arguments": arguments}],
             )
+
+        if name == "create_agent_process":
+            self._require(connection, project_id, actor, "task_create")
+            text_in = str(arguments.get("text") or "").strip()
+            if not text_in:
+                raise ValueError("process text is required")
+            given_name = str(arguments.get("name") or "").strip()
+            try:
+                spec = self._compile_agent_process(text_in, name=given_name or None)
+                template = AgentProcessService(self.settings).create_template(
+                    connection,
+                    project_id=project_id,
+                    actor=actor,
+                    process_key=str(spec.get("key") or given_name or "custom"),
+                    name=given_name or str(spec.get("name") or self._short_title(text_in, "Custom process")),
+                    description=str(spec.get("description") or text_in)[:1000],
+                    spec=spec,
+                )
+            except ValueError:
+                raise
+            except Exception as error:  # noqa: BLE001 — fail closed into a user-visible reply
+                raise ValueError(str(error) or "Could not create the agent process.") from error
+            action = {
+                "kind": "agent_process_template_created",
+                "template_id": template["id"],
+                "process_key": template.get("process_key"),
+                "href": f"/?area=agent_processes&template={template['id']}",
+            }
+            return RouterTurn(
+                reply=(
+                    f"Created agent process template “{template.get('name')}” "
+                    f"({template.get('process_key')})."
+                ),
+                actions=[action],
+                tool_calls=[{"name": name, "arguments": arguments}],
+            )
+
+        if name == "start_agent_process":
+            self._require(connection, project_id, actor, "task_create")
+            prd = str(arguments.get("prd") or "").strip()
+            if not prd:
+                raise ValueError("prd is required")
+            process_key = (
+                str(arguments.get("process_key") or "prd_to_accepted_work").strip()
+                or "prd_to_accepted_work"
+            )
+            simulated = self._tool_bool(arguments.get("simulated"), default=True)
+            # Chat never starts a live factory build unless the caller set auto_build=true.
+            auto_build = self._explicit_true(arguments.get("auto_build"))
+            try:
+                run = AgentProcessService(self.settings).start_run(
+                    connection,
+                    project_id=project_id,
+                    actor=actor,
+                    prd=prd,
+                    title=self._short_title(prd, "PRD delivery"),
+                    process_key=process_key,
+                    simulated=simulated,
+                    auto_build=auto_build,
+                )
+            except ValueError:
+                raise
+            except Exception as error:  # noqa: BLE001 — fail closed into a user-visible reply
+                raise ValueError(str(error) or "Could not start the agent process.") from error
+            mode = "simulated" if simulated else "live"
+            build = "auto_build" if auto_build else "no auto_build"
+            action = {
+                "kind": "agent_process_started",
+                "run_id": run["id"],
+                "process_key": process_key,
+                "simulated": simulated,
+                "auto_build": auto_build,
+                "href": f"/?area=agent_processes&run={run['id']}",
+            }
+            return RouterTurn(
+                reply=f"Started agent process “{run.get('title') or process_key}” ({mode}, {build}).",
+                actions=[action],
+                tool_calls=[{"name": name, "arguments": arguments}],
+            )
         raise ValueError(f"Unsupported orchestration tool: {name}")
 
     def _confirm_plan(
@@ -688,6 +808,23 @@ class IntentRouter:
             r"^\s*(how|what|why|when|where|who|which|whose|explain|tell me|show me)\b", lowered))
         polite_imperative = bool(re.match(r"^\s*(can|could|would|will|please)\b", lowered))
         lead_question = starts_discussion or (message.strip().endswith("?") and not polite_imperative)
+        # Process/workflow/handoff authoring and starts beat multi-phase and generic build.
+        # "build a settings page" must stay create_code_task; a role-handoff process must not.
+        if self._looks_process_start(lowered):
+            arguments: dict[str, Any] = {
+                "prd": self._extract_prd(message),
+                "simulated": True,
+            }
+            process_key = self._extract_process_key(lowered)
+            if process_key:
+                arguments["process_key"] = process_key
+            return "start_agent_process", arguments
+        if self._looks_process_authoring(lowered):
+            arguments = {"text": message}
+            given_name = self._extract_process_name(message)
+            if given_name:
+                arguments["name"] = given_name
+            return "create_agent_process", arguments
         if self._looks_multi_phase(lowered):
             return "propose_command", {"command": message}
         if re.search(r"\b(prd|product requirements?|requirements document|write a spec)\b", lowered):
@@ -717,6 +854,96 @@ class IntentRouter:
         untrusted issue cannot create work merely by being classified.
         """
         return self._deterministic_intent(message.strip())
+
+    @staticmethod
+    def _looks_process_start(message: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(start|run|launch|kick\s*off)\b\s+"
+                r"(this\s+|the\s+|an?\s+|our\s+)?"
+                r"(agent\s+)?(process|workflow)\b",
+                message,
+            )
+            or re.search(r"\bstart_agent_process\b", message)
+        )
+
+    @staticmethod
+    def _looks_process_authoring(message: str) -> bool:
+        if re.search(
+            r"\b(create|author|define|design|write|make|draft)\b\s+"
+            r"(me\s+)?((an?|the)\s+)?(agent\s+)?(process|workflow)\b",
+            message,
+        ):
+            return True
+        if re.search(r"\b(process|workflow)\s+where\b", message):
+            return True
+        if re.search(r"\bhandoffs?\b", message) and re.search(
+            r"\b(process|workflow|review|role|architect|captain)\b", message
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _extract_prd(message: str) -> str:
+        match = re.search(r"\bprd\s*[:\-]\s*(.+)$", message, re.IGNORECASE | re.DOTALL)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+        return message.strip()
+
+    @staticmethod
+    def _extract_process_key(message: str) -> Optional[str]:
+        match = re.search(r"\bprocess_key\s*[=:]\s*([a-z0-9_]+)", message)
+        if match:
+            return match.group(1)
+        match = re.search(r"\bkey\s+([a-z][a-z0-9_]{2,79})\b", message)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _extract_process_name(message: str) -> Optional[str]:
+        match = re.search(
+            r"\b(?:named|called)\s+[\"']?([^\"'\n,]{2,80})",
+            message,
+            re.IGNORECASE,
+        )
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _tool_bool(value: Any, *, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes"}:
+                return True
+            if lowered in {"false", "0", "no"}:
+                return False
+        return default
+
+    @staticmethod
+    def _explicit_true(value: Any) -> bool:
+        if value is True:
+            return True
+        return isinstance(value, str) and value.strip().lower() == "true"
+
+    @staticmethod
+    def _compile_agent_process(text: str, name: Optional[str] = None) -> dict[str, Any]:
+        try:
+            from .process_compiler import compile_process
+        except ImportError as error:
+            raise ValueError("Process compiler is not available.") from error
+        try:
+            spec = compile_process(text, name=name)
+        except ValueError:
+            raise
+        except TypeError:
+            spec = compile_process(text)
+        except Exception as error:  # noqa: BLE001 — compiler failures must be user-visible
+            raise ValueError(str(error) or "Process compilation failed.") from error
+        if not isinstance(spec, dict):
+            raise ValueError("Process compiler returned an invalid spec.")
+        return spec
 
     @staticmethod
     def _looks_multi_phase(message: str) -> bool:
@@ -805,8 +1032,11 @@ class IntentRouter:
                 "a document, and queues a build that nobody asked for.\n\n"
                 "Only when the user genuinely wants NEW WORK begun, pick exactly one enabled "
                 "initiator, and never a disabled one: code for a narrow change, meeting for an "
-                "open decision, PRD for a fuzzy feature, discovery for research, propose_command "
-                "for two or more dependent phases.\n\n"
+                "open decision, PRD for a fuzzy feature, discovery for research, "
+                "create_agent_process when they are authoring a role-handoff process or "
+                "workflow, start_agent_process when they want to run a process against a PRD "
+                "(simulated unless they say otherwise; never set auto_build), propose_command "
+                "for two or more dependent delivery phases that are not a process definition.\n\n"
                 "When it is unclear whether they want work started, select nothing. Answering a "
                 "request to build is a cheap mistake; building an answer to a question is not."
                 "\n\nCAPABILITY MANIFEST\n" + manifest.render_table()

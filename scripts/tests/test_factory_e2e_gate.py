@@ -102,6 +102,10 @@ def test_dry_run_structure_passes():
     assert "structure.factory_endpoints_remain" in names
     assert "structure.quality_loop_contract" in names
     assert "structure.no_budgeted_code_task" in names
+    assert "structure.agent_process_module" in names
+    assert "structure.process_compiler_module" in names
+    assert "structure.process_manager_module" in names
+    assert "structure.scorecard_honesty" in names
     # env docs check present as optional
     docs = next(c for c in checks if c.name == "structure.live_env_docs")
     assert docs.ok
@@ -552,6 +556,13 @@ def test_dry_run_structure_includes_quality_surface_checks():
     no_post = by_name["structure.no_budgeted_code_task"]
     assert no_post.ok is True
     assert no_post.evidence["create_required"] is False
+    process = by_name["structure.agent_process_module"]
+    assert process.ok is True
+    honesty = by_name["structure.scorecard_honesty"]
+    assert honesty.ok is True
+    assert honesty.evidence["invents_a11y_violations"] is False
+    assert honesty.evidence["invents_contrast_ok"] is False
+    assert honesty.evidence["unknown_jtbd_not_scored"] is True
 
 
 def test_dry_run_never_posts_budgeted_code_task(monkeypatch, tmp_path):
@@ -596,3 +607,110 @@ def test_live_readonly_includes_quality_surface_and_does_not_post():
         mode="live+readonly",
     )
     assert report["summary"]["passed"] is True
+
+
+AGENT_PROCESS_EXPORTS = (
+    "validate_process_spec",
+    "review_prd",
+    "improve_prd",
+    "AgentProcessService",
+)
+
+
+def test_agent_process_module_exists_and_exports():
+    inspection = gate.inspect_agent_process()
+    assert inspection["exists"] is True
+    assert inspection["path"].endswith("engine/boss_engine/services/agent_process.py")
+    for name in AGENT_PROCESS_EXPORTS:
+        assert inspection["exports"][name] is True, name
+
+
+def test_process_compiler_and_manager_skip_honestly_when_absent():
+    compiler = gate.inspect_optional_process_module("process_compiler")
+    manager = gate.inspect_optional_process_module("process_manager")
+    for item in (compiler, manager):
+        assert item["skipped"] is (not item["exists"])
+    # These modules now exist on main after the 377/378 merge. Gate must
+    # report them present — not invent a skip.
+    assert compiler["exists"] is True
+    assert manager["exists"] is True
+
+
+def test_optional_process_module_skips_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    missing = gate.inspect_optional_process_module("process_compiler")
+    assert missing["exists"] is False
+    assert missing["skipped"] is True
+
+
+def test_scorecard_honesty_does_not_invent_a11y_or_unknown_jtbd():
+    honesty = gate.inspect_scorecard_honesty()
+    assert honesty["invents_a11y_violations"] is False
+    assert honesty["invents_contrast_ok"] is False
+    assert honesty["unknown_jtbd_not_scored"] is True
+
+
+def test_quality_surface_includes_process_and_honesty_checks():
+    checks = gate.quality_surface_checks()
+    by_name = {c.name: c for c in checks}
+    process = by_name["structure.agent_process_module"]
+    assert process.ok is True
+    assert process.required is True
+    assert process.skipped is False
+    for name in AGENT_PROCESS_EXPORTS:
+        assert process.evidence["exports"][name] is True
+
+    compiler = by_name["structure.process_compiler_module"]
+    manager = by_name["structure.process_manager_module"]
+    assert compiler.ok is True
+    assert manager.ok is True
+    assert compiler.required is False
+    assert manager.required is False
+    assert compiler.skipped is False
+    assert manager.skipped is False
+    assert compiler.evidence.get("exists") is True
+    assert manager.evidence.get("exists") is True
+
+    honesty = by_name["structure.scorecard_honesty"]
+    assert honesty.ok is True
+    assert honesty.evidence["invents_a11y_violations"] is False
+    assert honesty.evidence["invents_contrast_ok"] is False
+    assert honesty.evidence["unknown_jtbd_not_scored"] is True
+
+
+def test_inspect_process_and_honesty_fall_back_when_import_fails(monkeypatch):
+    monkeypatch.setattr(gate, "_try_import_engine", lambda _name: None)
+    inspection = gate.inspect_agent_process()
+    assert inspection["imported"] is False
+    assert inspection["exists"] is True
+    for name in AGENT_PROCESS_EXPORTS:
+        assert inspection["exports"][name] is True, name
+    honesty = gate.inspect_scorecard_honesty()
+    assert honesty["imported"] is False
+    assert honesty["invents_a11y_violations"] is False
+    assert honesty["invents_contrast_ok"] is False
+    assert honesty["unknown_jtbd_not_scored"] is True
+
+
+def test_process_handoff_module_and_simulated_never_spends():
+    inspection = gate.inspect_process_handoff()
+    assert inspection["exists"] is True
+    assert inspection["exports"]["AgentProcessService"] is True
+    assert inspection["exports"]["PRD_TO_ACCEPTED_SPEC"] is True
+    assert inspection["endpoints"]["/v1/agent-processes/runs"] is True
+    assert inspection["endpoints"]["/v1/agent-processes/tick-all"] is True
+    assert "captain_accept" in inspection["steps"]
+    assert inspection["simulated_no_spend"] is True
+
+
+def test_sealed_contract_fails_closed_without_decision_or_evidence():
+    sealed = gate.inspect_sealed_contract()
+    assert sealed["exists"] is True
+    assert sealed["receipt_fail_closed"] is True
+    assert sealed["decision_hold_fail_closed"] is True
+    assert sealed["evidence_attach_fail_closed"] is True
+    assert sealed["factory_wires_receipt"] is True
+    assert sealed["factory_wires_decision"] is True
+    assert sealed["governed_passes_evidence"] is True
+    for name in gate.SEALED_CONTRACT_EXPORTS:
+        assert sealed["exports"][name] is True, name

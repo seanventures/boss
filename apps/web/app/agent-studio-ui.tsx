@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import {
   ArrowRight,
   BracketsCurly,
@@ -338,6 +339,65 @@ export function AgentStudio({
   const libraryEmpty =
     feed.agents.length === 0 && feed.panels.length === 0 && feed.workflows.length === 0;
 
+  if (libraryEmpty) {
+    return (
+      <div className="as-shell">
+        <header className="as-header">
+          <div>
+            <span className="as-kicker"><Sparkle weight="fill" /> Agent Studio / setup</span>
+            <h2>Starter catalog not installed</h2>
+            <p>
+              This project has no governed agents, panels, or workflows yet.
+              The reviewed starter catalog is project-scoped and idempotent.
+            </p>
+          </div>
+          <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
+            <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
+          </button>
+        </header>
+        <div className="as-first-run" role="region" aria-label="Agent Studio first-run setup">
+          <div>
+            <b>This project has no governed agents yet</b>
+            <p>
+              Install the reviewed BOSS starter catalog (13 agents, 3 panels) to make Agent Studio
+              usable. The setup is project-scoped, idempotent, role-review gated, and never
+              dispatches work or spends budget.
+            </p>
+            <p className="detail">
+              Endpoint: <code>POST /v1/agent-studio/catalog/seed</code>
+            </p>
+          </div>
+          <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
+            <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
+          </button>
+          <button
+            className="as-button secondary"
+            disabled={pending}
+            onClick={() => setWizardOpen(true)}
+          >
+            <Plus /> Commission a scoped agent
+          </button>
+          {result && (
+            <div className={`as-action-result ${result.ok ? "ok" : "bad"}`} role="status">
+              {result.ok ? <CheckCircle /> : <Warning />}
+              <span>{result.message}</span>
+            </div>
+          )}
+        </div>
+        {wizardOpen &&
+          createPortal(
+            <AgentCreationWizard
+              projectId={feed.projectId}
+              roles={roles}
+              skills={skills}
+              onClose={() => setWizardOpen(false)}
+            />,
+            document.body,
+          )}
+      </div>
+    );
+  }
+
   return (
     <div className="as-shell">
       <header className="as-header">
@@ -359,41 +419,10 @@ export function AgentStudio({
             </small>
           </div>
         </div>
-        {libraryEmpty ? (
-          <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
-            <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
-          </button>
-        ) : (
-          <button className="as-button primary" disabled={pending} onClick={runCatalogSmoke}>
-            <Flask /> {pending ? "Running catalog checks…" : `Smoke test all ${feed.agents.length} agents`}
-          </button>
-        )}
+        <button className="as-button primary" disabled={pending} onClick={runCatalogSmoke}>
+          <Flask /> {pending ? "Running catalog checks…" : `Smoke test all ${feed.agents.length} agents`}
+        </button>
       </header>
-
-      {libraryEmpty && (
-        <div className="as-first-run" role="region" aria-label="Agent Studio first-run setup">
-          <div>
-            <b>This project has no governed agents yet</b>
-            <p>
-              Install the reviewed BOSS starter catalog (13 agents, 3 panels) to make Agent Studio
-              usable. The setup is project-scoped, idempotent, role-review gated, and never
-              dispatches work or spends budget.
-            </p>
-            <p className="detail">
-              Endpoint: <code>POST /v1/agent-studio/catalog/seed</code>
-            </p>
-          </div>
-          <button className="as-button primary" disabled={pending} onClick={installStarterCatalog}>
-            <Sparkle /> {pending ? "Installing starter catalog…" : "Install BOSS starter catalog"}
-          </button>
-          {result && (
-            <div className={`as-action-result ${result.ok ? "ok" : "bad"}`} role="status">
-              {result.ok ? <CheckCircle /> : <Warning />}
-              <span>{result.message}</span>
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="as-metrics" aria-label="Agent Studio summary">
         <div><span>Published agents</span><b>{feed.agents.length}</b><small>immutable active versions</small></div>

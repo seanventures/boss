@@ -20,6 +20,7 @@ from scripts.qa.feature_sweep import (  # noqa: E402
     PHASE,
     Probe,
     build_probes,
+    classify_verdict,
     dry_run_catalog,
     evaluate,
     run_feature_sweep,
@@ -301,3 +302,121 @@ def test_run_feature_sweep_sets_phase_and_never_logs_key():
     }
     assert any(path == "/v1/deadletters/remediations" for _, path, _ in client.calls)
     assert any(path == "/v1/edition" for _, path, _ in client.calls)
+
+
+WORKFORCE_CATALOG = {
+    "workforce.focused-agents": "/v1/focused-agents",
+    "workforce.agent-process-templates": "/v1/agent-processes/templates",
+    "workforce.agent-process-runs": "/v1/agent-processes/runs",
+    "workforce.metatron-goals": "/v1/metatron/goals",
+    "workforce.metatron-session": "/v1/metatron/session",
+    "workforce.process-manager": "/v1/process-manager",
+}
+
+
+def test_dry_run_includes_workforce_operator_catalog():
+    catalog = dry_run_catalog()
+    names = catalog["names"]
+    for name in WORKFORCE_CATALOG:
+        assert name in names, name
+    assert "edition" in " ".join(names)
+
+
+def test_workforce_catalog_probes_are_optional_get_only():
+    by_name = {probe.name: probe for probe in build_probes("boss-dogfood")}
+    for name, path in WORKFORCE_CATALOG.items():
+        probe = by_name[name]
+        assert probe.path == path
+        assert probe.method.upper() == "GET"
+        assert probe.required is False
+        assert probe.expect == EXPECT_2XX_OR_404
+        assert probe.query and probe.query.get("project_id") == "boss-dogfood"
+        assert probe.body is None
+
+
+def test_workforce_writes_are_forbidden_post_prefixes():
+    covered = " ".join(FORBIDDEN_POST_PREFIXES)
+    assert "/v1/focused-agents" in covered
+    assert "/v1/agent-processes" in covered
+    assert "/v1/metatron/session" in covered
+    assert "/v1/metatron/goals" in covered
+    assert "/v1/metatron/watch" in covered
+    assert "/v1/metatron/drive" in covered
+    assert "/v1/metatron/overwatch" in covered
+    assert "/v1/process-manager" in covered
+
+
+def test_optional_404_is_skip_not_invented_pass():
+    probe = Probe(
+        name="workforce.focused-agents",
+        path="/v1/focused-agents",
+        required=False,
+        expect=EXPECT_2XX_OR_404,
+    )
+    ok, detail = evaluate(probe, 404, {"detail": "Not Found"})
+    assert ok is True
+    assert "404" in detail
+    assert classify_verdict(probe, 404, ok) == "skip"
+    assert "skip" in detail.lower()
+
+    paid = Probe(
+        name="paid.marketplace",
+        path="/v1/marketplace/listings",
+        required=True,
+        expect=EXPECT_2XX_OR_404,
+    )
+    ok, detail = evaluate(paid, 404, {"detail": "Not Found"})
+    assert ok is True
+    assert classify_verdict(paid, 404, ok) == "pass"
+    assert "edition honesty" in detail
+
+
+def test_optional_500_is_fail_and_2xx_is_pass():
+    probe = Probe(
+        name="workforce.agent-process-templates",
+        path="/v1/agent-processes/templates",
+        required=False,
+        expect=EXPECT_2XX_OR_404,
+    )
+    ok, detail = evaluate(probe, 500, {"detail": "boom"})
+    assert ok is False
+    assert classify_verdict(probe, 500, ok) == "fail"
+
+    ok, detail = evaluate(probe, 200, {"templates": [{"process_key": "prd_to_accepted_work"}]})
+    assert ok is True
+    assert "200" in detail
+    assert "items=1" in detail
+    assert classify_verdict(probe, 200, ok) == "pass"
+
+
+def test_run_feature_sweep_workforce_404_is_skip_evidence_not_pass():
+    client = _FakeClient(
+        status_for={
+            "/v1/account-connect": 404,
+            "/v1/marketplace": 404,
+            "/v1/self-improvement": 404,
+            "/v1/enterprise/clusters": 404,
+            "/v1/focused-agents": 404,
+            "/v1/agent-processes/templates": 404,
+            "/v1/agent-processes/runs": 404,
+            "/v1/metatron/goals": 404,
+            "/v1/metatron/session": 404,
+            "/v1/process-manager": 404,
+            "/v1/diag/sandbox-echo": 422,
+        }
+    )
+    checks = run_feature_sweep(client)
+    by_name = {check.name: check for check in checks}
+    for name in WORKFORCE_CATALOG:
+        check = by_name[name]
+        assert check.ok is True, name
+        assert check.required is False
+        assert check.evidence.get("verdict") == "skip", name
+        assert check.evidence.get("skipped") is True, name
+        assert "skip" in check.detail.lower()
+    posts = {(method, path) for method, path, _ in client.calls if method == "POST"}
+    assert ("POST", "/v1/focused-agents") not in posts
+    assert ("POST", "/v1/agent-processes/templates") not in posts
+    assert ("POST", "/v1/agent-processes/runs") not in posts
+    assert ("POST", "/v1/metatron/session") not in posts
+    assert ("POST", "/v1/process-manager") not in posts

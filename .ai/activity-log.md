@@ -1,5 +1,11 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Process authoring + PM steward swarm
+
+- 15-agent bake merged locally: NL compiler, compile API, Mission Control builder, Metatron/intent create-start-list, process harden (receipts + fail-closed panel), PM runtime + API/worker/UI.
+- Also: sealed E2E contract (no live spend), factory gate process/honesty checks, feature-sweep workforce GETs, BYOK paste 500/echo/empty fix, studio empty-state honesty.
+- Plane: BOSS-376/377/378 In Progress; BOSS-371 Done (already baked). Do not stamp GA.
+
 ## 2026-08-14 — Grok — Agent process handoffs
 
 - New runtime `AgentProcessService`: templates + runs + recorded handoffs.

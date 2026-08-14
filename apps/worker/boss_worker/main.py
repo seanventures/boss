@@ -17,11 +17,13 @@ SHEPHERD_WATCH_INTERVAL_SECONDS = 120
 METATRON_WATCH_INTERVAL_SECONDS = 60
 FOCUSED_AGENT_INTERVAL_SECONDS = 60
 AGENT_PROCESS_INTERVAL_SECONDS = 30
+PROCESS_MANAGER_INTERVAL_SECONDS = 60
 _last_shepherd_watch_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
 _last_focused_agent_monotonic = 0.0
 _last_agent_process_monotonic = 0.0
+_last_process_manager_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -150,6 +152,30 @@ def _tick_agent_processes(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("agent_processes_failed", exc_info=True)
 
 
+def _tick_process_manager(client: ControlPlaneClient, settings) -> None:
+    """Always-on Project Manager steward. Swallow errors. Never kill the worker."""
+    global _last_process_manager_monotonic
+    now = time.monotonic()
+    if now - _last_process_manager_monotonic < PROCESS_MANAGER_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.tick_process_manager(str(project_id))
+        _last_process_manager_monotonic = now
+        last_tick = result.get("last_tick") if isinstance(result, dict) else None
+        if last_tick:
+            LOGGER.info(
+                "process_manager status=%s",
+                last_tick.get("status") if isinstance(last_tick, dict) else last_tick,
+            )
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("process_manager_failed", exc_info=True)
+
+
 def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
     """Keep the benchmark evidence ledger current while the worker is idle.
 
@@ -220,6 +246,7 @@ def main() -> None:
             _tick_metatron_watch(client, settings)
             _tick_focused_agents(client, settings)
             _tick_agent_processes(client, settings)
+            _tick_process_manager(client, settings)
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)

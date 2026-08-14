@@ -65,6 +65,14 @@ async function post(
             "Project cannot accept the starter catalog (missing roles or policy).",
         };
       }
+      if (response.status === 503) {
+        return {
+          ok: false,
+          message:
+            detail ??
+            "Agent Studio schema is not applied on this runtime. Apply db/schema.sql before seeding.",
+        };
+      }
       return {
         ok: false,
         message: detail ?? `Agent Studio returned ${response.status}.`,

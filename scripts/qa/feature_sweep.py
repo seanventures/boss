@@ -4,10 +4,12 @@ Phase 1 of ``scripts/qa/harness.py``. Probes a curated settings + features
 surface — not every mounted route. Never POSTs spendy or mutating work
 (no code-task create, changeset apply, provider/github/cloud easy-connect,
 budget reserve, skill/pack import, assurance seed, standup create, preview
-fixture create, or comms deliver).
+fixture create, comms deliver, focused-agent create, agent-process start,
+or Metatron session/drive/overwatch).
 
-Community routes added after the original 55-check catalog are
-``required=False`` so a 404 on an older live tag is not a false red.
+Community / workforce routes added after the original 55-check catalog are
+``required=False``. A 404 on an older live tag is **skip**, not an invented
+pass. 500 is fail. 2xx is pass with payload evidence.
 
 ``POST /v1/diag/sandbox-echo`` is freeze-honest: 422 frozen or 503 no host
 is not a required fail (and does not launch a canary).
@@ -67,6 +69,27 @@ FORBIDDEN_POST_PREFIXES = (
     "/v1/meetings/simulated-run",
     "/v1/comms/outbox",
     "/v1/entitlements/sources",
+    "/v1/focused-agents",
+    "/v1/agent-processes",
+    "/v1/metatron/session",
+    "/v1/metatron/goals",
+    "/v1/metatron/watch",
+    "/v1/metatron/drive",
+    "/v1/metatron/overwatch",
+    "/v1/process-manager",
+)
+
+VERDICT_PASS = "pass"
+VERDICT_FAIL = "fail"
+VERDICT_SKIP = "skip"
+
+# List keys used by newer workforce payloads (templates/agents/goals).
+_WORKFORCE_COUNT_KEYS = (
+    "templates",
+    "agents",
+    "goals",
+    "runs",
+    "programs",
 )
 
 
@@ -139,8 +162,51 @@ def build_probes(
         Probe("workforce.workflows", "/v1/workflows", query=q),
         Probe("workforce.meetings", "/v1/meetings", query=q),
         Probe("workforce.benchmark-apps", "/v1/qa/benchmark-apps", query=q),
-        Probe("workforce.metatron-goals", "/v1/metatron/goals", query=q, required=False),
-        Probe("workforce.metatron-session", "/v1/metatron/session", query=q, required=False),
+        # Workforce add-ons after the original 55-check catalog. GET only.
+        # required=False: 404 on older live tags is skip, not an invented pass.
+        Probe(
+            "workforce.focused-agents",
+            "/v1/focused-agents",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.agent-process-templates",
+            "/v1/agent-processes/templates",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.agent-process-runs",
+            "/v1/agent-processes/runs",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.metatron-goals",
+            "/v1/metatron/goals",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.metatron-session",
+            "/v1/metatron/session",
+            query={**q, "actor": actor},
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        # BOSS-378 PM steward is not mounted yet. Probe presence; 404 = skip.
+        Probe(
+            "workforce.process-manager",
+            "/v1/process-manager",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
         # Identity — Community catalog, must be 2xx not 404
         Probe("identity.identity-providers", "/v1/identity-providers"),
         # Paid expected 404 on Community (edition honesty). 500 fails.
@@ -340,6 +406,32 @@ def dry_run_catalog() -> dict[str, Any]:
     }
 
 
+def _payload_count(payload: Any) -> int | None:
+    count = item_count(payload)
+    if count is not None:
+        return count
+    if not isinstance(payload, dict):
+        return None
+    for key in _WORKFORCE_COUNT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return len(value)
+    return None
+
+
+def classify_verdict(probe: Probe, status: int | None, ok: bool) -> str:
+    """Honest pass / fail / skip. 404 on optional probes is skip, never a pass."""
+    if not ok or status is None:
+        return VERDICT_FAIL
+    if probe.required is False and status == 404:
+        return VERDICT_SKIP
+    if probe.expect == EXPECT_2XX_OR_503 and status == 503:
+        return VERDICT_SKIP
+    if probe.expect == EXPECT_FREEZE_HONEST and status in (404, 422, 503):
+        return VERDICT_SKIP
+    return VERDICT_PASS
+
+
 def evaluate(
     probe: Probe,
     status: int | None,
@@ -349,7 +441,7 @@ def evaluate(
     path = probe.path
     method = probe.method
     expect = probe.expect
-    count = item_count(payload)
+    count = _payload_count(payload)
     count_bit = f" items={count}" if count is not None else ""
 
     if status is None:
@@ -361,7 +453,9 @@ def evaluate(
         return True, f"{method} {path} → {status}{count_bit}"
 
     if expect == EXPECT_2XX_OR_404 and status == 404:
-        return True, f"{method} {path} → 404 (edition honesty)"
+        if probe.required:
+            return True, f"{method} {path} → 404 (edition honesty)"
+        return True, f"{method} {path} → 404 skip (not mounted / old image)"
 
     if expect == EXPECT_2XX_OR_405 and status in (404, 405, 422):
         # 404: unmounted / old image, or GET matched a parameterized sibling
@@ -395,17 +489,22 @@ def evaluate(
     return False, f"{method} {path} → {status} expected {expect}"
 
 
-def _evidence(probe: Probe, payload: Any) -> dict[str, Any]:
+def _evidence(probe: Probe, payload: Any, *, verdict: str, status: int | None) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "method": probe.method,
         "path": probe.path,
         "expect": probe.expect,
+        "verdict": verdict,
     }
-    count = item_count(payload)
+    if verdict == VERDICT_SKIP:
+        evidence["skipped"] = True
+    count = _payload_count(payload)
     if count is not None:
         evidence["item_count"] = count
     if isinstance(payload, dict):
         evidence["keys"] = [str(key) for key in list(payload)[:12]]
+    if status is not None:
+        evidence["status"] = status
     return evidence
 
 
@@ -434,13 +533,18 @@ def run_feature_sweep(client: BossClient) -> list[CheckResult]:
                     detail=str(error),
                     status_code=None,
                     duration_ms=0,
-                    evidence={"path": probe.path, "method": probe.method},
+                    evidence={
+                        "path": probe.path,
+                        "method": probe.method,
+                        "verdict": VERDICT_FAIL,
+                    },
                     phase=PHASE,
                 )
             )
             continue
 
         ok, detail = evaluate(probe, status, payload)
+        verdict = classify_verdict(probe, status, ok)
         checks.append(
             CheckResult(
                 name=probe.name,
@@ -449,7 +553,7 @@ def run_feature_sweep(client: BossClient) -> list[CheckResult]:
                 detail=detail,
                 status_code=status,
                 duration_ms=elapsed,
-                evidence=_evidence(probe, payload),
+                evidence=_evidence(probe, payload, verdict=verdict, status=status),
                 phase=PHASE,
             )
         )
