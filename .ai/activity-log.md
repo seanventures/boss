@@ -1,5 +1,15 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — sample apps serve working software
+
+- Root cause: `resolve_app_entry` returned static on `bugbox/web/index.html` before the owning `scripts.start` server. PR-clone Views served Vite HTML; `/api` was HTML 404.
+- Fix `f5def77`: owning start outranks its own web/public index; sibling `web-nqueens` stays static; worker HTTP read 7200s; ReadTimeout is resume-safe.
+- Deploy: shared tag `boss-*:f5def77` (no `--env-template`; rollback `.env.bak.cefe635`). Sandbox root still volume-set.
+- Live Views: BugBox `prev_d06b4eabe8f3471cb2c0` title + `/health` JSON + `/api/issues` rows. ApproveIt `prev_7ad80927147e4ab3b8f3` title + `/health` JSON + `/api/users` JSON.
+- HookWatch launched: `crun_911888eefbd14166bce6` running `implement` (PRD meeting first).
+- Gates: `qa-live` 10/10 + Metatron; `qa-working-software` 4/4; harness reuse 56/56. Tests 21 focused.
+- Plane comments on 337/341/351. **Do not stamp public GA.** BOSS-300 legal. 14-day Day 1/14. C2 open.
+
 ## 2026-08-13 — Grok — GA bar = working software
 
 - Operator definition: Community is GA only when a functional app can be built through the full system and opened as designed.
