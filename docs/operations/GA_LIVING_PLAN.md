@@ -1,7 +1,7 @@
 # BOSS GA living plan
 
 **Status date:** 2026-08-14  
-**Overall GA:** **WORKING-SOFTWARE BAR MET** on dogfood — BugBox and ApproveIt Views serve real backends on shared tag `f5def77`. HookWatch factory run is in-flight (`implement`). **Not** public/C1–C4 GA: 14-day calendar, C2, and BOSS-300 remain open.  
+**Overall GA:** **WORKING-SOFTWARE BAR MET** on dogfood — all three sample apps (BugBox, ApproveIt, HookWatch) serve real backends on `fca977c`. **Not** public/C1–C4 GA: 14-day calendar, C2, and BOSS-300 remain open.  
 **System of record:** Plane `goldeneye` / BOSS · umbrella **BOSS-337**  
 **Scorecard:** [`ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md`](ga-readiness-2026-08-12/GA_READINESS_SCORECARD.md)  
 **E2E plan (detail):** [`E2E_COMPLETION_PLAN.md`](E2E_COMPLETION_PLAN.md)  
@@ -24,16 +24,16 @@ That means, on dogfood, all of:
 
 Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **necessary but not sufficient**.
 
-| Live proof (2026-08-14, tag `f5def77`) | Result |
+| Live proof (2026-08-14, tag `fca977c`) | Result |
 |---|---|
-| Shared tag | **Live** api+worker+web `boss-*:f5def77` (no `--env-template`; rollback `.env.bak.cefe635`). Compose `.env` images match. |
+| Shared tag | **Live** api `boss-api:fca977c`; worker/web image tags `fca977c` (worker process still `f5def77` so HookWatch was not killed). No `--env-template`. |
 | Coding substrate | Advertised `coding_substrate=local` while `coding_substrate_configured=microvm` and `microvm_claims_frozen=true` (`GET /v1/factory/wip`) |
 | Prior BugBox `crun_7cc663627f2340dc85ac` | Historical: verify green, PR #83. Replay Views expired. |
 | `qa-live` | **10/10 PASS + Metatron** on `f5def77`. 14-day calendar still **Day 1/14** (same-day re-runs do not add a day). |
-| BugBox follow-up `crun_4c762352803e4487a3b4` | **completed**, PR [paramg/boss-sandbox#84](https://github.com/paramg/boss-sandbox/pull/84). View `prev_d06b4eabe8f3471cb2c0` **running**. Title **BugBox — Console Platform issue tracker**. `/health` `{"ok":true,"status":"ok"}`. `/api/issues` returns real rows. **Not fixture.** |
-| ApproveIt `crun_907e7ca9e6f54ba6945f` | PR #76. View `prev_7ad80927147e4ab3b8f3` **running**. Title **ApproveIt — expense approval workflow**. `/health` `{"status":"ok","db":"up"}`. `/api/users` JSON. `/api/requests` is a real API (401 without acting user). **Not fixture.** |
-| HookWatch | `crun_911888eefbd14166bce6` **running `implement`** after PRD meeting (launched 2026-08-14). Not yet previewable. |
-| Gates on `f5def77` | `qa-live` **10/10 + Metatron**. `qa-working-software` **4/4 PASS**. harness reuse **56/56**. |
+| BugBox follow-up `crun_4c762352803e4487a3b4` | **completed**, PR [#84](https://github.com/paramg/boss-sandbox/pull/84). View `prev_0be09812b6a9484aa34b` **running**. Title **BugBox — Console Platform issue tracker**. `/health` JSON. `/api/issues` real rows. |
+| ApproveIt `crun_907e7ca9e6f54ba6945f` | PR [#76](https://github.com/paramg/boss-sandbox/pull/76). View `prev_b221f5225fdb471c98c5` **running**. `/health` JSON. `/api/users` JSON. `/api/requests` JSON with `X-Acting-User-Id`. |
+| HookWatch `crun_911888eefbd14166bce6` | **completed**, `npm run verify` exit 0, PR [#86](https://github.com/paramg/boss-sandbox/pull/86). View `prev_78b214cfb8fa4fbf8d08` **running**. Title **HookWatch — temporary webhook inboxes**. `/api/health` `{ok,inboxes}`. `GET /api/inboxes` list. `POST /api/inboxes` **201**. |
+| Gates | `qa-live` **10/10 + Metatron**. `qa-working-software` **4/4 PASS** (picked HookWatch). harness reuse **56/56**. |
 
 **Working-software Community dogfood GA: YES** (operator can build an app through BOSS and open it). Residuals below are not that bar.
 
@@ -43,14 +43,14 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 |---|---|---|---|---|
 | 1 | BYOK model + infra keys | **Mostly (live)** | Shared tag `647c742` live; provider-definitions **11** (openai/anthropic/compatible + clouds). Paste-and-connect route mounted. Operator still needs to paste one real key to close. | Paste a real model key on dogfood |
 | 2 | CEO command → task + budget path | **Mostly** | Live `workflow_e2e_gate` **5/5 PASS** 2026-08-13 (command+tasks+budget+jobs) | Seal plan→job if claimed |
-| 3 | Code → evidence → PR reliable | **Mostly** | BugBox #84 and ApproveIt #76/#78 shipped. Worker HTTP read timeout now 7200s; ReadTimeout is resume-safe. HookWatch in-flight. | Wait HookWatch verify+PR |
-| 4 | Previews reachable | **Working software live** | Resolver now prefers owning `scripts.start` over `web/index.html`. BugBox + ApproveIt Views serve backends, not static HTML 404s. | HookWatch View after run completes |
+| 3 | Code → evidence → PR reliable | **Mostly** | BugBox #84, ApproveIt #76/#78, HookWatch #86 all shipped with verify green. Worker HTTP read timeout 7200s. | Keep an eye on next greenfield timeout |
+| 4 | Previews reachable | **Working software live** | All three canaries serve backends. Resolver prefers owning `start`. Gateway forwards `X-Acting-User-Id`. | Keep Views from expiring during QA |
 | 5 | Honest unpaid/unconfigured UI | **Mostly (live)** | Web `647c742` deployed. Paid 404 honesty in harness. Visual dogfood of badges still optional. | Spot-check MC badges on `boss.local` |
 | 6 | GitHub MC connected | **Done** | 2 conns + 2 binds live; factory WIP `github_plane=mission_control_binding` on `647c742` | Keep bindings healthy |
 | 7 | Deploy path or honest empty CI/CD | **Honest empty** | 0 targets; empty CTA | Optional sandbox target later |
 | 8 | Automated live gate | **Done** | `make qa-live` 10/10 PASS | Wire as deploy mandatory (W5.2) |
 
-**DoD score:** **~7 / 8** toward the working-software bar (BugBox + ApproveIt Views serve backends on `f5def77`; HookWatch still building). Target for Community GA: HookWatch verify+View + 8/8 + 14-day green gate. Do **not** stamp public/C1–C4 GA. Community GA is **not** Done.
+**DoD score:** **~7 / 8** toward the working-software bar (all three sample apps open as designed on dogfood). Target for Community public GA: 8/8 + 14-day green gate + C2 + BOSS-300. Do **not** stamp public/C1–C4 GA. Community GA is **not** Done.
 
 **Claims freeze (signed list):** [`COMMUNITY_GA_CLAIMS_FREEZE.md`](COMMUNITY_GA_CLAIMS_FREEZE.md) — Allowed vs Forbidden; SSO is Community self-hosted.
 
@@ -120,12 +120,12 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 | `workflow_e2e_gate` | **5/5 PASS** live | 2026-08-13 |
 | `factory_e2e_gate` | **3/3 required PASS** (readonly; optional proposals 405) | 2026-08-13 |
 | Open DLQ | 41 historical still open (TPM + missing DO creds); not the GA bar | 2026-08-13 |
-| Working software | BugBox `prev_d06b4eabe8f3471cb2c0` + ApproveIt `prev_7ad80927147e4ab3b8f3` **running with JSON APIs**. HookWatch `crun_911888eefbd14166bce6` implement | 2026-08-14 |
+| Working software | **All 3 canaries running with JSON APIs**: BugBox `prev_0be09812b6a9484aa34b`, ApproveIt `prev_b221f5225fdb471c98c5`, HookWatch `prev_78b214cfb8fa4fbf8d08` | 2026-08-14 |
 | GitHub MC | 2 connections, 2 bindings (`seanheiney/boss`, `paramg/boss-sandbox`) | live |
 | Agent Studio | 13/13 active + published versions | 2026-08-13 |
 | Sandbox host | connected, 8/8 free, 0 running; claims frozen; rootfs unproven for Firecracker coding | live |
 | 14-day qa-live | **Day 1/14 PASS** (cron 06:15 UTC). Same-day re-runs on later tags do **not** add a day | cron 06:15 UTC |
-| Previews | **2 running real apps** BugBox `prev_d06b4eabe8f3471cb2c0` + ApproveIt `prev_7ad80927147e4ab3b8f3`. Public-base URLs; 0 loopback primary | 2026-08-14 |
+| Previews | **3 running real apps** BugBox + ApproveIt + HookWatch. Public-base URLs; 0 loopback primary | 2026-08-14 |
 | C2 security | **Open** — not Done | [`SECURITY_C2_STATUS.md`](SECURITY_C2_STATUS.md) |
 | BOSS-300 legal | **Human legal/product** — not Done | leave open |
 
@@ -151,7 +151,7 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 | BOSS-349 | OpenAPI parity | **Done** | #161; deploy lag |
 | BOSS-350 | Community keys decision | **Done** | Full kernel #157 |
 | BOSS-369 | BYOK paste-and-connect | **In Progress** | Catalog + easy-connect + MC paste card |
-| BOSS-351 | Live E2E / working-software | **In Progress** | `qa-live` 10/10 + working-software 4/4 on `f5def77`. Stays In Progress until HookWatch `crun_911888eefbd14166bce6` has a reachable preview |
+| BOSS-351 | Live E2E / working-software | **In Progress** | All 3 canaries have reachable API Views. Stays In Progress — public/C1–C4 GA not stamped |
 | BOSS-314 | GA readiness closure loop | **In Progress** | Children closed this cycle listed in Plane comment; Phase A live still open |
 | BOSS-288–290 | YouTube EP scripts | **Done** (scripts) | Recording is production work outside repo |
 | BOSS-291 | Engine private extract | **Done** (checklist) | Execution of extract still operational work |
@@ -234,6 +234,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-14 | **HookWatch working software:** `crun_911888eefbd14166bce6` completed, verify exit 0, PR #86. View `prev_78b214cfb8fa4fbf8d08` title “HookWatch — temporary webhook inboxes”; `/api/health` JSON; `GET/POST /api/inboxes` (201). All 3 canaries now serve backends. `qa-working-software` 4/4. Not public/C1–C4 GA. | grok |
 | 2026-08-14 | **Sample-app Views serve backends:** `f5def77` shared-tag deploy. Resolver prefers owning `scripts.start` over `web/index.html`. BugBox `prev_d06b4eabe8f3471cb2c0` `/health`+`/api/issues` JSON. ApproveIt `prev_7ad80927147e4ab3b8f3` `/health`+`/api/users` JSON. Worker read timeout 7200s. HookWatch `crun_911888eefbd14166bce6` implement. `qa-live` 10/10, working-software 4/4, harness 56/56. Not public/C1–C4 GA. | grok |
 | 2026-08-13 | **Working-software bar MET:** `crun_9acc1e5f44e0464099be` verify green; View `prev_bd861455f95f4bb2b183` title “BugBox — Console Platform issue tracker”; `/health` ok; `/api/issues` live. Review-timeout residual (run failed after verify). Not public/C1–C4 GA. | grok |
 | 2026-08-13 | **Live stack `647c742`:** api+worker+web shared tag (boot-fixed; rolled back from crashed `64d0e99`). Advertised coding substrate `local` while configured `microvm` + frozen. `qa-live` 10/10 ~22:44Z. `qa-working-software` **PASS** on replay BugBox `prev_4289c3eaad02479daa47` title “BugBox — capture, track, resolve”. New canary `crun_27b5a74441fc4c0d8ace` running `write_tests`. DoD #3/#4 updated. **Community GA not stamped.** 14-day still Day 1/14. C2 open. BOSS-300 human legal. 351 stays In Progress. | grok |

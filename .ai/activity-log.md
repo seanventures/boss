@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — HookWatch View live; all 3 canaries work
+
+- HookWatch `crun_911888eefbd14166bce6` **completed** (`npm run verify` exit 0, 11 impl files, PR paramg/boss-sandbox#86).
+- Preview `prev_78b214cfb8fa4fbf8d08` running: title **HookWatch — temporary webhook inboxes**; `/api/health` `{ok,inboxes}`; `GET /api/inboxes` list; `POST /api/inboxes` 201.
+- All three sample apps now open as designed: BugBox `prev_0be09812b6a9484aa34b`, ApproveIt `prev_b221f5225fdb471c98c5`, HookWatch `prev_78b214cfb8fa4fbf8d08`.
+- `qa-working-software` **4/4 PASS** (picked HookWatch).
+- Plane comments 337/341/351. **Do not stamp public GA.**
+
 ## 2026-08-14 — Grok — sample apps serve working software
 
 - Root cause: `resolve_app_entry` returned static on `bugbox/web/index.html` before the owning `scripts.start` server. PR-clone Views served Vite HTML; `/api` was HTML 404.
