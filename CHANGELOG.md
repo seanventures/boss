@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.12.0 - 2026-08-14
+
+This feature release is the Community integration cut: Metatron as an always-on
+captain, focused specialist agents, working-software previews, and the existing
+benchmark scorecard expanded with dedicated UI and UX dimensions.
+
+### Added
+
+- Metatron captain persistent session, goals, watch, validated drive, and
+  always-on overwatch (`POST /v1/metatron/overwatch`). Worker ticks the cycle
+  every 60s. Decisions and deadletters stay human. BOSS self-change is a PR.
+- Focused always-on agent builder on Agent Studio (`/v1/focused-agents`) with
+  preview-keeper, queue-helper, factory-driver, reviewer, and custom templates.
+  Always-on / hybrid / on-demand modes; Wake now for on-demand.
+- Preview resolver prefers owning `scripts.start` so sample apps serve real
+  backends; acting-user headers forward to app APIs.
+- Community self-hosted SSO (OIDC/SAML/SCIM), Agent KMS, platform-ops surfaces,
+  and a private design-partner week-1 path (`make onboard`).
+- Benchmark scorecard **v1.1**: dedicated **UI craft** and **UX / task success**
+  dimensions. Scores stay evidence-only (`ui_evidence`, `ux_evidence`). Missing
+  evidence remains `not_scored`.
+
+### Fixed
+
+- Factory verify-green workspaces can preview without a PR.
+- Worker HTTP read timeout raised so long `opening_pr` verifies do not become
+  silent system failures.
+
+### Release notes
+
+- Application, engine, API client, Helm, and Kubernetes versions and image tags
+  are aligned on `v0.12.0`.
+- Merges `#172` (Community GA integration) and `#173` (BOSS-292 onboarding).
+  PRs `#167`–`#171` were already contained in `#172` and were closed as
+  superseded.
+- **Does not stamp public Community GA.** Official Cloud/Enterprise remain
+  partial. 14-day `qa-live` and BOSS-300 legal remain open.
+- GitHub Actions remain intentionally disabled.
+
 ## v0.11.0 - 2026-08-09
 
 This feature release makes BOSS materially more self-governing: model access,

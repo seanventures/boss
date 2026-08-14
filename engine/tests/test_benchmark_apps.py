@@ -1,5 +1,6 @@
 from boss_engine.services.benchmark_apps import (
     COMPLETION_CONTRACT,
+    SCORECARD_VERSION,
     SCORING_DIMENSIONS,
     benchmark_task_input,
     completion_report,
@@ -18,6 +19,8 @@ def test_benchmark_catalog_covers_distinct_cross_layer_risks():
     assert all("npm run healthcheck" in app["verification_commands"] for app in apps)
     assert "authorization" in get_benchmark_app("approveit")["focus"]
     assert sum(dimension["weight"] for dimension in SCORING_DIMENSIONS) == 100
+    assert {item["id"] for item in SCORING_DIMENSIONS} >= {"ui", "ux", "interface", "functionality"}
+    assert SCORECARD_VERSION == "1.1"
 
 
 def test_benchmark_task_is_pinned_to_the_governed_evidence_contract():
@@ -110,7 +113,58 @@ def test_scorecard_uses_observed_runtime_metrics_without_inventing_subjective_sc
     assert dimensions["cost"]["score"] == 100
     assert dimensions["tokens"]["score"] == 100
     assert dimensions["innovation"]["status"] == "not_scored"
+    assert dimensions["ui"]["status"] == "not_scored"
+    assert dimensions["ux"]["status"] == "not_scored"
+    assert report["scorecard"]["version"] == "1.1"
     assert report["scorecard"]["overall_status"] == "provisional"
+
+
+def test_scorecard_scores_ui_and_ux_only_from_attached_evidence():
+    benchmark = benchmark_task_input("bugbox")["finalize_ctx"]["qa_benchmark"]
+    report = completion_report(
+        {
+            "id": "crun_uiux",
+            "status": "completed",
+            "state": {
+                "design": {"plan": "Build and verify the issue tracker."},
+                "tests": [{"command": "npm run verify", "exit_code": 0}],
+                "ui_evidence": {
+                    "a11y_violations": 0,
+                    "states_covered": ["loading", "empty", "error", "ok"],
+                    "contrast_ok": True,
+                },
+                "ux_evidence": {
+                    "jtbd": [
+                        {"id": "create-issue", "passed": True},
+                        {"id": "complete-issue", "passed": True},
+                        {"id": "search-delete", "passed": False},
+                    ],
+                    "rubric": {
+                        "task_success": 4,
+                        "clarity": 4,
+                        "trust": 4,
+                        "delight": 3,
+                        "accessibility": 4,
+                    },
+                },
+                "capability_evidence": {
+                    "scenario_mapping": [
+                        {"id": "create", "passed": True},
+                        {"id": "complete", "passed": True},
+                        {"id": "search", "passed": True},
+                    ]
+                },
+            },
+            "finalize_ctx": {"qa_benchmark": benchmark},
+        }
+    )
+    dimensions = {item["id"]: item for item in report["scorecard"]["dimensions"]}
+    assert dimensions["ui"]["status"] == "scored"
+    assert dimensions["ui"]["score"] == 100
+    assert dimensions["ux"]["status"] == "scored"
+    assert 60 <= dimensions["ux"]["score"] <= 90
+    assert dimensions["capability"]["status"] == "scored"
+    assert "UI/UX is scored" in benchmark_task_input("bugbox")["instructions"]
 
 
 def test_tuning_packet_requires_measured_gap_and_a_developer_candidate_diff():

@@ -37,18 +37,22 @@ The agent must report command results, not assert them. BOSS persists the author
 ## Scorecard and workflow tuning
 
 Each report includes a versioned, weighted scorecard tied to the original benchmark
-contract. It evaluates functionality (22%), capability coverage (12%), interface quality
-(12%), app quality (14%), speed (8%), efficiency (8%), cost discipline (6%), token
-consumption (6%), implementation effort (4%), independently assessed innovation (4%),
-and reliability (4%). The fixed v1 baselines are 15 minutes, $5, 200k tokens, 80 turns,
-and 30 changed files.
+contract. Scorecard **v1.1** evaluates functionality (18%), capability coverage (10%),
+interface coverage (6%), **UI craft (8%)**, **UX / task success (10%)**, app quality
+(12%), speed (6%), efficiency (6%), cost discipline (6%), token consumption (6%),
+implementation effort (4%), independently assessed innovation (4%), and reliability
+(4%). The fixed baselines remain 15 minutes, $5, 200k tokens, 80 turns, and 30
+changed files.
 
 Scores are evidence-aware: build/verification, phase timing, cost, token telemetry,
-turns/files, repair attempts, and independent quality gates are calculated from durable
-run records. Capability-to-test mapping, browser-state evidence, and innovation review
-remain **not scored** until cited evidence exists. Overall scores are provisional until
-the full 100% weight has evidence. This lets operators tune workflow profile, model route,
-repair budget, and test strategy from measured regressions rather than vague impressions.
+turns/files, repair attempts, quality gates, UI evidence (`a11y_violations`,
+`states_covered`, `contrast_ok`), and UX evidence (JTBD walkthroughs plus a 1–5
+rubric for task-success, clarity, trust, delight, accessibility) are calculated
+from durable run records. Capability-to-test mapping, browser-state evidence, UI,
+UX, and innovation review remain **not scored** until cited evidence exists.
+Overall scores are provisional until the full 100% weight has evidence. This lets
+operators tune workflow profile, model route, repair budget, and test strategy
+from measured regressions rather than vague impressions.
 
 ## Developer runner and evidence export
 

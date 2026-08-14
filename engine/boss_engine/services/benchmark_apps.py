@@ -23,41 +23,55 @@ COMPLETION_CONTRACT = [
 # Scores are a tuning instrument, not a replacement for acceptance evidence. The
 # numeric baselines are deliberately explicit and may be revised only alongside
 # a benchmark version; missing evidence remains unscored.
+SCORECARD_VERSION = "1.1"
+
 SCORING_DIMENSIONS = (
     {
         "id": "functionality",
         "label": "Functionality",
-        "weight": 22,
+        "weight": 18,
         "evidence": "Authoritative benchmark verification and acceptance-path tests.",
     },
     {
         "id": "capability",
         "label": "Capability coverage",
-        "weight": 12,
+        "weight": 10,
         "evidence": "Scenario-to-test mapping for each original-spec capability.",
     },
     {
         "id": "interface",
-        "label": "Interface quality",
-        "weight": 12,
+        "label": "Interface coverage",
+        "weight": 6,
         "evidence": "Browser evidence covering responsive, loading, empty, error, and keyboard states.",
+    },
+    {
+        "id": "ui",
+        "label": "UI craft",
+        "weight": 8,
+        "evidence": "Visual hierarchy, contrast, empty/error/loading treatment, and automated a11y violations.",
+    },
+    {
+        "id": "ux",
+        "label": "UX / task success",
+        "weight": 10,
+        "evidence": "JTBD walkthroughs plus rubric scores for task-success, clarity, trust, delight, and accessibility.",
     },
     {
         "id": "quality",
         "label": "App quality",
-        "weight": 14,
+        "weight": 12,
         "evidence": "Tests, independent review, security, and consistency evidence.",
     },
     {
         "id": "speed",
         "label": "Speed",
-        "weight": 8,
+        "weight": 6,
         "evidence": "Recorded end-to-end governed-run duration against the 15-minute baseline.",
     },
     {
         "id": "efficiency",
         "label": "Efficiency",
-        "weight": 8,
+        "weight": 6,
         "evidence": "Acceptance scenarios delivered per agent turn and per verification attempt.",
     },
     {
@@ -202,7 +216,12 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
         + "\n\nREQUIRED PACKAGE SCRIPTS (each must be runnable and report its real result):\n- "
         + "\n- ".join(verification)
         + "\n\nThe README must state the one-command startup, migration/seed behavior, and the complete verification command. "
-        "The health check must exercise a real running service rather than returning a hard-coded success response."
+        "The health check must exercise a real running service rather than returning a hard-coded success response.\n"
+        "UI/UX is scored, not optional: ship loading, empty, and error states; keep contrast and "
+        "hierarchy readable; cover the acceptance scenarios as JTBD walkthroughs. Attach "
+        "`ui_evidence` (a11y_violations, states_covered, contrast_ok) and `ux_evidence` "
+        "(jtbd pass/fail plus rubric 1–5 for task_success, clarity, trust, delight, "
+        "accessibility). Missing UI/UX evidence stays not_scored — do not invent scores."
     )
     return {
         "benchmark": benchmark,
@@ -228,6 +247,87 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
             }
         },
     }
+
+
+def _evidence_blob(run: dict[str, Any], *names: str) -> dict[str, Any]:
+    """First attached evidence dict from run state or finalize_ctx. Never invents."""
+    state = run.get("state") or {}
+    context = run.get("finalize_ctx") or {}
+    for name in names:
+        for source in (state, context):
+            value = source.get(name)
+            if isinstance(value, dict) and value:
+                return value
+    return {}
+
+
+def _score_ui(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
+    parts: list[int] = []
+    notes: list[str] = []
+    if "a11y_violations" in evidence:
+        violations = max(0, int(evidence.get("a11y_violations") or 0))
+        parts.append(max(0, 100 - min(100, violations * 20)))
+        notes.append(f"{violations} a11y violation(s)")
+    states = evidence.get("states_covered") or evidence.get("browser_states") or []
+    required = {"loading", "empty", "error", "ok"}
+    if isinstance(states, list) and states:
+        covered = {str(item).strip().lower() for item in states if item}
+        parts.append(round(100 * len(covered & required) / len(required)))
+        notes.append(f"states={sorted(covered & required)}")
+    if "contrast_ok" in evidence:
+        parts.append(100 if evidence.get("contrast_ok") else 40)
+        notes.append(f"contrast_ok={bool(evidence.get('contrast_ok'))}")
+    if not parts:
+        return None
+    return round(sum(parts) / len(parts)), notes
+
+
+def _score_ux(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
+    parts: list[int] = []
+    notes: list[str] = []
+    jtbd = evidence.get("jtbd") or evidence.get("walkthroughs") or []
+    if isinstance(jtbd, list) and jtbd:
+        passed = sum(1 for item in jtbd if isinstance(item, dict) and item.get("passed"))
+        parts.append(round(100 * passed / len(jtbd)))
+        notes.append(f"jtbd {passed}/{len(jtbd)} passed")
+    rubric = evidence.get("rubric") or {}
+    if isinstance(rubric, dict) and rubric:
+        keys = ("task_success", "clarity", "trust", "delight", "accessibility")
+        values = [
+            float(rubric[key])
+            for key in keys
+            if isinstance(rubric.get(key), (int, float))
+        ]
+        if values:
+            parts.append(round(100 * (sum(values) / len(values)) / 5))
+            notes.append(f"rubric mean {sum(values)/len(values):.1f}/5")
+    if not parts:
+        return None
+    return round(sum(parts) / len(parts)), notes
+
+
+def _score_interface(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
+    states = evidence.get("states_covered") or evidence.get("browser_states") or []
+    if not isinstance(states, list) or not states:
+        return None
+    required = {"loading", "empty", "error", "keyboard", "responsive"}
+    covered = {str(item).strip().lower() for item in states if item}
+    return round(100 * len(covered & required) / len(required)), [f"states={sorted(covered & required)}"]
+
+
+def _score_capability(evidence: dict[str, Any], benchmark: dict[str, Any]) -> tuple[int, list[str]] | None:
+    mapping = evidence.get("scenario_mapping") or evidence.get("scenarios") or []
+    expected = benchmark.get("acceptance_scenarios") or []
+    if not isinstance(mapping, list) or not mapping:
+        return None
+    covered = 0
+    for item in mapping:
+        if isinstance(item, dict) and (item.get("covered") or item.get("tested") or item.get("passed")):
+            covered += 1
+        elif isinstance(item, str) and item.strip():
+            covered += 1
+    total = max(len(expected), len(mapping), 1)
+    return min(100, round(100 * covered / total)), [f"{covered}/{total} scenarios mapped"]
 
 
 def _score_ratio(actual: int | float, baseline: int | float) -> int:
@@ -300,14 +400,40 @@ def benchmark_scorecard(
     else:
         unobserved("functionality", "Authoritative verification was not recorded.")
 
-    unobserved(
-        "capability",
-        "Scenario-to-test mapping has not been attached to the run evidence.",
-    )
-    unobserved(
-        "interface",
-        "Browser-state evidence has not been attached to the run evidence.",
-    )
+    capability_evidence = _evidence_blob(run, "capability_evidence", "scenario_mapping")
+    capability_score = _score_capability(capability_evidence, benchmark)
+    if capability_score:
+        observed("capability", capability_score[0], capability_score[1])
+    else:
+        unobserved(
+            "capability",
+            "Scenario-to-test mapping has not been attached to the run evidence.",
+        )
+    interface_evidence = _evidence_blob(run, "interface_evidence", "browser_states", "ui_evidence")
+    interface_score = _score_interface(interface_evidence)
+    if interface_score:
+        observed("interface", interface_score[0], interface_score[1])
+    else:
+        unobserved(
+            "interface",
+            "Browser-state evidence has not been attached to the run evidence.",
+        )
+    ui_score = _score_ui(_evidence_blob(run, "ui_evidence"))
+    if ui_score:
+        observed("ui", ui_score[0], ui_score[1])
+    else:
+        unobserved(
+            "ui",
+            "UI craft evidence (a11y_violations, states_covered, contrast_ok) was not attached.",
+        )
+    ux_score = _score_ux(_evidence_blob(run, "ux_evidence"))
+    if ux_score:
+        observed("ux", ux_score[0], ux_score[1])
+    else:
+        unobserved(
+            "ux",
+            "UX evidence (JTBD walkthroughs and/or rubric 1–5) was not attached.",
+        )
     if observed_reviews:
         observed(
             "quality",
@@ -386,7 +512,7 @@ def benchmark_scorecard(
         if value["status"] == "scored"
     )
     return {
-        "version": "1.0",
+        "version": SCORECARD_VERSION,
         "baselines": dict(SCORE_BASELINES),
         "dimensions": [
             {**dimension, **scores[dimension["id"]]}
