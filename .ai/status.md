@@ -1,5 +1,28 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-14 Focused always-on agents
+
+- Builder + duty loop: `POST /v1/focused-agents`, worker `tick-all` every 60s, Wake now.
+- Templates: preview keeper, queue helper, factory driver, reviewer, custom.
+- Same validate-then-apply gates as captain. FEATURES ◐. Not GA.
+
+## 2026-08-14 Metatron Captain always-on overwatch
+
+- Shared tag `3f1d2cf` live. Worker overwatch every 60s: observe → measure → validate → apply-safe → verify.
+- Live dogfood: first tick applied a validated preview restart (`verify_ok=true`). Decisions/DLQ stayed human. Working-software goal scored 100.
+- FEATURES.md captain stays ◐. Do not stamp public GA.
+
+## 2026-08-14 Metatron Captain validated drive
+
+- `f1fb273`: every drive move runs `validate_move` before apply. Auto-drive may restart a preview or enqueue a governed `code.task`. Decisions/DLQ never auto-apply. BOSS self-change is a PR.
+- FEATURES.md captain stays ◐ until live shared-tag dogfood. `make qa-metatron-captain` is unit/island only. Do not stamp public GA.
+
+## 2026-08-14 Metatron Captain Community UI
+
+- `ai/grok/community-ga` now mounts a Community-safe captain island on Mission Control overview beside the existing Status Query. Chat/goals/watch/drive post to `/v1/metatron/*`. Drive is proposal-only. HTTP 404 is honest unavailable — no invented session.
+- Stdlib captain TUI: `scripts/metatron_tui.py` + `make metatron`. REPL posts NL to `/v1/metatron/session`; `/watch` `/drive` `/goals` `/quit`. `/drive auto` or `go` posts `auto=true` (still proposal-only). Tests mock HTTP: `scripts/tests/test_metatron_tui.py`. ConsoleShell Run area `metatron` mounts the existing island at `data-area="metatron"`. Do not stamp GA.
+- W4 residual / BOSS-337 stays In Progress. Do not stamp public GA.
+
 ## 2026-08-08 BOSS-333 toolchain intake status
 
 - `ai/codex/model-agnostic-agent-toolchain` implements sanitized, model-agnostic

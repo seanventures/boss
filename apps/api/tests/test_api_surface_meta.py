@@ -16,6 +16,16 @@ def test_meta_api_catalog_domains_and_route_count(client):
     assert isinstance(body.get("domains"), list)
     assert len(body["domains"]) >= 1
     assert body.get("domain_count", len(body["domains"])) >= 1
+    # services_with_routes is the cheap domain coverage note for operators/agents
+    services = body.get("services_with_routes") or []
+    assert isinstance(services, list)
+    assert len(services) >= 1
+    assert all("id" in s and s.get("route_count", 0) > 0 for s in services)
+    # llm-calls lives under the models domain
+    models = next((d for d in body["domains"] if d.get("id") == "models"), None)
+    if models:
+        paths = {r.get("path") for r in models.get("routes") or []}
+        assert any(p and p.startswith("/v1/llm-calls") for p in paths)
 
 
 def test_meta_openapi_coverage_fields(client):

@@ -15,6 +15,12 @@ async function post(
   body: Record<string, unknown>,
 ): Promise<StudioActionResult> {
   try {
+    if (!API_URL) {
+      return {
+        ok: false,
+        message: "BOSS API URL is not configured; cannot reach Agent Studio.",
+      };
+    }
     const response = await fetch(`${API_URL}${path}`, {
       method: "POST",
       headers: {
@@ -24,14 +30,44 @@ async function post(
       body: JSON.stringify(body),
       cache: "no-store",
     });
-    const payload = (await response.json()) as Record<string, unknown>;
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = (await response.json()) as Record<string, unknown>;
+    } catch {
+      payload = {};
+    }
     if (!response.ok) {
+      const detail =
+        typeof payload.detail === "string"
+          ? payload.detail
+          : Array.isArray(payload.detail)
+            ? payload.detail
+                .map((item) =>
+                  typeof item === "object" && item && "msg" in item
+                    ? String((item as { msg: unknown }).msg)
+                    : String(item),
+                )
+                .join("; ")
+            : undefined;
+      if (response.status === 403) {
+        return {
+          ok: false,
+          message:
+            detail ??
+            "Actor lacks role_review authority to install the starter catalog.",
+        };
+      }
+      if (response.status === 422) {
+        return {
+          ok: false,
+          message:
+            detail ??
+            "Project cannot accept the starter catalog (missing roles or policy).",
+        };
+      }
       return {
         ok: false,
-        message:
-          typeof payload.detail === "string"
-            ? payload.detail
-            : `Agent Studio returned ${response.status}.`,
+        message: detail ?? `Agent Studio returned ${response.status}.`,
       };
     }
     revalidatePath("/");

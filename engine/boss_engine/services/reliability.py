@@ -28,7 +28,16 @@ from .change_correlation import ChangeCorrelationService
 from .investigation import InvestigationEngine
 from .knowledge_graph import KnowledgeGraphService
 from .learning_loop import LearningLoopService
-from .telemetry_source import InMemorySource, LogEvent, LogExportSource, TelemetrySource, TimeWindow
+from .telemetry_source import (
+    Alert,
+    InMemorySource,
+    LogEvent,
+    LogExportSource,
+    MetricSeries,
+    Span,
+    TelemetrySource,
+    TimeWindow,
+)
 
 _CRITICAL_KINDS = ("error_surge", "new_template")
 _TUNED_MIN_COUNT = 9        # a raise-listed signature needs 3x the default floor to fire again
@@ -49,7 +58,20 @@ def build_source(spec: dict[str, Any]) -> TelemetrySource:
     kind = (spec or {}).get("kind", "memory")
     if kind == "memory":
         logs = [LogEvent(**e) if isinstance(e, dict) else e for e in spec.get("logs", [])]
-        return InMemorySource(logs=logs)
+        metrics_raw = spec.get("metrics") or []
+        metrics = []
+        for m in metrics_raw:
+            if isinstance(m, MetricSeries):
+                metrics.append(m)
+            elif isinstance(m, dict):
+                from .telemetry_source import MetricPoint
+                points = [MetricPoint(**p) if isinstance(p, dict) else p
+                          for p in m.get("points", [])]
+                metrics.append(MetricSeries(name=m.get("name", ""), points=points,
+                                            labels=dict(m.get("labels") or {})))
+        traces = [Span(**t) if isinstance(t, dict) else t for t in (spec.get("traces") or [])]
+        alerts = [Alert(**a) if isinstance(a, dict) else a for a in (spec.get("alerts") or [])]
+        return InMemorySource(logs=logs, metrics=metrics, traces=traces, alerts=alerts)
     if kind == "log_export":
         return LogExportSource(spec["path"])
     if kind == "prometheus":                      # RB-9 native connectors
@@ -82,7 +104,6 @@ def build_source(spec: dict[str, Any]) -> TelemetrySource:
         return PagerDutySource(spec.get("base_url", "https://api.pagerduty.com"),
                                token_env=spec.get("token_env", "PAGERDUTY_TOKEN"))
     raise ValueError(f"unsupported source kind {kind!r}")
-
 
 def _dedupe_key(service: str, kind: str, signature: str) -> str:
     return hashlib.sha1(f"{service}|{kind}|{signature}".encode()).hexdigest()[:16]
@@ -511,6 +532,88 @@ class ReliabilityService:
             {"p": project_id},
         ).mappings().all()
         return [dict(r) for r in rows]
+
+    def get_source(self, connection: Connection, project_id: str,
+                   source_id: str) -> Optional[dict[str, Any]]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, kind, name, config, enabled, created_at, secret_ref
+                FROM telemetry_sources
+                WHERE project_id = :p AND id = :id
+                """
+            ),
+            {"p": project_id, "id": source_id},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def query_telemetry(
+        self,
+        connection: Connection,
+        project_id: str,
+        *,
+        kind: str,
+        query: str = "",
+        window: dict[str, float],
+        source_id: Optional[str] = None,
+        source_spec: Optional[dict[str, Any]] = None,
+        limit: int = 5000,
+    ) -> dict[str, Any]:
+        """Direct telemetry read (metrics|logs|traces|alerts) through a connector.
+
+        Distinct from ``scan`` (which mines signals): this is the raw connector query
+        surface. Fail-closed on missing creds/config — never returns silent fake data.
+        """
+        from .telemetry_connectors import (
+            ConnectorNotReady,
+            ensure_connector_ready,
+            run_source_query,
+        )
+
+        spec: dict[str, Any]
+        resolved_source_id = source_id
+        if source_id:
+            row = self.get_source(connection, project_id, source_id)
+            if not row:
+                raise LookupError(f"telemetry source {source_id!r} not found")
+            if not row.get("enabled", True):
+                raise ConnectorNotReady(
+                    f"telemetry source {source_id!r} is disabled",
+                    status_code=422,
+                )
+            config = row.get("config") or {}
+            if isinstance(config, str):
+                config = json.loads(config)
+            spec = {"kind": row["kind"], **dict(config)}
+        elif source_spec:
+            spec = dict(source_spec)
+        else:
+            raise ConnectorNotReady(
+                "source_id or source is required",
+                status_code=422,
+            )
+
+        ensure_connector_ready(spec)
+        try:
+            source = build_source(spec)
+        except (ValueError, KeyError, TypeError) as error:
+            raise ConnectorNotReady(str(error), status_code=422) from error
+
+        win = TimeWindow(float(window["start"]), float(window["end"]))
+        if win.end < win.start:
+            raise ConnectorNotReady("window.end must be >= window.start", status_code=422)
+
+        items = run_source_query(source, kind, query, win, limit=limit)
+        return {
+            "project_id": project_id,
+            "kind": kind,
+            "query": query,
+            "source_id": resolved_source_id,
+            "source_kind": getattr(source, "kind", spec.get("kind")),
+            "window": {"start": win.start, "end": win.end},
+            "count": len(items),
+            "items": items,
+        }
 
     # --- alert intake (RB-10 — the incident-response trigger) -----------------
     def verify_alert_signature(self, raw_body: bytes, signature: str) -> bool:

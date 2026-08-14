@@ -994,6 +994,7 @@ h1, h2, h3, h4, h5, h6 {
   display: none;
 }
 .bx-content[data-active="agent"] .frame > section:is([data-area="agent"], :has([data-area="agent"])),
+.bx-content[data-active="metatron"] .frame > section:is([data-area="metatron"], :has([data-area="metatron"])),
 .bx-content[data-active="dashboard"] .frame > section:is([data-area="dashboard"], :has([data-area="dashboard"])),
 .bx-content[data-active="overview"] .frame > section:is([data-area="overview"], :has([data-area="overview"])),
 .bx-content[data-active="decisions"] .frame > section:is([data-area="decisions"], :has([data-area="decisions"])),
@@ -1014,6 +1015,7 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active="github"] .frame > section:is([data-area="github"], :has([data-area="github"])),
 .bx-content[data-active="infra"] .frame > section:is([data-area="infra"], :has([data-area="infra"])),
 .bx-content[data-active="ops"] .frame > section:is([data-area="ops"], :has([data-area="ops"])),
+.bx-content[data-active="assurance"] .frame > section:is([data-area="assurance"], :has([data-area="assurance"])),
 .bx-content[data-active="org"] .frame > section:is([data-area="org"], :has([data-area="org"])),
 .bx-content[data-active="reports"] .frame > section:is([data-area="reports"], :has([data-area="reports"])),
 .bx-content[data-active="capabilities"] .frame > section:is([data-area="capabilities"], :has([data-area="capabilities"])),
@@ -4259,6 +4261,23 @@ select.input:focus {
 }
 .as-unavailable strong { color: var(--red); }
 .as-unavailable p { margin: 4px 0 0; }
+.as-first-run {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 14px;
+  padding: 16px 18px;
+  border: 1px solid rgba(99, 230, 216, 0.35);
+  border-radius: 12px;
+  background: rgba(99, 230, 216, 0.06);
+  color: var(--ink-soft);
+}
+.as-first-run b { display: block; color: var(--ink); font-size: 0.95rem; margin-bottom: 4px; }
+.as-first-run p { margin: 0 0 6px; max-width: 62ch; line-height: 1.45; font-size: 0.85rem; }
+.as-first-run .detail { margin: 0; color: var(--muted); font-size: 0.75rem; }
+.as-first-run .as-action-result { flex-basis: 100%; }
 
 /* Guided agent commissioning wizard */
 .aw-backdrop {

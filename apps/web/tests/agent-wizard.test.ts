@@ -19,7 +19,11 @@ describe("Agent Studio creation wizard", () => {
 
     expect(studio).toContain("Install BOSS starter catalog");
     expect(studio).toContain("The reviewed starter catalog is project-scoped and idempotent.");
+    expect(studio).toContain("as-first-run");
+    expect(studio).toContain("This project has no governed agents yet");
+    expect(studio).toContain("POST /v1/agent-studio/catalog/seed");
     expect(actions).toContain('post("/v1/agent-studio/catalog/seed"');
+    expect(actions).toContain("role_review authority");
   });
 
   it("normalizes human names and deduplicates reference lists", () => {

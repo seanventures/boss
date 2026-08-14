@@ -2,13 +2,18 @@ id: community_edition
 version: 2.0.0
 description: >
   Self-hosted Community edition capability pack. Full local BOSS product without
-  hosted Account Connect. Optional Easy Connect (/v1/cloud/*) links to BOSS Cloud.
+  hosted Account Connect. Includes self-hosted SSO (OIDC/SAML/SCIM). Optional
+  Easy Connect (/v1/cloud/*) links to BOSS Cloud.
 edition: community
 license_candidate: AGPLv3
 legal_review_required: true
 hosted_account_connect_required: false
 includes:
   - local_auth
+  - self_hosted_sso
+  - saml_sp
+  - scim_provisioning
+  - identity_provider_registry
   - single_org_workspace
   - local_control_plane
   - local_runner

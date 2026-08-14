@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { BossApiError } from "@boss/api-client";
+
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+}));
+
 vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
@@ -7,6 +14,9 @@ vi.mock("../lib/client", () => ({
     listOutboxMessages: vi.fn(),
     listCommsChannelPolicies: vi.fn(),
     listInboxMessages: vi.fn(),
+    dryRunOutboxMessage: vi.fn(),
+    queueOutboxDelivery: vi.fn(),
+    reserveBudget: vi.fn(),
   },
 }));
 describe("Comms feed (policy form, outbox empty/error/success/ACK, perm 403, persist refresh)", () => {
@@ -52,5 +62,57 @@ describe("Comms feed (policy form, outbox empty/error/success/ACK, perm 403, per
     const i1 = await fetchInboxFeed();
     expect(f1.items[0].id).toBe(f2.items[0].id);
     expect(i1.apiReachable).toBe(true);
+  });
+});
+
+describe("comms dry-run close-the-loop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders Dry-run deliver and never says sent on dry-run copy", () => {
+    const page = readFileSync(resolve(__dirname, "../app/page.tsx"), "utf8");
+    const start = page.indexOf("Recent outbox");
+    const end = page.indexOf("Recent inbox");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const outbox = page.slice(start, end);
+    expect(outbox).toContain("Dry-run deliver");
+    expect(outbox).toContain("dryRunOutboxMessageAction");
+    expect(outbox).toContain("dry-run — no provider send");
+    expect(outbox).toContain("Queue send");
+    expect(outbox.toLowerCase()).not.toMatch(/\bsent\b/);
+  });
+
+  it("dryRunOutboxMessageAction does not reserve budget and never queues a send", async () => {
+    const { client } = await import("../lib/client");
+    const { revalidatePath } = await import("next/cache");
+    const { dryRunOutboxMessageAction } = await import("../app/actions");
+
+    vi.mocked(client.dryRunOutboxMessage).mockResolvedValueOnce({
+      status: "dry_run",
+      message_id: "m1",
+      receipt_id: "rcpt_dry",
+      delivery_mode: "dry_run",
+      provider_send: false,
+      message: "dry-run — no provider send",
+    });
+
+    const fd = new FormData();
+    fd.set("message_id", "m1");
+    fd.set("project_id", "boss-dogfood");
+    fd.set("actor", "exec");
+    await dryRunOutboxMessageAction(fd);
+
+    expect(client.reserveBudget).not.toHaveBeenCalled();
+    expect(client.queueOutboxDelivery).not.toHaveBeenCalled();
+    expect(client.dryRunOutboxMessage).toHaveBeenCalledTimes(1);
+    const [messageId, payload] = vi.mocked(client.dryRunOutboxMessage).mock.calls[0];
+    expect(messageId).toBe("m1");
+    expect(payload.project_id).toBe("boss-dogfood");
+    expect(payload.actor).toBe("exec");
+    expect(payload.dedupe_key).toMatch(/^outbox-dry-run-m1-/);
+    expect(JSON.stringify(payload).toLowerCase()).not.toMatch(/\bsent\b/);
+    expect(revalidatePath).toHaveBeenCalledWith("/");
   });
 });

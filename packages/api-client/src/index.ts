@@ -1197,7 +1197,9 @@ export type PreviewRec = {
   id: string;
   run_id?: string | null;
   status: string; // running | stopped | failed | expired
-  /** Operator-reachable gateway path (`/v1/previews/{id}/web/`). Never loopback. */
+  /** Operator-reachable gateway URL. Relative `/v1/previews/{id}/web/` or
+   * `{BOSS_PREVIEW_PUBLIC_BASE}/v1/previews/{id}/web/` when that origin is set.
+   * Never loopback. */
   url?: string | null;
   /** Same as `url` — explicit name for the address a person can open. */
   open_url?: string | null;
@@ -2747,6 +2749,12 @@ export type OutboxQueueRequest = {
   created_by_job_id?: string;
 };
 
+export type OutboxDryRunRequest = {
+  project_id: string;
+  actor?: string;
+  dedupe_key?: string;
+};
+
 export type OutboxDeliveryResponse = {
   status: string;
   data_boundary?: DataBoundary;
@@ -2754,6 +2762,15 @@ export type OutboxDeliveryResponse = {
   receipt_id?: string;
   decision_id?: string;
   provider_ref?: string;
+  message?: string;
+};
+
+export type OutboxDryRunResponse = {
+  status: string;
+  message_id?: string;
+  receipt_id?: string;
+  delivery_mode?: string;
+  provider_send?: boolean;
   message?: string;
 };
 
@@ -2960,6 +2977,26 @@ export type PackImportRequest = {
   project_id: string;
   yaml_content: string;
   actor?: string;
+};
+
+export type SkillImportRequest = {
+  project_id: string;
+  bundle: string;
+  allow_untrusted?: boolean;
+  enabled?: boolean;
+  on_demand?: boolean | null;
+  actor?: string;
+};
+
+export type SkillImportResponse = {
+  id: string;
+  project_id?: string;
+  skill_id?: string;
+  source?: string;
+  enabled?: boolean;
+  on_demand?: boolean;
+  publisher?: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
 };
 
 export type SecretRefSummary = {
@@ -5300,7 +5337,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
   const apiKey = config.apiKey?.trim();
 
   async function request<T>(
-    method: "GET" | "POST" | "PATCH" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     options?: {
       query?: Record<string, QueryValue>;
@@ -5335,7 +5372,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return undefined as T;
     }
     const text = await response.text();
-    return (text ? JSON.parse(text) : undefined) as T;
+    if (!text) {
+      return undefined as T;
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (
+      contentType.includes("yaml") ||
+      contentType.includes("text/plain") ||
+      contentType.includes("vnd.boss.capability")
+    ) {
+      return text as T;
+    }
+    return JSON.parse(text) as T;
   }
 
   return {
@@ -5355,6 +5403,20 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "/v1/agent-studio/catalog",
         { query: { project_id: projectId } },
       );
+    },
+    seedAgentStudioCatalog(payload: {
+      project_id: string;
+      actor?: string;
+    }) {
+      return request<{
+        project_id: string;
+        status: string;
+        agents: Array<Record<string, unknown>>;
+        panels: Array<Record<string, unknown>>;
+        agent_count: number;
+        panel_count: number;
+        external_effects: number;
+      }>("POST", "/v1/agent-studio/catalog/seed", { body: payload });
     },
     validateStudioWorkflow(payload: {
       project_id: string;
@@ -6970,6 +7032,18 @@ export function createBossApiClient(config: BossApiClientConfig) {
     listSkills() {
       return request<SkillListResponse>("GET", "/v1/skills");
     },
+    importSkill(payload: SkillImportRequest) {
+      return request<SkillImportResponse>("POST", "/v1/skills/import", {
+        body: payload,
+      });
+    },
+    exportSkill(projectId: string, skillId: string, actor = "ceo") {
+      return request<string>(
+        "GET",
+        `/v1/skills/${encodeURIComponent(skillId)}/export`,
+        { query: { project_id: projectId, actor } },
+      );
+    },
     listModelAdapters() {
       return request<ModelAdapterListResponse>("GET", "/v1/model-adapters");
     },
@@ -8151,6 +8225,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<OutboxDeliveryResponse>(
         "POST",
         `/v1/comms/outbox/${encodeURIComponent(messageId)}/deliver`,
+        { body: payload },
+      );
+    },
+    dryRunOutboxMessage(messageId: string, payload: OutboxDryRunRequest) {
+      return request<OutboxDryRunResponse>(
+        "POST",
+        `/v1/comms/outbox/${encodeURIComponent(messageId)}/dry-run`,
         { body: payload },
       );
     },

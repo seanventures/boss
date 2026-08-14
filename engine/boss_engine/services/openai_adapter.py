@@ -12,6 +12,64 @@ from .redaction import redact as _redact
 
 _RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
 
+# Groq free-tier TPM is 6k. Default native_max_output_tokens=8192 plus a packed
+# repo context routinely *requests* ~12k and 429s before any token is generated.
+# Cap request size (not just completion) when the model class is groq/qwen.
+GROQ_QWEN_MAX_OUTPUT_TOKENS = 1024
+GROQ_QWEN_CONTEXT_FILES = 4
+GROQ_QWEN_CONTEXT_HEAD_BYTES = 3000
+GROQ_QWEN_CONTEXT_MAX_BYTES = 12_000
+
+
+def is_groq_qwen_model_class(
+    model: Optional[str] = None,
+    *,
+    base_url: str = "",
+    engine: str = "",
+) -> bool:
+    """True when the request will hit Groq or a Qwen model (incl. groq:qwen/…)."""
+    blob = " ".join(str(part or "") for part in (model, base_url, engine)).lower()
+    return "groq" in blob or "qwen" in blob
+
+
+def capped_max_output_tokens(
+    requested: int,
+    model: Optional[str] = None,
+    *,
+    base_url: str = "",
+    engine: str = "",
+) -> int:
+    """Shrink max_tokens so a Groq 6k TPM lane cannot ask for 8k+ output."""
+    requested = int(requested or 0)
+    if requested <= 0:
+        return requested
+    if is_groq_qwen_model_class(model, base_url=base_url, engine=engine):
+        return min(requested, GROQ_QWEN_MAX_OUTPUT_TOKENS)
+    return requested
+
+
+def groq_qwen_context_limits(
+    model: Optional[str] = None,
+    *,
+    base_url: str = "",
+    engine: str = "",
+    file_limit: int = 14,
+) -> tuple[int, int, int]:
+    """(file_limit, max_bytes, head_bytes) for the code-task context packer.
+
+    ``file_limit <= 0`` means packing is disabled and must stay disabled.
+    """
+    requested = int(file_limit or 0)
+    if is_groq_qwen_model_class(model, base_url=base_url, engine=engine):
+        if requested <= 0:
+            return (0, GROQ_QWEN_CONTEXT_MAX_BYTES, GROQ_QWEN_CONTEXT_HEAD_BYTES)
+        return (
+            min(requested, GROQ_QWEN_CONTEXT_FILES),
+            GROQ_QWEN_CONTEXT_MAX_BYTES,
+            GROQ_QWEN_CONTEXT_HEAD_BYTES,
+        )
+    return (requested, 400_000, 20_000)
+
 
 def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict] = None):
     """Call an OpenAI request, retrying on 429 / transient errors with exponential backoff +
@@ -134,8 +192,26 @@ def _usage_from_response(response, model: str) -> dict:
 
 
 class OpenAIAdapter:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ):
         self.settings = settings
+        self._base_url_override = (base_url or "").strip() or None
+        self._api_key_override = api_key
+
+    def _resolved_base_url(self) -> str:
+        if self._base_url_override:
+            return self._base_url_override
+        return (self.settings.openai_base_url or "").strip()
+
+    def _resolved_api_key(self) -> Optional[str]:
+        if self._api_key_override is not None:
+            return self._api_key_override
+        return self.settings.openai_api_key
 
     def _azure_enabled(self) -> bool:
         return bool(
@@ -149,8 +225,8 @@ class OpenAIAdapter:
         target any OpenAI-compatible provider (OpenRouter/Fireworks/DeepSeek/local) — the
         same knob the guest path already honors. Empty base_url => SDK default (api.openai.com).
         Azure keeps precedence via _azure_enabled(); base_url is ignored when Azure is configured."""
-        kwargs: dict = {"api_key": self.settings.openai_api_key}
-        base = (self.settings.openai_base_url or "").strip()
+        kwargs: dict = {"api_key": self._resolved_api_key()}
+        base = self._resolved_base_url()
         if base:
             kwargs["base_url"] = base
         return OpenAI(**kwargs)
@@ -186,13 +262,13 @@ class OpenAIAdapter:
             usage["retries"] = stats.get("retries", 0)
             return response.id, text, usage
 
-        if not self.settings.openai_api_key:
+        if not self._resolved_api_key():
             raise IntegrationConfigurationError("OPENAI_API_KEY is not configured.")
 
         client = self._openai_client()
         used_model = model or self.settings.openai_model
         stats = {}
-        if self.settings.openai_base_url:
+        if self._resolved_base_url():
             messages: list[dict] = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
@@ -245,7 +321,7 @@ class OpenAIAdapter:
                 api_version=self.settings.azure_openai_api_version,
             )
             model = self.settings.azure_openai_deployment or "gpt-4o"
-        elif self.settings.openai_api_key:
+        elif self._resolved_api_key():
             client = self._openai_client()
             model = self.settings.openai_model
         else:
@@ -256,7 +332,15 @@ class OpenAIAdapter:
         kwargs: dict = {"model": model, "messages": messages}
         # Cap the completion size: metered gateways (OpenRouter) reserve credits for the
         # requested MAXIMUM, so an uncapped request can 402 on reservation alone.
+        # Groq/Qwen is additionally capped well below the 6k TPM window.
         max_out = int(getattr(self.settings, "native_max_output_tokens", 0) or 0)
+        max_out = capped_max_output_tokens(
+            max_out,
+            model,
+            base_url=self._resolved_base_url()
+            or str(getattr(self.settings, "openai_base_url", "") or ""),
+            engine=str(getattr(self.settings, "code_agent_engine", "") or ""),
+        )
         if max_out > 0:
             kwargs["max_tokens"] = max_out
         if tools:
@@ -283,3 +367,20 @@ class OpenAIAdapter:
         usage = _usage_from_response(response, model)
         usage["retries"] = stats.get("retries", 0)
         return normalized, usage
+
+
+def adapter_for_entitlement_source(
+    settings: Settings,
+    source: dict,
+    *,
+    api_key: Optional[str] = None,
+) -> OpenAIAdapter:
+    """Build an adapter routed at the entitlement source's OpenAI-compatible base_url."""
+    from .entitlements import EntitlementBrokerService
+
+    endpoint = EntitlementBrokerService.resolve_openai_compatible_endpoint(source)
+    return OpenAIAdapter(
+        settings,
+        base_url=endpoint.get("base_url"),
+        api_key=api_key if api_key is not None else "local",
+    )

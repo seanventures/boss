@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { DataBoundary, LlmCallRow } from "@boss/api-client";
+import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
 
@@ -211,6 +211,10 @@ export async function loadTaskContextAction(taskId: string, projectId: string): 
 }
 
 export async function tallyVotesAction(_prev: ActionResult | null, formData: FormData): Promise<ActionResult> {
+  const meetingId = String(formData.get("meeting_id") ?? "").trim();
+  if (!meetingId) {
+    return { ok: false, error: "requires meeting_id — open a meeting or paste a run/meeting id." };
+  }
   const approve = Math.max(0, Number(formData.get("approve") ?? 0));
   const reject = Math.max(0, Number(formData.get("reject") ?? 0));
   const abstain = Math.max(0, Number(formData.get("abstain") ?? 0));
@@ -222,7 +226,8 @@ export async function tallyVotesAction(_prev: ActionResult | null, formData: For
     ...Array.from({ length: abstain }, (_v, i) => ({ voter: `x${i}`, vote: "abstain" })),
   ];
   if (!votes.length) return { ok: false, error: "Enter at least one vote." };
-  return postJsonReturn(`/v1/meetings/tally`, {
+  return postJsonReturn(`/v1/meetings/${encodeURIComponent(meetingId)}/tally`, {
+    actor: getActor(formData),
     votes,
     eligible_count: eligibleRaw ? Number(eligibleRaw) : undefined,
     quorum: quorumRaw ? Number(quorumRaw) : undefined,
@@ -755,6 +760,143 @@ export async function installPackAction(formData: FormData): Promise<void> {
     actor: getActor(formData),
   });
   revalidatePath("/");
+}
+
+export async function importPackAction(formData: FormData): Promise<void> {
+  const yamlContent = await readPackYaml(formData);
+  try {
+    await client.importPack({
+      project_id: getProjectId(formData),
+      yaml_content: yamlContent,
+      actor: getActor(formData),
+    });
+  } catch (error) {
+    throw packYamlApiError(error, "Pack import failed.");
+  }
+  revalidatePath("/");
+}
+
+export async function exportPackYaml(projectId: string, packId: string): Promise<string> {
+  try {
+    const yaml = await client.exportPack(projectId, packId);
+    if (typeof yaml !== "string" || !yaml) {
+      throw new Error("Pack export returned empty YAML.");
+    }
+    return yaml;
+  } catch (error) {
+    throw packYamlApiError(error, "Pack export failed.");
+  }
+}
+
+export async function exportPackAction(
+  formData: FormData,
+): Promise<{ yaml: string; packId: string }> {
+  const packId = formData.get("pack_id");
+  if (typeof packId !== "string" || !packId.trim()) {
+    throw new Error("pack_id is required");
+  }
+  const yaml = await exportPackYaml(getProjectId(formData), packId.trim());
+  return { yaml, packId: packId.trim() };
+}
+
+export async function importSkillAction(formData: FormData): Promise<void> {
+  const yamlContent = await readSkillYaml(formData);
+  try {
+    await client.importSkill({
+      project_id: getProjectId(formData),
+      bundle: yamlContent,
+      allow_untrusted: true,
+      actor: getActor(formData),
+    });
+  } catch (error) {
+    throw packYamlApiError(error, "Skill import failed.");
+  }
+  revalidatePath("/");
+}
+
+export async function exportSkillYaml(
+  projectId: string,
+  skillId: string,
+  actor = "ceo",
+): Promise<string> {
+  try {
+    const yaml = await client.exportSkill(projectId, skillId, actor);
+    if (typeof yaml !== "string" || !yaml) {
+      throw new Error("Skill export returned empty YAML.");
+    }
+    return yaml;
+  } catch (error) {
+    throw packYamlApiError(error, "Skill export failed.");
+  }
+}
+
+export async function exportSkillAction(
+  formData: FormData,
+): Promise<{ yaml: string; skillId: string }> {
+  const skillId = formData.get("skill_id");
+  if (typeof skillId !== "string" || !skillId.trim()) {
+    throw new Error("skill_id is required");
+  }
+  const yaml = await exportSkillYaml(
+    getProjectId(formData),
+    skillId.trim(),
+    getActor(formData),
+  );
+  return { yaml, skillId: skillId.trim() };
+}
+
+async function readPackYaml(formData: FormData): Promise<string> {
+  const pasted = formData.get("yaml");
+  if (typeof pasted === "string" && pasted.trim()) {
+    return pasted;
+  }
+  const uploaded = formData.get("yaml_file");
+  if (uploaded instanceof Blob) {
+    const text = await uploaded.text();
+    if (text.trim()) {
+      return text;
+    }
+  }
+  throw new Error("Pack YAML is required");
+}
+
+async function readSkillYaml(formData: FormData): Promise<string> {
+  const pasted = formData.get("yaml");
+  if (typeof pasted === "string" && pasted.trim()) {
+    return pasted;
+  }
+  const uploaded = formData.get("yaml_file");
+  if (uploaded instanceof Blob) {
+    const text = await uploaded.text();
+    if (text.trim()) {
+      return text;
+    }
+  }
+  throw new Error("Skill YAML is required");
+}
+
+function packYamlApiError(error: unknown, fallback: string): Error {
+  if (error instanceof BossApiError) {
+    const detail = extractBossDetail(error.body);
+    return new Error(detail || error.message || fallback);
+  }
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(fallback);
+}
+
+function extractBossDetail(body: unknown): string | undefined {
+  if (typeof body === "string" && body.trim()) {
+    return body;
+  }
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) {
+      return detail;
+    }
+  }
+  return undefined;
 }
 
 export async function installAgentModuleAction(formData: FormData): Promise<void> {
@@ -1651,6 +1793,20 @@ export async function queueOutboxMessageAction(formData: FormData): Promise<void
   revalidatePath("/");
 }
 
+export async function dryRunOutboxMessageAction(formData: FormData): Promise<void> {
+  const messageId = formData.get("message_id");
+  if (typeof messageId !== "string" || !messageId) {
+    throw new Error("message_id is required");
+  }
+
+  await client.dryRunOutboxMessage(messageId, {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    dedupe_key: `outbox-dry-run-${messageId}-${Date.now()}`,
+  });
+  revalidatePath("/");
+}
+
 export async function createDecisionDigestAction(
   formData: FormData,
 ): Promise<void> {
@@ -1964,6 +2120,46 @@ export async function enqueueGitHubMergeAction(
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
+  revalidatePath("/");
+}
+
+export async function easyConnectProviderAction(
+  formData: FormData,
+): Promise<void> {
+  const provider = formData.get("provider");
+  const accountLabel = formData.get("account_label");
+  const secretValue = formData.get("secret_value");
+  if (typeof provider !== "string" || !provider.trim()) {
+    throw new Error("provider is required");
+  }
+  if (typeof accountLabel !== "string" || !accountLabel.trim()) {
+    throw new Error("account_label is required");
+  }
+  if (typeof secretValue !== "string" || !secretValue.trim()) {
+    throw new Error("secret_value is required");
+  }
+  const body: Record<string, unknown> = {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    provider: provider.trim(),
+    account_label: accountLabel.trim(),
+    secret_value: secretValue,
+    backend: "local_vault",
+    read_only: true,
+  };
+  const baseUrl = getOptionalString(formData, "base_url");
+  if (baseUrl) {
+    body.base_url = baseUrl;
+  }
+  const response = await fetch(`${API_URL}/v1/providers/easy-connect`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const out = await response.json().catch(() => ({}));
+    throw new Error(failureText(out?.detail, response.status));
+  }
   revalidatePath("/");
 }
 
@@ -2373,6 +2569,49 @@ export async function runDeploymentHealthCheckAction(
   revalidatePath("/");
 }
 
+export async function createImprovementProgramAction(
+  formData: FormData,
+): Promise<void> {
+  const name = String(formData.get("name") ?? "").trim();
+  const objective = String(formData.get("objective") ?? "").trim();
+  const baselineEvaluationId = String(
+    formData.get("baseline_evaluation_id") ?? "",
+  ).trim();
+  if (!name) {
+    throw new Error("name is required");
+  }
+  if (!objective) {
+    throw new Error("objective is required");
+  }
+  if (!baselineEvaluationId) {
+    throw new Error("baseline_evaluation_id is required");
+  }
+
+  const response = await fetch(`${API_URL}/v1/improvement-programs`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      project_id: getProjectId(formData),
+      name,
+      objective,
+      baseline_evaluation_id: baselineEvaluationId,
+      actor: getActor(formData),
+    }),
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      detail = String((await response.json()).detail ?? "");
+    } catch {
+      detail = "";
+    }
+    throw new Error(
+      detail || `Improvement program create failed (${response.status})`,
+    );
+  }
+  revalidatePath("/");
+}
+
 export async function submitSelfImprovementProposalAction(
   formData: FormData,
 ): Promise<void> {
@@ -2540,8 +2779,25 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
   const directive = String(formData.get("directive") ?? "").trim();
   const url = String(formData.get("url") ?? "").trim();
   const taskId = String(formData.get("task_id") ?? "").trim();
+  const meetingType = String(formData.get("meeting_type") ?? "prd_panel").trim() || "prd_panel";
   const roles = formData.getAll("roles").map((r) => String(r)).filter(Boolean);
   if (!directive) {
+    return;
+  }
+  if (meetingType === "standup") {
+    await fetch(`${API_URL}/v1/meetings/standup`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        project_id: projectId,
+        actor: getActor(formData),
+        directive,
+        url: url || undefined,
+        roles: roles.length ? roles : undefined,
+        simulated: true,
+      }),
+    });
+    revalidatePath("/");
     return;
   }
   await client.conveneMeeting({
@@ -2551,6 +2807,81 @@ export async function conveneMeetingAction(formData: FormData): Promise<void> {
     roles: roles.length ? roles : undefined,
     task_id: taskId || undefined,
     actor: getActor(formData),
+    constraints: { meeting_type: "prd_panel" },
+  });
+  revalidatePath("/");
+}
+
+export async function runSimulatedMeetingAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  const meetingId = String(formData.get("meeting_id") ?? "").trim();
+  const directive = String(formData.get("directive") ?? "").trim();
+  const path = meetingId
+    ? `/v1/meetings/${encodeURIComponent(meetingId)}/simulated-run`
+    : "/v1/meetings/simulated-run";
+  await fetch(`${API_URL}${path}`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      project_id: projectId,
+      actor: getActor(formData),
+      directive: directive || "Community simulated panel fixture",
+      simulated: true,
+      meeting_type: String(formData.get("meeting_type") ?? "prd_panel").trim() || "prd_panel",
+    }),
+  });
+  revalidatePath("/");
+}
+
+export async function loadMeetingEvidenceAction(
+  meetingId: string,
+  projectId: string,
+): Promise<{
+  ok: boolean;
+  phase_timeline: Array<{ phase: string; status?: string; artifact_id?: string }>;
+  artifact_links: Array<{ kind: string; artifact_id: string }>;
+  receipt_id?: string | null;
+  simulated?: boolean;
+  meeting_type?: string;
+  decision_id?: string | null;
+}> {
+  const p = encodeURIComponent(projectId);
+  const id = encodeURIComponent(meetingId);
+  const res = await fetch(
+    `${API_URL}/v1/meetings/${id}/evidence?project_id=${p}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    return { ok: false, phase_timeline: [], artifact_links: [] };
+  }
+  const data = (await res.json()) as {
+    phase_timeline?: Array<{ phase: string; status?: string; artifact_id?: string }>;
+    artifact_links?: Array<{ kind: string; artifact_id: string }>;
+    receipt_id?: string | null;
+    simulated?: boolean;
+    meeting_type?: string;
+    decision_id?: string | null;
+  };
+  return {
+    ok: true,
+    phase_timeline: data.phase_timeline ?? [],
+    artifact_links: data.artifact_links ?? [],
+    receipt_id: data.receipt_id,
+    simulated: data.simulated,
+    meeting_type: data.meeting_type,
+    decision_id: data.decision_id,
+  };
+}
+
+export async function seedAssuranceDemoAction(formData: FormData): Promise<void> {
+  const projectId = getProjectId(formData);
+  await fetch(`${API_URL}/v1/assurance/seed-demo`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      project_id: projectId,
+      actor: getActor(formData),
+    }),
   });
   revalidatePath("/");
 }
@@ -3359,4 +3690,93 @@ export async function reliabilityRemediateAction(formData: FormData): Promise<vo
     project_id: getProjectId(formData),
     actor: getActor(formData),
   });
+}
+
+export async function createPreviewFixtureAction(
+  _prev: { id?: string; error?: string; open_url?: string } | null,
+  formData: FormData,
+): Promise<{ id?: string; error?: string; open_url?: string }> {
+  const projectId = getProjectId(formData);
+  try {
+    const res = await fetch(`${API_URL}/v1/previews/fixture`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        project_id: projectId,
+        actor: getActor(formData),
+        ttl_minutes: 60,
+      }),
+    });
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 240);
+      return { error: `API returned ${res.status}: ${detail || res.statusText}` };
+    }
+    const body = (await res.json()) as { id?: string; open_url?: string; url?: string };
+    revalidatePath("/");
+    return { id: body.id, open_url: body.open_url ?? body.url };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function metatronCaptainTurnAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const message = String(formData.get("message") ?? "").trim();
+  if (!message) {
+    return { ok: false, error: "Enter a captain message." };
+  }
+  const result = await postJsonReturn("/v1/metatron/session", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
+    message,
+  });
+  revalidatePath("/");
+  return result;
+}
+
+export async function metatronCaptainWatchAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const result = await postJsonReturn("/v1/metatron/watch", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+  return result;
+}
+
+export async function metatronCaptainDriveAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const result = await postJsonReturn("/v1/metatron/drive", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    auto: false,
+  });
+  revalidatePath("/");
+  return result;
+}
+
+export async function metatronCaptainAddGoalAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const title = String(formData.get("title") ?? "").trim();
+  if (!title) {
+    return { ok: false, error: "Goal title is required." };
+  }
+  const result = await postJsonReturn("/v1/metatron/goals", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    title,
+    kind: String(formData.get("kind") ?? "custom").trim() || "custom",
+    description: String(formData.get("description") ?? "").trim(),
+  });
+  revalidatePath("/");
+  return result;
 }

@@ -1,0 +1,164 @@
+"""HTTP surface for distributed worker autoscaling over elastic fabric.
+
+Prefix: /v1/worker-autoscaling
+  GET  /policies
+  PUT  /policies
+  POST /evaluate
+  POST /apply
+  GET  /status
+  GET  /history
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from boss_engine.config import get_settings
+from boss_engine.db import begin, get_engine
+from boss_engine.services.elastic_fabric import ElasticFabricService
+from boss_engine.services.resource_plane import ResourcePlaneService
+from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
+
+router = APIRouter(
+    prefix="/v1/worker-autoscaling",
+    tags=["worker-autoscaling"],
+)
+
+
+def _service() -> WorkerAutoscalingService:
+    settings = get_settings()
+    resource_plane = ResourcePlaneService(settings)
+    elastic = ElasticFabricService(settings, resource_plane=resource_plane)
+    return WorkerAutoscalingService(
+        settings, elastic_fabric=elastic, resource_plane=resource_plane
+    )
+
+
+class PolicyUpsertRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    pool_key: str = "default"
+    enabled: bool = True
+    min_workers: int = Field(default=0, ge=0)
+    max_workers: int = Field(default=8, ge=0)
+    scale_up_threshold: int = Field(default=1, ge=0)
+    cooldown_seconds: int = Field(default=30, ge=0)
+    max_queue_depth_per_worker: int = Field(default=5, ge=1)
+    kind: str = "local"
+    provider_account_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EvaluateRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    pool_key: Optional[str] = None
+    persist_history: bool = True
+
+
+class ApplyRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+    pool_key: Optional[str] = None
+    force: bool = False
+    auto_reconcile: bool = True
+    cloud_spillover_enabled: bool = False
+    reason: Optional[str] = None
+
+
+@router.get("/policies")
+def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
+    svc = _service()
+    with begin(get_engine()) as connection:
+        items = svc.list_policies(connection, project_id)
+        return {"project_id": project_id, "items": items, "count": len(items)}
+
+
+@router.put("/policies")
+def upsert_policy(payload: PolicyUpsertRequest) -> dict[str, Any]:
+    svc = _service()
+    with begin(get_engine()) as connection:
+        try:
+            policy = svc.upsert_policy(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                pool_key=payload.pool_key,
+                enabled=payload.enabled,
+                min_workers=payload.min_workers,
+                max_workers=payload.max_workers,
+                scale_up_threshold=payload.scale_up_threshold,
+                cooldown_seconds=payload.cooldown_seconds,
+                max_queue_depth_per_worker=payload.max_queue_depth_per_worker,
+                kind=payload.kind,
+                provider_account_id=payload.provider_account_id,
+                metadata=payload.metadata,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return policy
+
+
+@router.post("/evaluate")
+def evaluate(payload: EvaluateRequest) -> dict[str, Any]:
+    svc = _service()
+    with begin(get_engine()) as connection:
+        try:
+            return svc.evaluate(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                pool_key=payload.pool_key,
+                persist_history=payload.persist_history,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.post("/apply")
+def apply(payload: ApplyRequest) -> dict[str, Any]:
+    """Evaluate + request elastic capacity (simulated/real per fabric gates)."""
+    svc = _service()
+    with begin(get_engine()) as connection:
+        try:
+            return svc.apply(
+                connection,
+                project_id=payload.project_id,
+                actor=payload.actor,
+                pool_key=payload.pool_key,
+                force=payload.force,
+                auto_reconcile=payload.auto_reconcile,
+                cloud_spillover_enabled=payload.cloud_spillover_enabled,
+                reason=payload.reason,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@router.get("/status")
+def status(project_id: str = Query(...)) -> dict[str, Any]:
+    svc = _service()
+    with begin(get_engine()) as connection:
+        return svc.status(connection, project_id)
+
+
+@router.get("/history")
+def history(
+    project_id: str = Query(...),
+    pool_key: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    svc = _service()
+    with begin(get_engine()) as connection:
+        items = svc.history(
+            connection, project_id, pool_key=pool_key, limit=limit
+        )
+        return {
+            "project_id": project_id,
+            "pool_key": pool_key,
+            "items": items,
+            "count": len(items),
+        }

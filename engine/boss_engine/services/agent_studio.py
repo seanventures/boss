@@ -40,6 +40,15 @@ class PanelVersionStateError(ValueError):
     pass
 
 
+class AgentStudioSchemaMissingError(RuntimeError):
+    """Studio tables are not applied on this runtime — fail closed, never 500."""
+
+    def __init__(self, missing: list[str]):
+        self.missing = list(missing)
+        detail = "Agent Studio schema is not applied: " + ", ".join(self.missing)
+        super().__init__(detail)
+
+
 class AgentStudioService:
     """Versioned agent/panel registry and deterministic execution planner.
 
@@ -67,9 +76,27 @@ class AgentStudioService:
         "producer_reviewer",
         "hold_for_evidence",
     }
+    CATALOG_TABLES = (
+        "agent_definitions",
+        "agent_versions",
+        "panel_definitions",
+        "panel_versions",
+    )
 
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    def _catalog_tables_ready(
+        self, connection: Connection
+    ) -> tuple[bool, list[str]]:
+        missing: list[str] = []
+        for table in self.CATALOG_TABLES:
+            present = connection.execute(
+                text("SELECT to_regclass(:name)"), {"name": table}
+            ).scalar()
+            if present is None:
+                missing.append(table)
+        return (not missing, missing)
 
     # ------------------------------------------------------------------
     # Seed catalog
@@ -80,19 +107,29 @@ class AgentStudioService:
         project_id: str,
         actor: str = "bootstrap",
     ) -> dict[str, list[dict[str, Any]]]:
+        ready, missing = self._catalog_tables_ready(connection)
+        if not ready:
+            raise AgentStudioSchemaMissingError(missing)
         agents: list[dict[str, Any]] = []
         panels: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
         for path in sorted((self.settings.specpack_root / "agents").glob("*.yaml")):
             payload = self._load_yaml(path)
-            agents.append(
-                self._seed_agent(connection, project_id, payload, actor, path)
-            )
+            try:
+                agents.append(
+                    self._seed_agent(connection, project_id, payload, actor, path)
+                )
+            except ValueError as error:
+                skipped.append({"path": str(path.name), "error": str(error)})
         for path in sorted((self.settings.specpack_root / "panels").glob("*.yaml")):
             payload = self._load_yaml(path)
-            panels.append(
-                self._seed_panel(connection, project_id, payload, actor, path)
-            )
-        return {"agents": agents, "panels": panels}
+            try:
+                panels.append(
+                    self._seed_panel(connection, project_id, payload, actor, path)
+                )
+            except ValueError as error:
+                skipped.append({"path": str(path.name), "error": str(error)})
+        return {"agents": agents, "panels": panels, "skipped": skipped}
 
     def _seed_agent(
         self,
@@ -122,6 +159,9 @@ class AgentStudioService:
             "path": str(source.relative_to(self.settings.specpack_root)),
             "trusted": True,
         }
+        version_payload["requested_skills"] = self._seed_strip_unusable_skills(
+            connection, project_id, version_payload
+        )
         version = self.create_agent_version(
             connection,
             definition["id"],
@@ -2369,6 +2409,47 @@ class AgentStudioService:
             key: json.dumps(value) if isinstance(value, (dict, list)) else value
             for key, value in content.items()
         }
+
+    def _seed_strip_unusable_skills(
+        self,
+        connection: Connection,
+        project_id: str,
+        version_payload: dict[str, Any],
+    ) -> list[str]:
+        """Drop requested skills that are not installed or not on the RoleSpec.
+
+        Community seed must not fail the whole catalog because one pack file
+        names a skill the live RoleSpec has not been refreshed to include.
+        """
+        requested = [
+            str(item)
+            for item in (version_payload.get("requested_skills") or [])
+            if str(item).strip()
+        ]
+        if not requested:
+            return []
+        catalog = self._project_skill_ids(connection, project_id)
+        role_key = str((version_payload.get("role_key") or "")).strip()
+        allowed: Optional[set[str]] = None
+        if role_key:
+            row = connection.execute(
+                text(
+                    "SELECT spec FROM roles WHERE project_id=:p AND role_key=:r "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"p": project_id, "r": role_key},
+            ).mappings().first()
+            if row and row.get("spec"):
+                allowed = self._role_allowed_skill_ids(row["spec"] or {}, catalog)
+        keep: list[str] = []
+        for skill in requested:
+            matches = matching_skill_ids(skill, catalog)
+            if not matches:
+                continue
+            if allowed is not None and not any(m in allowed for m in matches):
+                continue
+            keep.append(skill)
+        return keep
 
     def _project_skill_ids(
         self, connection: Connection, project_id: str

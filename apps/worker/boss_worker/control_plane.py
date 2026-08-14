@@ -40,12 +40,12 @@ class ControlPlaneClient:
         # but allow a generous read timeout so the worker doesn't abandon the call.
         # read must exceed the LONGEST single control-plane call. A code.task runs the WHOLE
         # governed pipeline (design → tests → implement → review → mutation → PR) in ONE
-        # request — many stages, each up to code_agent_timeout — so 900s was shorter than a
-        # real pipeline and the worker abandoned still-running jobs. The lease heartbeat keeps
-        # the lease alive; this keeps the HTTP call alive too.
+        # request — many stages, each up to code_agent_timeout. 3600s was still shorter
+        # than a real BugBox run (verify-green then opening_pr died as "timed out").
+        # The lease heartbeat keeps the lease alive; this keeps the HTTP call alive too.
         self._client = httpx.Client(
             base_url=self.base_url,
-            timeout=httpx.Timeout(connect=10.0, read=3600.0, write=30.0, pool=30.0),
+            timeout=httpx.Timeout(connect=10.0, read=7200.0, write=30.0, pool=30.0),
             headers=headers,
         )
 
@@ -129,6 +129,32 @@ class ControlPlaneClient:
 
     def run_code_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/code-tasks/step", json=payload)
+        # Operator/host 422 (claims frozen, missing sandbox task) is fail-closed:
+        # return a terminal payload so execute_job can complete instead of DLQ.
+        if response.status_code == 422:
+            try:
+                body = response.json()
+            except Exception:  # noqa: BLE001
+                body = {"detail": (response.text or "")[:400]}
+            detail = ""
+            if isinstance(body, dict):
+                detail = str(body.get("detail") or body.get("error") or body)
+            else:
+                detail = str(body)
+            blob = detail.lower()
+            reason = (
+                "microvm_claims_frozen"
+                if "claim" in blob or "frozen" in blob
+                else "sandbox_task_missing"
+            )
+            return {
+                "status": "failed",
+                "done": True,
+                "error": detail or "sandbox request rejected (422)",
+                "reason_code": reason,
+                "failure_class": "needs_human",
+                "http_status": 422,
+            }
         response.raise_for_status()
         return response.json()
 
@@ -172,6 +198,33 @@ class ControlPlaneClient:
         nothing and saves a great deal.
         """
         response = self._client.post("/v1/shepherd/watch", json={})
+        response.raise_for_status()
+        return response.json()
+
+    def tick_metatron_watch(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+        """Legacy observe-only tick. Prefer tick_metatron_overwatch."""
+        response = self._client.post(
+            "/v1/metatron/watch",
+            json={"project_id": project_id, "actor": actor},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def tick_metatron_overwatch(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+        """Always-on captain cycle: observe, measure, validate, apply safe, verify."""
+        response = self._client.post(
+            "/v1/metatron/overwatch",
+            json={"project_id": project_id, "actor": actor},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def tick_focused_agents(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+        """Always-on / hybrid focused agents whose interval elapsed or a wake event arrived."""
+        response = self._client.post(
+            "/v1/focused-agents/tick-all",
+            json={"project_id": project_id, "actor": actor},
+        )
         response.raise_for_status()
         return response.json()
 

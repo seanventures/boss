@@ -546,3 +546,136 @@ def test_project_member_upsert_does_not_escalate_to_org_scope(client, engine):
         },
     )
     assert denied.status_code in (401, 403), denied.text
+
+
+def test_deprovisioned_scim_user_cannot_act_via_org_member_fallback(client, engine):
+    """BOSS-320: deprovision must close require_member's org_members fallback.
+
+    Older BOSS mirrored project members into org_members. MemberDirectory
+    falls back to an *active* org row when the project row is inactive, so
+    disabling only project_members left a deprovisioned SCIM user able to
+    mutate. This test plants that leftover mirror, then deactivates via SCIM
+    and asserts the actor is unauthorized.
+    """
+    project_id = get_settings().default_project_id
+    user_name = "c2.scim.deprov@example.com"
+    member_id = "scim_boss-dogfood_c2_scim_deprov_example_com"
+
+    created = client.post(
+        "/v1/enterprise/scim/users",
+        json={
+            "project_id": project_id,
+            "external_id": "usr-c2-scim-deprov",
+            "user_name": user_name,
+            "display_name": "C2 SCIM Deprov",
+            "permissions": ["command_submit"],
+            "actor": "ceo",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["member_id"] == member_id
+    assert created.json()["active"] is True
+
+    with engine.begin() as connection:
+        org_id = connection.execute(
+            text(
+                """
+                SELECT o.id
+                FROM projects p
+                JOIN workspaces w ON w.id = p.workspace_id
+                JOIN orgs o ON o.id = w.org_id
+                WHERE p.id = :project_id
+                """
+            ),
+            {"project_id": project_id},
+        ).scalar_one()
+        connection.execute(
+            text(
+                """
+                INSERT INTO org_members (
+                    id, org_id, member_id, display_name, member_type,
+                    role_keys, permissions, status, created_by
+                )
+                VALUES (
+                    :id, :org_id, :member_id, 'C2 SCIM Deprov leftover',
+                    'human', CAST(:role_keys AS JSONB),
+                    CAST(:permissions AS JSONB), 'active', 'legacy_mirror'
+                )
+                ON CONFLICT (org_id, member_id) DO UPDATE
+                SET status = 'active',
+                    permissions = EXCLUDED.permissions,
+                    updated_at = now()
+                """
+            ),
+            {
+                "id": f"om_c2_deprov_{member_id}",
+                "org_id": org_id,
+                "member_id": member_id,
+                "role_keys": json.dumps([]),
+                "permissions": json.dumps(["command_submit"]),
+            },
+        )
+
+    allowed = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": project_id,
+            "command": "Active SCIM user may submit a command.",
+            "actor": member_id,
+        },
+    )
+    assert allowed.status_code == 201, allowed.text
+
+    deactivated = client.post(
+        "/v1/enterprise/scim/users",
+        json={
+            "project_id": project_id,
+            "user_name": user_name,
+            "display_name": "C2 SCIM Deprov",
+            "active": False,
+            "actor": "ceo",
+        },
+    )
+    assert deactivated.status_code == 201, deactivated.text
+    assert deactivated.json()["active"] is False
+
+    with engine.begin() as connection:
+        project_status = connection.execute(
+            text(
+                """
+                SELECT status FROM project_members
+                WHERE project_id = :project_id AND member_id = :member_id
+                """
+            ),
+            {"project_id": project_id, "member_id": member_id},
+        ).scalar_one()
+        org_status = connection.execute(
+            text(
+                """
+                SELECT status FROM org_members
+                WHERE member_id = :member_id
+                """
+            ),
+            {"member_id": member_id},
+        ).scalar_one()
+    assert project_status == "inactive"
+    assert org_status == "inactive", (
+        "deprovisioned SCIM user must not remain an active org member "
+        f"(status={org_status})"
+    )
+
+    denied = client.post(
+        "/v1/commands/propose",
+        json={
+            "project_id": project_id,
+            "command": "Deprovisioned SCIM user must not submit via org fallback.",
+            "actor": member_id,
+        },
+    )
+    assert denied.status_code == 403, denied.text
+
+    members_after = client.get("/v1/members", params={"project_id": project_id})
+    assert members_after.status_code == 200
+    assert member_id not in {
+        item["member_id"] for item in members_after.json()["items"]
+    }

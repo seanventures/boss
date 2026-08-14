@@ -65,6 +65,49 @@ function mapMetatron(payload: MetatronQueryResponse): MetatronCard {
   };
 }
 
+export async function fetchMetatronCaptainSession(
+  projectId = PROJECT_ID,
+  actor = "executive_console",
+): Promise<{
+  thread_id?: string;
+  messages?: Array<{ id?: string; role?: string; content?: string }>;
+  memories?: Array<{ id?: string; content?: string }>;
+  goals?: Array<Record<string, unknown>>;
+  watch?: { findings?: Array<Record<string, unknown>> } | null;
+  unavailable?: string;
+}> {
+  const pid = resolveProjectId(projectId);
+  try {
+    const { API_URL, authHeaders } = await import("./client");
+    const response = await fetch(
+      `${API_URL}/v1/metatron/session?project_id=${encodeURIComponent(pid)}&actor=${encodeURIComponent(actor)}`,
+      { headers: authHeaders(), cache: "no-store" },
+    );
+    if (!response.ok) {
+      return {
+        unavailable: `Metatron captain session not mounted (${response.status}).`,
+        messages: [],
+        memories: [],
+        goals: [],
+      };
+    }
+    return (await response.json()) as {
+      thread_id?: string;
+      messages?: Array<{ id?: string; role?: string; content?: string }>;
+      memories?: Array<{ id?: string; content?: string }>;
+      goals?: Array<Record<string, unknown>>;
+      watch?: { findings?: Array<Record<string, unknown>> } | null;
+    };
+  } catch {
+    return {
+      unavailable: "Metatron captain could not reach the control plane.",
+      messages: [],
+      memories: [],
+      goals: [],
+    };
+  }
+}
+
 export async function fetchMetatronQuery(
   question?: string,
   taskId?: string,

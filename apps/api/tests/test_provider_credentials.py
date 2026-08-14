@@ -30,7 +30,19 @@ def test_initial_infrastructure_provider_definitions_are_truthful(client):
     assert response.status_code == 200
     definitions = {item["provider"]: item for item in response.json()["items"]}
 
-    assert set(definitions) == {"aws", "azure", "digitalocean", "gcp", "ovhcloud"}
+    assert {
+        "aws",
+        "azure",
+        "digitalocean",
+        "gcp",
+        "ovhcloud",
+        "openai",
+        "anthropic",
+        "openai_compatible",
+        "cloudflare",
+        "supabase",
+        "ssh_host",
+    } <= set(definitions)
     assert definitions["aws"]["adapter_status"] == "available"
     assert definitions["digitalocean"]["adapter_status"] == "available"
     assert definitions["azure"]["adapter_status"] == "available"

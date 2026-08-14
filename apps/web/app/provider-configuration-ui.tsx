@@ -16,7 +16,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { formatDateTime as formatDateTimeUtc } from "../lib/datetime";
 import type { ActivityFeedItem } from "../lib/events";
@@ -28,6 +28,11 @@ import type {
   ProviderOpsFeed,
 } from "../lib/providerops";
 import {
+  costsForHonestyChart,
+  describeResourceMonthlyCost,
+  describeSpendHonesty,
+} from "../lib/providerops";
+import {
   disableProviderAccountAction,
   enableProviderAccountAction,
   revokeProviderAccountAction,
@@ -37,6 +42,7 @@ import {
 import {
   ActionForm,
   ProviderCreateForm,
+  ProviderEasyConnectForm,
   ProviderSyncForm,
   ProviderTestForm,
 } from "./client-forms";
@@ -236,6 +242,116 @@ function ProviderCatalog({
   );
 }
 
+function PasteAndConnect({
+  projectId,
+  actor,
+  canManage,
+  definitions,
+}: {
+  projectId: string;
+  actor: string;
+  canManage: boolean;
+  definitions: ProviderDefinitionFeedItem[];
+}) {
+  const pasteable = useMemo(
+    () =>
+      definitions.filter((definition) =>
+        definition.authMethods.some((method) => method.credentialSlots.length > 0),
+      ),
+    [definitions],
+  );
+  const [provider, setProvider] = useState(pasteable[0]?.provider ?? "openai");
+  const selected = pasteable.find((item) => item.provider === provider) ?? pasteable[0];
+  const showBaseUrl = ["openai", "openai_compatible", "anthropic"].includes(
+    selected?.provider ?? provider,
+  );
+
+  useEffect(() => {
+    if (!pasteable.some((item) => item.provider === provider) && pasteable[0]) {
+      setProvider(pasteable[0].provider);
+    }
+  }, [pasteable, provider]);
+
+  if (pasteable.length === 0) {
+    return null;
+  }
+
+  return (
+    <ProviderEasyConnectForm className="provider-create-form">
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="actor" value={actor} />
+      <div className="provider-form-heading">
+        <div>
+          <span className="eyebrow">Paste and connect</span>
+          <h3>Bring your own model or infra key</h3>
+        </div>
+        <StatusBadge status="available" />
+      </div>
+      <p className="provider-notice" role="note">
+        Value is written to the local vault. BOSS stores only a SecretRef. Agents
+        never see the raw key.
+      </p>
+      <div className="provider-form-grid">
+        <label className="field">
+          <span>Provider</span>
+          <select
+            className="input"
+            name="provider"
+            value={selected?.provider ?? provider}
+            onChange={(event) => setProvider(event.target.value)}
+            disabled={!canManage}
+          >
+            {pasteable.map((definition) => (
+              <option key={definition.provider} value={definition.provider}>
+                {definition.displayName}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Account label</span>
+          <input
+            className="input"
+            name="account_label"
+            placeholder={`${selected?.displayName ?? "Provider"} production`}
+            required
+            disabled={!canManage}
+          />
+        </label>
+      </div>
+      <label className="field">
+        <span>API key / token</span>
+        <input
+          className="input"
+          name="secret_value"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Paste key — written to the local vault"
+          required
+          disabled={!canManage}
+        />
+      </label>
+      {showBaseUrl ? (
+        <label className="field">
+          <span>Base URL · optional</span>
+          <input
+            className="input"
+            name="base_url"
+            type="url"
+            placeholder="https://localhost:11434/v1"
+            disabled={!canManage}
+          />
+          <small>Ollama, vLLM, or any OpenAI-compatible endpoint.</small>
+        </label>
+      ) : null}
+      <button className="button primary" type="submit" disabled={!canManage}>
+        <Key size={15} aria-hidden />
+        Paste and connect
+      </button>
+    </ProviderEasyConnectForm>
+  );
+}
+
 function ConnectionCreate({
   projectId,
   actor,
@@ -273,7 +389,7 @@ function ConnectionCreate({
       <input type="hidden" name="provider" value={definition.provider} />
       <div className="provider-form-heading">
         <div>
-          <span className="eyebrow">New connection</span>
+          <span className="eyebrow">Advanced: bind an existing SecretRef</span>
           <h3>{definition.displayName}</h3>
         </div>
         <StatusBadge status={available ? "available" : "planned"} />
@@ -1125,14 +1241,23 @@ function ResourceView({
                       <small>Seen {formatDate(resource.lastSeenAt)}</small>
                     </td>
                     <td>
-                      <strong>
-                        {formatMicros(
-                          resource.actualMonthlyUsdMicros ??
-                            resource.estimatedMonthlyUsdMicros ??
-                            0,
-                        )}
-                      </strong>
-                      <small>{titleCase(resource.costConfidence)}</small>
+                      {(() => {
+                        const monthly = describeResourceMonthlyCost(resource);
+                        return (
+                          <>
+                            <strong>
+                              {monthly.amountUsdMicros == null
+                                ? monthly.label
+                                : formatMicros(monthly.amountUsdMicros)}
+                            </strong>
+                            <small>
+                              {monthly.amountUsdMicros == null
+                                ? monthly.helper
+                                : titleCase(resource.costConfidence)}
+                            </small>
+                          </>
+                        );
+                      })()}
                     </td>
                     <td>
                       <button
@@ -1226,12 +1351,12 @@ function ResourceDrawer({
           <div>
             <dt>Cost</dt>
             <dd>
-              {formatMicros(
-                resource.actualMonthlyUsdMicros ??
-                  resource.estimatedMonthlyUsdMicros ??
-                  0,
-              )}{" "}
-              · {titleCase(resource.costConfidence)}
+              {(() => {
+                const monthly = describeResourceMonthlyCost(resource);
+                return monthly.amountUsdMicros == null
+                  ? `${monthly.label} — ${monthly.helper}`
+                  : `${formatMicros(monthly.amountUsdMicros)} · ${titleCase(resource.costConfidence)}`;
+              })()}
             </dd>
           </div>
           <div>
@@ -1358,20 +1483,33 @@ export function costByProvider(costs: CostEventFeedItem[]) {
     .sort((left, right) => right.amount - left.amount);
 }
 
-function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
-  const totals = costByProvider(feed.costs);
+export function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
+  const honesty = describeSpendHonesty({
+    costs: feed.costs,
+    health: feed.providerHealth,
+    runs: feed.reconciliationRuns,
+  });
+  const showExactChart =
+    honesty.kind === "observed" || honesty.kind === "estimated";
+  const totals = showExactChart
+    ? costByProvider(costsForHonestyChart(feed.costs, honesty.kind))
+    : [];
   const max = Math.max(...totals.map((item) => item.amount), 1);
   return (
     <div className="provider-view-panel provider-split-view">
       <section aria-labelledby="provider-spend-heading">
         <div className="provider-view-heading">
           <div>
-            <span className="eyebrow">Observed spend</span>
+            <span className="eyebrow">{honesty.label}</span>
             <h3 id="provider-spend-heading">Provider distribution</h3>
           </div>
-          <strong>{formatMicros(feed.summary.spendUsdMicros)}</strong>
+          <strong data-testid="provider-spend-amount">
+            {honesty.amountUsdMicros == null
+              ? "—"
+              : formatMicros(honesty.amountUsdMicros)}
+          </strong>
         </div>
-        {totals.length > 0 ? (
+        {showExactChart && totals.length > 0 ? (
           <div className="provider-cost-chart" role="img" aria-label="Observed cost by provider">
             {totals.map((item) => (
               <div key={item.provider}>
@@ -1386,14 +1524,16 @@ function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
             ))}
           </div>
         ) : (
-          <div className="provider-empty compact">
+          <div
+            className="provider-empty compact"
+            data-testid="provider-spend-honesty"
+          >
             <ChartBar size={22} aria-hidden />
-            <p>No cost events are available for this project.</p>
+            <p>{honesty.helper}</p>
           </div>
         )}
         <p className="provider-helper">
-          Every value retains its confidence label. Estimates are never presented
-          as reconciled actuals.
+          {honesty.helper} Resource receipts prove actions; they are not invoices.
         </p>
       </section>
       <section aria-labelledby="provider-finops-evidence-heading">
@@ -1423,7 +1563,9 @@ function FinOpsView({ feed }: { feed: ProviderOpsFeed }) {
               <span>
                 <strong>{titleCase(run.provider ?? "all providers")}</strong>
                 <small>
-                  {run.resourcesSeen} resources · {run.costsSeen} costs ·{" "}
+                  {run.resourcesSeen} resources · {run.costsSeen} cost events ·{" "}
+                  billing {run.billingStatus ?? "unknown"}
+                  {run.billingMessage ? ` — ${run.billingMessage}` : ""} ·{" "}
                   {formatDate(run.startedAt)}
                 </small>
               </span>
@@ -1544,8 +1686,9 @@ export function ProviderConfigurationSuite({
             {editionLabel} is fully functional when operators bring their own
             keys: attach model and infra API keys, sync inventory,
             plan/approve/apply ChangeSets, and run local worker pools against
-            infrastructure you manage. Hosted SSO, marketplace, and managed
-            fleets stay on Cloud / Enterprise.
+            infrastructure you manage. Self-hosted SSO is included; hosted
+            Account Connect, marketplace, and managed fleets stay on Cloud /
+            Enterprise.
           </span>
         </div>
       ) : null}
@@ -1611,11 +1754,28 @@ export function ProviderConfigurationSuite({
           <strong>{feed.summary.healthyProviders}</strong>
           <small>{feed.providerHealth.length} observations</small>
         </div>
-        <div>
-          <span>Observed spend</span>
-          <strong>{formatMicros(feed.summary.spendUsdMicros)}</strong>
-          <small>{feed.summary.openCostAnomalies} open anomalies</small>
-        </div>
+        {(() => {
+          const honesty = describeSpendHonesty({
+            costs: feed.costs,
+            health: feed.providerHealth,
+            runs: feed.reconciliationRuns,
+          });
+          return (
+            <div data-testid="provider-suite-spend">
+              <span>{honesty.label}</span>
+              <strong>
+                {honesty.amountUsdMicros == null
+                  ? "—"
+                  : formatMicros(honesty.amountUsdMicros)}
+              </strong>
+              <small>
+                {honesty.kind === "observed" || honesty.kind === "estimated"
+                  ? `${feed.summary.openCostAnomalies} open anomalies`
+                  : honesty.helper}
+              </small>
+            </div>
+          );
+        })()}
       </div>
 
       <nav className="provider-subnav" aria-label="System configuration sections">
@@ -1656,6 +1816,12 @@ export function ProviderConfigurationSuite({
             definitions={feed.providerDefinitions}
             selectedProvider={selectedProvider}
             onSelect={setSelectedProvider}
+          />
+          <PasteAndConnect
+            projectId={projectId}
+            actor={actor}
+            canManage={canManage}
+            definitions={feed.providerDefinitions}
           />
           <ConnectionCreate
             projectId={projectId}

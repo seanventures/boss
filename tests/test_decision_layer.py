@@ -634,7 +634,9 @@ def t_resume_after_system_failure() -> None:
     for err in ["claude code agent exited 1: success — You've hit your monthly spend limit",
                 "rate limit exceeded (429)", "job timed out after 3600s",
                 "Budget reservation denied: denied", "lease expired",
-                "connection refused"]:  # every phrase the engine actually writes
+                "connection refused",
+                "The read operation timed out",
+                "httpx.ReadTimeout"]:  # every phrase the engine actually writes
         check_true(f"system failure detected: {err[:34]}", is_system_failure(err))
 
     # A code verdict is NOT a system failure — those must still repair properly.

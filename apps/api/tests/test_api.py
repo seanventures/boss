@@ -3418,9 +3418,8 @@ def test_command_proposal_requires_known_project_actor(client):
 
 
 def test_high_cost_endpoints_rate_limited_429_and_emits_event(client):
-    """P2 rate limit test per security review: in-mem limiter on metatron/propose/provider-sync.
-    10/min default but use low for test burst; assert 429 + rate_limit.exceeded event.
-    Uses test helpers to not impact other tests. Per-actor/IP key.
+    """C2 / Community: in-proc limiter on metatron/propose must 429 + emit rate_limit.exceeded.
+    Low RPM for this burst only; helpers isolate the rest of the suite. Per-actor/IP key.
     """
     # Set low limit + fresh state for this test only.
     api_main.configure_rate_limiter_for_testing(2)

@@ -836,6 +836,55 @@ class WorkOrchestrationService:
             id_key=id_key,
         )
 
+    def schedule_preference(
+        self,
+        candidates: list[dict[str, Any]],
+        *,
+        budget_state: str = "green",
+        score_key: str = "priority_score",
+        cost_key: str = "estimated_cost_usd_micros",
+        id_key: str = "id",
+    ) -> dict[str, Any]:
+        """G3 — order work for claim under optional budget pressure.
+
+        green: priority_score DESC, then value density, then lower cost.
+        yellow/orange/red: value density first (value-per-dollar), then priority,
+        then lower cost. Budget governor admission still applies separately —
+        ranking never bypasses budget freezes.
+        """
+        state = (budget_state or "green").strip().lower()
+        if state not in {"green", "yellow", "orange", "red"}:
+            raise ValueError(
+                "budget_state must be one of green|yellow|orange|red."
+            )
+        pressure = state in {"yellow", "orange", "red"}
+        mode = "value_density" if pressure else "priority_then_value"
+
+        # Normalize scores/costs so every row has density fields.
+        normalized = rank_by_value_density(
+            candidates,
+            score_key=score_key,
+            cost_key=cost_key,
+            id_key=id_key,
+        )
+        if not pressure:
+            # Prefer raw priority, break ties with density / cost / id.
+            normalized.sort(
+                key=lambda row: (
+                    -float(row.get("priority_score") or 0),
+                    -float(row.get("value_density") or 0),
+                    int(row.get("estimated_cost_usd_micros") or 0),
+                    str(row.get(id_key) or ""),
+                )
+            )
+        # Under pressure, rank_by_value_density order already applies.
+        return {
+            "budget_state": state,
+            "ranking_mode": mode,
+            "value_preferred": pressure,
+            "items": normalized,
+        }
+
     @staticmethod
     def priority_band(score: Decimal | float) -> str:
         return value_priority_band(score)

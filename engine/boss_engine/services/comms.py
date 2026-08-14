@@ -33,6 +33,10 @@ class InvalidCreatedByJobError(RuntimeError):
     pass
 
 
+class OutboxDryRunNotAllowedError(ValueError):
+    pass
+
+
 class CommsService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -355,6 +359,92 @@ class CommsService:
             event_data,
         )
         return job
+
+    def dry_run_deliver_outbox(
+        self,
+        connection: Connection,
+        project_id: str,
+        message_id: str,
+        actor: str,
+        dedupe_key: Optional[str] = None,
+    ) -> dict:
+        """Record a dry-run Receipt for a draft outbox message.
+
+        Never calls Slack/email/Mattermost adapters, never requires
+        ``real_send_allowed``, never reserves budget, and never enqueues
+        ``comms.outbox.deliver``.
+        """
+        message = self.get_outbox_message(connection, message_id)
+        self._assert_message_project(message, project_id)
+        status = str(message.get("status") or "")
+        if status not in {"draft", "dry_run"}:
+            raise OutboxDryRunNotAllowedError(
+                "Dry-run requires an existing draft outbox message; "
+                f"status is {status}."
+            )
+        boundary = normalize_data_boundary(message.get("data_boundary"))
+        key = (dedupe_key or "").strip() or (
+            f"outbox-dry-run:{project_id}:{message_id}:{make_id('dry')}"
+        )
+        scope = self._scope(connection, project_id)
+        receipt, created = self.receipts.create_or_reuse(
+            connection,
+            scope["org_id"],
+            scope["workspace_id"],
+            project_id,
+            key,
+            "comms",
+            {
+                "channel": message["channel"],
+                "outbox_message_id": message_id,
+                "data_boundary": boundary,
+                "delivery_mode": "dry_run",
+            },
+            {
+                "channel": message["channel"],
+                "data_boundary": boundary,
+                "delivery_mode": "dry_run",
+            },
+            data_boundary=boundary,
+        )
+        if created or receipt.get("status") != "succeeded":
+            self.receipts.mark_succeeded(
+                connection,
+                receipt["id"],
+                None,
+                {
+                    "delivery_mode": "dry_run",
+                    "provider_send": False,
+                    "message": "dry-run — no provider send",
+                    "outbox_message_id": message_id,
+                    "channel": message["channel"],
+                },
+            )
+        self._set_outbox_status(connection, message_id, "dry_run", receipt["id"])
+        emit_event(
+            connection,
+            project_id,
+            "outbox.dry_run",
+            actor,
+            "outbox_message",
+            message_id,
+            {
+                "receipt_id": receipt["id"],
+                "delivery_mode": "dry_run",
+                "channel": message["channel"],
+                "data_boundary": boundary,
+                "provider_send": False,
+                "reused": not created,
+            },
+        )
+        return {
+            "status": "dry_run",
+            "message_id": message_id,
+            "receipt_id": receipt["id"],
+            "delivery_mode": "dry_run",
+            "provider_send": False,
+            "message": "dry-run — no provider send",
+        }
 
     def deliver_outbox_message(
         self,

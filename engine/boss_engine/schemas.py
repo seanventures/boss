@@ -1734,6 +1734,10 @@ class PullRequestProposalResponse(BaseModel):
     validation_sources: list[str] = Field(default_factory=list)
     local_validation_receipt_id: Optional[str] = None
     message: Optional[str] = None
+    # Honesty field for dual GitHub planes (MC binding vs legacy env PAT/App).
+    github_plane: Optional[str] = None
+    github_binding_id: Optional[str] = None
+    github_connection_id: Optional[str] = None
 
 
 class CIConfigProposalRequest(BaseModel):
@@ -2536,6 +2540,10 @@ class MeetingSummary(BaseModel):
     created_by: str
     created_at: str
     updated_at: str
+    phase_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    artifact_links: list[dict[str, Any]] = Field(default_factory=list)
+    receipt_id: Optional[str] = None
+    simulated: bool = False
 
 
 class MeetingCreateRequest(BaseModel):
@@ -3076,6 +3084,41 @@ class DeadletterRequeueResponse(BaseModel):
     status: str
     deadletter: DeadletterItem
     requeued_job_id: str
+
+
+class DeadletterClassifyItem(BaseModel):
+    id: str
+    source_kind: str
+    source_id: str
+    reason: str
+    error_class: str
+    status: str = "open"
+    job_kind: Optional[str] = None
+    remediation_decision_id: Optional[str] = None
+    escalated_to_decision: bool = False
+    created_at: Optional[str] = None
+
+
+class DeadletterClassifyEscalation(BaseModel):
+    deadletter_id: str
+    decision_id: str
+    reason: Optional[str] = None
+
+
+class DeadletterClassifyRequest(BaseModel):
+    project_id: str
+    limit: int = Field(default=200, ge=1, le=500)
+    escalate_model: bool = True
+    actor: str = "system"
+
+
+class DeadletterClassifyResponse(BaseModel):
+    project_id: str
+    total_open: int
+    by_class: dict[str, int]
+    items: list[DeadletterClassifyItem] = Field(default_factory=list)
+    escalations: list[DeadletterClassifyEscalation] = Field(default_factory=list)
+    error_classes: list[str] = Field(default_factory=list)
 
 
 class BudgetReservationSummary(BaseModel):
@@ -3742,6 +3785,32 @@ class RoleAutonomyCheckResponse(BaseModel):
     required_level: Optional[int] = None
     allowed_capabilities: list[str] = Field(default_factory=list)
     trust_score: int
+    # G2 — trust_score → risk-tier gate (fail-closed). Present on all checks.
+    min_trust_required: Optional[int] = None
+    max_allowed_risk_tier: Optional[int] = None
+    trust_gate_passed: Optional[bool] = None
+
+
+class AutonomyScoreResponse(BaseModel):
+    """G1 — current earned-autonomy score for a role (read-only)."""
+
+    project_id: str
+    role_key: str
+    role_id: str
+    display_name: str
+    trust_score: int
+    autonomy_level: int
+    max_allowed_risk_tier: int
+    trust_risk_tier_floors: dict[str, int] = Field(default_factory=dict)
+    successful_runs: int = 0
+    policy_violation_count: int = 0
+    scope_violation_count: int = 0
+    duplicate_effect_attempt_count: int = 0
+    hidden_failure_count: int = 0
+    low_quality_output_count: int = 0
+    last_reviewed_at: Optional[str] = None
+    score_exists: bool = True
+    gate_mode: str = "fail_closed"
 
 
 class RoleScopeCheckRequest(BaseModel):
@@ -7470,6 +7539,183 @@ class KnowledgePackContextRequest(BaseModel):
     reserved_output_tokens: int = Field(default=0, ge=0)
     tool_ids: list[str] = Field(default_factory=list, max_length=100)
 
+
+# ── Knowledge graph (RB-15) — Community-safe /v1/knowledge/graph/* ────────────
+
+
+class KnowledgeGraphNodeUpsertRequest(BaseModel):
+    """Create-or-merge a knowledge-graph node keyed by (project, kind, node_key).
+
+    BOSS-355: carries provenance ``source``, ``confidence``, and temporal
+    validity ``valid_from`` / ``valid_to`` (ISO-8601 or null for unbounded).
+    """
+
+    project_id: str
+    actor: str = "system"
+    kind: str
+    node_key: str
+    name: Optional[str] = None
+    attrs: dict[str, Any] = Field(default_factory=dict)
+    layer: str = "deterministic"
+    source: str = "manual"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "KnowledgeGraphNodeUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.kind = _require_text(self.kind, "kind")
+        self.node_key = _require_text(self.node_key, "node_key")
+        self.layer = _require_text(self.layer, "layer")
+        self.source = _require_text(self.source, "source")
+        if self.layer not in ("deterministic", "inferred"):
+            raise ValueError("layer must be deterministic|inferred")
+        return self
+
+
+class KnowledgeGraphNodeUpsertResponse(BaseModel):
+    id: str
+    project_id: str
+    kind: str
+    node_key: str
+    source: Optional[str] = None
+    confidence: Optional[float] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+
+
+class KnowledgeGraphEdgeUpsertRequest(BaseModel):
+    """Create-or-merge a directed edge keyed by (project, src, dst, kind)."""
+
+    project_id: str
+    actor: str = "system"
+    src_id: str
+    dst_id: str
+    kind: str
+    attrs: dict[str, Any] = Field(default_factory=dict)
+    layer: str = "deterministic"
+    source: str = "manual"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "KnowledgeGraphEdgeUpsertRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.src_id = _require_text(self.src_id, "src_id")
+        self.dst_id = _require_text(self.dst_id, "dst_id")
+        self.kind = _require_text(self.kind, "kind")
+        self.layer = _require_text(self.layer, "layer")
+        self.source = _require_text(self.source, "source")
+        if self.layer not in ("deterministic", "inferred"):
+            raise ValueError("layer must be deterministic|inferred")
+        return self
+
+
+class KnowledgeGraphEdgeUpsertResponse(BaseModel):
+    id: str
+    project_id: str
+    src_id: str
+    dst_id: str
+    kind: str
+    source: Optional[str] = None
+    confidence: Optional[float] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None
+
+
+class KnowledgeGraphNodeListResponse(BaseModel):
+    project_id: str
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+
+
+class KnowledgeRetrievalEvalResponse(BaseModel):
+    """BOSS-357 coverage metrics + regression/threshold alarm."""
+
+    project_id: str
+    coverage_score: float
+    threshold: float
+    alarm: bool
+    alarm_reasons: list[str] = Field(default_factory=list)
+    prior_coverage_score: Optional[float] = None
+    regression: bool = False
+    below_threshold: bool = False
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    snapshot_id: Optional[str] = None
+    evaluated_at: Optional[str] = None
+
+
+class KnowledgeGraphSubgraphResponse(BaseModel):
+    project_id: str
+    root: Optional[dict[str, Any]] = None
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    depth: int = 2
+
+
+class KnowledgeGraphNeighborsResponse(BaseModel):
+    project_id: str
+    node_id: str
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class KnowledgeGraphRootCauseRequest(BaseModel):
+    """Persist a confirmed root cause as a ``caused_by`` edge (learning write-back)."""
+
+    project_id: str
+    actor: str = "system"
+    service: str
+    cause_kind: str
+    cause_key: str
+    cause_name: str
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    evidence: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "KnowledgeGraphRootCauseRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.service = _require_text(self.service, "service")
+        self.cause_kind = _require_text(self.cause_kind, "cause_kind")
+        self.cause_key = _require_text(self.cause_key, "cause_key")
+        self.cause_name = _require_text(self.cause_name, "cause_name")
+        return self
+
+
+class KnowledgeGraphRootCauseResponse(BaseModel):
+    service_id: str
+    cause_id: str
+    edge_id: str
+
+
+class KnowledgeGraphKnownCausesResponse(BaseModel):
+    project_id: str
+    service: str
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class KnowledgeGraphSeedFromInfraRequest(BaseModel):
+    """Seed ``resource`` nodes from active ``infra_resources`` inventory."""
+
+    project_id: str
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "KnowledgeGraphSeedFromInfraRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+
+class KnowledgeGraphSeedFromInfraResponse(BaseModel):
+    project_id: str
+    resources: int
+
+
 class ProviderSloUpsertRequest(BaseModel):
     """Create or update a provider SLO definition (BOSS-241)."""
 
@@ -7534,3 +7780,584 @@ class ProviderSloEvaluationSummary(BaseModel):
     evaluated_at: Optional[datetime] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+class FeatureCatalogEntrySummary(BaseModel):
+    id: str
+    project_id: str
+    label: Optional[str] = None
+    slug: str
+    title: str
+    doc_path: str
+    status: str
+    source: Optional[str] = None
+    implementation_files: list[Any] = Field(default_factory=list)
+    test_coverage: list[Any] = Field(default_factory=list)
+    source_refs: list[Any] = Field(default_factory=list)
+    needs_label: bool = False
+    last_documented_event_id: Optional[str] = None
+    last_documented_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+    idempotent: bool = False
+
+class FeatureCatalogListResponse(BaseModel):
+    project_id: str
+    items: list[FeatureCatalogEntrySummary]
+    count: int
+
+class FeatureSeedRequest(BaseModel):
+    project_id: str
+    actor: str = "system"
+
+class FeatureSeedResponse(BaseModel):
+    project_id: str
+    items: list[FeatureCatalogEntrySummary]
+    entry_count: int
+    seeded: bool
+    source: Optional[str] = None
+    reason: Optional[str] = None
+
+class FeatureUpsertRequest(BaseModel):
+    project_id: str
+    title: str
+    label: Optional[str] = None
+    slug: Optional[str] = None
+    doc_path: Optional[str] = None
+    status: Optional[str] = None
+    source: Optional[str] = None
+    implementation_files: list[Any] = Field(default_factory=list)
+    test_coverage: list[Any] = Field(default_factory=list)
+    source_refs: list[Any] = Field(default_factory=list)
+    needs_label: Optional[bool] = None
+    actor: str
+
+class FeatureDocumentedRequest(BaseModel):
+    project_id: str
+    event_id: str
+    status: Optional[str] = None
+    actor: str
+
+class CapabilityItem(BaseModel):
+    id: str
+    title: str
+    summary: str
+    initiator_tool: Optional[str] = None
+    enabled: bool
+    reason: Optional[str] = None
+
+class CapabilityManifestResponse(BaseModel):
+    project_id: str
+    capabilities: list[CapabilityItem]
+    count: int
+
+class CapabilityManifestTableResponse(BaseModel):
+    project_id: str
+    table: str
+
+class LearningExampleRecordRequest(BaseModel):
+    project_id: str
+    agent: str
+    kind: str
+    label: str = ""
+    outcome: str = ""
+    ref: str = ""
+    source: str = "manual"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "LearningExampleRecordRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.agent = _require_text(self.agent, "agent")
+        self.kind = _require_text(self.kind, "kind")
+        self.actor = _require_text(self.actor, "actor")
+        self.source = (self.source or "manual").strip() or "manual"
+        return self
+
+class LearningExampleRecordResponse(BaseModel):
+    id: str
+    project_id: str
+    agent: str
+    kind: str
+
+class LearningExampleItem(BaseModel):
+    id: str
+    agent: str
+    kind: str
+    label: str = ""
+    outcome: str = ""
+    ref: str = ""
+    source: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+
+class LearningCorpusResponse(BaseModel):
+    project_id: str
+    agent: str
+    kind: Optional[str] = None
+    items: list[LearningExampleItem] = Field(default_factory=list)
+    count: int = 0
+
+class LearningEvaluateResponse(BaseModel):
+    project_id: str
+    agent: str
+    total: int
+    by_outcome: dict[str, int] = Field(default_factory=dict)
+    by_label: dict[str, int] = Field(default_factory=dict)
+    false_alarm_rate: Optional[float] = None
+    fix_success_rate: Optional[float] = None
+
+class LearningSuggestTuningRequest(BaseModel):
+    project_id: str
+    agent: str
+    actor: str = "system"
+
+    @model_validator(mode="after")
+    def _validate(self) -> "LearningSuggestTuningRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.agent = _require_text(self.agent, "agent")
+        self.actor = _require_text(self.actor, "actor")
+        return self
+
+class LearningSuggestTuningResponse(BaseModel):
+    project_id: str
+    agent: str
+    raise_threshold: list[dict[str, Any]] = Field(default_factory=list)
+    few_shot_candidates: list[dict[str, Any]] = Field(default_factory=list)
+
+class IntentClassifyRequest(BaseModel):
+    message: str
+
+    @model_validator(mode="after")
+    def _validate(self) -> "IntentClassifyRequest":
+        self.message = _require_text(self.message, "message")
+        return self
+
+class IntentClassifyResponse(BaseModel):
+    intent: Optional[str] = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+class IntentRouteRequest(BaseModel):
+    project_id: str
+    actor: str = "executive_console"
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    confirm_plan_id: Optional[str] = None
+    pending_plan_id: Optional[str] = None
+    external_ref: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> "IntentRouteRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if not self.messages and not self.confirm_plan_id:
+            raise ValueError("messages or confirm_plan_id is required.")
+        if self.messages is not None and not isinstance(self.messages, list):
+            raise ValueError("messages must be a list.")
+        # Fail closed on empty content when no confirmation is in flight.
+        if not self.confirm_plan_id:
+            if not self.messages:
+                raise ValueError("messages or confirm_plan_id is required.")
+            last = self.messages[-1] if self.messages else {}
+            content = str((last or {}).get("content") or "").strip()
+            if not content:
+                raise ValueError("messages must end with non-empty content.")
+        return self
+
+class IntentRouteResponse(BaseModel):
+    reply: str
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+    pending_confirmation: Optional[dict[str, Any]] = None
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+
+class TelemetryQueryRequest(BaseModel):
+    """Direct connector query — metrics|logs|traces|alerts (not a reliability scan)."""
+    project_id: str
+    actor: str = "system"
+    kind: str                                    # metrics | logs | traces | alerts
+    query: str = ""
+    source_id: Optional[str] = None
+    source: Optional[dict[str, Any]] = None      # inline connector config when source_id omitted
+    window: ReliabilityWindow
+    limit: int = 5000
+
+    @model_validator(mode="after")
+    def _validate(self) -> "TelemetryQueryRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        self.kind = _require_text(self.kind, "kind").lower()
+        if self.kind not in ("metrics", "logs", "traces", "alerts"):
+            raise ValueError("kind must be metrics|logs|traces|alerts")
+        if not self.source_id and not self.source:
+            raise ValueError("source_id or source is required")
+        if self.limit < 1 or self.limit > 10000:
+            raise ValueError("limit must be within [1, 10000]")
+        return self
+
+class TelemetryQueryResponse(BaseModel):
+    project_id: str
+    kind: str
+    query: str = ""
+    source_id: Optional[str] = None
+    source_kind: Optional[str] = None
+    window: ReliabilityWindow
+    count: int = 0
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+class TelemetryConnectorCatalogItem(BaseModel):
+    kind: str
+    title: str
+    capabilities: list[str] = Field(default_factory=list)
+    auth: str = "none"
+    required_config: list[str] = Field(default_factory=list)
+    optional_config: list[str] = Field(default_factory=list)
+    required_env_present: bool = False
+
+class TelemetryConnectorCatalogResponse(BaseModel):
+    items: list[TelemetryConnectorCatalogItem] = Field(default_factory=list)
+    count: int = 0
+
+class ChangeCorrelateRequest(BaseModel):
+    """Rank recent changes near an incident onset or service window (RB-17)."""
+    project_id: str
+    actor: str = "system"
+    incident_ref: Optional[str] = None
+    service: Optional[str] = None
+    window: Optional[ReliabilityWindow] = None
+    lookback_minutes: Optional[int] = None
+    limit: int = 10
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ChangeCorrelateRequest":
+        self.project_id = _require_text(self.project_id, "project_id")
+        self.actor = _require_text(self.actor, "actor")
+        if not (self.incident_ref or self.service):
+            raise ValueError("incident_ref or service is required")
+        if not self.incident_ref and self.window is None:
+            raise ValueError("window is required when incident_ref is omitted")
+        if self.limit < 1 or self.limit > 100:
+            raise ValueError("limit must be within [1, 100]")
+        if self.lookback_minutes is not None and self.lookback_minutes < 1:
+            raise ValueError("lookback_minutes must be >= 1")
+        return self
+
+class ChangeCorrelateResponse(BaseModel):
+    project_id: str
+    service: Optional[str] = None
+    incident_ref: Optional[str] = None
+    onset: str
+    lookback_minutes: int
+    changes: list[dict[str, Any]] = Field(default_factory=list)
+    count: int = 0
+
+
+# ── Agent Studio, executable Panels, and durable A2A coordination ────────────
+
+class ModelRateLimitLaneSummary(BaseModel):
+    """Per-provider AIMD lane state (process-local)."""
+
+    provider: str
+    limit: int
+    max_concurrency: int
+    floor_concurrency: int = 1
+    in_flight: int = 0
+    successes: int = 0
+    backoff_remaining_seconds: float = 0.0
+    pacing_wait_seconds: float = 0.0
+
+class ModelRateLimitsResponse(BaseModel):
+    """Observability snapshot of the model-call rate limiter.
+
+    State is process-local: API and worker processes do not share counters.
+    Lanes are empty until the process has paced at least one call for a provider.
+    """
+
+    project_id: Optional[str] = None
+    mode: str
+    scope: str = "process_local"
+    available: bool = True
+    note: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    lanes: list[ModelRateLimitLaneSummary] = Field(default_factory=list)
+
+class ModelRateLimitReportRequest(BaseModel):
+    """Worker-reported rate-limit or success signal for AIMD pacing."""
+
+    project_id: Optional[str] = None
+    provider: str = Field(min_length=1, max_length=100)
+    outcome: Literal["rate_limited", "ok"]
+    retry_after_s: Optional[float] = Field(default=None, ge=0)
+
+class ModelRateLimitReportResponse(BaseModel):
+    accepted: bool
+    project_id: Optional[str] = None
+    provider: str
+    outcome: str
+    scope: str = "process_local"
+    note: str = ""
+    mode: Optional[str] = None
+    lane: Optional[ModelRateLimitLaneSummary] = None
+
+class PipelineAdapterCatalogItem(BaseModel):
+    """Static pipeline adapter kind — capabilities only, no secret values."""
+
+    kind: str
+    display_name: str
+    description: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    read_only_operations: list[str] = Field(default_factory=list)
+    effect_operations: list[str] = Field(default_factory=list)
+    config_keys: list[str] = Field(default_factory=list)
+    secret_config_keys: list[str] = Field(default_factory=list)
+    requires_credentials: bool = True
+    status: str = "available"
+    is_default: bool = False
+
+class PipelineAdapterCatalogResponse(BaseModel):
+    default_provider: str
+    note: str = ""
+    items: list[PipelineAdapterCatalogItem] = Field(default_factory=list)
+
+
+# ── Operator utilities: CI generate, redaction, standards, mining, debate ─────
+
+
+class CIConfigGenerateRequest(BaseModel):
+    """Dry-run CI config generation (no PR, no provider write)."""
+
+    language: str = Field(min_length=1, max_length=64)
+    framework: Optional[str] = Field(default=None, max_length=64)
+    target: str = Field(default="github_actions", min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "CIConfigGenerateRequest":
+        self.language = _require_text(self.language, "language").lower()
+        self.target = _require_text(self.target, "target").lower()
+        if self.framework is not None:
+            self.framework = self.framework.strip() or None
+        return self
+
+
+class CIConfigGenerateResponse(BaseModel):
+    target: str
+    path: str
+    content: str
+    checksum: str
+    commands: dict[str, str] = Field(default_factory=dict)
+
+
+class RedactRequest(BaseModel):
+    """PII/secret redaction before a data boundary (deterministic)."""
+
+    text: str = ""
+
+
+class RedactResponse(BaseModel):
+    text: str
+    redacted: str
+    summary: dict[str, int] = Field(default_factory=dict)
+    has_pii: bool = False
+
+
+class PlatformStandardsCatalogResponse(BaseModel):
+    """Catalog of BOSS platform standards (keyed blocks agents must apply)."""
+
+    keys: list[str] = Field(default_factory=list)
+    standards: dict[str, str] = Field(default_factory=dict)
+    count: int = 0
+
+
+class PlatformStandardsApplyRequest(BaseModel):
+    """Resolve which platform standards apply to a task description."""
+
+    instructions: str = ""
+    force: bool = False
+
+
+class PlatformStandardsApplyResponse(BaseModel):
+    applies: bool
+    force: bool = False
+    block: str = ""
+    keys_applied: list[str] = Field(default_factory=list)
+
+
+class TelemetryMineLogEvent(BaseModel):
+    ts: float = 0.0
+    message: str
+    service: str = ""
+    level: str = "info"
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+class TelemetryMineMetricPoint(BaseModel):
+    ts: float
+    value: float
+
+
+class TelemetryMineMetricSeries(BaseModel):
+    name: str
+    points: list[TelemetryMineMetricPoint] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
+class TelemetryMineRequest(BaseModel):
+    """Model-free log/metric distillation (templates + anomaly signals)."""
+
+    events: list[TelemetryMineLogEvent] = Field(default_factory=list)
+    baseline: Optional[dict[str, float]] = None
+    metrics: Optional[list[TelemetryMineMetricSeries]] = None
+    top_n: int = Field(default=10, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "TelemetryMineRequest":
+        if not self.events and not self.metrics:
+            raise ValueError("events or metrics is required")
+        return self
+
+
+class TelemetryMineResponse(BaseModel):
+    events: int = 0
+    distinct_templates: int = 0
+    reduction_ratio: Optional[float] = None
+    top_templates: list[dict[str, Any]] = Field(default_factory=list)
+    signals: list[dict[str, Any]] = Field(default_factory=list)
+    signal_count: int = 0
+
+
+class VerificationTargetProfileRequest(BaseModel):
+    """Resolve web vs python verification target from a task spec."""
+
+    spec: dict[str, Any] = Field(default_factory=dict)
+    title: str = ""
+
+
+class VerificationTargetProfileResponse(BaseModel):
+    kind: str
+    steps: list[str] = Field(default_factory=list)
+    command: str
+    test_commands: list[str] = Field(default_factory=list)
+
+
+class AwsMetalTypesResponse(BaseModel):
+    """Advisory AWS EC2 bare-metal instance type shortlist."""
+
+    region: Optional[str] = None
+    items: list[str] = Field(default_factory=list)
+    count: int = 0
+    note: str = (
+        "Advisory only — validate availability via EC2 describe-instance-type-offerings."
+    )
+
+
+class AwsMetalClassifyRequest(BaseModel):
+    instance_type: str = Field(min_length=1, max_length=64)
+
+
+class AwsMetalClassifyResponse(BaseModel):
+    instance_type: str
+    is_bare_metal: bool
+
+
+class VerifierDebateTurn(BaseModel):
+    """Scripted debate turn for pure (no-model) debate runs."""
+
+    argument: str = ""
+    concede: bool = False
+    withdraw: bool = False
+    verdict: Optional[str] = None
+    rationale: str = ""
+
+
+class VerifierDebateRequest(BaseModel):
+    """Bounded generator↔verifier debate with scripted debaters (zero model cost).
+
+    Provide ordered defend/challenge turns; optional judge turns used only if the
+    debate is unresolved after max_rounds.
+    """
+
+    claim: str = Field(min_length=1)
+    defend_turns: list[VerifierDebateTurn] = Field(default_factory=list)
+    challenge_turns: list[VerifierDebateTurn] = Field(default_factory=list)
+    judge_turns: list[VerifierDebateTurn] = Field(default_factory=list)
+    max_rounds: int = Field(default=2, ge=1, le=8)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "VerifierDebateRequest":
+        self.claim = _require_text(self.claim, "claim")
+        return self
+
+
+class VerifierDebateResponse(BaseModel):
+    verdict: str
+    reason: str
+    confidence: float
+    rounds_used: int
+    transcript: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DesignPromptRequest(BaseModel):
+    """Build the product_design role prompt for a UI-bearing task."""
+
+    title: str = ""
+    instructions: str = ""
+    criteria: list[str] = Field(default_factory=list)
+    design_system: Optional[str] = None
+    spec: dict[str, Any] = Field(default_factory=dict)
+    test_files: list[str] = Field(default_factory=list)
+
+
+class DesignPromptResponse(BaseModel):
+    ui_bearing: bool
+    product_design_prompt: Optional[str] = None
+    design_impl_clause: Optional[str] = None
+    design_review_clause: Optional[str] = None
+
+
+class LlmCallItem(BaseModel):
+    id: str
+    project_id: Optional[str] = None
+    code_task_run_id: Optional[str] = None
+    stage: Optional[str] = None
+    engine: Optional[str] = None
+    model: Optional[str] = None
+    role: Optional[str] = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd_micros: int = 0
+    price_estimated: Optional[bool] = None
+    latency_ms: int = 0
+    retries: int = 0
+    turns: int = 0
+    ok: bool = True
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class LlmCallListResponse(BaseModel):
+    project_id: str
+    count: int
+    total: int
+    limit: int
+    offset: int
+    items: list[LlmCallItem] = Field(default_factory=list)
+
+
+class LlmCallSummaryGroup(BaseModel):
+    group_key: str
+    calls: int
+    cost_usd_micros: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    ok_calls: int = 0
+    failed_calls: int = 0
+    avg_latency_ms: float = 0.0
+
+
+class LlmCallSummaryResponse(BaseModel):
+    project_id: str
+    group_by: str
+    total_calls: int
+    total_cost_usd_micros: int
+    groups: list[LlmCallSummaryGroup] = Field(default_factory=list)

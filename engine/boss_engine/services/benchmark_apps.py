@@ -570,8 +570,16 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
             "timed_out": verify.get("timed_out") if isinstance(verify, dict) else None,
         },
     ]
-    is_complete = run.get("status") == "completed" and all(
-        row["status"] == "pass" for row in command_results
+    simulated = bool(
+        spec.get("simulated")
+        or context.get("simulated")
+        or context.get("fixture")
+        or run.get("status") == "simulated"
+    )
+    is_complete = (
+        not simulated
+        and run.get("status") == "completed"
+        and all(row["status"] == "pass" for row in command_results)
     )
     return {
         "run_id": run.get("id"),
@@ -582,6 +590,7 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
         or list(COMPLETION_CONTRACT),
         "required_verification_commands": benchmark.get("verification_commands") or [],
         "results": command_results,
+        "simulated": simulated,
         "passed": is_complete,
         "scorecard": benchmark_scorecard(
             run,
@@ -590,7 +599,9 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
             llm_calls=llm_calls,
         ),
         "message": (
-            "Benchmark acceptance evidence is complete."
+            "Simulated fixture is not a certified benchmark pass."
+            if simulated
+            else "Benchmark acceptance evidence is complete."
             if is_complete
             else "Benchmark is not certified: missing, failed, or incomplete durable evidence remains visible."
         ),

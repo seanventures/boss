@@ -657,6 +657,31 @@ class Settings(BaseSettings):
     model_max_concurrency: int = Field(default=3, alias="BOSS_MODEL_MAX_CONCURRENCY")
     model_min_interval_ms: int = Field(default=0, alias="BOSS_MODEL_MIN_INTERVAL_MS")
     model_rate_backoff_seconds: int = Field(default=30, alias="BOSS_MODEL_RATE_BACKOFF_SECONDS")
+    # Concurrency & scheduling governance (BOSS-100): VM-pool density ceiling,
+    # queue backpressure thresholds, lease-contention ratio. Provider rate limits
+    # bind first when prefer_provider_rate_limits is true.
+    concurrency_max_vms_per_host: int = Field(
+        default=8, alias="BOSS_CONCURRENCY_MAX_VMS_PER_HOST"
+    )
+    concurrency_max_queue_depth_per_worker: int = Field(
+        default=5, alias="BOSS_CONCURRENCY_MAX_QUEUE_DEPTH_PER_WORKER"
+    )
+    concurrency_backpressure_queue_depth: int = Field(
+        default=20, alias="BOSS_CONCURRENCY_BACKPRESSURE_QUEUE_DEPTH"
+    )
+    concurrency_lease_contention_ratio: float = Field(
+        default=0.75, alias="BOSS_CONCURRENCY_LEASE_CONTENTION_RATIO"
+    )
+    concurrency_lease_expiry_soon_seconds: int = Field(
+        default=30, alias="BOSS_CONCURRENCY_LEASE_EXPIRY_SOON_SECONDS"
+    )
+    concurrency_prefer_provider_rate_limits: bool = Field(
+        default=True, alias="BOSS_CONCURRENCY_PREFER_PROVIDER_RATE_LIMITS"
+    )
+    concurrency_budget_governor_overrides_scale: bool = Field(
+        default=True, alias="BOSS_CONCURRENCY_BUDGET_GOVERNOR_OVERRIDES_SCALE"
+    )
+    concurrency_wip_limit: int = Field(default=5, alias="BOSS_CONCURRENCY_WIP_LIMIT")
     # Which CodeAgent implementation runs the edit/test loop:
     #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).
@@ -928,12 +953,28 @@ class Settings(BaseSettings):
     # Coding-agent engine that runs INSIDE the sandbox (echo | openai | claude_code).
     # openai = native agent on the raw model API (no CLI/keychain — works headless).
     sandbox_guest_engine: str = Field(default="openai", alias="BOSS_SANDBOX_GUEST_ENGINE")
-    # Root dir under which per-task ephemeral sandboxes are cloned and torn down.
+    # Community GA honesty gate: when true, refuse microVM *execution* claims with a clear
+    # 422 (host connectivity may still be reported). Flip after rootfs bake is proven live.
+    # See docs/product/SANDBOX_GA_STATUS.md.
+    microvm_claims_frozen: bool = Field(
+        default=True, alias="BOSS_MICROVM_CLAIMS_FROZEN"
+    )
+    # Root dir for ephemeral sandboxes. Production must set this to a volume
+    # (e.g. /var/lib/boss/artifacts/sandboxes) so API recreates do not destroy
+    # verify-green workspaces needed for preview.
     sandbox_root_path: Optional[Path] = Field(
         default=None, alias="BOSS_SANDBOX_ROOT_PATH"
     )
     # Shallow-clone depth for the ephemeral sandbox.
     sandbox_clone_depth: int = Field(default=1, alias="BOSS_SANDBOX_CLONE_DEPTH")
+    # Absolute operator-facing origin for preview View URLs (e.g.
+    # https://boss-api.local.sean.network). When set, publicize_preview rewrites
+    # loopback binds to {base}/v1/previews/{id}/web/ and rejects a loopback base.
+    # Relative gateway paths are used when empty. See docs/product/PREVIEW_GA_CHECKLIST.md.
+    preview_public_base: str = Field(
+        default="",
+        validation_alias=AliasChoices("BOSS_PREVIEW_PUBLIC_BASE", "preview_public_base"),
+    )
 
     # --- GitHub App (Phase 2: developer impersonation, revocable) ------------
     # When set, github_app_adapter mints short-lived, repo-scoped installation
@@ -949,17 +990,18 @@ class Settings(BaseSettings):
         default=None, alias="BOSS_GITHUB_APP_INSTALLATION_ID"
     )
 
-    # Simple rate limiting for high-cost paths (P2 per .ai/security-review.md).
-    # In-memory implementation only (see main.py); production requires Redis or
-    # edge limiter (nginx, CDN, etc). Default protects metatron/query, commands/propose,
-    # resources/sync etc at 10 req/min per (IP+actor) key. Can disable or tune via env.
+    # In-process rate limiting for high-cost paths (P2 per .ai/security-review.md).
+    # Community / single-process: the in-memory limiter in apps/api/app/main.py is
+    # the supported control. Redis is the A2A transport, not a rate-limit backend.
+    # Multi-replica / public-edge: front with Redis/LB/CDN and optionally disable
+    # this limiter via BOSS_RATE_LIMIT_ENABLED=false. Default protects
+    # metatron/query, commands/propose, resources/sync per (IP+actor) key.
     rate_limit_enabled: bool = Field(
         default=True, alias="BOSS_RATE_LIMIT_ENABLED"
     )
     rate_limit_requests_per_minute: int = Field(
         # Bumped 10 -> 120 so interactive console/validation sessions aren't
-        # throttled on the high-cost paths (propose/query/chat/sync). Still
-        # env-overridable; prod should front with Redis/LB rate limiting.
+        # throttled on the high-cost paths (propose/query/chat/sync).
         default=120, alias="BOSS_RATE_LIMIT_RPM"
     )
 

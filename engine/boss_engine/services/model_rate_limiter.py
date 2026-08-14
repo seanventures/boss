@@ -184,6 +184,49 @@ class ModelRateLimiter:
         with self._cond:
             return self._lane(provider).limit
 
+    def snapshot(self) -> dict:
+        """Process-local limiter state for observability. Lanes appear only after use."""
+        with self._cond:
+            now = self._time()
+            lanes = []
+            for provider, lane in sorted(self._lanes.items()):
+                lanes.append(
+                    {
+                        "provider": provider,
+                        "limit": lane.limit,
+                        "max_concurrency": self.max_concurrency,
+                        "floor_concurrency": self.floor,
+                        "in_flight": lane.in_flight,
+                        "successes": lane.successes,
+                        "backoff_remaining_seconds": round(
+                            max(0.0, lane.backoff_until - now), 3
+                        ),
+                        "pacing_wait_seconds": round(
+                            max(0.0, lane.next_earliest - now), 3
+                        ),
+                    }
+                )
+            return {
+                "mode": "paced",
+                "scope": "process_local",
+                "available": True,
+                "note": (
+                    "Limiter state is process-local to this process; API and worker "
+                    "processes do not share lane counters. Multi-worker coordination "
+                    "is not yet implemented."
+                ),
+                "config": {
+                    "max_concurrency": self.max_concurrency,
+                    "floor_concurrency": self.floor,
+                    "min_interval_ms": int(round(self.min_interval_s * 1000)),
+                    "default_backoff_seconds": self.default_backoff_s,
+                    "max_backoff_seconds": self.max_backoff_s,
+                    "recover_after": self.recover_after,
+                    "acquire_timeout_seconds": self.acquire_timeout_s,
+                },
+                "lanes": lanes,
+            }
+
 
 class NullRateLimiter:
     """Burst mode: no limiting at all (BOSS_MODEL_BURST_MODE=true)."""
@@ -198,10 +241,39 @@ class NullRateLimiter:
     def report_ok(self, provider: str) -> None:
         pass
 
+    def limit_for(self, provider: str) -> int:
+        return 0
+
+    def snapshot(self) -> dict:
+        return {
+            "mode": "burst",
+            "scope": "process_local",
+            "available": True,
+            "note": (
+                "BOSS_MODEL_BURST_MODE is enabled: no concurrency/pacing/backoff is "
+                "applied. There is no per-lane state to report."
+            ),
+            "config": {
+                "max_concurrency": 0,
+                "floor_concurrency": 0,
+                "min_interval_ms": 0,
+                "default_backoff_seconds": 0.0,
+                "max_backoff_seconds": 0.0,
+                "recover_after": 0,
+                "acquire_timeout_seconds": 0.0,
+            },
+            "lanes": [],
+        }
+
 
 _singleton_lock = threading.Lock()
 _singleton: Optional[object] = None
 _singleton_key: Optional[tuple] = None
+
+_SCOPE_NOTE = (
+    "Limiter state is process-local to this process; API and worker processes do not "
+    "share lane counters. Multi-worker coordination is not yet implemented."
+)
 
 
 def get_rate_limiter(settings) -> object:
@@ -227,3 +299,63 @@ def get_rate_limiter(settings) -> object:
             )
         _singleton_key = key
         return _singleton
+
+
+def rate_limiter_observability(settings, *, project_id: Optional[str] = None) -> dict:
+    """API-facing snapshot of the process-local rate limiter (honest empty when unused)."""
+    limiter = get_rate_limiter(settings)
+    snap = limiter.snapshot() if hasattr(limiter, "snapshot") else {
+        "mode": "unknown",
+        "scope": "process_local",
+        "available": False,
+        "note": _SCOPE_NOTE,
+        "config": {},
+        "lanes": [],
+    }
+    return {
+        "project_id": project_id,
+        **snap,
+    }
+
+
+def report_rate_limiter_outcome(
+    settings,
+    *,
+    provider: str,
+    outcome: str,
+    retry_after_s: Optional[float] = None,
+    project_id: Optional[str] = None,
+) -> dict:
+    """Apply a worker-reported rate-limit or ok signal to the process-local limiter."""
+    provider_key = (provider or "").strip().lower() or "default"
+    outcome_key = (outcome or "").strip().lower()
+    if outcome_key not in {"rate_limited", "ok"}:
+        raise ValueError("outcome must be 'rate_limited' or 'ok'")
+    limiter = get_rate_limiter(settings)
+    if outcome_key == "rate_limited":
+        limiter.report_rate_limited(provider_key, retry_after_s=retry_after_s)
+    else:
+        limiter.report_ok(provider_key)
+    snap = rate_limiter_observability(settings, project_id=project_id)
+    lane = next(
+        (item for item in snap.get("lanes") or [] if item.get("provider") == provider_key),
+        None,
+    )
+    return {
+        "accepted": True,
+        "project_id": project_id,
+        "provider": provider_key,
+        "outcome": outcome_key,
+        "scope": "process_local",
+        "note": _SCOPE_NOTE,
+        "lane": lane,
+        "mode": snap.get("mode"),
+    }
+
+
+def reset_rate_limiter_for_tests() -> None:
+    """Clear the process-global singleton (tests only)."""
+    global _singleton, _singleton_key
+    with _singleton_lock:
+        _singleton = None
+        _singleton_key = None

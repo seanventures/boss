@@ -22,6 +22,7 @@ import pytest
 from boss_engine.services.preview_service import (
     _detect_command,
     _node_server_dir,
+    forwarded_preview_headers,
     resolve_app_entry,
 )
 from boss_engine.services.scaffold_service import scaffold_project
@@ -223,3 +224,64 @@ def test_the_resolver_agrees_with_the_command_for_a_root_full_stack_app(tmp_path
         "server/index.js": "// server",
     })
     assert resolve_app_entry(tmp_path, ["server/index.js"]) == ("node", ".")
+
+
+def test_sample_app_web_index_does_not_shadow_its_start_server(tmp_path):
+    """Live BugBox / ApproveIt: lineage includes web/index.html so step 2 returned static
+    and /health + /api/* came back as the Vite HTML 404 page.
+
+    The owning start server (bugbox/package.json scripts.start) must outrank the SPA
+    file this task also wrote. A sibling static product (web-nqueens) must stay static.
+    """
+    write(tmp_path, {
+        "bugbox/package.json": pkg(start="node server/index.js", build="vite build", dev="vite"),
+        "bugbox/vite.config.ts": "export default {}",
+        "bugbox/server/index.js": "// express + sqlite",
+        "bugbox/web/index.html": "<html><title>BugBox</title></html>",
+        "approveit/package.json": pkg(start="node server/index.js"),
+        "approveit/server/index.js": "// server",
+        "approveit/public/index.html": "<html></html>",
+        "web-nqueens/index.html": "<title>Queen Quest</title>",
+        "serve.py": "# sudoku",
+        "index.html": "<title>Sudoku</title>",
+    })
+    bugbox_files = [
+        "bugbox/web/index.html",
+        "bugbox/server/index.js",
+        "bugbox/src/App.tsx",
+        "bugbox/package.json",
+    ]
+    assert resolve_app_entry(tmp_path, bugbox_files) == ("node", "bugbox")
+    command = " ".join(_detect_command(tmp_path, bugbox_files) or [])
+    assert "npm start" in command
+    assert "bugbox" in command
+    assert "http.server" not in command
+    assert "--base=./" in command
+
+    # Only the SPA file in the lineage — still the server, not static web/.
+    assert resolve_app_entry(tmp_path, ["bugbox/web/index.html"]) == ("node", "bugbox")
+    assert resolve_app_entry(tmp_path, ["approveit/public/index.html"]) == ("node", "approveit")
+
+    # Sibling static app this task built must not be stolen by bugbox's start.
+    assert resolve_app_entry(tmp_path, ["web-nqueens/index.html"]) == ("static", "web-nqueens")
+
+
+def test_preview_proxy_forwards_acting_user_and_strips_boss_secrets():
+    """ApproveIt /api/requests 401'd because the gateway dropped X-Acting-User-Id."""
+    got = forwarded_preview_headers(
+        {
+            "X-Acting-User-Id": "usr_morgan",
+            "Authorization": "Bearer boss-control-plane-secret",
+            "X-Boss-Api-Key": "also-secret",
+            "Accept": "application/json",
+            "Cookie": "boss_session=nope",
+        },
+        content_type="application/json",
+    )
+    lowered = {k.lower(): v for k, v in got.items()}
+    assert lowered["x-acting-user-id"] == "usr_morgan"
+    assert lowered["accept"] == "application/json"
+    assert lowered["content-type"] == "application/json"
+    assert "authorization" not in lowered
+    assert "x-boss-api-key" not in lowered
+    assert "cookie" not in lowered

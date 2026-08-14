@@ -1,5 +1,315 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Focused always-on agent builder
+
+- Thin builder at Agent Studio: pick template (preview keeper / queue helper / factory driver / reviewer / custom), set focus, mode (always_on / hybrid / on_demand), start.
+- Runtime `FocusedAgentService`: observe → plan → validate → apply allowed actions → verify. Worker `tick-all` every 60s; hybrid also wakes on matching events; Wake now for on-demand.
+- Same captain gates: no DLQ/decision apply, budget, no duplicate factory, preview needs verify-green. Receipts `focused:{id}:{minute}:{trigger}`.
+- **Not GA.** FEATURES ◐ until live dogfood of a focused-agent apply.
+
+## 2026-08-14 — Grok — Live always-on overwatch dogfood
+
+- Shared-tag deploy api+worker+web `3f1d2cf`. No `--env-template`.
+- Worker first idle tick `POST /v1/metatron/overwatch` applied 1 (preview restart) + `verify_ok=true` at 17:32:16Z. Event `app_preview.started` same second.
+- Manual cycle after goal set: working_software score 100, 43 DLQ + 12 decisions proposed and **not** applied. Receipts `rcpt_ce4417ea462745e2805a` / `rcpt_13092f9031964610bb81`.
+- FEATURES stays ◐. Do not stamp public GA.
+
+## 2026-08-14 — Grok — Always-on validated overwatch
+
+- Worker ticks `POST /v1/metatron/overwatch` every 60s even while a job is leased.
+- Cycle: observe → measure goals → validate every action → apply only safe moves → verify snapshot.
+- `validate_action` covers remember / set_goal / drive / overwatch; `validate_move` still gates apply.
+- Preview-gap working_software goals restart preview; they do not also enqueue a factory job.
+- Decisions/DLQ stay human. BOSS self-change is a PR. FEATURES stays ◐. **Not GA.**
+
+## 2026-08-14 — Grok — Metatron captain TUI + Run area
+
+- Stdlib TUI `scripts/metatron_tui.py` (optional `python -m boss_engine.cli.metatron`). Env: `BOSS_API_URL` + `BOSS_API_KEY` + `BOSS_PROJECT_ID`. Never prints the key.
+- REPL: NL → POST `/v1/metatron/session`. Slash: `/watch` `/drive` `/goals` `/quit`. `/drive auto` or `go` → POST drive `auto=true` (proposal-only on the server).
+- `make metatron` launches the TUI. Tests: `scripts/tests/test_metatron_tui.py` (mocked HTTP, no live API).
+- ConsoleShell AreaId `metatron` labeled "Metatron" under Run; island moved from overview to `data-area="metatron"`. Status Query stays on overview with an "Open captain" link. `EXISTING_AREA_IDS` updated.
+- **Not GA.** Do not deploy. Do not close BOSS-337.
+
+## 2026-08-14 — Grok — Captain drive validates every action
+
+- Every drive move runs `validate_move` before apply: kind, human-only block, budget not red/orange, preview has verify-green target, factory launch has no in-flight duplicate.
+- Decisions and deadletters never apply. Failed checks stay on the move (`validation.failed`).
+- Auto-drive (`go` / Launch validated work) may start a preview or enqueue a governed `code.task` with Receipt. BOSS self-change is a PR (`open_pr=True`).
+- Tests: engine captain 7 passed; web captain 8 passed.
+
+## 2026-08-14 — Grok — Captain NL leftovers (tests/docs/QA)
+
+- Parent landed `interpret_turn` `act`/`prioritize`/`drive auto`. Did **not** edit `metatron_captain.py`.
+- Tests: `test_interpret_turn_build_and_prioritize` (implement/ship/fix, question stays status, prioritize/p0/p1, drive auto vs propose next).
+- FEATURES.md + Community spec stay ◐ / partial. Claims freeze forbids autonomous build/prioritize. **Not GA.**
+- `make qa-metatron-captain` is unit/island only; documented in `QA_HARNESS.md` + `ga_dod_checklist.md` as not live dogfood.
+- UI empty-chat copy: build/prioritize phrasing is recognized but does not start work.
+
+## 2026-08-14 — Grok — Metatron Captain engine + idle watch
+
+- Engine `MetatronCaptain`: persistent `agent_threads` session (`external_ref=metatron:captain`), `metatron_memories`, `metatron_goals` (scored from control-plane snapshot), `metatron_watch_ticks` with Receipt `metatron:watch:{project}:{minute}`.
+- Routes: POST/GET `/v1/metatron/session`, GET/POST `/v1/metatron/goals`, POST `/v1/metatron/watch`, GET `/v1/metatron/watch/latest`, POST `/v1/metatron/drive`. Drive is **proposal-only** — never applies BOSS self-mod, never starts a code.task.
+- Worker idle tick every 180s (`tick_metatron_watch`) is no-LLM / no-spend.
+- Tests: `engine/tests/test_metatron_captain.py` 5 passed; web `metatron-captain.test.ts` 2 passed.
+- **Do not stamp public GA.** Captain is Community code.
+
+## 2026-08-14 — Grok — Metatron Captain Community UI island
+
+- Added `apps/web/app/metatron-captain-ui.tsx` on `ai/grok/community-ga` and mounted it on Mission Control overview beside Status Query. Existing `POST /v1/metatron/query` form is unchanged.
+- Island: persistent chat → `/v1/metatron/session`, goals + add-goal, last watch findings, proposal-only **Propose next moves** (`auto: false`). 404/unavailable is honest — no invented session.
+- Tests: `apps/web/tests/metatron-captain.test.ts` (mount, fields, 404 copy, no loopback operator URL).
+- W4 residual: Community code, not a public GA stamp. Do not close BOSS-337.
+
+## 2026-08-14 — Grok — Metatron captain expansion (docs; no silent autonomy)
+
+- Product direction: Metatron becomes the always-on captain — persistent chat with memory, goal register+measure, watch ticks, and proposal-only drive of governed work.
+- **Live (cited):** scoped `POST /v1/metatron/query` (`engine/boss_engine/services/metatron.py`, Mission Control card in `apps/web/lib/metatron.ts` / `page.tsx`); `metatron_operator_v1` (command.propose / decision.create, autonomy 1, must not bypass approvals); `POST /v1/commands/propose` intake creates task/plan with `dedupe_key` (`intake.py`).
+- **Not live / mid-flight:** persistent session+memory, goal register+measure, watch ticks, captain drive loop. FEATURES.md Workforce row is **◐**.
+- **No-silent-autonomy rule:** Metatron must **not** autonomously self-modify BOSS. Every drive effect needs a Decision or existing intake/job path **plus** a Receipt with a unique `dedupe_key`. Never silent-apply.
+- W4 residual: captain watch/drive is Community code, not a public GA stamp. Plane BOSS-337 comment skipped (`plane.local.sean.network` is a private IP; no POST from this agent). Issue stays In Progress — do not close. **Do not stamp public GA.**
+
+## 2026-08-14 — Grok — HookWatch View live; all 3 canaries work
+
+- HookWatch `crun_911888eefbd14166bce6` **completed** (`npm run verify` exit 0, 11 impl files, PR paramg/boss-sandbox#86).
+- Preview `prev_78b214cfb8fa4fbf8d08` running: title **HookWatch — temporary webhook inboxes**; `/api/health` `{ok,inboxes}`; `GET /api/inboxes` list; `POST /api/inboxes` 201.
+- All three sample apps now open as designed: BugBox `prev_0be09812b6a9484aa34b`, ApproveIt `prev_b221f5225fdb471c98c5`, HookWatch `prev_78b214cfb8fa4fbf8d08`.
+- `qa-working-software` **4/4 PASS** (picked HookWatch).
+- Plane comments 337/341/351. **Do not stamp public GA.**
+
+## 2026-08-14 — Grok — sample apps serve working software
+
+- Root cause: `resolve_app_entry` returned static on `bugbox/web/index.html` before the owning `scripts.start` server. PR-clone Views served Vite HTML; `/api` was HTML 404.
+- Fix `f5def77`: owning start outranks its own web/public index; sibling `web-nqueens` stays static; worker HTTP read 7200s; ReadTimeout is resume-safe.
+- Deploy: shared tag `boss-*:f5def77` (no `--env-template`; rollback `.env.bak.cefe635`). Sandbox root still volume-set.
+- Live Views: BugBox `prev_d06b4eabe8f3471cb2c0` title + `/health` JSON + `/api/issues` rows. ApproveIt `prev_7ad80927147e4ab3b8f3` title + `/health` JSON + `/api/users` JSON.
+- HookWatch launched: `crun_911888eefbd14166bce6` running `implement` (PRD meeting first).
+- Gates: `qa-live` 10/10 + Metatron; `qa-working-software` 4/4; harness reuse 56/56. Tests 21 focused.
+- Plane comments on 337/341/351. **Do not stamp public GA.** BOSS-300 legal. 14-day Day 1/14. C2 open.
+
+## 2026-08-13 — Grok — GA bar = working software
+
+- Operator definition: Community is GA only when a functional app can be built through the full system and opened as designed.
+- Live replay: completed BugBox `crun_7cc663627f2340dc85ac` (`npm run verify` exit 0, PR paramg/boss-sandbox#83) → `POST .../preview` → `prev_af60b33719b04082b027` running; HTML title **BugBox — capture, track, resolve**.
+- `make_sandbox_provider`: frozen microVM now selects local coding (does not unfreeze Firecracker).
+- Gate: `make qa-working-software` (`scripts/qa/working_software_gate.py`).
+- Do **not** stamp GA: new greenfield canary on the current shared tag is still unproven.
+
+## 2026-08-13 — Codex — Community OpenAPI sync (ai/grok/community-ga)
+
+- Extended `scripts/sync_openapi_from_routes.py` to scan `apps/api/app/routers/*.py` (honors `APIRouter` prefix) and splice missing paths instead of rewriting 49k-line `api/openapi.yaml`.
+- Synced Community GA isolated routes: easy-connect, preview fixture, comms dry-run, standup/simulated-run/evidence, assurance seed-demo, openai-compatible entitlement source.
+- `packages/api-client` unchanged (no OpenAPI→TS generator; Grok skill import/export WIP left alone).
+- Tests: `apps/api/tests/test_community_openapi_routes.py` + `scripts/tests/test_sync_openapi_community_routes.py`. `make openapi-live-qa-parity` OK (80).
+- Plane: BOSS-373 Done (`028f194`). Did not touch parallel Grok working-tree files.
+
+## 2026-08-13 — Grok — Resource receipts / cost-event honesty (ai/grok/community-ga)
+
+- API already keeps inventory when billing is unavailable (`billing_status` / `billing_confidence=unknown`).
+- Mission Control FinOps/receipts no longer render empty/unknown/unavailable as exact `$0.00`.
+- Feed maps health/recon billing fields; receipts empty copy says they are not invoices.
+- Tests: `finops-honesty.test.tsx`, providerops mapping, feature_sweep `GET /v1/resource-receipts`.
+- FEATURES.md receipts stay ◐ — honest labels; exact $ still needs billing-readable keys. No live E2E spend proof.
+
+## 2026-08-13 — Grok — Phase C2 local-code security (ai/grok/community-ga)
+
+- Confirmed `BOSS_API_KEY_PRINCIPALS` map + unbound-key 401. Added focused BOSS-320 test: leftover `org_members` mirror cannot authorize a deprovisioned SCIM user.
+- Rate limits: documented in-proc limiter as Community-ok; Redis is A2A-only (not added). Existing 429 + `rate_limit.exceeded` test kept.
+- BOSS-326: PyJWT==2.13.0 and cryptography==50.0.0 are already latest PyPI; no bump. Honest residuals in `docs/operations/SECURITY_C2_STATUS.md`. **C2 not Done** (no dep CI fail-gate; Actions stay off).
+- Plane: BOSS-320/326 already Done; comment evidence. OPS_BASE_URL unset — used local Plane key file.
+
+## 2026-08-13 — Grok — BOSS-338 residual: Community nav honesty (ai/grok/community-ga)
+
+- Community primary nav no longer presents leftover **Enterprise** or design-system-as-product as required areas.
+- `foundations` / `components` are `hide_nav` on Community (⌘K + `?area=` still resolve).
+- Area id `enterprise` stays as **SSO** (OIDC/SAML/SCIM/IdP). Account Connect, marketplace, clusters, SIM remain gated or Paid-badged.
+- Tests: `apps/web/tests/edition-visibility.test.ts` (15). No API edits. Plane: `OPS_BASE_URL` unset — track on branch.
+
+## 2026-08-13 — Grok — Community skill YAML import/export UI (ai/grok/community-ga)
+
+- Mission Control Company Pack sibling: local skill YAML import (`importSkillAction` → `POST /v1/skills/import`) and per-skill export download (`exportSkillAction` → `GET /v1/skills/{id}/export`).
+- Island: `apps/web/app/skills-import-ui.tsx` (`data-testid=skill-import` / `skill-export`). Marketplace stays behind PaidSurfaceGate.
+- Client: capability-bundle export (`application/vnd.boss.capability+json`) is not JSON-parsed (checksum preserved).
+- Tests: `apps/web/tests/skills-import.test.ts`. Plane: `OPS_BASE_URL` unset — track on branch.
+
+
+## 2026-08-13 — Grok — Factory + preview fixture slice (ai/grok/community-ga)
+
+- Live factory: `GET /v1/factory/wip` `github_plane=mission_control_binding` `seanheiney/boss`; `POST /v1/code-tasks` `simulated=true` → simulated, no job.
+- Preview fixture: `POST /v1/previews/fixture` creates `mode=fixture` running row; `/v1/previews/{id}/web/` returns 200 honest HTML. No sandbox, no loopback operator URL.
+- Tests: `test_preview_fixture.py` + URL contract 14 passed.
+- Live `1d5c081`: fixture View **200 HTML** (`prev_8a4947e073c547aab6d9`). qa-live 10/10. Real app View / factory PR success rate still open.
+
+## 2026-08-13 — Grok — A1/A2 shared-tag live cd13067 (ai/grok/community-ga)
+
+- Built/pushed `boss-api|worker|web:cd13067` natively on goldeneye. Bumped only `BOSS_*_IMAGE` (no `--env-template`). Rollback copy `.env.bak.3e6c906`.
+- Live: all three services `cd13067`; API healthy; web 200.
+- `qa-live` **10/10 + Metatron PASS**. Harness catalog **55/55** required; optional schema 500s gone (column reconcile now applied).
+- Provider-definitions count **11**. Do not stamp GA: 14-day calendar still Day 1/14; factory/preview substrate still open.
+
+## 2026-08-13 — Grok — Typed standup meeting (ai/grok/community-ga)
+
+- `meeting_type` persisted in constraints: `prd_panel` | `standup`.
+- `POST /v1/meetings/standup` simulated fixture: minutes artifact, action items, dissent, Decision. No LLM/job/budget.
+- Duplicate running standup refused (`already` + `duplicate_of`).
+- Meeting Room type select; MeetingConsensusCard bound to a real meeting_id.
+- Tests: 6 meeting simulated/standup passed. FEATURES meetings ✅ (go/no-go still future type).
+
+## 2026-08-13 — Grok — GA loop: catalog honesty + Code Tasks plane + B6 SOP (ai/grok/community-ga)
+
+- Catalog `built` only when `matched_on` is `benchmark_id` or `launched_as_benchmark`; name matches become `related` (stops stale report 404 reuse).
+- Code Tasks home shows factory GitHub plane (MC binding vs settings token).
+- Deploy SOP B6 in `GOLDENEYE_DEPLOYMENT.md`: never `--env-template` on redeploy; `qa-live` + `qa-harness` catalog required after shared-tag bump.
+
+## 2026-08-13 — Grok — Community pack YAML import/export UI (ai/grok/community-ga)
+
+- Mission Control Company Pack: local YAML import (`importPackAction` → `POST /v1/packs/import`) and per-installed-pack export download (`exportPackAction` → `GET /v1/packs/{id}/export`).
+- Island: `apps/web/app/packs-import-ui.tsx` (`data-testid=pack-import` / `pack-export`). Marketplace stays behind PaidSurfaceGate.
+- Client: YAML/text export responses are not JSON-parsed.
+- Tests: `apps/web/tests/packs-import.test.ts`. Plane: `OPS_BASE_URL` unset — track on branch (GAP-PRD-AUDIT-001 UI).
+
+
+## 2026-08-13 — Grok — Constitution §5 comms dry-run close-the-loop (ai/grok/community-ga)
+
+- `dry_run_deliver_outbox` writes a Receipt (`effect_kind=comms`, `delivery_mode=dry_run`) and emits `outbox.dry_run`. Never Slack/email, never `real_send_allowed`, never `comms.outbox.deliver`, no budget reserve.
+- Isolated `POST /v1/comms/outbox/{id}/dry-run` in `comms_dry_run.py` (platform.py only; main.py untouched).
+- Mission Control: **Dry-run deliver** next to Queue send; result copy **dry-run — no provider send**.
+- Tests: API receipt/no-adapter + real path still fail-closed without creds; web button/copy + action does not reserve.
+- Plane: `OPS_BASE_URL` unset — track on branch.
+
+## 2026-08-13 — Grok — Unified E2E QA harness (ai/grok/community-ga)
+
+- One command: `make qa-harness` — preflight + 44-probe settings/features sweep + control-plane reads + 3 canaries.
+- Canary modes: catalog (default) / reuse / fixture (`simulated=true`) / launch (`BOSS_QA_ALLOW_CANARIES=1`).
+- Live dogfood catalog: 54/55 then fixed `GET /v1/edition` to send `project_id`; stale catalog `built.run_id` is optional honesty, not a false red.
+- Tests: harness + feature_sweep + canary_apps + benchmark catalog/simulated (no spend).
+- Docs: `docs/operations/QA_HARNESS.md`. 14-day `qa-live` remains separate. Launch of real BugBox/HookWatch/ApproveIt still needs worker+model+flag.
+
+## 2026-08-13 — Grok — QA harness phase 3 canaries (ai/grok/community-ga)
+
+- `scripts/qa/canary_apps.py`: catalog / reuse / fixture / launch for bugbox, hookwatch, approveit.
+- Catalog asserts pinned contracts (`npm run healthcheck` present, `npm run verify` not listed).
+- Reuse: missing `built` is `canary.{id}.not_built` required=False. 409 preview is honesty.
+- Fixture: POST `route=direct&simulated=true`, never `open_pr`. Report `passed=true` is an honesty fail. 422 old image skips.
+- Launch refuses without `BOSS_QA_ALLOW_CANARIES`. `already_built` reuses the report. Poll 5s / default 1800s.
+- API: `POST /v1/qa/benchmark-apps/{id}/runs` `simulated=true` forces direct, wires `start_code_task(simulated=True)`, never certifies pass.
+- Tests: 8 harness (no network) + 28 API/launch/benchmark green.
+- Plane: `OPS_BASE_URL` unset — no issue comment.
+
+## 2026-08-13 — Grok — Unified QA harness glue (ai/grok/community-ga)
+- Tests: `scripts/tests/test_qa_harness.py` (parse_args, launch-guard exit 2, summarize required-fail, redact API key, dry-run).
+- Makefile: `qa-harness` beside `qa-factory-e2e`; `DRY_RUN=1`; `CANARY_MODE=catalog|reuse|fixture|launch`; never echoes `BOSS_API_KEY`.
+- Docs: `docs/operations/QA_HARNESS.md` — local + dogfood, modes, canary pass = `npm run verify` evidence not model prose.
+- No-false-reds: optional/missing sibling modules skip; required fail only fails the gate.
+- 14-day `qa-live` remains separate (`docs/operations/QA_LIVE_14DAY.md`); this harness does not replace it.
+- DoD checklist: appended `make qa-harness` row. Plane: `OPS_BASE_URL` unset — track on branch.
+- No live canary success invented; no spend; engine services untouched.
+
+## 2026-08-13 — Grok — Community PRD-partials: meetings/assurance/local models (ai/grok/community-ga)
+
+Inventory then closed three Community ◐ holes without touching other-agent files (`main.py`, resource_plane, provider-configuration-ui, factory_scale).
+
+- **Meetings:** `POST /v1/meetings/{id}/run` now persists phase timeline + receipt; isolated `POST /v1/meetings/simulated-run` walks research→finalize with artifacts, no LLM/job/budget. UI shows timeline/artifact links + no-spend CTA.
+- **Assurance:** Honest empty (measured-contract copy + how-to). `POST /v1/assurance/seed-demo` creates one deterministic metric+case with `seeded: true` (not production health); fail-closed if tables missing; idempotent.
+- **Local OpenAI-compatible source:** `POST /v1/entitlements/sources/{id}/openai-compatible` stores `base_url` on `approved_local_model_host` + optional SecretRef. Adapter/client receives that base_url; credentials never returned. Distinct from ProviderOps easy-connect (other agent).
+
+Tests: 19 Python + 2 web passed. FEATURES.md: local URLs + assurance ✅; meetings stay ◐ (typed operating meetings still missing). W4.5 Done (code).
+
+## 2026-08-13 — Grok — Community BYOK paste-and-connect (ai/grok/community-ga)
+
+- Catalog: openai, anthropic, openai_compatible, cloudflare, supabase, ssh_host profiles.
+- `POST /v1/providers/easy-connect` writes through local_vault; SecretRef pointer only.
+- Mission Control: Paste and connect above Advanced SecretRef pointer form.
+- Tests: API paste/empty/redact/base_url/catalog + web form source. Plane BOSS-369.
+- Never stores raw keys in Postgres; response last4/fingerprint only.
+- Community-mounted (not enterprise-gated). DoD #1 Mostly (code); live paste still A1.
+- Router appended in platform.py only — main.py untouched.
+- Remaining: live dogfood paste of a real model key after shared-tag redeploy.
+
+## 2026-08-13 — Grok — QA-2 API/settings/functions panel (ai/grok/community-ga)
+
+- Live probe 114 paths on `boss-api:3e6c906`: 90 PASS / 17 WARN prefix-404 / **7 FAIL 500**.
+- 500s: token-efficiency policies+consumption, elastic status+instances, worker-autoscaling status/policies/history. Cause: `ensure_schema` aborted on `kg_nodes.valid_from` so later tables never created.
+- Fix (519ba85): reconcile columns before schema.sql; `UndefinedTable` → 503. Tests 4 passed. Live still 500 until redeploy.
+- Doc: `docs/operations/qa-2026-08-13-api-panel.md`. Plane BOSS-337.
+
+## 2026-08-13 — Grok — QA-3 unfinished Community surfaces (ai/grok/community-ga)
+
+- Inventory: Studio seed CTA already wired; factory fixture already landed; preview list `open_url` already public-base.
+- Built: factory WIP `github_plane` (read-only describe) + card no longer swallows fetch errors; dashboard + preview list `apiReachable`/`blockedReason`; View for verified-test only when URL exists; list endpoints default `project_id` to `BOSS_DEFAULT_PROJECT_ID`. Settings 500s already in `519ba85`.
+- Doc: `docs/operations/qa-2026-08-13-incomplete.md`.
+- Tests: dual-plane describe, list defaults, factory/dashboard/preview honesty, schema fail-closed.
+
+## 2026-08-13 — Grok — Factory gate skip + simulated fixture (ai/grok/community-ga)
+
+- `GET /v1/software-factory/proposals/queue` 404/405 is now **SKIP** (POST-only route), not optional FAIL.
+- No no-spend worker path exists (`deterministic_brief` / dry-run does not complete a real code-task).
+- Added fail-closed `POST /v1/code-tasks` `simulated=true`: persist fixture evidence, no job, no budget, no model. Retry/follow-up/open_pr fail-closed.
+- Gate `--create-fixture` POSTs only when `GET /v1/factory/wip` advertises `fixture_supported` (old APIs would ignore the flag and enqueue a real job).
+- Tests: gate skip/fixture + API/service fixture path.
+
+## 2026-08-13 — Grok — Community GA preview operator URL (ai/grok/community-ga)
+
+- Live SSH `boss-app-api-1` (`boss-api:3e6c906`): `BOSS_PREVIEW_PUBLIC_BASE=https://boss-api.local.sean.network` is set and bound.
+- `GET /v1/previews` 50 rows: 37 bound `open_url`s are absolute `{public-base}/v1/previews/{id}/web/`; 0 loopback primary; 13 empty (never-bound). Status: 30 expired / 10 failed / 7 stopped / 3 verified / **0 running**.
+- Expired View `GET /v1/previews/{id}/web/` → **409** `preview not running (status=expired)`.
+- Code: env fallback when Settings field empty; `list_previews` + list-payload tests forbid 127.0.0.1 as `open_url` when public base is set; smoke/agent report use the same helper.
+- Docs: `PREVIEW_GA_CHECKLIST.md` live truth; GA living plan + claims freeze (View HTML still forbidden).
+- Plane: `OPS_BASE_URL` unset — no issue comment; track BOSS-341 on branch.
+
+## 2026-08-12 — Grok — Community GA DLQ hardening (ai/grok/community-ga)
+
+- Worker Dockerfile: pytest `test_worker_dockerfile_run_line_includes_git` asserts the worker RUN `apt-get install` line lists `git` (BOSS-342 regression).
+- Groq/Qwen: cap `max_tokens` at 1024 and shrink context pack to 4 files / 3k head so a 6k TPM lane cannot request ~12k.
+- Sandbox 404 / claims frozen: `SandboxTaskMissing` 422 fail-closed; worker `complete`s instead of `fail`/DLQ. Classify `sandbox_task_missing` / `microvm_claims_frozen`.
+- Tests: 52 passed (image contract, microvm freeze/404, deadletter classify, groq caps, worker no-DLQ).
+- Plane: `OPS_BASE_URL` unset this session — no issue filed; track on branch.
+
+## 2026-08-12 — Grok — Community GA automated gates (ai/grok/community-ga)
+
+- Added `scripts/qa/workflow_e2e_gate.py` — health → command propose → tasks → budget status|quote → jobs; `--dry-run` structure check; exit 0 only if critical steps 2xx.
+- Added `scripts/qa/factory_e2e_gate.py` — factory WIP + code-tasks list; optional `--create-code-task` (gated by `BOSS_FACTORY_ALLOW_CREATE`); auto dry-run without key.
+- Makefile: `qa-workflow-e2e`, `qa-factory-e2e` (`DRY_RUN=1` supported).
+- DoD map: `scripts/qa/ga_dod_checklist.md` (criteria 1–8 → commands).
+- Unit tests: `scripts/tests/test_workflow_e2e_gate.py`, `test_factory_e2e_gate.py` (19 passed dry-run paths).
+- Plane: `OPS_BASE_URL` unset this session — no issue filed; track on branch.
+
+## 2026-08-12 — Grok — Platform Ops epic (ai/grok/platform-ops-epic)
+
+Multi-agent swarm delivered API-first, OSS-validated platform capabilities:
+
+| Domain | Prefix | OSS / standards |
+|--------|--------|-----------------|
+| Top-10 IdP packs | `/v1/identity-providers` | OIDC, SAML 2.0, SCIM 2.0 (Okta→Ping) |
+| On-call / SRE + KG | `/v1/oncall-sre` | PD/Opsgenie/Grafana OnCall adapter shells + KG link |
+| CI/CD multi-vendor | `/v1/cicd` | GHA, GitLab CI, Jenkins, CircleCI, Buildkite |
+| Security scan | `/v1/security-scan` | Semgrep, Trivy, OSV-Scanner, Gitleaks, Checkov |
+| Release planning | `/v1/release-planning` | Built/todo board + tracker issue links |
+| Worker autoscaling | `/v1/worker-autoscaling` | Queue→elastic fabric scale-out |
+| Token efficiency | `/v1/token-efficiency` | Scorecard, policies, estimate, recommendations |
+| Observability suite | `/v1/observability-suite` | Prometheus/Grafana/Loki/Tempo/OTEL/Alertmanager |
+
+UI: panels nested into existing Mission Control areas (enterprise, reliability, assurance, portfolio, delivery, infra, budget, monitoring) — 0 new nav items.
+
+Evidence: **126** domain tests passed (~5m). Plane: OPS credentials unavailable.
+
+---
+## 2026-08-12 — Grok — API E2E completeness (ai/grok/api-e2e-completeness)
+
+- **Mission:** E2E-test every BOSS API; expose missing operator surfaces as HTTP; fix 5xx/NameError paths.
+- **Harness:** `apps/api/tests/test_api_e2e_smoke.py` — universal GET smoke + domain POSTs; OpenAPI/catalog checks.
+- **New APIs (services that lacked HTTP):**
+  - Knowledge graph, feature catalog, capability-manifest, learning loop, intent classify/route
+  - Telemetry query + connectors catalog, change-correlation
+  - Model rate-limits report/list, pipeline-adapters catalog
+  - Operator utilities: ci-config/generate, redaction/redact, platform-standards, telemetry/mine,
+    verification-target/profile, aws/metal types+classify, verifier-debate/run, design-prompts/product
+- **Domain E2E packs:** core control plane, providers/changesets, work/deploy, goldeneye, reliability, finops/value
+- **Bugs fixed:** `CapabilityItem` import; jobs enqueue FK fail-closed; task duplicate `dedupe_key` → **409**;
+  work-orchestration overview DB deadlock → **503**
+- **Evidence:** **95 passed** full E2E suite (~198s) against local Postgres; ~715 routes in ROUTE_INDEX; OpenAPI synced
+- **Docs:** `docs/api/AGENTS_AND_SKILLS.md`, `docs/api/ROUTE_INDEX.md`, `api/openapi.yaml`
+- **Plane:** `OPS_BASE_URL` unset this session — issue not filed; track on branch + activity log
+
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
@@ -16,6 +326,17 @@ All 15-min terminal updates and major milestones appended here. Chronological, n
 - Residual: private-repo access remains a human GitHub invite. Plane/ops
   credentials were unavailable in this session so BOSS-292 state was not
   moved via API.
+
+## 2026-08-12 18:54 UTC — domain E2E API packs (ai/grok/api-e2e-completeness)
+
+- Added focused live-Postgres E2E packs:
+  - `apps/api/tests/test_e2e_core_control_plane.py` (5)
+  - `apps/api/tests/test_e2e_providers_and_changesets.py` (7)
+  - `apps/api/tests/test_e2e_work_and_deploy.py` (7)
+- Result: **19 passed** against local Postgres TestClient.
+- Bug fix: duplicate task `dedupe_key` no longer 500s — intake fail-closed + API returns **409**.
+- Hardening: `GET /v1/work-orchestration/overview` maps DB `OperationalError` to **503**.
+- Plane: ops secret store unavailable this session (`OPS_BASE_URL` unset); no issue filed.
 
 ---
 ## 2026-08-12 — Grok — BOSS-244 FinOps charts/summary API

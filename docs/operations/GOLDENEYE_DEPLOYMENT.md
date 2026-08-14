@@ -50,8 +50,25 @@ docker buildx build --platform linux/amd64 --target account-connect \
 #   BOSS_IMAGE=$REG/boss-api:$TAG BOSS_WORKER_IMAGE=$REG/boss-worker:$TAG \
 #     python tests/test_runtime_image_contract.py
 
+# First deploy only (provisions ports / writes .env from template):
 ssh root@goldeneye deploy boss --compose /path/to/goldeneye.compose.yaml --env-template /path/to/app.env.tmpl
+
+# Redeploy (mandatory): NEVER pass --env-template — it clobbers /srv/apps/boss-app/.env.
+# Bump the three images to the SAME $TAG in compose, then:
+ssh root@goldeneye 'cd /srv/apps/boss-app && docker compose -p boss-app --env-file .env -f compose.yaml up -d --no-deps --force-recreate api worker web'
 ```
+
+## Deploy SOP (B6 — required before any GA language)
+
+After every shared-tag bump of api+worker+web:
+
+1. Confirm images match: `docker compose -p boss-app ps` (no `--env-template`).
+2. `BOSS_API_KEY=… make qa-live` must be **10/10**.
+3. `BOSS_API_KEY=… make qa-harness` (catalog) must pass required checks.
+4. Update `docs/operations/GA_LIVING_PLAN.md` live-stack table + changelog.
+5. Comment evidence on Plane BOSS-337. Do not mark GA Done.
+
+A bump that skips `qa-live` is not a release. Auto-rollback if `/health` is not ok or `qa-live` required checks fail.
 
 **Worker image contract (BOSS-342):** the multi-target `Dockerfile` `worker` stage
 must install `git`, `nodejs`, and `npm` (same packages as the api coding

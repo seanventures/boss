@@ -1,0 +1,669 @@
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+
+import { createDecisionDigestAction } from "./actions";
+import { ClientRelativeTime } from "./client-relative-time";
+import { DecisionResolveForm } from "./client-forms";
+import { SubmitButton } from "./submit-button";
+import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
+import {
+  DEFAULT_DECISION_INBOX_FILTER,
+  DECISION_INBOX_EMPTY_HOWTO,
+  DECISION_INBOX_EMPTY_TITLE,
+  filterDecisionInbox,
+  parseDecisionInboxFilter,
+  type DecisionFeed,
+  type DecisionFeedItem,
+  type DecisionInboxFilter,
+} from "../lib/decisions";
+import type { RoleFeedItem } from "../lib/roles";
+import type { TaskFeedItem } from "../lib/tasks";
+
+function formatMicros(amount: unknown): string {
+  if (typeof amount !== "number") {
+    return "n/a";
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(amount / 1_000_000);
+}
+
+function formatDeadline(deadlineAt?: string): string {
+  if (!deadlineAt) {
+    return "No deadline";
+  }
+  return formatDateTimeShared(deadlineAt, "No deadline");
+}
+
+function roleInitials(name: string): string {
+  const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "CP";
+  const initials =
+    words.length === 1 ? words[0].slice(0, 3) : words.map((word) => word[0]).join("").slice(0, 3);
+  return initials.toUpperCase();
+}
+
+export function formatRecommendation(decision: DecisionFeedItem): string {
+  const r = decision.recommendation || {};
+  const str = (k: string): string => (typeof r[k] === "string" ? (r[k] as string) : "");
+  const action = str("action");
+  const title = str("title");
+  const pr = str("pull_request_url");
+  const prNum = pr ? `#${pr.split("/").pop()}` : "";
+  const vstatus = str("validation_status");
+  const vsummary = str("validation_summary");
+
+  if (action === "review_pull_request") {
+    return [
+      title ? `Approve the code change “${title}”.` : "Approve this code change.",
+      pr ? `Pull request ${prNum} is open on GitHub with the full diff to review.` : "",
+      vstatus
+        ? `Automated checks: ${vstatus.replaceAll("_", " ")}${vsummary ? ` — ${vsummary}` : ""}.`
+        : "",
+      "Approving opens/merges the PR; rejecting keeps it blocked for changes.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+  if (action === "execute_agent_tool") {
+    const tool = str("tool");
+    if (tool === "publish_document") {
+      return `Publish the drafted document${title ? ` “${title}”` : ""}${
+        r["start_code_task"] ? " and start the build from it" : ""
+      }.`;
+    }
+    return `Run the gated agent action${tool ? `: ${tool.replaceAll("_", " ")}` : ""}.`;
+  }
+  if (action === "review_plan_draft") {
+    return `Review the drafted plan${title ? ` for “${title}”` : ""} before any code is written.`;
+  }
+  if (action === "review_deployment") {
+    return `Approve deploying${title ? ` “${title}”` : " this change"} to its target environment.`;
+  }
+  if (action) return action.replaceAll("_", " ");
+  return "review required";
+}
+
+function decisionRuleLabel(decision: DecisionFeedItem): string {
+  const action = typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
+  const tool = typeof decision.recommendation.tool === "string" ? ` (${decision.recommendation.tool})` : "";
+  const map: Record<string, string> = {
+    execute_agent_tool: `Agent tool requires approval${tool}`,
+    resume_agent_run: `Agent action gated — deferred tool${tool}`,
+    review_plan_draft: "Plan ready for review",
+    review_pull_request: "Pull request review",
+    review_deployment: "Deployment review",
+    review_infra_provisioning: "Infrastructure provisioning review",
+    "role.autonomy_change": "Role autonomy change",
+  };
+  if (map[action]) return map[action];
+  if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
+  return "governance gate";
+}
+
+function approvalEffectLabel(recommendation: Record<string, unknown>): string {
+  const action = typeof recommendation.action === "string" ? recommendation.action : "";
+  if (
+    action === "execute_agent_tool" &&
+    (recommendation.start_code_task === true || recommendation.tool === "publish_document")
+  ) {
+    return "Approving publishes the PRD and starts a governed code task for this task.";
+  }
+  switch (action) {
+    case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
+    case "resume_code_task": return "Approving resumes the paused code task.";
+    case "review_pull_request": return "Approving authorizes the pull-request merge.";
+    case "review_deployment": return "Approving authorizes the deployment.";
+    case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
+    case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
+    case "resume_agent_run": return "Approving resumes the paused agent run.";
+    case "role.autonomy_change": return "Approving applies the role autonomy change.";
+    case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
+    case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
+    case "self_improvement.begin_canary":
+    case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
+    default: return "Approving records your decision — this type has no automated follow-on (no code task is started).";
+  }
+}
+
+function decisionImpact(decision: DecisionFeedItem): { label: string; tone: string } {
+  const action =
+    typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
+  if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
+  if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
+  if (action === "review_deployment") return { label: "deploy", tone: "teal" };
+  if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
+  if (action === "role.autonomy_change") return { label: "access", tone: "red" };
+  if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
+  if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
+  if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
+  const rule = decisionRuleLabel(decision);
+  return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
+}
+
+function decisionStatusDetail(decision: DecisionFeedItem): string {
+  if (decision.status === "delegated" && decision.delegatedTo) {
+    return `Delegated to ${decision.delegatedTo}${
+      decision.delegatedBy ? ` by ${decision.delegatedBy}` : ""
+    }${decision.delegatedAt ? ` at ${formatDeadline(decision.delegatedAt)}` : ""}.`;
+  }
+  if (decision.status === "revision_requested") {
+    return decision.resolutionNote
+      ? `Revision requested: ${decision.resolutionNote}`
+      : "Revision was requested on this decision.";
+  }
+  if (decision.status === "executed") {
+    return decision.externalRef
+      ? `Executed with evidence: ${decision.externalRef}`
+      : "This decision has been marked executed.";
+  }
+  if (decision.approvedBy) {
+    return `Approved by ${decision.approvedBy} at ${formatDeadline(
+      decision.approvedAt,
+    )}.`;
+  }
+  return "This card remains explicit until it is approved, rejected, delegated, revised, or safely expired.";
+}
+
+function readFilterFromLocation(): DecisionInboxFilter {
+  if (typeof window === "undefined") {
+    return DEFAULT_DECISION_INBOX_FILTER;
+  }
+  return parseDecisionInboxFilter(
+    new URLSearchParams(window.location.search).get("decision_filter"),
+  );
+}
+
+function writeFilterToLocation(next: DecisionInboxFilter, orgId?: string): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (orgId) url.searchParams.set("org", orgId);
+  url.searchParams.set("area", "decisions");
+  url.searchParams.set("decision_filter", next);
+  if (url.toString() !== window.location.href) {
+    window.history.pushState(null, "", url.toString());
+  }
+}
+
+export type DecisionInboxProps = {
+  feed: DecisionFeed;
+  tasks: TaskFeedItem[];
+  roles: RoleFeedItem[];
+  projectId: string;
+  actorId: string;
+  orgId?: string;
+  initialFilter?: DecisionInboxFilter;
+};
+
+export function DecisionInbox({
+  feed,
+  tasks,
+  roles,
+  projectId,
+  actorId,
+  orgId,
+  initialFilter = DEFAULT_DECISION_INBOX_FILTER,
+}: DecisionInboxProps) {
+  const [filter, setFilter] = useState<DecisionInboxFilter>(initialFilter);
+
+  useEffect(() => {
+    const sync = () => setFilter(readFilterFromLocation());
+    sync();
+    window.addEventListener("popstate", sync);
+    window.addEventListener("boss:navigate", sync);
+    return () => {
+      window.removeEventListener("popstate", sync);
+      window.removeEventListener("boss:navigate", sync);
+    };
+  }, []);
+
+  const visible = useMemo(
+    () => filterDecisionInbox(feed.items, filter),
+    [feed.items, filter],
+  );
+  const actionableCount = useMemo(
+    () => filterDecisionInbox(feed.items, "needs_action").length,
+    [feed.items],
+  );
+  const resolvedCount = useMemo(
+    () => filterDecisionInbox(feed.items, "resolved").length,
+    [feed.items],
+  );
+
+  const applyFilter = (next: DecisionInboxFilter) => {
+    setFilter(next);
+    writeFilterToLocation(next, orgId);
+  };
+
+  return (
+    <section
+      aria-labelledby="decision-inbox-title"
+      className="panel-stack decision-inbox-section"
+      data-area="decisions"
+      data-decision-filter={filter}
+      data-testid="decision-inbox"
+      id="decision-inbox"
+      tabIndex={-1}
+    >
+      <div className="section-head">
+        <div>
+          <span className="eyebrow">Decision Queue</span>
+          <h2 id="decision-inbox-title">
+            Agents proposed — <span className="dq-you-decide">you decide</span>.
+          </h2>
+        </div>
+        <p className="status-meta">
+          Default view is the actionable queue (pending and delegated). Resolved
+          history is one click away. Cards expire to a safe default when their
+          deadline passes.
+        </p>
+      </div>
+
+      <div
+        className="dq-filter"
+        role="tablist"
+        aria-label="Decision inbox filter"
+        data-testid="decision-inbox-filter"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "needs_action"}
+          className={`dq-filter-btn${filter === "needs_action" ? " active" : ""}`}
+          data-testid="decision-filter-needs-action"
+          onClick={() => applyFilter("needs_action")}
+        >
+          Needs action
+          <span className="dq-filter-count">{actionableCount}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "resolved"}
+          className={`dq-filter-btn${filter === "resolved" ? " active" : ""}`}
+          data-testid="decision-filter-resolved"
+          onClick={() => applyFilter("resolved")}
+        >
+          Resolved
+          <span className="dq-filter-count">{resolvedCount}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={filter === "all"}
+          className={`dq-filter-btn${filter === "all" ? " active" : ""}`}
+          data-testid="decision-filter-all"
+          onClick={() => applyFilter("all")}
+        >
+          All
+          <span className="dq-filter-count">{feed.items.length}</span>
+        </button>
+      </div>
+
+      {!feed.apiReachable ? (
+        <article
+          className="decision-card empty"
+          data-empty-state="api-unavailable"
+          data-testid="decision-inbox-unavailable"
+        >
+          <h3>Decision API unavailable</h3>
+          <p className="detail">
+            {feed.blockedReason ??
+              "The executive console could not reach the decision inbox."}
+          </p>
+        </article>
+      ) : visible.length === 0 ? (
+        <DecisionInboxEmpty filter={filter} orgId={orgId} />
+      ) : (
+        <div className="dq" data-testid="decision-inbox-list">
+          {visible.map((decision) => (
+            <DecisionInboxRow
+              key={decision.id}
+              decision={decision}
+              tasks={tasks}
+              roles={roles}
+              projectId={projectId}
+              actorId={actorId}
+            />
+          ))}
+        </div>
+      )}
+
+      {feed.apiReachable ? (
+        <details className="dq-digest">
+          <summary>Create decision digest</summary>
+          <div className="dq-digest-body">
+            <p className="detail">
+              Creates a durable digest artifact. Optional channel creates an
+              outbox draft only; sending still requires a budgeted queue action.
+            </p>
+            <form action={createDecisionDigestAction} className="decision-actions">
+              <input type="hidden" name="project_id" value={projectId} />
+              <input type="hidden" name="actor" value={actorId} />
+              <label className="field">
+                <span>Max items</span>
+                <input
+                  className="input"
+                  defaultValue={20}
+                  max={100}
+                  min={1}
+                  name="max_items"
+                  type="number"
+                />
+              </label>
+              <label className="field">
+                <span>Optional outbox channel</span>
+                <input
+                  className="input"
+                  name="channel"
+                  placeholder="email:founder@example.com or slack:#ops"
+                />
+              </label>
+              <SubmitButton className="button secondary" type="submit">
+                Create digest
+              </SubmitButton>
+            </form>
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+export function DecisionInboxEmpty({
+  filter,
+  orgId,
+}: {
+  filter: DecisionInboxFilter;
+  orgId?: string;
+}) {
+  if (filter === "resolved") {
+    return (
+      <article
+        className="decision-card empty"
+        data-empty-state="no-resolved"
+        data-testid="decision-inbox-empty"
+      >
+        <h3>No resolved decisions</h3>
+        <p className="detail">
+          Approved, rejected, executed, and expired cards land here after you act
+          or a deadline expires to its safe default.
+        </p>
+      </article>
+    );
+  }
+
+  return (
+    <article
+      className="decision-card empty"
+      data-empty-state="queue-clear"
+      data-testid="decision-inbox-empty"
+    >
+      <h3>{DECISION_INBOX_EMPTY_TITLE}</h3>
+      <p className="detail">
+        Nothing needs your signature. Decisions appear here when work hits a
+        human gate — they are not a history dump of already-resolved cards.
+      </p>
+      <ul className="dq-empty-how">
+        {DECISION_INBOX_EMPTY_HOWTO.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+      {filter !== "all" && orgId ? (
+        <p className="detail">
+          <button
+            type="button"
+            className="linkish"
+            onClick={() => {
+              writeFilterToLocation("all", orgId);
+              window.dispatchEvent(
+                new CustomEvent("boss:navigate", {
+                  detail: { area: "decisions", params: { decision_filter: "all" } },
+                }),
+              );
+            }}
+          >
+            View resolved history
+          </button>
+        </p>
+      ) : null}
+    </article>
+  );
+}
+
+function DecisionInboxRow({
+  decision,
+  tasks,
+  roles,
+  projectId,
+  actorId,
+}: {
+  decision: DecisionFeedItem;
+  tasks: TaskFeedItem[];
+  roles: RoleFeedItem[];
+  projectId: string;
+  actorId: string;
+}) {
+  const estimatedCost =
+    typeof decision.costSummary.estimated_usd_micros === "number"
+      ? decision.costSummary.estimated_usd_micros
+      : undefined;
+  const isPending =
+    decision.status === "pending" || decision.status === "delegated";
+  const isApproved = decision.status === "approved";
+  const linkedTask = decision.taskId
+    ? tasks.find((task) => task.id === decision.taskId)
+    : undefined;
+  const ownerRole = linkedTask?.ownerRoleId
+    ? roles.find((role) => role.id === linkedTask.ownerRoleId)
+    : undefined;
+  const who = ownerRole?.displayName ?? "Control plane";
+  const impact = decisionImpact(decision);
+  const rec = decision.recommendation;
+  const why = typeof rec.why === "string" ? rec.why : "";
+  const plan = typeof rec.plan === "string" ? rec.plan : "";
+  const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
+  const recArgs =
+    rec.args && typeof rec.args === "object"
+      ? (rec.args as Record<string, unknown>)
+      : {};
+  const subject =
+    typeof recArgs.markdown === "string"
+      ? recArgs.markdown
+      : typeof recArgs.content === "string"
+        ? recArgs.content
+        : "";
+  const subjectTitle =
+    typeof recArgs.title === "string" ? recArgs.title : "Document to publish";
+
+  return (
+    <article
+      className="dq-row"
+      data-testid="decision-row"
+      data-decision-status={decision.status}
+      id={`decision-${decision.id}`}
+    >
+      <div className="dq-body">
+        <div className="dq-orb" aria-hidden>{roleInitials(who)}</div>
+        <div className="dq-main">
+          <div className="dq-propose">
+            <span className="dq-who"><b>{who}</b> proposes</span>
+            <span className={`dq-impact ${impact.tone}`}>{impact.label}</span>
+          </div>
+          <h3 className="dq-title">{decision.question}</h3>
+          <p className="dq-rationale">
+            {why || formatRecommendation(decision)}
+          </p>
+          {subject ? (
+            <details className="decision-plan-details">
+              <summary>
+                Read the full document before approving
+                <span className="dq-doc-size">
+                  {" · "}
+                  {subject.length.toLocaleString("en-US")} characters
+                </span>
+              </summary>
+              <div className="decision-plan-sec">
+                <h4>{subjectTitle}</h4>
+                <pre className="decision-doc">{subject}</pre>
+              </div>
+            </details>
+          ) : null}
+          {plan || review ? (
+            <details className="decision-plan-details">
+              <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
+              {plan ? (
+                <div className="decision-plan-sec">
+                  <h4>Technical plan</h4>
+                  <pre>{plan}</pre>
+                </div>
+              ) : null}
+              {review ? (
+                <div className="decision-plan-sec">
+                  <h4>Automated plan review</h4>
+                  <pre>{review}</pre>
+                </div>
+              ) : null}
+            </details>
+          ) : null}
+          <div className="dq-evidence">
+            <span className="dq-ev-label">evidence</span>
+            {linkedTask ? (
+              <span className="dq-ev">
+                T-{decision.taskId?.slice(-4)} · {linkedTask.title.slice(0, 44)}
+                {linkedTask.title.length > 44 ? "…" : ""}
+              </span>
+            ) : null}
+            <span className="dq-ev">risk tier {decision.riskTier}</span>
+            <span className="dq-ev">default {decision.defaultAction ?? "hold"}</span>
+            {estimatedCost != null ? (
+              <span className="dq-ev">{formatMicros(estimatedCost)}</span>
+            ) : null}
+            <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
+          </div>
+          {isPending ? (
+            <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
+          ) : null}
+        </div>
+      </div>
+      <div className="dq-foot">
+        {isPending ? (
+          <DecisionResolveForm className="dq-actions">
+            <input type="hidden" name="decision_id" value={decision.id} />
+            <input type="hidden" name="project_id" value={projectId} />
+            <input type="hidden" name="actor" value={actorId} />
+            <SubmitButton
+              className="dq-btn approve"
+              name="action"
+              value="approve"
+              data-testid="decision-approve"
+            >
+              Approve
+            </SubmitButton>
+            <SubmitButton
+              className="dq-btn reject"
+              name="action"
+              value="reject"
+              data-testid="decision-reject"
+            >
+              Reject
+            </SubmitButton>
+            <label className="dq-escalate-field">
+              <span className="sr-only">Escalate {decision.id} to</span>
+              <input
+                aria-label={`Escalate target for ${decision.id}`}
+                className="input dq-escalate-input"
+                name="escalate_to"
+                placeholder="Escalate to role or approver"
+                data-testid="decision-escalate-target"
+              />
+            </label>
+            <SubmitButton
+              className="dq-btn escalate"
+              name="action"
+              value="escalate"
+              data-testid="decision-escalate"
+            >
+              Escalate
+            </SubmitButton>
+            <details className="dq-more">
+              <summary>Note · request changes</summary>
+              <div className="dq-more-body">
+                <textarea
+                  aria-label={`Decision note for ${decision.id}`}
+                  className="textarea decision-note"
+                  name="note"
+                  rows={3}
+                  placeholder="Optional note or required revision request rationale."
+                />
+                <SubmitButton className="dq-btn neutral" name="action" value="revise">
+                  Request changes
+                </SubmitButton>
+              </div>
+            </details>
+            <span className="dq-waited">
+              <ClientRelativeTime
+                iso={decision.createdAt}
+                empty=""
+                as="span"
+              />
+            </span>
+          </DecisionResolveForm>
+        ) : (
+          <>
+            <span
+              className={`dq-verdict ${
+                isApproved || decision.status === "executed"
+                  ? "green"
+                  : decision.status === "rejected"
+                    ? "red"
+                    : "muted"
+              }`}
+            >
+              {decision.status.toUpperCase()}
+            </span>
+            <span className="dq-note">{decisionStatusDetail(decision)}</span>
+            {isApproved ? (
+              <details className="dq-more">
+                <summary>Mark executed</summary>
+                <DecisionResolveForm className="dq-more-body">
+                  <input type="hidden" name="decision_id" value={decision.id} />
+                  <input type="hidden" name="project_id" value={projectId} />
+                  <input type="hidden" name="actor" value={actorId} />
+                  <textarea
+                    aria-label={`Execution note for ${decision.id}`}
+                    className="textarea decision-note"
+                    name="note"
+                    rows={2}
+                    placeholder="Record what was executed."
+                  />
+                  <input
+                    aria-label={`Execution external reference for ${decision.id}`}
+                    className="input"
+                    name="external_ref"
+                    placeholder="External reference (PR URL, commit SHA, ticket)"
+                  />
+                  <SubmitButton className="dq-btn approve" name="action" value="execute">
+                    Mark executed
+                  </SubmitButton>
+                </DecisionResolveForm>
+              </details>
+            ) : null}
+            <span className="dq-waited">
+              <ClientRelativeTime
+                iso={decision.createdAt}
+                empty=""
+                as="span"
+              />
+            </span>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+
