@@ -349,6 +349,46 @@ def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
     return out
 
 
+# Conventional frontend folders of a full-stack app. Walking UP through these to find
+# package.json `start` is correct (bugbox/web → bugbox). Walking from a sibling product
+# directory (web-nqueens) up to an unrelated root start is how we once previewed the
+# wrong tenant's application — so those stop before the repo root.
+_FRONTEND_DIR_NAMES = frozenset({
+    "web", "public", "dist", "src", "frontend", "client", "app", "ui", "static", "www",
+})
+
+
+def _has_start_script(directory: Path) -> bool:
+    """True when directory/package.json declares a non-empty scripts.start."""
+    manifest = directory / "package.json"
+    if not manifest.is_file():
+        return False
+    try:
+        scripts = json.loads(manifest.read_text()).get("scripts") or {}
+    except (json.JSONDecodeError, OSError):
+        return False
+    return bool(str(scripts.get("start") or "").strip())
+
+
+def _owning_node_server(workdir: Path, rel_dir: str) -> Optional[str]:
+    """Nearest ancestor of rel_dir (inclusive) that declares scripts.start, or None.
+
+    Used so a task that touched `bugbox/web/index.html` still runs `bugbox`'s Express
+    server instead of `python3 -m http.server` on the SPA. A sibling static app
+    (`web-nqueens/`) is not treated as owned by a root start.
+    """
+    parts: list[str] = [] if rel_dir in (".", "") else list(Path(rel_dir).parts)
+    while True:
+        candidate = workdir.joinpath(*parts) if parts else workdir
+        if _has_start_script(candidate):
+            return "." if not parts else str(Path(*parts))
+        if not parts:
+            return None
+        if len(parts) == 1 and parts[0] not in _FRONTEND_DIR_NAMES:
+            return None
+        parts.pop()
+
+
 def _node_server_dir(workdir: Path, changed: Optional[list[str]] = None) -> Optional[str]:
     """The directory of a package.json that declares a real `start` server, or None.
 
@@ -359,34 +399,23 @@ def _node_server_dir(workdir: Path, changed: Optional[list[str]] = None) -> Opti
     operator reasonably concluded the agent had built a shell.
 
     Subdirectories are checked before the root, and directories the task actually touched
-    before those it did not, so a repo holding several apps runs the one this task built.
+    (including ancestors of `web/` / `public/`) before those it did not, so a repo holding
+    several apps runs the one this task built.
 
     `dev`/`build` alone are deliberately NOT enough: a frontend-only Vite app has those and is
     correctly deployed as static output. Only `start` means "there is a server here".
     """
-    def has_start(directory: Path) -> bool:
-        manifest = directory / "package.json"
-        if not manifest.is_file():
-            return False
-        try:
-            scripts = json.loads(manifest.read_text()).get("scripts") or {}
-        except (json.JSONDecodeError, OSError):
-            return False
-        return bool(str(scripts.get("start") or "").strip())
-
     seen: list[str] = []
     for touched in _changed_dirs(changed):
-        candidate = workdir / touched if touched not in (".", "") else workdir
-        if candidate.is_dir() and has_start(candidate):
-            rel = "." if candidate == workdir else str(candidate.relative_to(workdir))
-            if rel not in seen:
-                seen.append(rel)
+        owner = _owning_node_server(workdir, touched)
+        if owner is not None and owner not in seen:
+            seen.append(owner)
     for manifest in sorted(workdir.glob("*/package.json")):
-        if has_start(manifest.parent):
+        if _has_start_script(manifest.parent):
             rel = manifest.parent.name
             if rel not in seen:
                 seen.append(rel)
-    if has_start(workdir) and "." not in seen:
+    if _has_start_script(workdir) and "." not in seen:
         seen.append(".")
     # One unambiguous server wins. Several means the same ambiguity the static path refuses,
     # and guessing is what once previewed another tenant's application.
@@ -419,8 +448,16 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
             return ("py", cand)
     # 2. A static app THIS task built. Ranked ABOVE the repo-wide python fallback: a task that
     #    ships web-nqueens/index.html means that app, not whatever serve.py predates it.
+    #
+    #    A start server that OWNS that index.html outranks the static file. BugBox/ApproveIt
+    #    lineage lists `bugbox/web/index.html`; returning static here previewed the SPA and
+    #    every /api call came back as the Vite 404 HTML page. The owning check walks ancestors
+    #    (bugbox/web → bugbox) and refuses to let a root start steal a sibling product dir.
     for d in touched:
         if (workdir / d / "index.html").is_file():
+            owner = _owning_node_server(workdir, d)
+            if owner is not None:
+                return ("node", owner)
             return ("static", d)
     # 3. Repo conventions — but ONLY when the repo is unambiguous.
     #
@@ -547,10 +584,27 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
         # above only ever looked at `workdir/package.json`, so an app built in a subdirectory
         # fell through to the static branch and was published without its backend.
         app_dir = "" if value in (".", "") else f"cd {shlex.quote(value)} && "
+        app_root = workdir if value in (".", "") else workdir / value
+        vite_start = False
+        try:
+            payload = json.loads((app_root / "package.json").read_text())
+            scripts = payload.get("scripts") or {}
+            deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
+            is_vite = (
+                "vite" in deps
+                or (app_root / "vite.config.ts").exists()
+                or (app_root / "vite.config.js").exists()
+            )
+            vite_start = bool(is_vite and scripts.get("start"))
+        except (OSError, json.JSONDecodeError):
+            vite_start = False
+        # Same relative-base Vite build as the root path: absolute /assets 404 under the
+        # /v1/previews/<id>/web/ proxy prefix.
+        build = "npx vite build --base=./ && " if vite_start else "npm run build --if-present && "
         return [
             "sh", "-lc",
             f"{app_dir}npm install --no-audit --no-fund --loglevel=error && "
-            "npm run build --if-present && npm start",
+            f"{build}npm start",
         ]
     if kind == "py":
         return ["python3", value]
@@ -946,6 +1000,18 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
             "FROM python:3.11-slim\nWORKDIR /app\n" + reqs +
             f"COPY . .\nENV HOST=0.0.0.0 PORT={port} PYTHONUNBUFFERED=1\nEXPOSE {port}\n"
             f'CMD ["python3", "{py_entry}"]\n')
+        return port
+    if kind == "node":
+        port = 3000
+        app_workdir = "/app" if value in (".", "") else f"/app/{value}"
+        existing.write_text(
+            "FROM node:20-slim\n"
+            "COPY . /app\n"
+            f"WORKDIR {app_workdir}\n"
+            "RUN npm install --no-audit --no-fund --loglevel=error\n"
+            "RUN npm run build --if-present || true\n"
+            f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\n"
+            "CMD [\"npm\", \"run\", \"start\"]\n")
         return port
     if (workdir / "package.json").exists():
         port = 3000

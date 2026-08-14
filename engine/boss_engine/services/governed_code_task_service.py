@@ -326,6 +326,10 @@ _SYSTEM_FAILURE_MARKERS = (
     "quota exceeded",
     "too many requests",
     "timed out after",
+    # Exact httpx / worker phrases. A bare "timeout" is NOT listed — reviewer prose
+    # ("missing timeout on the fetch call") must stay a code verdict.
+    "read operation timed out",
+    "readtimeout",
     "lease expired",
     "budget reservation denied",
     "connection refused",

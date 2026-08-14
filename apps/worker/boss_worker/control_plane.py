@@ -40,12 +40,12 @@ class ControlPlaneClient:
         # but allow a generous read timeout so the worker doesn't abandon the call.
         # read must exceed the LONGEST single control-plane call. A code.task runs the WHOLE
         # governed pipeline (design → tests → implement → review → mutation → PR) in ONE
-        # request — many stages, each up to code_agent_timeout — so 900s was shorter than a
-        # real pipeline and the worker abandoned still-running jobs. The lease heartbeat keeps
-        # the lease alive; this keeps the HTTP call alive too.
+        # request — many stages, each up to code_agent_timeout. 3600s was still shorter
+        # than a real BugBox run (verify-green then opening_pr died as "timed out").
+        # The lease heartbeat keeps the lease alive; this keeps the HTTP call alive too.
         self._client = httpx.Client(
             base_url=self.base_url,
-            timeout=httpx.Timeout(connect=10.0, read=3600.0, write=30.0, pool=30.0),
+            timeout=httpx.Timeout(connect=10.0, read=7200.0, write=30.0, pool=30.0),
             headers=headers,
         )
 
