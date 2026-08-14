@@ -2,9 +2,9 @@
 
 ## 2026-08-14 Metatron Captain always-on overwatch
 
-- Worker overwatch every 60s: observe → measure → validate → apply-safe → verify.
-- Every captain action is validated (`validate_action` / `validate_move`). Decisions/DLQ stay human. BOSS self-change is a PR.
-- FEATURES.md captain stays ◐ until live shared-tag dogfood. Do not stamp public GA.
+- Shared tag `3f1d2cf` live. Worker overwatch every 60s: observe → measure → validate → apply-safe → verify.
+- Live dogfood: first tick applied a validated preview restart (`verify_ok=true`). Decisions/DLQ stayed human. Working-software goal scored 100.
+- FEATURES.md captain stays ◐. Do not stamp public GA.
 
 ## 2026-08-14 Metatron Captain validated drive
 

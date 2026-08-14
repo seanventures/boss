@@ -82,7 +82,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
-| Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch (`POST /v1/metatron/overwatch`, worker every 60s): observe → measure → validate → apply-safe → verify. Every action is validated. Decisions/DLQ stay human. BOSS self-change is a PR. Live dogfood residual until shared-tag deploy. **Not GA.** |
+| Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch on shared tag `3f1d2cf`. Worker every 60s: observe → measure → validate → apply-safe → verify. Live dogfood: first tick applied a preview restart (`app_preview.started` 17:32:16Z, verify ok). Decisions/DLQ stay human. **Not public GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Assurance / ground-truth runtime | ✅ |

@@ -26,7 +26,7 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 
 | Live proof (2026-08-14, tag `fca977c`) | Result |
 |---|---|
-| Shared tag | **Live** api `boss-api:fca977c`; worker/web image tags `fca977c` (worker process still `f5def77` so HookWatch was not killed). No `--env-template`. |
+| Shared tag | **Live** api+worker+web `3f1d2cf` (always-on Metatron overwatch). No `--env-template`. |
 | Coding substrate | Advertised `coding_substrate=local` while `coding_substrate_configured=microvm` and `microvm_claims_frozen=true` (`GET /v1/factory/wip`) |
 | Prior BugBox `crun_7cc663627f2340dc85ac` | Historical: verify green, PR #83. Replay Views expired. |
 | `qa-live` | **10/10 PASS + Metatron** on `f5def77`. 14-day calendar still **Day 1/14** (same-day re-runs do not add a day). |
@@ -234,6 +234,7 @@ Panels 16–21: founder IA, settings hub, workflow loop, cognitive load, edition
 
 | When | What changed | Who |
 |---|---|---|
+| 2026-08-14 | **Live always-on overwatch** shared-tag `3f1d2cf`. Worker first tick applied validated preview restart (`app_preview.started` 17:32:16Z, verify ok). DLQ/decisions not applied. Working-software goal score 100. Not public GA. | grok |
 | 2026-08-14 | Always-on Metatron overwatch: worker every 60s observe→measure→validate→apply-safe→verify. TUI `/overwatch`. Every action validated. FEATURES ◐. Not GA. | grok |
 | 2026-08-14 | W4 residual leftovers: expanded `interpret_turn` tests for build/prioritize (parent parse landed). FEATURES.md captain stays ◐ **Not GA**. Added `make qa-metatron-captain` (unit/island only — not live dogfood). | grok |
 | 2026-08-14 | W4 residual: Metatron captain watch/drive is Community code (FEATURES.md ◐), not a public GA stamp. No live dogfood of captain drive. | grok |

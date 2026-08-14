@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-14 — Grok — Live always-on overwatch dogfood
+
+- Shared-tag deploy api+worker+web `3f1d2cf`. No `--env-template`.
+- Worker first idle tick `POST /v1/metatron/overwatch` applied 1 (preview restart) + `verify_ok=true` at 17:32:16Z. Event `app_preview.started` same second.
+- Manual cycle after goal set: working_software score 100, 43 DLQ + 12 decisions proposed and **not** applied. Receipts `rcpt_ce4417ea462745e2805a` / `rcpt_13092f9031964610bb81`.
+- FEATURES stays ◐. Do not stamp public GA.
+
 ## 2026-08-14 — Grok — Always-on validated overwatch
 
 - Worker ticks `POST /v1/metatron/overwatch` every 60s even while a job is leased.
