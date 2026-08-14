@@ -213,7 +213,9 @@ describe("BOSS mission-control design system", () => {
     expect(page).toContain('className="cc-composer"');
     expect(operations).toContain('className="mission-task-board"');
     expect(operations).toContain('className="ar-table"');
-    expect(page).toContain('className="dq"');
+    const inbox = readFileSync(resolve(__dirname, "../app/decision-inbox-ui.tsx"), "utf8");
+    expect(page).toContain("<DecisionInbox");
+    expect(inbox).toContain('className="dq"');
     expect(page).toContain('className="mission-evidence-receipt"');
     expect(page).toContain("<MissionAgentRoster");
     expect(page).toContain("<MissionTaskBoard");
@@ -247,12 +249,16 @@ describe("BOSS mission-control design system", () => {
     // BOSS-147: a pending decision needs a clearly attributable proposer,
     // impact, rationale/evidence, and the governed resolve action. A read-only
     // card or a blind approve button would both violate the queue contract.
-    expect(page).toContain('className="dq-row"');
-    expect(page).toContain('className="dq-who"');
-    expect(page).toContain('className={`dq-impact ${impact.tone}`}');
-    expect(page).toContain('className="dq-evidence"');
-    expect(page).toContain("resolveDecisionAction");
-    expect(page).toContain('className={`dq-verdict ${');
+    const inbox = readFileSync(resolve(__dirname, "../app/decision-inbox-ui.tsx"), "utf8");
+    const forms = readFileSync(resolve(__dirname, "../app/client-forms.tsx"), "utf8");
+    expect(page).toContain("<DecisionInbox");
+    expect(inbox).toContain('className="dq-row"');
+    expect(inbox).toContain('className="dq-who"');
+    expect(inbox).toContain('className={`dq-impact ${impact.tone}`}');
+    expect(inbox).toContain('className="dq-evidence"');
+    expect(inbox).toContain("DecisionResolveForm");
+    expect(inbox).toContain('className={`dq-verdict ${');
+    expect(forms).toContain("resolveDecisionAction");
     expect(css).toContain(".dq-row + .dq-row");
     expect(css).toContain(".dq-actions");
   });

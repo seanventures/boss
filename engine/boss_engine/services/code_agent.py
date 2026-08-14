@@ -196,7 +196,14 @@ def _scope_to_task_app(entries: list[dict], files: list[str], task: str) -> tupl
     return (kept_entries or entries), (kept_files or files)
 
 
-def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
+def _pack(
+    cwd: Path,
+    *,
+    task: str = "",
+    limit: int = 120,
+    max_bytes: int = 400_000,
+    head_bytes: int = 20_000,
+) -> str:
     # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
     # added so the design system is visible, and selection is retrieval-driven (pin the design
     # source-of-truth + Terraform core, rank the rest by relevance) instead of first-N-by-path.
@@ -226,12 +233,26 @@ def _pack(cwd: Path, *, task: str = "", limit: int = 120) -> str:
     # consume half the context budget.
     entries, files = _scope_to_task_app(entries, files, task)
     ui = any(repo_retriever.is_design_file(e["rel"]) for e in entries)
-    selection = repo_retriever.select_files(entries, task, ui=ui, pin=_is_core_tf_file,
-                                             max_files=limit)
+    selection = repo_retriever.select_files(
+        entries,
+        task,
+        ui=ui,
+        pin=_is_core_tf_file,
+        max_files=limit,
+        max_bytes=max_bytes,
+        head_bytes=head_bytes,
+    )
     return repo_retriever.render_context(files, selection)
 
 
-def build_repo_context(cwd: Path, *, task: str = "", limit: int = 120) -> str:
+def build_repo_context(
+    cwd: Path,
+    *,
+    task: str = "",
+    limit: int = 120,
+    max_bytes: int = 400_000,
+    head_bytes: int = 20_000,
+) -> str:
     """Relevance-ranked repo context for a task.
 
     BOSS has owned a module-aware context packer since spec 09, but only NativeCodeAgent
@@ -240,7 +261,9 @@ def build_repo_context(cwd: Path, *, task: str = "", limit: int = 120) -> str:
     ~27 of its tool calls were exploration (Read/ls/cat) against 16 real edits. That
     rediscovery is paid again by every stage of every run.
     """
-    return _pack(cwd, task=task, limit=limit)
+    return _pack(
+        cwd, task=task, limit=limit, max_bytes=max_bytes, head_bytes=head_bytes
+    )
 
 
 class CodeAgent(Protocol):
@@ -293,10 +316,23 @@ class ClaudeCodeAgent:
         # so it orients the agent rather than flooding the context it re-sends each turn.
         ctx = ""
         limit = int(getattr(self.settings, "code_agent_context_files", 14) or 0)
+        from .openai_adapter import groq_qwen_context_limits
+
+        limit, max_bytes, head_bytes = groq_qwen_context_limits(
+            getattr(self.settings, "openai_model", None),
+            base_url=str(getattr(self.settings, "openai_base_url", "") or ""),
+            engine=str(getattr(self, "engine", "") or ""),
+            file_limit=limit,
+        )
         if cwd is not None and limit > 0:
             try:
                 packed = build_repo_context(
-                    cwd, task=f"{spec.title}\n{spec.instructions}", limit=limit)
+                    cwd,
+                    task=f"{spec.title}\n{spec.instructions}",
+                    limit=limit,
+                    max_bytes=max_bytes,
+                    head_bytes=head_bytes,
+                )
             except Exception:
                 packed = ""
             if packed:
@@ -598,8 +634,34 @@ class NativeCodeAgent:
 
         self._llm = OpenAIAdapter(settings)
 
-    def _repo_context(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
-        return build_repo_context(cwd, task=task, limit=limit)
+    def _repo_context(
+        self,
+        cwd: Path,
+        *,
+        task: str = "",
+        limit: int = 120,
+        model: Optional[str] = None,
+    ) -> str:
+        from .openai_adapter import groq_qwen_context_limits
+
+        configured = int(getattr(self.settings, "code_agent_context_files", 14) or 0)
+        if configured <= 0:
+            return ""
+        file_limit, max_bytes, head_bytes = groq_qwen_context_limits(
+            model or getattr(self.settings, "openai_model", None),
+            base_url=str(getattr(self.settings, "openai_base_url", "") or ""),
+            engine=str(getattr(self, "engine", "") or ""),
+            file_limit=min(int(limit or configured), configured),
+        )
+        if file_limit <= 0:
+            return ""
+        return build_repo_context(
+            cwd,
+            task=task,
+            limit=file_limit,
+            max_bytes=max_bytes,
+            head_bytes=head_bytes,
+        )
 
     def _repo_context_impl(self, cwd: Path, *, task: str = "", limit: int = 120) -> str:
         # IaC authoring (spec 05 §3.2 / T4): .tf/.tfvars/.hcl are context. APP-5 (#95): frontend exts
@@ -673,7 +735,9 @@ class NativeCodeAgent:
         try:
             msg, usage = self._llm.create_chat_completion(
                 [{"role": "system", "content": system},
-                 {"role": "user", "content": f"{prompt}\n\n{self._repo_context(cwd, task=prompt)}"}],
+                 {"role": "user", "content": (
+                     f"{prompt}\n\n{self._repo_context(cwd, task=prompt, model=model)}"
+                 )}],
                 model_override=model or None,
                 redact=getattr(self, "redact", False),  # data-boundary: mask PII for restricted tasks
             )

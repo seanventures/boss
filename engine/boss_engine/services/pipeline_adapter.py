@@ -549,3 +549,114 @@ def make_pipeline_adapter(
     if provider == "bitbucket_pipelines":
         return BitbucketPipelines(settings)
     raise ValueError(f"Unsupported pipeline provider: {settings.pipeline_provider}")
+
+
+# Static discovery catalog — kinds/capabilities only. Never includes secret values.
+_PIPELINE_ADAPTER_CATALOG: list[dict] = [
+    {
+        "kind": "github_actions",
+        "display_name": "GitHub Actions",
+        "description": (
+            "Read check-runs and optionally dispatch workflows for the configured "
+            "target GitHub repository."
+        ),
+        "capabilities": ["discover", "trigger", "poll", "verdict", "wait_for_verdict"],
+        "read_only_operations": ["discover", "poll", "verdict"],
+        "effect_operations": ["trigger"],
+        "config_keys": [
+            "BOSS_PIPELINE_PROVIDER",
+            "BOSS_TARGET_GITHUB_OWNER",
+            "BOSS_TARGET_GITHUB_REPO",
+        ],
+        "secret_config_keys": ["BOSS_GITHUB_TOKEN"],
+        "requires_credentials": True,
+        "status": "available",
+    },
+    {
+        "kind": "jenkins",
+        "display_name": "Jenkins",
+        "description": (
+            "Drive a Jenkins job via buildWithParameters; poll queue/build status."
+        ),
+        "capabilities": ["discover", "trigger", "poll", "verdict", "wait_for_verdict"],
+        "read_only_operations": ["discover", "poll", "verdict"],
+        "effect_operations": ["trigger"],
+        "config_keys": [
+            "BOSS_PIPELINE_PROVIDER",
+            "BOSS_JENKINS_BASE_URL",
+            "BOSS_JENKINS_JOB",
+            "BOSS_JENKINS_USER",
+            "BOSS_TARGET_GITHUB_OWNER",
+            "BOSS_TARGET_GITHUB_REPO",
+        ],
+        "secret_config_keys": ["BOSS_JENKINS_TOKEN"],
+        "requires_credentials": True,
+        "status": "available",
+    },
+    {
+        "kind": "gitlab",
+        "display_name": "GitLab CI",
+        "description": "Trigger and poll GitLab project pipelines via the REST API.",
+        "capabilities": ["discover", "trigger", "poll", "verdict", "wait_for_verdict"],
+        "read_only_operations": ["discover", "poll", "verdict"],
+        "effect_operations": ["trigger"],
+        "config_keys": [
+            "BOSS_PIPELINE_PROVIDER",
+            "BOSS_GITLAB_BASE_URL",
+            "BOSS_GITLAB_PROJECT_ID",
+            "BOSS_TARGET_GITHUB_OWNER",
+            "BOSS_TARGET_GITHUB_REPO",
+        ],
+        "secret_config_keys": ["BOSS_GITLAB_TOKEN"],
+        "requires_credentials": True,
+        "status": "available",
+    },
+    {
+        "kind": "bitbucket_pipelines",
+        "display_name": "Bitbucket Pipelines",
+        "description": (
+            "CI checks for Bitbucket-hosted target repos via the Pipelines API."
+        ),
+        "capabilities": ["discover", "trigger", "poll", "verdict", "wait_for_verdict"],
+        "read_only_operations": ["discover", "poll", "verdict"],
+        "effect_operations": ["trigger"],
+        "config_keys": [
+            "BOSS_PIPELINE_PROVIDER",
+            "BOSS_TARGET_BITBUCKET_WORKSPACE",
+            "BOSS_TARGET_BITBUCKET_REPO",
+            "BOSS_BITBUCKET_USERNAME",
+        ],
+        "secret_config_keys": [
+            "BOSS_BITBUCKET_TOKEN",
+            "BOSS_BITBUCKET_APP_PASSWORD",
+        ],
+        "requires_credentials": True,
+        "status": "available",
+    },
+]
+
+
+def pipeline_adapter_catalog(
+    settings: Optional[Settings] = None,
+) -> dict:
+    """Read-only discovery of pipeline adapter kinds/capabilities (no secrets).
+
+    Returns static kind metadata plus the configured default provider when
+    settings are supplied. Credential *names* are listed; values never are.
+    """
+    default_provider = "github_actions"
+    if settings is not None:
+        raw = getattr(settings, "pipeline_provider", None) or default_provider
+        default_provider = str(raw).strip().lower() or default_provider
+    items = [dict(item) for item in _PIPELINE_ADAPTER_CATALOG]
+    for item in items:
+        item["is_default"] = item["kind"] == default_provider
+    return {
+        "default_provider": default_provider,
+        "note": (
+            "Catalog lists adapter kinds and capability seams only. Secret values "
+            "are never included. Trigger is an effect and must sit behind policy, "
+            "budget, and Receipt gates."
+        ),
+        "items": items,
+    }

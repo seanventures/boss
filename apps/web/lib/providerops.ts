@@ -239,6 +239,9 @@ export type ProviderHealthFeedItem = {
   rateLimitStatus: string;
   usageCapStatus: string;
   lastCheckedAt: string;
+  billingStatus?: string;
+  billingConfidence?: string;
+  billingMessage?: string;
 };
 
 export type DriftReportFeedItem = {
@@ -265,6 +268,9 @@ export type ReconciliationRunFeedItem = {
   startedAt: string;
   finishedAt?: string;
   inventorySnapshotArtifactId?: string;
+  billingStatus?: string;
+  billingConfidence?: string;
+  billingMessage?: string;
 };
 
 export type WorkerPoolFeedItem = {
@@ -317,6 +323,201 @@ export type ProviderOpsSummary = {
   openScalePlans: number;
   activeDeploymentRuns: number;
 };
+
+export type SpendHonestyKind =
+  | "empty"
+  | "unavailable"
+  | "unknown"
+  | "estimated"
+  | "observed";
+
+export type SpendHonesty = {
+  kind: SpendHonestyKind;
+  label: string;
+  amountUsdMicros: number | null;
+  helper: string;
+};
+
+const OBSERVED_COST_CONFIDENCE = new Set([
+  "exact_call_metered",
+  "provider_reported",
+  "invoice_reconciled",
+]);
+
+const ESTIMATED_COST_CONFIDENCE = new Set([
+  "estimated_from_price_catalog",
+  "estimated",
+]);
+
+function optionalRecordString(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeHonestyToken(value?: string): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+/** Never present missing/unknown billing as an exact $0.00. */
+export function describeSpendHonesty(input: {
+  costs: Array<{ amountUsdMicros: number; confidence: string }>;
+  health?: Array<{
+    billingStatus?: string;
+    billingConfidence?: string;
+    billingMessage?: string;
+  }>;
+  runs?: Array<{
+    billingStatus?: string;
+    billingConfidence?: string;
+    billingMessage?: string;
+  }>;
+}): SpendHonesty {
+  const costs = input.costs ?? [];
+  const signals = [...(input.health ?? []), ...(input.runs ?? [])];
+  const statuses = signals.map((item) => normalizeHonestyToken(item.billingStatus));
+  const confidences = [
+    ...signals.map((item) => normalizeHonestyToken(item.billingConfidence)),
+    ...costs.map((item) => normalizeHonestyToken(item.confidence)),
+  ];
+  const unavailableMessage = signals
+    .map((item) => item.billingMessage?.trim())
+    .find((message) => Boolean(message));
+
+  const observed = costs.filter((item) =>
+    OBSERVED_COST_CONFIDENCE.has(normalizeHonestyToken(item.confidence)),
+  );
+  const estimated = costs.filter((item) =>
+    ESTIMATED_COST_CONFIDENCE.has(normalizeHonestyToken(item.confidence)),
+  );
+
+  if (observed.length > 0) {
+    const mixed = estimated.length > 0 || observed.length !== costs.length;
+    return {
+      kind: "observed",
+      label: mixed ? "Recorded spend (mixed confidence)" : "Observed spend",
+      amountUsdMicros: observed.reduce((total, item) => total + item.amountUsdMicros, 0),
+      helper: mixed
+        ? "Dollar total is only provider-reported or metered events. Estimates stay labeled and are not added as exact."
+        : "Values retain their confidence labels. Estimates are never presented as reconciled actuals.",
+    };
+  }
+
+  if (estimated.length > 0) {
+    return {
+      kind: "estimated",
+      label: "Estimated spend",
+      amountUsdMicros: estimated.reduce((total, item) => total + item.amountUsdMicros, 0),
+      helper:
+        "Catalog estimates only — not provider-reconciled actuals and not exact spend.",
+    };
+  }
+
+  if (statuses.includes("unavailable")) {
+    return {
+      kind: "unavailable",
+      label: "Billing unavailable",
+      amountUsdMicros: null,
+      helper:
+        unavailableMessage ||
+        "Exact billing sync is not available. Inventory is kept; this is not $0.00 spend.",
+    };
+  }
+
+  if (
+    costs.length > 0 ||
+    statuses.includes("failed") ||
+    statuses.includes("not_requested") ||
+    confidences.includes("unknown")
+  ) {
+    return {
+      kind: "unknown",
+      label: "Cost unknown",
+      amountUsdMicros: null,
+      helper:
+        "No exact cost events are recorded. Unknown confidence is not an exact $0.00.",
+    };
+  }
+
+  return {
+    kind: "empty",
+    label: "No cost events",
+    amountUsdMicros: null,
+    helper:
+      "No provider cost events yet. Resource receipts are action evidence, not invoices. Absence is not $0.00 spend.",
+  };
+}
+
+export function costsForHonestyChart<T extends { confidence: string }>(
+  costs: T[],
+  kind: SpendHonestyKind,
+): T[] {
+  if (kind === "observed") {
+    return costs.filter((item) =>
+      OBSERVED_COST_CONFIDENCE.has(normalizeHonestyToken(item.confidence)),
+    );
+  }
+  if (kind === "estimated") {
+    return costs.filter((item) =>
+      ESTIMATED_COST_CONFIDENCE.has(normalizeHonestyToken(item.confidence)),
+    );
+  }
+  return [];
+}
+
+export function describeResourceMonthlyCost(resource: {
+  actualMonthlyUsdMicros?: number;
+  estimatedMonthlyUsdMicros?: number;
+  costConfidence: string;
+}): SpendHonesty {
+  const confidence = normalizeHonestyToken(resource.costConfidence);
+  const amount =
+    resource.actualMonthlyUsdMicros ?? resource.estimatedMonthlyUsdMicros;
+
+  if (confidence === "unavailable") {
+    return {
+      kind: "unavailable",
+      label: "Billing unavailable",
+      amountUsdMicros: null,
+      helper: "Monthly cost is unavailable — not $0.00.",
+    };
+  }
+  if (confidence === "unknown" || amount == null) {
+    return {
+      kind: "unknown",
+      label: "Unknown",
+      amountUsdMicros: null,
+      helper: "Monthly cost is unknown — not an exact $0.00.",
+    };
+  }
+  if (ESTIMATED_COST_CONFIDENCE.has(confidence)) {
+    return {
+      kind: "estimated",
+      label: "Estimated",
+      amountUsdMicros: amount,
+      helper: "Catalog estimate — not a reconciled actual.",
+    };
+  }
+  if (OBSERVED_COST_CONFIDENCE.has(confidence)) {
+    return {
+      kind: "observed",
+      label: resource.costConfidence,
+      amountUsdMicros: amount,
+      helper: "Provider-reported or metered monthly cost.",
+    };
+  }
+  return {
+    kind: "unknown",
+    label: resource.costConfidence || "Unknown",
+    amountUsdMicros: null,
+    helper: "Confidence is not exact — amount is not shown as spend.",
+  };
+}
 
 /**
  * Community is fully functional for BYOK + self-managed infra: ChangeSets,
@@ -624,6 +825,9 @@ function mapProviderHealth(payload: ProviderHealthSummary): ProviderHealthFeedIt
     rateLimitStatus: payload.rate_limit_status,
     usageCapStatus: payload.usage_cap_status,
     lastCheckedAt: payload.last_checked_at,
+    billingStatus: optionalRecordString(payload.detail, "billing_status"),
+    billingConfidence: optionalRecordString(payload.detail, "billing_confidence"),
+    billingMessage: optionalRecordString(payload.detail, "billing_message"),
   };
 }
 
@@ -659,6 +863,9 @@ function mapReconciliationRun(
       typeof payload.metadata.inventory_snapshot_artifact_id === "string"
         ? payload.metadata.inventory_snapshot_artifact_id
         : undefined,
+    billingStatus: optionalRecordString(payload.metadata, "billing_status"),
+    billingConfidence: optionalRecordString(payload.metadata, "billing_confidence"),
+    billingMessage: optionalRecordString(payload.metadata, "billing_message"),
   };
 }
 

@@ -55,6 +55,18 @@ PROVIDER_REGISTRY: dict[str, dict[str, Any]] = {
             "cloudflare_api_token": "env:BOSS_CLOUDFLARE_API_TOKEN",
         },
     },
+    "azure": {
+        # BOSS skill prefix is "azure.*"; Terraform provider block key is azurerm.
+        "tf_name": "azurerm",
+        "source": "hashicorp/azurerm",
+        "version": "~> 3.0",
+        "variables": {
+            "azure_client_id": "env:BOSS_AZURE_CLIENT_ID",
+            "azure_client_secret": "env:BOSS_AZURE_CLIENT_SECRET",
+            "azure_tenant_id": "env:BOSS_AZURE_TENANT_ID",
+            "azure_subscription_id": "env:BOSS_AZURE_SUBSCRIPTION_ID",
+        },
+    },
 }
 
 # (provider, resource_type) and (provider, skill_id) -> Terraform resource type.
@@ -77,6 +89,11 @@ RESOURCE_TYPE_MAP: dict[tuple[str, str], str] = {
     ("digitalocean", "digitalocean.app.deploy"): "digitalocean_app",
     ("cloudflare", "dns_record"): "cloudflare_record",
     ("cloudflare", "cloudflare.dns.record.upsert"): "cloudflare_record",
+    ("azure", "vm"): "azurerm_linux_virtual_machine",
+    ("azure", "virtual_machine"): "azurerm_linux_virtual_machine",
+    ("azure", "azure.vm.create"): "azurerm_linux_virtual_machine",
+    ("azure", "resource_group"): "azurerm_resource_group",
+    ("azure", "azure.resource_group.ensure"): "azurerm_resource_group",
 }
 
 # desired_state keys whose values are secrets and must NEVER be copied into the
@@ -332,6 +349,78 @@ def _fields_cloudflare_record(desired: dict, operation: dict) -> tuple[dict, dic
     return body, {}
 
 
+def _fields_azurerm_resource_group(desired: dict, operation: dict) -> tuple[dict, dict]:
+    body: dict[str, Any] = {
+        "name": str(
+            desired.get("name")
+            or desired.get("resource_group")
+            or operation.get("resource_ref")
+            or ""
+        ),
+        "location": str(desired.get("location") or desired.get("region") or ""),
+    }
+    tags = _tags_map(desired, body["name"] or None)
+    if tags:
+        body["tags"] = tags
+    return body, {}
+
+
+def _fields_azurerm_linux_virtual_machine(
+    desired: dict, operation: dict
+) -> tuple[dict, dict]:
+    name = str(
+        desired.get("name") or operation.get("resource_ref") or ""
+    ).strip() or "vm"
+    body: dict[str, Any] = {
+        "name": name,
+        "resource_group_name": str(
+            desired.get("resource_group_name")
+            or desired.get("resource_group")
+            or ""
+        ),
+        "location": str(desired.get("location") or desired.get("region") or ""),
+        "size": str(desired.get("vm_size") or desired.get("size") or ""),
+        "admin_username": str(desired.get("admin_username") or "bossadmin"),
+        "network_interface_ids": _clean_str_list(
+            desired.get("network_interface_ids")
+        ),
+        "tags": _tags_map(desired, name),
+    }
+    image = desired.get("source_image_reference") or desired.get("image")
+    if isinstance(image, dict):
+        body["source_image_reference"] = {
+            "publisher": str(image.get("publisher") or ""),
+            "offer": str(image.get("offer") or ""),
+            "sku": str(image.get("sku") or ""),
+            "version": str(image.get("version") or "latest"),
+        }
+    elif isinstance(image, str) and image.strip():
+        # Compact image string → Ubuntu default reference with sku override.
+        body["source_image_reference"] = {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": image.strip(),
+            "version": "latest",
+        }
+    os_disk = desired.get("os_disk") if isinstance(desired.get("os_disk"), dict) else {}
+    body["os_disk"] = {
+        "caching": str(os_disk.get("caching") or "ReadWrite"),
+        "storage_account_type": str(
+            os_disk.get("storage_account_type") or "Standard_LRS"
+        ),
+    }
+    extra_variables: dict[str, str] = {}
+    secret_ref = desired.get("admin_password_secret_ref")
+    if isinstance(secret_ref, str) and secret_ref.strip():
+        variable_name = _variable_name_for_secret_ref(secret_ref.strip())
+        body["admin_password"] = f"${{var.{variable_name}}}"
+        body["disable_password_authentication"] = False
+        extra_variables[variable_name] = secret_ref.strip()
+    else:
+        body["disable_password_authentication"] = True
+    return body, extra_variables
+
+
 _FIELD_TRANSLATORS = {
     "aws_instance": _fields_aws_instance,
     "aws_s3_bucket": _fields_aws_s3_bucket,
@@ -341,7 +430,15 @@ _FIELD_TRANSLATORS = {
     "digitalocean_droplet": _fields_digitalocean_droplet,
     "digitalocean_app": _fields_digitalocean_app,
     "cloudflare_record": _fields_cloudflare_record,
+    "azurerm_resource_group": _fields_azurerm_resource_group,
+    "azurerm_linux_virtual_machine": _fields_azurerm_linux_virtual_machine,
 }
+
+
+def _tf_provider_name(provider: str) -> str:
+    """Map BOSS provider key → Terraform required_providers / provider block key."""
+    entry = PROVIDER_REGISTRY.get(provider) or {}
+    return str(entry.get("tf_name") or provider)
 
 
 def _provider_block(provider: str, aws_region: str) -> dict[str, Any]:
@@ -355,6 +452,14 @@ def _provider_block(provider: str, aws_region: str) -> dict[str, Any]:
         return {"token": "${var.digitalocean_token}"}
     if provider == "cloudflare":
         return {"api_token": "${var.cloudflare_api_token}"}
+    if provider == "azure":
+        return {
+            "features": {},
+            "client_id": "${var.azure_client_id}",
+            "client_secret": "${var.azure_client_secret}",
+            "tenant_id": "${var.azure_tenant_id}",
+            "subscription_id": "${var.azure_subscription_id}",
+        }
     raise TerraformExportError(f"No provider block template for '{provider}'.")
 
 
@@ -576,7 +681,7 @@ def changeset_to_tf(
         },
         "terraform": {
             "required_providers": {
-                provider: {
+                _tf_provider_name(provider): {
                     "source": PROVIDER_REGISTRY[provider]["source"],
                     "version": PROVIDER_REGISTRY[provider]["version"],
                 }
@@ -587,7 +692,7 @@ def changeset_to_tf(
     }
     if providers_used:
         tf_json["provider"] = {
-            provider: _provider_block(provider, aws_region)
+            _tf_provider_name(provider): _provider_block(provider, aws_region)
             for provider in sorted(providers_used)
         }
     if variables:

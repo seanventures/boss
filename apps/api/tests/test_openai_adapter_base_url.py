@@ -107,6 +107,71 @@ def test_provider_lane_engines_bind_dedicated_credentials(monkeypatch):
             make_code_agent(Settings(**{key_alias: ""}), engine=engine_name)
 
 
+def test_groq_qwen_caps_max_tokens_below_tpm_window(monkeypatch):
+    """Groq 6k TPM + default 8192 max_tokens requests ~12k and 429s. Cap it."""
+    from apps.api.app.services.openai_adapter import (
+        GROQ_QWEN_MAX_OUTPUT_TOKENS,
+        capped_max_output_tokens,
+        is_groq_qwen_model_class,
+    )
+
+    assert is_groq_qwen_model_class("qwen/qwen3-32b")
+    assert is_groq_qwen_model_class("openai/gpt-oss", base_url="https://api.groq.com/openai/v1")
+    assert is_groq_qwen_model_class("gpt-4o", engine="groq")
+    assert not is_groq_qwen_model_class("gpt-4o", base_url="https://api.openai.com/v1")
+    assert capped_max_output_tokens(8192, "groq:qwen/qwen3-32b") == GROQ_QWEN_MAX_OUTPUT_TOKENS
+    assert GROQ_QWEN_MAX_OUTPUT_TOKENS <= 2048
+    assert capped_max_output_tokens(8192, "gpt-4o") == 8192
+
+    captured: dict = {}
+
+    class _Capture(_FakeOpenAI):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            inner = self.chat.completions.create
+
+            def create(**kw):
+                captured.update(kw)
+                return inner(**kw)
+
+            self.chat.completions.create = create
+
+    monkeypatch.setattr(openai_adapter, "OpenAI", _Capture)
+    adapter = OpenAIAdapter(_settings(
+        native_max_output_tokens=8192,
+        openai_base_url="https://api.groq.com/openai/v1",
+        openai_model="qwen/qwen3-32b",
+    ))
+    adapter.create_chat_completion([{"role": "user", "content": "hi"}])
+    assert captured["max_tokens"] == GROQ_QWEN_MAX_OUTPUT_TOKENS
+    assert captured["max_tokens"] < 6000
+
+
+def test_groq_qwen_context_pack_is_smaller_than_default():
+    from apps.api.app.services.openai_adapter import (
+        GROQ_QWEN_CONTEXT_FILES,
+        GROQ_QWEN_CONTEXT_HEAD_BYTES,
+        GROQ_QWEN_CONTEXT_MAX_BYTES,
+        groq_qwen_context_limits,
+    )
+
+    files, max_bytes, head = groq_qwen_context_limits(
+        "qwen/qwen3-32b", file_limit=14
+    )
+    assert files == GROQ_QWEN_CONTEXT_FILES
+    assert files <= 4
+    assert max_bytes == GROQ_QWEN_CONTEXT_MAX_BYTES
+    assert head == GROQ_QWEN_CONTEXT_HEAD_BYTES
+    # Combined prompt budget stays well under Groq 6k TPM even with max_tokens.
+    assert files * head + 1024 < 6000 * 4  # rough chars; just prove we shrank
+    default_files, default_bytes, default_head = groq_qwen_context_limits(
+        "gpt-4o", file_limit=14
+    )
+    assert default_files == 14
+    assert default_bytes > max_bytes
+    assert groq_qwen_context_limits("qwen", file_limit=0)[0] == 0
+
+
 def test_native_max_output_tokens_cap_passed(monkeypatch):
     """Metered gateways reserve credits for the requested max — the adapter caps it."""
     captured: dict = {}

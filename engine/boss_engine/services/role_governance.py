@@ -64,6 +64,19 @@ class RoleGovernanceService:
 
         role = self.get_role(connection, project_id, role_key)
         policy = self._load_autonomy_policy()
+        # Import here to avoid a circular import at module load (autonomy_engine
+        # already depends on RoleGovernanceService).
+        from .autonomy_engine import AutonomyEngine
+
+        trust_floors = AutonomyEngine.trust_risk_tier_floors(policy)
+        trust_score = int(role.get("trust_score") or 50)
+        trust_ok, min_trust_required = AutonomyEngine.trust_allows_risk_tier(
+            trust_score, risk_tier, trust_floors
+        )
+        max_allowed_risk_tier = AutonomyEngine.max_allowed_risk_tier(
+            trust_score, trust_floors
+        )
+
         required_capability = self._required_capability(
             action, risk_tier, sandboxed, policy_approved
         )
@@ -74,10 +87,20 @@ class RoleGovernanceService:
         required_level = self._minimum_level_for_capability(
             policy, required_capability
         )
-        allowed = required_capability in allowed_capabilities
-        reason = "allowed_by_autonomy_level" if allowed else "autonomy_level_too_low"
+        level_allowed = required_capability in allowed_capabilities
+        reason = (
+            "allowed_by_autonomy_level" if level_allowed else "autonomy_level_too_low"
+        )
         if required_level is None:
+            level_allowed = False
             reason = "action_not_allowed_by_autonomy_policy"
+
+        # G2 — trust_score gates allowed risk tiers. Fail closed: deny when
+        # trust is below the floor even if the autonomy ladder would permit.
+        allowed = level_allowed
+        if allowed and not trust_ok:
+            allowed = False
+            reason = "trust_score_below_risk_tier_floor"
 
         emit_event(
             connection,
@@ -95,6 +118,10 @@ class RoleGovernanceService:
                 "policy_approved": policy_approved,
                 "current_level": current_level,
                 "required_level": required_level,
+                "trust_score": trust_score,
+                "min_trust_required": min_trust_required,
+                "max_allowed_risk_tier": max_allowed_risk_tier,
+                "trust_gate_passed": trust_ok,
                 "reason": reason,
             },
         )
@@ -111,7 +138,10 @@ class RoleGovernanceService:
             "current_level": current_level,
             "required_level": required_level,
             "allowed_capabilities": allowed_capabilities,
-            "trust_score": int(role.get("trust_score") or 50),
+            "trust_score": trust_score,
+            "min_trust_required": min_trust_required,
+            "max_allowed_risk_tier": max_allowed_risk_tier,
+            "trust_gate_passed": trust_ok,
         }
 
     def check_scope(

@@ -128,6 +128,13 @@ SUPPORTED_PROVIDERS = {
             "openai.costs.sync",
         ],
     },
+    "openai_compatible": {
+        "credential_ref": "env:OPENAI_API_KEY",
+        "capabilities": [
+            "provider_connection_test",
+            "openai.costs.sync",
+        ],
+    },
     "anthropic": {
         "credential_ref": "env:ANTHROPIC_API_KEY",
         "capabilities": [
@@ -329,6 +336,126 @@ PROVIDER_CONNECTION_PROFILES: dict[str, dict[str, Any]] = {
                         "required": False,
                         "default_ref": "env:BOSS_OVH_CLOUD_PROJECT_ID",
                     },
+                ],
+            }
+        },
+    },
+    "openai": {
+        "display_name": "OpenAI",
+        "category": "models",
+        "adapter_status": "available",
+        "default_auth_method": "api_key",
+        "auth_methods": {
+            "api_key": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "api_key",
+                        "secret_kind": "api_token",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:OPENAI_API_KEY",
+                    }
+                ],
+            }
+        },
+    },
+    "openai_compatible": {
+        "display_name": "OpenAI-compatible (Ollama / vLLM)",
+        "category": "models",
+        "adapter_status": "available",
+        "default_auth_method": "api_key",
+        "auth_methods": {
+            "api_key": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "api_key",
+                        "secret_kind": "api_token",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:OPENAI_API_KEY",
+                    }
+                ],
+            }
+        },
+    },
+    "anthropic": {
+        "display_name": "Anthropic",
+        "category": "models",
+        "adapter_status": "available",
+        "default_auth_method": "api_key",
+        "auth_methods": {
+            "api_key": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "api_key",
+                        "secret_kind": "api_token",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:ANTHROPIC_API_KEY",
+                    }
+                ],
+            }
+        },
+    },
+    "cloudflare": {
+        "display_name": "Cloudflare",
+        "category": "infrastructure",
+        "adapter_status": "available",
+        "default_auth_method": "api_token",
+        "auth_methods": {
+            "api_token": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "token",
+                        "secret_kind": "api_token",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_CLOUDFLARE_API_TOKEN",
+                    }
+                ],
+            }
+        },
+    },
+    "supabase": {
+        "display_name": "Supabase",
+        "category": "infrastructure",
+        "adapter_status": "available",
+        "default_auth_method": "api_token",
+        "auth_methods": {
+            "api_token": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "token",
+                        "secret_kind": "api_token",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_SUPABASE_ACCESS_TOKEN",
+                    }
+                ],
+            }
+        },
+    },
+    "ssh_host": {
+        "display_name": "SSH host",
+        "category": "infrastructure",
+        "adapter_status": "available",
+        "default_auth_method": "private_key",
+        "auth_methods": {
+            "private_key": {
+                "runtime_status": "available",
+                "credential_slots": [
+                    {
+                        "key": "private_key",
+                        "secret_kind": "private_key",
+                        "required": True,
+                        "primary": True,
+                        "default_ref": "env:BOSS_SSH_HOST_PRIVATE_KEY",
+                    }
                 ],
             }
         },
@@ -620,6 +747,159 @@ class ResourcePlaneService:
             capabilities,
         )
         return self._serialize_provider_account(row)
+
+    def easy_connect(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        provider: str,
+        account_label: str,
+        secret_value: str,
+        slot: Optional[str] = None,
+        auth_method: Optional[str] = None,
+        base_url: Optional[str] = None,
+        backend: str = "local_vault",
+        read_only: bool = True,
+        test_after: bool = False,
+    ) -> dict[str, Any]:
+        """Write-through paste of a provider key into a SecretRef-backed account.
+
+        The raw value is handed to the secret backend and dropped. Postgres keeps
+        only a pointer plus last4/fingerprint metadata. Agents never receive the
+        material.
+        """
+        from .secrets_service import put_secret
+
+        if not str(secret_value or "").strip():
+            raise ValueError("secret_value is required")
+        backend_key = (backend or "local_vault").strip().lower() or "local_vault"
+        normalized_provider = self._normalize_provider(provider)
+        normalized_label = self._require_text(account_label, "account_label")
+        profile = PROVIDER_CONNECTION_PROFILES.get(normalized_provider)
+        method_key = (
+            auth_method or (profile or {}).get("default_auth_method") or "api_token"
+        ).strip().lower()
+        requested_slot = (slot or "").strip().lower()
+        if profile:
+            method = profile["auth_methods"].get(method_key)
+            if not method:
+                raise ValueError(
+                    f"{normalized_provider} auth_method must be one of: "
+                    + ", ".join(sorted(profile["auth_methods"]))
+                    + "."
+                )
+            slots = {item["key"]: item for item in method["credential_slots"]}
+            primary = next(
+                (
+                    item["key"]
+                    for item in method["credential_slots"]
+                    if item.get("primary")
+                ),
+                next(iter(slots), "primary"),
+            )
+            slot_key = requested_slot or primary
+            if slot_key not in slots:
+                if slot_key in {"token", "api_key", "primary"}:
+                    slot_key = primary
+                else:
+                    raise ValueError(
+                        f"Unknown credential slot {slot_key!r} for "
+                        f"{normalized_provider}/{method_key}."
+                    )
+            secret_kind = str(slots[slot_key]["secret_kind"])
+        else:
+            if requested_slot and requested_slot not in {"token", "api_key", "primary"}:
+                raise ValueError(
+                    f"{normalized_provider} credential_refs supports only the "
+                    "'primary' slot."
+                )
+            slot_key = "primary"
+            secret_kind = "api_token"
+
+        stored = put_secret(
+            connection,
+            self.settings,
+            project_id=project_id,
+            name=f"{normalized_provider}_{normalized_label}_{slot_key}",
+            value=secret_value,
+            secret_kind=secret_kind,
+            backend=backend_key,
+            actor=actor,
+        )
+        connection.execute(
+            text("UPDATE secret_refs SET provider = :provider WHERE id = :id"),
+            {"provider": normalized_provider, "id": stored["secret_ref_id"]},
+        )
+        pointer = f"{backend_key}:{stored['ref_key']}"
+        metadata: dict[str, Any] = {}
+        cleaned_base = str(base_url or "").strip()
+        if cleaned_base:
+            metadata["base_url"] = cleaned_base.rstrip("/")
+        account = self.create_provider_account(
+            connection,
+            project_id=project_id,
+            provider=normalized_provider,
+            account_label=normalized_label,
+            auth_method=method_key,
+            credential_refs={slot_key: pointer},
+            connection_metadata=metadata or None,
+            scopes=[],
+            read_only=bool(read_only),
+            deploy_capable=False,
+            billing_readable=False,
+            destructive_actions_disabled=True,
+            actor=actor,
+        )
+        emit_event(
+            connection,
+            project_id,
+            "provider.easy_connected",
+            actor,
+            "provider_account",
+            account["id"],
+            {
+                "provider": normalized_provider,
+                "account_label": normalized_label,
+                "backend": backend_key,
+                "slot": slot_key,
+                "secret_ref_id": stored["secret_ref_id"],
+                "last4": stored.get("last4"),
+                "raw_secret_stored": False,
+                "has_base_url": bool(cleaned_base),
+            },
+        )
+        test_payload: Optional[dict[str, Any]] = None
+        if test_after:
+            try:
+                test_payload = self.test_provider_account(
+                    connection,
+                    project_id=project_id,
+                    provider_account_id=account["id"],
+                    actor=actor,
+                )
+                account = test_payload.get("provider_account") or account
+            except Exception as error:
+                test_payload = {
+                    "status": "failed",
+                    "detail": self._safe_provider_error(error),
+                }
+                account = self.get_provider_account(
+                    connection, project_id, account["id"]
+                )
+        return {
+            "provider_account": account,
+            "secret": {
+                "secret_ref_id": stored["secret_ref_id"],
+                "last4": stored.get("last4"),
+                "fingerprint": stored.get("fingerprint"),
+                "raw_secret_stored": False,
+                "backend": backend_key,
+            },
+            "raw_secret_stored": False,
+            "test": test_payload,
+        }
 
     def update_provider_account(
         self,
@@ -1027,7 +1307,11 @@ class ResourcePlaneService:
             try:
                 self._require_account_secret_refs_usable(connection, account)
                 credential = self._credential_value(account["credential_ref"])
-                result = self._test_connection(account["provider"], credential)
+                result = self._test_connection(
+                    account["provider"],
+                    credential,
+                    account.get("connection_metadata"),
+                )
                 status = "passed"
                 detail = result
                 missing_permissions = []
@@ -8103,7 +8387,12 @@ class ResourcePlaneService:
         )
         return deadletter_id
 
-    def _test_connection(self, provider: str, credential: str) -> dict[str, Any]:
+    def _test_connection(
+        self,
+        provider: str,
+        credential: str,
+        connection_metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         if provider == "aws":
             sts = self._aws_client("sts", credential)
             payload = sts.get_caller_identity()
@@ -8174,13 +8463,20 @@ class ResourcePlaneService:
                     "https://api.supabase.com/v1/projects",
                     headers=headers,
                 )
-            elif provider == "openai":
-                response = client.get("https://api.openai.com/v1/models", headers=headers)
+            elif provider in {"openai", "openai_compatible"}:
+                metadata = connection_metadata or {}
+                base = str(
+                    metadata.get("base_url") or "https://api.openai.com"
+                ).rstrip("/")
+                models_path = "/models" if base.endswith("/v1") else "/v1/models"
+                response = client.get(f"{base}{models_path}", headers=headers)
             elif provider == "anthropic":
-                response = client.get(
-                    "https://api.anthropic.com/v1/models",
-                    headers=headers,
-                )
+                metadata = connection_metadata or {}
+                base = str(
+                    metadata.get("base_url") or "https://api.anthropic.com"
+                ).rstrip("/")
+                models_path = "/models" if base.endswith("/v1") else "/v1/models"
+                response = client.get(f"{base}{models_path}", headers=headers)
             else:
                 raise ProviderAdapterError(f"Provider '{provider}' is not supported.")
             response.raise_for_status()
@@ -8328,7 +8624,7 @@ class ResourcePlaneService:
                 )
                 response.raise_for_status()
                 return self._supabase_resources(response.json())
-            if provider in {"openai", "anthropic"}:
+            if provider in {"openai", "anthropic", "openai_compatible"}:
                 self._test_connection(provider, credential)
                 return []
         raise ProviderAdapterError(
@@ -9016,24 +9312,30 @@ class ResourcePlaneService:
     def _credential_value(self, credential_ref: Optional[str]) -> str:
         if not credential_ref:
             raise ProviderCredentialError("Provider account has no credential_ref.")
-        ref_kind, _, ref_key = credential_ref.partition(":")
-        if ref_kind != "env" or not ref_key:
-            raise ProviderCredentialError(
-                "Only env SecretRef credentials are supported in this runtime slice."
-            )
-        value_map = {
-            "OPENAI_API_KEY": self.settings.openai_api_key,
-            "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
-            "BOSS_DIGITALOCEAN_TOKEN": self.settings.digitalocean_token,
-            "BOSS_CLOUDFLARE_API_TOKEN": self.settings.cloudflare_api_token,
-            "BOSS_SUPABASE_ACCESS_TOKEN": self.settings.supabase_access_token,
-        }
-        value = value_map.get(ref_key) or os.environ.get(ref_key)
-        if not value:
-            raise ProviderCredentialError(
-                f"Missing credential for SecretRef env:{ref_key}."
-            )
-        return value
+        try:
+            ref_kind, ref_key = self.secret_refs.parse_credential_ref(credential_ref)
+        except ValueError as error:
+            raise ProviderCredentialError(str(error)) from error
+        if ref_kind == "env":
+            value_map = {
+                "OPENAI_API_KEY": self.settings.openai_api_key,
+                "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
+                "BOSS_DIGITALOCEAN_TOKEN": self.settings.digitalocean_token,
+                "BOSS_CLOUDFLARE_API_TOKEN": self.settings.cloudflare_api_token,
+                "BOSS_SUPABASE_ACCESS_TOKEN": self.settings.supabase_access_token,
+            }
+            value = value_map.get(ref_key) or os.environ.get(ref_key)
+            if not value:
+                raise ProviderCredentialError(
+                    f"Missing credential for SecretRef env:{ref_key}."
+                )
+            return value
+        from .secret_backends import SecretUnavailable, backend_for
+
+        try:
+            return backend_for(ref_kind, self.settings).get(ref_key)
+        except SecretUnavailable as error:
+            raise ProviderCredentialError(str(error)) from error
 
     def _env_secret_value(self, secret_ref: str) -> str:
         ref_kind, _, ref_key = secret_ref.partition(":")

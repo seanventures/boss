@@ -128,3 +128,153 @@ def record_llm_call(
             )
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
+
+
+# ── Operator read APIs (query / rollup over llm_calls) ─────────────────────────
+
+_SUMMARY_GROUP_COLS = {
+    "stage": "COALESCE(stage, '?')",
+    "role": "COALESCE(role, '?')",
+    "model": "COALESCE(model, '?')",
+    "engine": "COALESCE(engine, '?')",
+}
+
+
+def list_llm_calls(
+    connection,
+    *,
+    project_id: str,
+    stage: Optional[str] = None,
+    role: Optional[str] = None,
+    model: Optional[str] = None,
+    engine_name: Optional[str] = None,
+    ok: Optional[bool] = None,
+    code_task_run_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """List llm_calls rows for a project with optional filters (operator read path)."""
+    if not (project_id or "").strip():
+        raise ValueError("project_id is required.")
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+
+    clauses = ["project_id = :p"]
+    params: dict = {"p": project_id.strip(), "lim": limit, "off": offset}
+    if stage:
+        clauses.append("stage = :stage")
+        params["stage"] = stage
+    if role:
+        clauses.append("role = :role")
+        params["role"] = role
+    if model:
+        clauses.append("model = :model")
+        params["model"] = model
+    if engine_name:
+        clauses.append("engine = :eng")
+        params["eng"] = engine_name
+    if ok is not None:
+        clauses.append("ok = :ok")
+        params["ok"] = bool(ok)
+    if code_task_run_id:
+        clauses.append("code_task_run_id = :run")
+        params["run"] = code_task_run_id
+
+    where = " AND ".join(clauses)
+    total = connection.execute(
+        text(f"SELECT count(*) FROM llm_calls WHERE {where}"), params
+    ).scalar() or 0
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT id, project_id, code_task_run_id, stage, engine, model, role,
+                   prompt_tokens, completion_tokens, total_tokens,
+                   cache_read_tokens, cache_write_tokens, cost_usd_micros,
+                   price_estimated, latency_ms, retries, turns, ok, error, created_at
+            FROM llm_calls
+            WHERE {where}
+            ORDER BY created_at DESC
+            LIMIT :lim OFFSET :off
+            """
+        ),
+        params,
+    ).mappings().all()
+    items = []
+    for r in rows:
+        d = dict(r)
+        if d.get("created_at") is not None:
+            d["created_at"] = d["created_at"].isoformat() if hasattr(d["created_at"], "isoformat") else str(d["created_at"])
+        items.append(d)
+    return {
+        "project_id": project_id.strip(),
+        "count": len(items),
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+        "items": items,
+    }
+
+
+def summarize_llm_calls(
+    connection,
+    *,
+    project_id: str,
+    group_by: str = "stage",
+) -> dict:
+    """Roll up llm_calls spend/tokens by stage|role|model|engine."""
+    if not (project_id or "").strip():
+        raise ValueError("project_id is required.")
+    key = (group_by or "stage").strip().lower()
+    if key not in _SUMMARY_GROUP_COLS:
+        raise ValueError(
+            f"group_by must be one of {sorted(_SUMMARY_GROUP_COLS)}; got {group_by!r}."
+        )
+    col = _SUMMARY_GROUP_COLS[key]
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT {col} AS group_key,
+                   count(*) AS calls,
+                   COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros,
+                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                   COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                   COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0) AS ok_calls,
+                   COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END), 0) AS failed_calls,
+                   COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
+            FROM llm_calls
+            WHERE project_id = :p
+            GROUP BY 1
+            ORDER BY cost_usd_micros DESC
+            """
+        ),
+        {"p": project_id.strip()},
+    ).mappings().all()
+    groups = []
+    total_cost = 0
+    total_calls = 0
+    for r in rows:
+        cost = int(r["cost_usd_micros"] or 0)
+        calls = int(r["calls"] or 0)
+        total_cost += cost
+        total_calls += calls
+        groups.append(
+            {
+                "group_key": str(r["group_key"]),
+                "calls": calls,
+                "cost_usd_micros": cost,
+                "prompt_tokens": int(r["prompt_tokens"] or 0),
+                "completion_tokens": int(r["completion_tokens"] or 0),
+                "total_tokens": int(r["total_tokens"] or 0),
+                "ok_calls": int(r["ok_calls"] or 0),
+                "failed_calls": int(r["failed_calls"] or 0),
+                "avg_latency_ms": float(r["avg_latency_ms"] or 0),
+            }
+        )
+    return {
+        "project_id": project_id.strip(),
+        "group_by": key,
+        "total_calls": total_calls,
+        "total_cost_usd_micros": total_cost,
+        "groups": groups,
+    }

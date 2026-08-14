@@ -37,6 +37,73 @@ export type DecisionFeed = {
   items: DecisionFeedItem[];
 };
 
+/** CEO inbox default: only cards that still need a human. */
+export const DEFAULT_DECISION_INBOX_FILTER = "needs_action" as const;
+
+export const DECISION_INBOX_FILTERS = [
+  "needs_action",
+  "resolved",
+  "all",
+] as const;
+
+export type DecisionInboxFilter = (typeof DECISION_INBOX_FILTERS)[number];
+
+export const ACTIONABLE_DECISION_STATUSES = ["pending", "delegated"] as const;
+
+export const DECISION_INBOX_EMPTY_TITLE = "Queue is clear";
+
+export const DECISION_INBOX_EMPTY_HOWTO = [
+  "Budget reservations or spend that need a human gate",
+  "Pull-request or merge reviews from the software factory",
+  "TPM / credit / model-limit escalations that would otherwise deadletter",
+  "Agents hitting a governance ceiling (plan, deploy, autonomy)",
+] as const;
+
+export function isActionableDecision(item: { status: string }): boolean {
+  return item.status === "pending" || item.status === "delegated";
+}
+
+export function parseDecisionInboxFilter(
+  raw?: string | null,
+): DecisionInboxFilter {
+  if (raw === "needs_action" || raw === "resolved" || raw === "all") {
+    return raw;
+  }
+  if (raw === "pending" || raw === "actionable") {
+    return "needs_action";
+  }
+  return DEFAULT_DECISION_INBOX_FILTER;
+}
+
+export function filterDecisionInbox<T extends { status: string }>(
+  items: T[],
+  filter: DecisionInboxFilter = DEFAULT_DECISION_INBOX_FILTER,
+): T[] {
+  if (filter === "all") {
+    return items;
+  }
+  if (filter === "resolved") {
+    return items.filter((item) => !isActionableDecision(item));
+  }
+  return items.filter(isActionableDecision);
+}
+
+export function decisionInboxHref(options: {
+  orgId?: string;
+  filter?: DecisionInboxFilter;
+}): string {
+  const params = new URLSearchParams();
+  if (options.orgId) {
+    params.set("org", options.orgId);
+  }
+  params.set("area", "decisions");
+  params.set(
+    "decision_filter",
+    options.filter ?? DEFAULT_DECISION_INBOX_FILTER,
+  );
+  return `/?${params.toString()}`;
+}
+
 function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
   return {
     id: payload.id,

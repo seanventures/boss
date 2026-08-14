@@ -8,6 +8,7 @@ import {
   createKpiAction,
   submitCommandAction,
   createProviderAccountAction,
+  easyConnectProviderAction,
   submitSelfImprovementProposalAction,
   queueOutboxMessageAction,
   testProviderAccountAction,
@@ -15,6 +16,7 @@ import {
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
   applyChangeSetAction,
+  resolveDecisionAction,
 } from './actions';
 
 export type ToastType = 'success' | 'error';
@@ -165,6 +167,25 @@ export function KpiCreateForm({ children, className }: { children: ReactNode; cl
   );
 }
 
+export function DecisionResolveForm({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <ActionForm
+      action={resolveDecisionAction}
+      successMessage="Decision recorded. Inbox revalidated."
+      className={className}
+      data-testid="decision-resolve-form"
+    >
+      {children}
+    </ActionForm>
+  );
+}
+
 export function CommandSubmitForm({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <ActionForm
@@ -185,6 +206,19 @@ export function ProviderCreateForm({ children, className }: { children: ReactNod
       successMessage="Provider account registered. Use Test/Sync for inventory + receipts."
       className={className}
       data-testid="provider-create-form"
+    >
+      {children}
+    </ActionForm>
+  );
+}
+
+export function ProviderEasyConnectForm({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <ActionForm
+      action={easyConnectProviderAction}
+      successMessage="Key written to the local vault. BOSS stored only a SecretRef."
+      className={className}
+      data-testid="provider-paste-connect-form"
     >
       {children}
     </ActionForm>

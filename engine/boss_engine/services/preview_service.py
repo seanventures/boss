@@ -41,15 +41,6 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def operator_preview_open_url(preview_id: str) -> str:
-    """Path a browser can open on the BOSS API host (reverse-proxied to the preview).
-
-    The preview process binds 127.0.0.1 inside the API host; only this gateway path is
-    reachable from an operator browser or agent on the tailnet.
-    """
-    return f"/v1/previews/{preview_id}/web/"
-
-
 def _is_loopback_url(url: Optional[str]) -> bool:
     if not url:
         return False
@@ -58,12 +49,68 @@ def _is_loopback_url(url: Optional[str]) -> bool:
         "://127." in lowered
         or "://localhost" in lowered
         or "://[::1]" in lowered
+        or "://0.0.0.0" in lowered
         or lowered.startswith("127.")
         or lowered.startswith("localhost")
+        or lowered.startswith("[::1]")
+        or lowered.startswith("0.0.0.0")
     )
 
 
-def publicize_preview(record: dict) -> dict:
+def _preview_public_base(
+    explicit: Optional[str] = None, *, settings: Optional[Settings] = None
+) -> str:
+    """Operator-facing origin for View URLs. Loopback bases are rejected (fail closed
+    to relative gateway paths) so a mis-set BOSS_PREVIEW_PUBLIC_BASE cannot reintroduce
+    127.0.0.1 into operator-facing URLs.
+
+    An explicit ``public_base`` wins (and a loopback explicit value still fail-closes).
+    Otherwise prefer ``settings.preview_public_base``, then ``BOSS_PREVIEW_PUBLIC_BASE``
+    in the process environment so a Settings object constructed without the field
+    (or with an empty default) cannot hide a live-set public origin.
+    """
+    if explicit is not None:
+        raw = explicit
+    else:
+        raw = ""
+        if settings is not None:
+            raw = getattr(settings, "preview_public_base", None) or ""
+        if not str(raw or "").strip():
+            raw = os.environ.get("BOSS_PREVIEW_PUBLIC_BASE", "") or ""
+    base = (raw or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if _is_loopback_url(base):
+        return ""
+    return base
+
+
+def operator_preview_open_url(
+    preview_id: str,
+    *,
+    public_base: Optional[str] = None,
+    settings: Optional[Settings] = None,
+) -> str:
+    """URL a browser can open for the preview (reverse-proxied by the BOSS API).
+
+    The preview process binds 127.0.0.1 inside the API host; only this gateway path is
+    reachable from an operator browser or agent on the tailnet. When
+    ``BOSS_PREVIEW_PUBLIC_BASE`` (or ``public_base``) is set to a non-loopback origin,
+    returns an absolute URL; otherwise a relative gateway path.
+    """
+    path = f"/v1/previews/{preview_id}/web/"
+    base = _preview_public_base(public_base, settings=settings)
+    if base:
+        return f"{base}{path}"
+    return path
+
+
+def publicize_preview(
+    record: dict,
+    *,
+    public_base: Optional[str] = None,
+    settings: Optional[Settings] = None,
+) -> dict:
     """Never hand out the preview's internal address as the primary ``url``.
 
     ``app_previews.url`` holds the sandbox-internal address
@@ -73,6 +120,9 @@ def publicize_preview(record: dict) -> dict:
 
     The internal address is preserved under ``internal_url`` for diagnostics and
     for the in-process reverse proxy, which still probes the loopback port.
+
+    When ``BOSS_PREVIEW_PUBLIC_BASE`` is set, operator-facing ``url`` / ``open_url``
+    become absolute under that origin. A loopback public base is rejected.
     """
     out = dict(record)
     preview_id = out.get("id")
@@ -80,15 +130,113 @@ def publicize_preview(record: dict) -> dict:
     if internal is not None:
         out["internal_url"] = internal
     if not preview_id:
+        # Still strip loopback from primary url if someone handed us a bare record.
+        if _is_loopback_url(out.get("url")):
+            out["url"] = None
         return out
     # Any record that ever had a live bind (or is still marked running) gets a
     # gateway open URL as the primary `url`. Failed/never-started rows with no
     # bind stay url=null so the console does not offer a dead "Open" link.
     if internal is not None or str(out.get("status") or "").lower() == "running":
-        open_url = operator_preview_open_url(str(preview_id))
+        open_url = operator_preview_open_url(
+            str(preview_id), public_base=public_base, settings=settings
+        )
+        out["open_url"] = open_url
+        out["url"] = open_url
+    # Hard invariant: primary operator URL must never be loopback, even if a
+    # non-gateway absolute slipped into the DB column without publicize rewrite.
+    if _is_loopback_url(out.get("url")):
+        open_url = operator_preview_open_url(
+            str(preview_id), public_base=public_base, settings=settings
+        )
         out["open_url"] = open_url
         out["url"] = open_url
     return out
+
+
+FIXTURE_MODE = "fixture"
+
+FIXTURE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>BOSS preview fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; }
+    .badge { display: inline-block; border: 1px solid #888; border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <p class="badge">fixture — not a sandboxed app</p>
+  <h1>Preview View path is live</h1>
+  <p>This page is served by the BOSS API gateway at <code>/v1/previews/{preview_id}/web/</code>.
+     It is a no-spend fixture so operators can prove View HTML without a microVM rootfs.</p>
+  <p data-testid="preview-fixture">ok</p>
+</body>
+</html>
+"""
+
+
+def create_fixture_preview(
+    engine,
+    settings: Settings,
+    *,
+    project_id: str,
+    actor: str,
+    ttl_minutes: int = 60,
+) -> dict:
+    """No-spend running preview that serves fixture HTML through the gateway.
+
+    Does not clone a repo, start a process, or claim a microVM. Status is
+    ``running`` with ``mode=fixture`` so View HTML can be proven while sandbox
+    claims stay frozen. Never advertised as a real app preview.
+    """
+    preview_id = make_id("prev")
+    ttl = max(5, min(int(ttl_minutes), 180))
+    expires = datetime.now(timezone.utc) + timedelta(minutes=ttl)
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                """
+                INSERT INTO app_previews (
+                    id, project_id, run_id, repo, branch, command, port, url,
+                    mode, substrate, status, error, expires_at
+                )
+                VALUES (
+                    :id, :project_id, NULL, NULL, NULL, 'fixture', NULL, NULL,
+                    :mode, 'preview_host', 'running',
+                    'fixture — not a sandboxed app', :expires
+                )
+                """
+            ),
+            {
+                "id": preview_id,
+                "project_id": project_id,
+                "mode": FIXTURE_MODE,
+                "expires": expires,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "preview.fixture_started",
+            actor,
+            "app_preview",
+            preview_id,
+            {"mode": FIXTURE_MODE, "ttl_minutes": ttl, "simulated": True},
+        )
+        row = connection.execute(
+            text("SELECT * FROM app_previews WHERE id = :id"),
+            {"id": preview_id},
+        ).mappings().first()
+    record = publicize_preview(dict(row), settings=settings)
+    record["fixture"] = True
+    record["simulated"] = True
+    return record
+
+
+def fixture_html(preview_id: str) -> bytes:
+    return FIXTURE_HTML.replace("{preview_id}", preview_id).encode("utf-8")
 
 
 def _free_port() -> int:
@@ -201,6 +349,46 @@ def _changed_dirs(changed: Optional[list[str]]) -> list[str]:
     return out
 
 
+# Conventional frontend folders of a full-stack app. Walking UP through these to find
+# package.json `start` is correct (bugbox/web → bugbox). Walking from a sibling product
+# directory (web-nqueens) up to an unrelated root start is how we once previewed the
+# wrong tenant's application — so those stop before the repo root.
+_FRONTEND_DIR_NAMES = frozenset({
+    "web", "public", "dist", "src", "frontend", "client", "app", "ui", "static", "www",
+})
+
+
+def _has_start_script(directory: Path) -> bool:
+    """True when directory/package.json declares a non-empty scripts.start."""
+    manifest = directory / "package.json"
+    if not manifest.is_file():
+        return False
+    try:
+        scripts = json.loads(manifest.read_text()).get("scripts") or {}
+    except (json.JSONDecodeError, OSError):
+        return False
+    return bool(str(scripts.get("start") or "").strip())
+
+
+def _owning_node_server(workdir: Path, rel_dir: str) -> Optional[str]:
+    """Nearest ancestor of rel_dir (inclusive) that declares scripts.start, or None.
+
+    Used so a task that touched `bugbox/web/index.html` still runs `bugbox`'s Express
+    server instead of `python3 -m http.server` on the SPA. A sibling static app
+    (`web-nqueens/`) is not treated as owned by a root start.
+    """
+    parts: list[str] = [] if rel_dir in (".", "") else list(Path(rel_dir).parts)
+    while True:
+        candidate = workdir.joinpath(*parts) if parts else workdir
+        if _has_start_script(candidate):
+            return "." if not parts else str(Path(*parts))
+        if not parts:
+            return None
+        if len(parts) == 1 and parts[0] not in _FRONTEND_DIR_NAMES:
+            return None
+        parts.pop()
+
+
 def _node_server_dir(workdir: Path, changed: Optional[list[str]] = None) -> Optional[str]:
     """The directory of a package.json that declares a real `start` server, or None.
 
@@ -211,34 +399,23 @@ def _node_server_dir(workdir: Path, changed: Optional[list[str]] = None) -> Opti
     operator reasonably concluded the agent had built a shell.
 
     Subdirectories are checked before the root, and directories the task actually touched
-    before those it did not, so a repo holding several apps runs the one this task built.
+    (including ancestors of `web/` / `public/`) before those it did not, so a repo holding
+    several apps runs the one this task built.
 
     `dev`/`build` alone are deliberately NOT enough: a frontend-only Vite app has those and is
     correctly deployed as static output. Only `start` means "there is a server here".
     """
-    def has_start(directory: Path) -> bool:
-        manifest = directory / "package.json"
-        if not manifest.is_file():
-            return False
-        try:
-            scripts = json.loads(manifest.read_text()).get("scripts") or {}
-        except (json.JSONDecodeError, OSError):
-            return False
-        return bool(str(scripts.get("start") or "").strip())
-
     seen: list[str] = []
     for touched in _changed_dirs(changed):
-        candidate = workdir / touched if touched not in (".", "") else workdir
-        if candidate.is_dir() and has_start(candidate):
-            rel = "." if candidate == workdir else str(candidate.relative_to(workdir))
-            if rel not in seen:
-                seen.append(rel)
+        owner = _owning_node_server(workdir, touched)
+        if owner is not None and owner not in seen:
+            seen.append(owner)
     for manifest in sorted(workdir.glob("*/package.json")):
-        if has_start(manifest.parent):
+        if _has_start_script(manifest.parent):
             rel = manifest.parent.name
             if rel not in seen:
                 seen.append(rel)
-    if has_start(workdir) and "." not in seen:
+    if _has_start_script(workdir) and "." not in seen:
         seen.append(".")
     # One unambiguous server wins. Several means the same ambiguity the static path refuses,
     # and guessing is what once previewed another tenant's application.
@@ -271,8 +448,16 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
             return ("py", cand)
     # 2. A static app THIS task built. Ranked ABOVE the repo-wide python fallback: a task that
     #    ships web-nqueens/index.html means that app, not whatever serve.py predates it.
+    #
+    #    A start server that OWNS that index.html outranks the static file. BugBox/ApproveIt
+    #    lineage lists `bugbox/web/index.html`; returning static here previewed the SPA and
+    #    every /api call came back as the Vite 404 HTML page. The owning check walks ancestors
+    #    (bugbox/web → bugbox) and refuses to let a root start steal a sibling product dir.
     for d in touched:
         if (workdir / d / "index.html").is_file():
+            owner = _owning_node_server(workdir, d)
+            if owner is not None:
+                return ("node", owner)
             return ("static", d)
     # 3. Repo conventions — but ONLY when the repo is unambiguous.
     #
@@ -399,10 +584,27 @@ def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optio
         # above only ever looked at `workdir/package.json`, so an app built in a subdirectory
         # fell through to the static branch and was published without its backend.
         app_dir = "" if value in (".", "") else f"cd {shlex.quote(value)} && "
+        app_root = workdir if value in (".", "") else workdir / value
+        vite_start = False
+        try:
+            payload = json.loads((app_root / "package.json").read_text())
+            scripts = payload.get("scripts") or {}
+            deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
+            is_vite = (
+                "vite" in deps
+                or (app_root / "vite.config.ts").exists()
+                or (app_root / "vite.config.js").exists()
+            )
+            vite_start = bool(is_vite and scripts.get("start"))
+        except (OSError, json.JSONDecodeError):
+            vite_start = False
+        # Same relative-base Vite build as the root path: absolute /assets 404 under the
+        # /v1/previews/<id>/web/ proxy prefix.
+        build = "npx vite build --base=./ && " if vite_start else "npm run build --if-present && "
         return [
             "sh", "-lc",
             f"{app_dir}npm install --no-audit --no-fund --loglevel=error && "
-            "npm run build --if-present && npm start",
+            f"{build}npm start",
         ]
     if kind == "py":
         return ["python3", value]
@@ -556,20 +758,52 @@ class PreviewNotReady(Exception):
         }
 
 
+def _verify_green(run: dict) -> bool:
+    state = run.get("state") or {}
+    if state.get("tests_passed") is True:
+        return True
+    cmd = str(state.get("test_command") or "").lower()
+    return state.get("test_exit_code") == 0 and "verify" in cmd
+
+
+def find_local_run_workspace(run_id: str) -> Optional[Path]:
+    """Retained local-subprocess sandbox for a verify-green run (no PR required)."""
+    roots = [
+        Path(tempfile.gettempdir()) / "boss-sandboxes",
+        Path("/app"),
+        Path("/var/lib/boss"),
+        Path("/tmp"),
+        PREVIEW_ROOT.parent,
+    ]
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved = str(root.resolve())
+        except OSError:
+            continue
+        if resolved in seen or not root.is_dir():
+            continue
+        seen.add(resolved)
+        for cand in root.glob(f"{run_id}*"):
+            if not cand.is_dir():
+                continue
+            if (cand / "package.json").is_file() or (cand / "bugbox" / "package.json").is_file():
+                return cand
+    return None
+
+
 def assert_previewable(run: dict, run_id: str) -> None:
-    """A preview is only meaningful once the work exists as a PR.
+    """A preview is meaningful once the work exists as a PR *or* verify-green files.
 
-    Enforced HERE, in the one place every caller already passes through, rather than in each
-    entrypoint. The console gated its button and the API gated its endpoint, but the MCP tool
-    called the service directly and bypassed both — the same "fix the host path, miss the
-    container path" mistake that once launched Sudoku as the preview for an N-Queens build.
-    Share the decision, not just the data.
-
-    Gated on the PR, deliberately not on gates passing: an advisory run legitimately opens a
-    PR with failing checks and IS previewable.
+    Gated on the PR for GitHub-backed runs. A local-subprocess run that already
+    passed ``npm run verify`` is also previewable from its retained workspace —
+    review-timeout / no-PR must not hide working software.
     """
-    if not (run.get("pull_request_url") or ""):
-        raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
+    if run.get("pull_request_url"):
+        return
+    if _verify_green(run) and find_local_run_workspace(run_id) is not None:
+        return
+    raise PreviewNotReady(run_id, str(run.get("status") or "?"), str(run.get("phase") or "?"))
 
 
 def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:
@@ -610,14 +844,24 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         return {"id": preview_id, "status": "failed", "error": msg,
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
-    token = settings.github_token
-    from .repo_host import clone_url_for  # BOSS-267: host-aware clone
-    clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
-                              owner, repo, token or "")
-    clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
-                           capture_output=True, text=True, timeout=120)
-    if clone.returncode != 0:
-        return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
+    local_ws = None if (run.get("pull_request_url") or "") else find_local_run_workspace(run_id)
+    if local_ws is not None:
+        src = local_ws / "bugbox" if (local_ws / "bugbox" / "package.json").is_file() else local_ws
+        try:
+            shutil.copytree(
+                src, workdir, dirs_exist_ok=True, ignore=shutil.ignore_patterns("node_modules")
+            )
+        except OSError as exc:
+            return _fail(f"copy local workspace failed: {exc}")
+    else:
+        token = settings.github_token
+        from .repo_host import clone_url_for  # BOSS-267: host-aware clone
+        clone_url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                                  owner, repo, token or "")
+        clone = subprocess.run(["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)],
+                               capture_output=True, text=True, timeout=120)
+        if clone.returncode != 0:
+            return _fail(f"git clone failed: {(clone.stderr or '')[-300:]}")
 
     def _verify(cmd_str: str) -> dict:
         """Library/CLI/module build — there is no web server to serve. 'Run it' means run its
@@ -721,7 +965,7 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
         "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_HOST.value,
         "build_substrate": build_substrate,
-    })
+    }, settings=settings)
 
 
 def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> int:
@@ -756,6 +1000,18 @@ def _generate_dockerfile(workdir: Path, changed: Optional[list[str]] = None) -> 
             "FROM python:3.11-slim\nWORKDIR /app\n" + reqs +
             f"COPY . .\nENV HOST=0.0.0.0 PORT={port} PYTHONUNBUFFERED=1\nEXPOSE {port}\n"
             f'CMD ["python3", "{py_entry}"]\n')
+        return port
+    if kind == "node":
+        port = 3000
+        app_workdir = "/app" if value in (".", "") else f"/app/{value}"
+        existing.write_text(
+            "FROM node:20-slim\n"
+            "COPY . /app\n"
+            f"WORKDIR {app_workdir}\n"
+            "RUN npm install --no-audit --no-fund --loglevel=error\n"
+            "RUN npm run build --if-present || true\n"
+            f"ENV HOST=0.0.0.0 PORT={port}\nEXPOSE {port}\n"
+            "CMD [\"npm\", \"run\", \"start\"]\n")
         return port
     if (workdir / "package.json").exists():
         port = 3000
@@ -866,7 +1122,7 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
         "run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
         "substrate": ExecutionSubstrate.PREVIEW_DOCKER.value,
         "build_substrate": build_substrate,
-    })
+    }, settings=settings)
 
 
 def start_rootfs_preview(
@@ -932,7 +1188,7 @@ def start_rootfs_preview(
         "build_substrate": build_substrate, "sandbox_task_id": sandbox_id,
         "expires_at": expires.isoformat(), "run_id": run_id,
         "repo": f"{owner}/{repo}", "branch": branch,
-    })
+    }, settings=settings)
 
 
 def _process_alive(pid: Optional[int]) -> bool:
@@ -1226,10 +1482,44 @@ def _inject_shim(html: bytes, prefix: str) -> bytes:
         return html
 
 
+# Headers the sample app is allowed to see. Never forward BOSS control-plane
+# secrets (Authorization / X-Boss-Api-Key) into the tenant process.
+_PREVIEW_FORWARD_HEADER_NAMES = (
+    "x-acting-user-id",
+    "accept",
+    "x-requested-with",
+    "x-csrf-token",
+)
+
+
+def forwarded_preview_headers(
+    incoming: Optional[dict] = None,
+    *,
+    content_type: Optional[str] = None,
+) -> dict[str, str]:
+    """Allowlist of hop headers a preview app may receive.
+
+    ApproveIt requires ``X-Acting-User-Id``. The gateway used to drop every
+    incoming header except Content-Type, so /api/requests always 401'd even
+    when the SPA (or an operator probe) sent the acting user.
+    """
+    out: dict[str, str] = {}
+    for key, value in (incoming or {}).items():
+        if value is None:
+            continue
+        name = str(key).strip()
+        if name.lower() in _PREVIEW_FORWARD_HEADER_NAMES:
+            out[name] = str(value)
+    if content_type and "content-type" not in {k.lower() for k in out}:
+        out["Content-Type"] = content_type
+    return out
+
+
 def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                   query_string: str = "", body: Optional[bytes] = None,
                   content_type: Optional[str] = None,
-                  sandbox_token: str = ""):
+                  sandbox_token: str = "",
+                  incoming_headers: Optional[dict] = None):
     """Reverse-proxy a request to a running preview's loopback port → (status, content_type, bytes).
     Only the api can reach the preview's 127.0.0.1 port, so this exposes it via the api's own
     (tailnet-routed) URL. HTML responses get the root-relative path-rewrite shim."""
@@ -1239,14 +1529,22 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
                         {"id": preview_id}).mappings().first()
     if row is None:
         return 404, "text/plain", b"preview not found", {}
-    if row["status"] != "running" or not row["url"]:
+    if row["status"] != "running":
+        return 409, "text/plain", f"preview not running (status={row['status']})".encode(), {}
+    if str(row.get("mode") or "") == FIXTURE_MODE:
+        if subpath and subpath not in {"", "/"}:
+            return 404, "text/plain", b"fixture preview has no extra paths", {}
+        return 200, "text/html; charset=utf-8", fixture_html(preview_id), {}
+    if not row["url"]:
         return 409, "text/plain", f"preview not running (status={row['status']})".encode(), {}
     target = row["url"].rstrip("/") + "/" + (subpath or "")
     if query_string:
         target += "?" + query_string
     req = urllib.request.Request(target, data=body or None, method=method)
-    if content_type:
-        req.add_header("Content-Type", content_type)
+    for header_name, header_value in forwarded_preview_headers(
+        incoming_headers, content_type=content_type
+    ).items():
+        req.add_header(header_name, header_value)
     if row["mode"] == "rootfs" and sandbox_token:
         req.add_header("X-Sandbox-Token", sandbox_token)
     response_headers: dict[str, str] = {}
@@ -1283,7 +1581,12 @@ def proxy_preview(engine, preview_id: str, subpath: str, method: str,
     return status, ctype, data, response_headers
 
 
-def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> dict:
+def smoke_test(
+    engine,
+    preview_id: str,
+    checks: Optional[list[dict]] = None,
+    settings: Optional[Settings] = None,
+) -> dict:
     """Tier-3 smoke canary: hit the live preview URL with a set of checks and assert each — proves
     the deployed app actually works, not just that it serves a page. Records a receipt event.
     Each check: {method, path, body?, expect_status?, expect_contains?}. Default: GET / -> 2xx."""
@@ -1333,9 +1636,9 @@ def smoke_test(engine, preview_id: str, checks: Optional[list[dict]] = None) -> 
                     "ok": all_ok, "results": results})
     return {
         "preview_id": preview_id,
-        "url": operator_preview_open_url(preview_id),
+        "url": operator_preview_open_url(preview_id, settings=settings),
         "internal_url": base,
-        "open_url": operator_preview_open_url(preview_id),
+        "open_url": operator_preview_open_url(preview_id, settings=settings),
         "ok": all_ok,
         "passed": passed,
         "total": len(checks),
@@ -1397,7 +1700,7 @@ def list_previews(
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     # Publicize at the boundary: DB keeps loopback for the proxy; callers get open_url.
-    return [publicize_preview(dict(r)) for r in rows]
+    return [publicize_preview(dict(r), settings=settings) for r in rows]
 
 
 def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minutes: int = 60) -> dict:

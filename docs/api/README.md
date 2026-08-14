@@ -218,7 +218,8 @@ curl -sS -H "Authorization: Bearer $BOSS_KEY" \
 # Route index (markdown)
 python scripts/generate_api_route_index.py
 
-# Merge implemented routes into OpenAPI stubs
+# Merge implemented routes into OpenAPI stubs (main.py + routers/*.py)
+# Default is a conservative splice; add --prefix /v1/foo to limit the set.
 PYTHONPATH=.:engine python scripts/sync_openapi_from_routes.py
 
 # Optional parity check

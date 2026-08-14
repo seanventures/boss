@@ -470,6 +470,7 @@ class EntitlementBrokerService:
 
     def _route_context_for_source(self, source: dict[str, Any]) -> dict[str, Any]:
         observed_capacity = source.get("observed_capacity") or {}
+        endpoint = self.resolve_openai_compatible_endpoint(source)
         return {
             "source_id": source["source_id"],
             "provider": source.get("provider"),
@@ -482,6 +483,8 @@ class EntitlementBrokerService:
             or observed_capacity.get("rate_limit_reset_at"),
             "observed_at": observed_capacity.get("observed_at")
             or observed_capacity.get("last_checked_at"),
+            "base_url": endpoint.get("base_url"),
+            "openai_compatible": endpoint.get("openai_compatible"),
         }
 
     def _reject_source(
@@ -525,15 +528,176 @@ class EntitlementBrokerService:
         )
         observed_capacity = row.get("observed_capacity") or {}
         bound_secret = bool(row.get("credential_secret_ref_id"))
-        runtime_supported = bound_secret or bool(row.get("runtime_supported", False)) or bool(
-            computed_runtime_supported
+        endpoint = self.resolve_openai_compatible_endpoint(row)
+        local_endpoint = bool(endpoint.get("base_url"))
+        runtime_supported = (
+            bound_secret
+            or local_endpoint
+            or bool(row.get("runtime_supported", False))
+            or bool(computed_runtime_supported)
         )
         credential_present = (
             bound_secret
+            or local_endpoint
             or bool(observed_capacity.get("credential_present", False))
             or bool(computed_credential_present)
         )
         return runtime_supported, credential_present
+
+    @staticmethod
+    def _connection_metadata(row: dict[str, Any]) -> dict[str, Any]:
+        meta = row.get("connection_metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except (TypeError, ValueError):
+                return {}
+        return dict(meta) if isinstance(meta, dict) else {}
+
+    @classmethod
+    def public_connection_metadata(cls, row: dict[str, Any]) -> dict[str, Any]:
+        """Return connection metadata with credential-like keys stripped."""
+        safe: dict[str, Any] = {}
+        for key, value in cls._connection_metadata(row).items():
+            normalized = str(key).strip().lower()
+            if any(
+                term in normalized
+                for term in ("secret", "token", "api_key", "password", "credential")
+            ):
+                continue
+            safe[key] = value
+        return safe
+
+    @classmethod
+    def resolve_openai_compatible_endpoint(cls, row: dict[str, Any]) -> dict[str, Any]:
+        """Routing view for a local/OpenAI-compatible entitlement source.
+
+        Never includes the raw credential. ``base_url`` is the operator-configured
+        OpenAI-compatible origin (e.g. http://127.0.0.1:11434/v1).
+        """
+        source_kind = str(row.get("source_kind") or "")
+        source_id = str(row.get("source_id") or "")
+        if source_kind != "approved_local_model" and source_id != "approved_local_model_host":
+            return {
+                "source_id": source_id,
+                "base_url": None,
+                "openai_compatible": False,
+                "credential_bound": bool(row.get("credential_secret_ref_id")),
+            }
+        meta = cls.public_connection_metadata(row)
+        base_url = str(meta.get("base_url") or "").strip() or None
+        return {
+            "source_id": source_id,
+            "base_url": base_url,
+            "openai_compatible": bool(base_url or meta.get("openai_compatible")),
+            "credential_bound": bool(row.get("credential_secret_ref_id")),
+            "auth_method": row.get("auth_method") or "local_host",
+        }
+
+    def configure_openai_compatible_source(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        source_id: str,
+        base_url: str,
+        actor: str,
+        secret_ref_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Persist a local OpenAI-compatible base_url on an entitlement source."""
+        from urllib.parse import urlparse
+
+        source = self.get_source(connection, project_id, source_id)
+        if (
+            source.get("source_kind") != "approved_local_model"
+            and source_id != "approved_local_model_host"
+        ):
+            raise ValueError(
+                "Only approved local model sources accept an OpenAI-compatible base_url."
+            )
+        parsed = urlparse(str(base_url or "").strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("base_url must be an http(s) origin, e.g. http://127.0.0.1:11434/v1")
+        if parsed.username or parsed.password:
+            raise ValueError("base_url must not contain credentials.")
+        cleaned = str(base_url).strip().rstrip("/")
+        if secret_ref_id:
+            secret = connection.execute(
+                text(
+                    """
+                    SELECT id, provider, status, secret_kind
+                    FROM secret_refs
+                    WHERE id = :secret_ref_id AND project_id = :project_id
+                    """
+                ),
+                {"secret_ref_id": secret_ref_id, "project_id": project_id},
+            ).mappings().first()
+            if not secret or secret["status"] not in {"active", "rotating", "rotation_due"}:
+                raise ValueError("An active project SecretRef is required.")
+            if secret["secret_kind"] not in {"api_token", "access_key", "client_secret"}:
+                raise ValueError("SecretRef kind is not valid for a model credential.")
+        meta = {
+            **self._connection_metadata(source),
+            "base_url": cleaned,
+            "openai_compatible": True,
+        }
+        observed = {
+            **(source.get("observed_capacity") or {}),
+            "credential_present": True,
+            "runtime_supported": True,
+            "capacity_state": (source.get("observed_capacity") or {}).get(
+                "capacity_state", "available"
+            ),
+            "local_openai_compatible": True,
+        }
+        connection.execute(
+            text(
+                """
+                UPDATE entitlement_sources
+                SET connection_metadata = CAST(:metadata AS JSONB),
+                    credential_secret_ref_id = COALESCE(:secret_ref_id, credential_secret_ref_id),
+                    connection_status = 'connected',
+                    runtime_supported = true,
+                    status = 'active',
+                    auth_method = 'openai_compatible',
+                    observed_capacity = CAST(:observed AS JSONB),
+                    updated_at = now()
+                WHERE project_id = :project_id AND source_id = :source_id
+                """
+            ),
+            {
+                "metadata": json.dumps(meta),
+                "secret_ref_id": secret_ref_id,
+                "observed": json.dumps(observed),
+                "project_id": project_id,
+                "source_id": source_id,
+            },
+        )
+        emit_event(
+            connection,
+            project_id,
+            "entitlement.local_endpoint_configured",
+            actor,
+            "entitlement_source",
+            source["id"],
+            {
+                "source_id": source_id,
+                "base_url_host": parsed.hostname,
+                "base_url_port": parsed.port,
+                "credential_bound": bool(secret_ref_id or source.get("credential_secret_ref_id")),
+            },
+        )
+        updated = self.get_source(connection, project_id, source_id)
+        endpoint = self.resolve_openai_compatible_endpoint(updated)
+        return {
+            "source_id": source_id,
+            "project_id": project_id,
+            "effective_status": updated.get("effective_status"),
+            "connection_status": updated.get("connection_status"),
+            "credential_secret_ref_id": updated.get("credential_secret_ref_id"),
+            "endpoint": endpoint,
+            "connection_metadata": self.public_connection_metadata(updated),
+        }
 
     def _access_class_for_source_kind(self, source_kind: str) -> str:
         if source_kind == "approved_local_model":

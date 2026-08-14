@@ -5,7 +5,7 @@
 **UI:** https://plane.local.sean.network  
 **Contract:** `AGENTS.md` — Plane is the system of record; dedupe before create; never commit API keys.  
 **Living plan (update first):** [`GA_LIVING_PLAN.md`](GA_LIVING_PLAN.md)  
-**Last refresh:** 2026-08-12 (post GA 15-panel assessment)
+**Last refresh:** 2026-08-12 (open-issue honesty pass + post GA 15-panel assessment)
 
 ## Umbrella
 
@@ -27,10 +27,10 @@ Evidence:
 | Issue | Proof summary |
 |---|---|
 | **BOSS-350** | Community BYOK + full ProviderOps kernel (#157); live providers/changesets 200 |
-| **BOSS-338** | Edition-aware MC / kernel UI (residual: Enterprise nav still visible) |
+| **BOSS-338** | Edition-aware MC / kernel UI (Community SSO kept; Enterprise/design-system primary nav residual closed) |
 | **BOSS-339** | SIM / improvement-programs honesty on community |
 | **BOSS-340** | Sandbox host.connected=true (rootfs still a follow-on) |
-| **BOSS-341** | Preview publicize code (live View browser proof still Phase B) |
+| **BOSS-341** | Preview publicize + live list contract (absolute `open_url`); View HTML still Phase B |
 | **BOSS-342** | Worker Dockerfile git/tools + contract tests (live shared-tag still Phase A) |
 | **BOSS-343** | GitHub MC wired: connections + bindings + easy-connect (#158) |
 | **BOSS-344** | CI/CD + Monitoring empty-state honesty |
@@ -47,7 +47,7 @@ Evidence:
 | **BOSS-347** | Open / In Progress | Redeploy seed route; catalog 13/3; one deterministic run |
 | **BOSS-348** | Open | G1–G3 — not required for narrow Community GA claims |
 | **BOSS-340 residual** | Open work | Guest rootfs / provision success |
-| **BOSS-342 residual** | Open work | Shared-tag live api=worker=web |
+| **BOSS-342 residual / BOSS-372** | In Progress | DLQ remediations list + fail-closed retry; remaining live classes TPM + missing DO creds |
 | **BOSS-343 residual** | Open work | Factory uses primary binding or UI dual-plane honesty |
 | **BOSS-351 residual** | Open work | Sealed weekly command→PR reliability |
 
@@ -68,7 +68,9 @@ Evidence:
 | Issue | Note |
 |---|---|
 | BOSS-246–255 | GHX feature stack — dogfood connect now live |
+| BOSS-320 | SCIM deprovision org-member fallback — Done (#131); C2 added focused 403 test 2026-08-13 |
 | BOSS-324 | boss-sandbox main protection (external/plan) |
+| BOSS-326 | PyJWT 2.13.0 / cryptography 50.0.0 — Done (#139); C2 re-scan 2026-08-13, no bump, no CI fail-gate |
 | GAP-002/003/004 | Account Connect / IdP / prod provider writes — fail-closed |
 
 ## Agent rules for this workstream
@@ -102,7 +104,20 @@ Automated + agent team Plane update (workspace `goldeneye`, BOSS project).
 - BOSS-1/2/3/4/12/16/17, BOSS-152/153
 
 ### Left open honestly (partial/roadmap)
-~40 open: GA/QA (337,314,324,346,347), Knowledge/Autonomy parents, PRV FinOps children, GTM/YouTube, Go/Firecracker backlog.
+GA/QA umbrellas (337, 314) remain **In Progress** until Phase A (shared-tag redeploy + `qa-live`) lands. Residual children: 346, 347, 324, rootfs/DLQ/factory honesty. Knowledge/Autonomy parents and PRV FinOps children may still be open.
 
-Reports: `/tmp/plane_session_sync_report.json`, `/tmp/plane_agent_*.json`
-Script: `scripts/plane_sync_session_work.py`
+### 2026-08-12 open-issue honesty pass (docs + Plane)
+
+| Issue | Action | Evidence |
+|---|---|---|
+| BOSS-288–290 | **Done** | `docs/marketing/youtube/EP{1,2,3}_SCRIPT.md` — script package; recording outside repo |
+| BOSS-291 | **Done** | `docs/product/ENGINE_EXTRACT_CHECKLIST.md` (actionable extract checklist) |
+| BOSS-292/293 | Progress comments | Reference extract checklist; public flip blocked on BOSS-300 |
+| BOSS-295 + 304 | **Done** | `docs/product/GTM_PRODUCT_GAP_RECONCILIATION.md` (+ AI SRE `/v1/oncall-sre`) |
+| BOSS-300 | **Todo** | BLOCKED — human legal decision; do not Done |
+| BOSS-302/303 | **Cancelled** | Phase-03 Cloud roadmap; not active this cycle |
+| BOSS-97/98/101/102 | **Backlog** (kept) | Python worker fabric + concurrency governance + elastic cover Community; Go S1–S3 optional scale |
+| BOSS-314 + 337 | **In Progress** | Progress comments only; Phase A live proof still required |
+
+Reports: `/tmp/plane_session_sync_report.json`, `/tmp/plane_agent_*.json`  
+Script: `scripts/plane_sync_session_work.py` · ops helper: `/tmp/plane_ops.py`

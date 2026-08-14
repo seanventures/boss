@@ -40,4 +40,37 @@ describe("Assurance Center", () => {
     expect(html).toContain("1 currently breached");
     expect(html).toContain("1 refuted or failed");
   });
+
+  it("explains empty proof gates and offers a labeled demo seed", () => {
+    const html = renderToStaticMarkup(
+      <AssuranceCenter
+        feed={{
+          projectId: "project-1",
+          apiReachable: true,
+          overview: {
+            project_id: "project-1",
+            metrics: [],
+            cases: [],
+            surfaces: [],
+            verification_runs: [],
+            settled_conclusions: [],
+          },
+          modelUsage: {
+            project_id: "project-1",
+            window_days: 30,
+            totals: {},
+            items: [],
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("No cases recorded yet.");
+    expect(html).toContain("measured contract");
+    expect(html).toContain("POST /v1/assurance/metrics");
+    expect(html).toContain("docs/api/ASSURANCE_GOVERNANCE.md");
+    expect(html).toContain("Seed one demo metric + case");
+    expect(html).toContain("seeded: true");
+    expect(html).toContain("not production health");
+    expect(html).toContain("not a healthy production claim");
+  });
 });

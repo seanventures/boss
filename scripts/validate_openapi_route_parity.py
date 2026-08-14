@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import argparse
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_PATH = ROOT / "apps/api/app/main.py"
 OPENAPI_PATH = ROOT / "api/openapi.yaml"
+SYNC_SCRIPT = ROOT / "scripts/sync_openapi_from_routes.py"
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
 
@@ -22,10 +24,29 @@ def normalize_openapi_path(path: str) -> str:
     return re.sub(r"\{[^}]+\}", "{}", path.rstrip("/") or "/")
 
 
+def _load_sync_module():
+    spec = importlib.util.spec_from_file_location("sync_openapi_from_routes", SYNC_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {SYNC_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def fastapi_routes() -> set[tuple[str, str]]:
+    """Collect FastAPI routes from main.py plus isolated routers."""
+    routes: set[tuple[str, str]] = set()
+    sync = _load_sync_module()
+    for path, methods in sync.collect_impl().items():
+        if not path.startswith("/"):
+            continue
+        normalized = normalize_openapi_path(sync.normalize_fastapi_path(path))
+        for method in methods:
+            routes.add((method.upper(), normalized))
+    # Keep the original AST walk for app.api_route() entries that the regex
+    # collector does not see (methods= keyword on api_route).
     source = MAIN_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
-    routes: set[tuple[str, str]] = set()
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
@@ -34,7 +55,7 @@ def fastapi_routes() -> set[tuple[str, str]]:
             if call is None:
                 continue
             func = _attr_name(call.func)
-            if not call.args:
+            if func != "app.api_route" or not call.args:
                 continue
             path_arg = call.args[0]
             if not (
@@ -42,14 +63,8 @@ def fastapi_routes() -> set[tuple[str, str]]:
             ):
                 continue
             path = normalize_openapi_path(path_arg.value)
-            if func in {f"app.{method}" for method in HTTP_METHODS}:
-                method = func.split(".", 1)[1].upper()
-                routes.add((method, path))
-                continue
-            if func == "app.api_route":
-                methods = _methods_kwarg(call)
-                for method in methods:
-                    routes.add((method.upper(), path))
+            for method in _methods_kwarg(call):
+                routes.add((method.upper(), path))
     return routes
 
 

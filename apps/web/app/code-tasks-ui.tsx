@@ -3,6 +3,7 @@
 import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
+import { operatorPreviewOpenHref } from "../lib/code-tasks";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
@@ -103,7 +104,7 @@ function PreviewLogs({ previewId }: { previewId: string }) {
 
 function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
   const [state, action, pending] = useActionState(startPreviewAction, null);
-  const hasLive = livePreviews.length > 0;
+  const hasLive = livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p));
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       {/* Only offer "Run preview" (a heavy npm-install+build) when NO live preview exists yet.
@@ -116,15 +117,29 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
         </form>
       ) : null}
       {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
-      {livePreviews.map((p) => (
+      {livePreviews.map((p) => {
+        const href = operatorPreviewOpenHref(p);
+        return (
         <span key={p.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <a className="cap-btn primary" href={`${PREVIEW_API}/v1/previews/${encodeURIComponent(p.id)}/web/`} target="_blank" rel="noreferrer">Open preview ↗</a>
+          {href ? (
+            <a className="cap-btn primary" href={href.startsWith("http") ? href : `${PREVIEW_API}${href}`} target="_blank" rel="noreferrer">
+              {p.status === "verified" ? "View verified preview ↗" : "Open preview ↗"}
+            </a>
+          ) : (
+            <span className="detail" data-preview-view="missing-url">
+              {p.status === "verified"
+                ? "verified-test — no operator URL (not running; View would 409)"
+                : `preview ${p.status} — no operator URL`}
+            </span>
+          )}
           <span className="cap-badge tone-blue">
-            preview: {p.substrate === "preview_rootfs" ? "retained rootfs" : p.substrate === "preview_docker" ? "docker" : "host process"}
+            preview: {p.status}
+            {p.substrate === "preview_rootfs" ? " · retained rootfs" : p.substrate === "preview_docker" ? " · docker" : " · host process"}
           </span>
-          <PreviewLogs previewId={p.id} />
+          {p.status === "running" ? <PreviewLogs previewId={p.id} /> : null}
         </span>
-      ))}
+        );
+      })}
       {/* Rebuild — only when a preview already exists; replaces (does not stack) the current one. */}
       {hasLive ? (
         <form action={action} style={{ display: "inline-flex" }}>
@@ -908,20 +923,42 @@ function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
 function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = structuredCodeTaskTests(st);
-  // One link per task: the most-recent running preview for this run (dedupe).
+  // Operator View: running first, then verified-test with an open_url.
+  // verified-test without a URL is still shown so we can be honest (no invented View).
   const livePreviews = previews
-    .filter((p) => p.run_id === run.id && p.status === "running")
-    .sort((a, b) => (b.expires_at ?? "").localeCompare(a.expires_at ?? ""))
-    .slice(0, 1);
+    .filter((p) => p.run_id === run.id && (p.status === "running" || p.status === "verified"))
+    .sort((a, b) => {
+      if (a.status === "running" && b.status !== "running") return -1;
+      if (b.status === "running" && a.status !== "running") return 1;
+      return (b.expires_at ?? "").localeCompare(a.expires_at ?? "");
+    })
+    .slice(0, 2);
   const live = run.status === "running" || run.status === "queued";
   useLiveRefresh(live);
   // Step timing: completed phases carry their duration; the current phase's elapsed is computed
   // live from phase_started_at (re-renders every ~4s via useLiveRefresh, so it ticks up).
+  // Compute only after mount so SSR HTML matches the client's first paint (BOSS-346 / #418).
   const _fc = (run.finalize_ctx ?? {}) as Record<string, unknown>;
   const phaseTimings = (_fc.phase_timings as { ms: number; phase: string }[] | undefined) ?? [];
   const _phaseStartedAt = _fc.phase_started_at as string | undefined;
-  const currentPhaseMs = live && _phaseStartedAt
-    ? Math.max(0, Date.now() - new Date(_phaseStartedAt).getTime()) : null;
+  const [currentPhaseMs, setCurrentPhaseMs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!live || !_phaseStartedAt) {
+      setCurrentPhaseMs(null);
+      return;
+    }
+    const tick = () => {
+      const started = new Date(_phaseStartedAt).getTime();
+      if (Number.isNaN(started)) {
+        setCurrentPhaseMs(null);
+        return;
+      }
+      setCurrentPhaseMs(Math.max(0, Date.now() - started));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [live, _phaseStartedAt]);
   const totalMs = phaseTimings.reduce((s, t) => s + (t.ms || 0), 0) + (currentPhaseMs ?? 0);
   const hasGateEvidence = Boolean(
     st.review_summary || st.adversarial_verdict || st.security_verdict || st.qa_summary || st.impl_summary,
@@ -955,7 +992,8 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       {live ? (
         <div className="detail" style={{ margin: "8px 0", color: "#58a6ff", fontWeight: 600 }}>
           <span style={{ animation: "pulse 1.5s infinite" }}>●</span>{" "}
-          {PHASE_LABEL[run.phase] ?? run.phase} — running <span suppressHydrationWarning>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
+          {PHASE_LABEL[run.phase] ?? run.phase} — running{" "}
+          <span>{currentPhaseMs != null ? fmtDuration(currentPhaseMs) : "…"}</span>{" "}
           <span className="detail" style={{ fontWeight: 400 }}>(auto‑refreshing every 4s)</span>
         </div>
       ) : null}
@@ -973,12 +1011,12 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             {live && currentPhaseMs != null ? (
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }} suppressHydrationWarning>{fmtDuration(currentPhaseMs)}</span>
+                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
               </div>
             ) : null}
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
               <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
-              <span className="detail" suppressHydrationWarning>{fmtDuration(totalMs)}</span>
+              <span className="detail">{fmtDuration(totalMs)}</span>
             </div>
           </div>
         </div>
@@ -1017,7 +1055,20 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             <GateRow label="No regressions" ok={st.regressions_ok} skipped={st.regressions_ok == null} note={st.mutation_caught ? "mutation caught" : undefined} />
             <GateRow label="Consistency" ok={["consistent", "pass", "survived"].includes(st.consistency_verdict ?? "")} skipped={!st.consistency_verdict || st.consistency_verdict === "skipped"} note={st.consistency_verdict} />
             <GateRow label="Pull request opened" ok={!!run.pull_request_url} skipped={!run.pull_request_url && run.status !== "completed"} note={run.pull_request_number ? `PR #${run.pull_request_number}` : undefined} />
-            <GateRow label="Preview available" ok={livePreviews.length > 0} skipped={livePreviews.length === 0} note={livePreviews.length > 0 ? "running — open below" : "run a preview"} />
+            <GateRow
+              label="Preview available"
+              ok={livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p))}
+              skipped={livePreviews.length === 0}
+              note={
+                livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p))
+                  ? "running — open below"
+                  : livePreviews.some((p) => p.status === "verified" && operatorPreviewOpenHref(p))
+                    ? "verified-test has a View URL"
+                    : livePreviews.some((p) => p.status === "verified")
+                      ? "verified-test — no operator URL"
+                      : "run a preview"
+              }
+            />
           </div>
           <p className="detail">
             Independent reviewer: {st.reviewer_independent ? "yes" : "no"} · Independent test author:{" "}
@@ -1180,14 +1231,18 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   );
 }
 
-export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], benchmarks = [], actor = "executive_console" }: {
+export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
   apiReachable: boolean;
   previews?: PreviewRec[];
+  previewBlockedReason?: string;
   benchmarks?: QaBenchmarkApp[];
   actor?: string;
+  githubPlane?: string | null;
+  githubPlaneLabel?: string | null;
+  githubFullName?: string | null;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
@@ -1240,17 +1295,38 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
     return <p className="detail">Code tasks unavailable — API unreachable.</p>;
   }
 
+  const previewListError = previewBlockedReason ? (
+    <p className="detail" role="status" data-preview-list="error">
+      Preview list unavailable — {previewBlockedReason}. View links cannot be offered until the list loads.
+    </p>
+  ) : null;
+
   const active = selected ? tasks.find((c) => c.id === selected) : null;
   if (active) {
-    return <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />;
+    return (
+      <>
+        {previewListError}
+        <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+      </>
+    );
   }
 
   const lastRepo = tasks[0]?.spec;
 
   return (
     <div className="ct">
+      {previewListError}
       <div className="ct-home-bar">
         <span className="ct-home-count">{tasks.length} code task{tasks.length === 1 ? "" : "s"}</span>
+        {githubPlane ? (
+          <span className="detail" data-testid="code-tasks-github-plane">
+            {githubPlane === "mission_control_binding"
+              ? `GitHub: Mission Control binding${githubFullName ? ` (${githubFullName})` : ""}`
+              : githubPlane === "legacy_env"
+                ? `GitHub: settings token${githubFullName ? ` (${githubFullName})` : ""} — connect in GitHub Mission Control for the project binding`
+                : githubPlaneLabel || `GitHub: ${githubPlane}`}
+          </span>
+        ) : null}
         <div className="ct-home-actions">
           <button className="cap-btn primary" onClick={() => setShowNew((v) => !v)}>
             {showNew ? "Close" : "＋ New code task"}

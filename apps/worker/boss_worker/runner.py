@@ -16,6 +16,32 @@ class RetryableJobError(RuntimeError):
     """A transient effect failure that should use the durable job backoff path."""
 
 
+# Claims frozen / missing host task: the code-task run is already terminal.
+# Raising here would fail() the job into the DLQ. Complete instead.
+SANDBOX_FAIL_CLOSED_REASON_CODES = frozenset(
+    {"microvm_claims_frozen", "sandbox_task_missing"}
+)
+
+
+def is_sandbox_fail_closed(result: dict[str, Any] | None) -> bool:
+    """True when a code.task result should complete (not DLQ) as a 422-class stop."""
+    if not isinstance(result, dict):
+        return False
+    code = str(result.get("reason_code") or "")
+    if code in SANDBOX_FAIL_CLOSED_REASON_CODES:
+        return True
+    blob = " ".join(
+        str(result.get(key) or "")
+        for key in ("error", "message", "detail")
+    ).lower()
+    return (
+        "claims_frozen" in blob
+        or "not claimed for community ga" in blob
+        or "sandbox host task missing" in blob
+        or ("404" in blob and "sandbox" in blob)
+    )
+
+
 AGENT_WORK_PRODUCT_STRATEGIES: dict[str, dict[str, Any]] = {
     "agent.metatron.status_brief": {
         "contract": "StatusBrief",
@@ -733,6 +759,10 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
                                        "fencing_token": job.lease_token,
                                        "job_id": job.id})
         if result.get("status") == "failed":
+            # Host 404 / claims frozen already marked the run failed. Completing
+            # the job avoids a retry loop that deadletters the same 422.
+            if is_sandbox_fail_closed(result):
+                return result
             raise RuntimeError(result.get("error") or "Code task failed.")
         return result
     if job.kind == "docs.update":

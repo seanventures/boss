@@ -9,7 +9,6 @@ import {
   createComplianceEvidenceBundleAction,
   createDeadletterIncidentAction,
   createEntitlementConnectionSessionAction,
-  createDecisionDigestAction,
   createOpsDigestAction,
   createDeploymentRunAction,
   completeAccountConnectAuthSessionAction,
@@ -27,13 +26,13 @@ import {
   syncCloudAction,
   inviteCloudTeamAction,
   saveCloudRetentionAction,
+  dryRunOutboxMessageAction,
   queueOutboxMessageAction,
   refreshHealthSnapshotAction,
   recordSelfImprovementCanaryAction,
   recordSelfImprovementRolloutAction,
   disconnectEntitlementSourceAction,
   revokeBreakGlassGrantAction,
-  resolveDecisionAction,
   rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
   requeueDeadletterJobAction,
@@ -63,6 +62,13 @@ import {
   uploadModelCredentialAction,
 } from "./actions";
 import ConsoleShell from "./ConsoleShell";
+import {
+  CommunityIncludedBadge,
+  PaidSurfaceGate,
+  PaidTierBadge,
+  SurfaceHeading,
+} from "./edition-ui";
+import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
 import { AgentChat } from "./agent-ui";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
@@ -74,8 +80,15 @@ import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
 import { AgentStudio } from "./agent-studio-ui";
+import { FocusedAgents } from "./focused-agents-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
+import { PackExportButton, PackImportForm } from "./packs-import-ui";
+import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
+import { PreviewsPanel } from "./previews-ui";
+import { DecisionInbox } from "./decision-inbox-ui";
+import { OnboardingHelpCard } from "./onboarding-help-card";
+import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
@@ -113,7 +126,7 @@ import { fetchBreakGlassGrantFeed } from "../lib/break-glass";
 import { fetchChangeJournalFeed } from "../lib/change-journal";
 import { fetchCommercialFeed } from "../lib/commercial";
 import { fetchDeadletterFeed } from "../lib/deadletters";
-import { fetchDecisionFeed, type DecisionFeedItem } from "../lib/decisions";
+import { fetchDecisionFeed, parseDecisionInboxFilter, type DecisionFeedItem } from "../lib/decisions";
 import { fetchEntitlementFeed } from "../lib/entitlements";
 import { fetchEnterpriseFeed } from "../lib/enterprise";
 import { fetchActivityFeed } from "../lib/events";
@@ -162,7 +175,7 @@ import { fetchApprovalRules } from "../lib/approval-rules";
 import { ApprovalRulesView } from "./approval-rules-ui";
 import { fetchMcpServers } from "../lib/mcp";
 import { fetchPackFeed } from "../lib/packs";
-import { fetchProviderOpsFeed } from "../lib/providerops";
+import { describeSpendHonesty, fetchProviderOpsFeed } from "../lib/providerops";
 import { ProviderConfigurationSuite } from "./provider-configuration-ui";
 import { fetchInfraFabricFeed } from "../lib/infra-fabric";
 import { InfraFabricPanel } from "./infra-fabric-ui";
@@ -176,6 +189,7 @@ import { fetchReceiptFeed } from "../lib/receipts";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
+import { ImprovementProgramsPanel } from "./improvement-programs-ui";
 import {
   extractSoftwareFactoryArtifactEvidence,
   extractSoftwareFactoryDecisionEvidence,
@@ -185,6 +199,39 @@ import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
 import { PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
+import { fetchIdentityProvidersFeed } from "../lib/identity-providers";
+import { IdentityProvidersCatalogView } from "./identity-providers-ui";
+import { fetchOncallSreStatus } from "../lib/oncall-sre";
+import { OncallSreHome } from "./oncall-sre-ui";
+import {
+  fetchLatestSecurityScan,
+  fetchSecurityScanners,
+} from "../lib/security-scan";
+import { SecurityScanCard } from "./security-scan-ui";
+import {
+  fetchReleaseBoard,
+  fetchReleaseStatus,
+  fetchReleases,
+} from "../lib/release-planning";
+import { ReleasePlanningPanel } from "./release-planning-ui";
+import {
+  fetchWorkerAutoscalingHistory,
+  fetchWorkerAutoscalingStatus,
+} from "../lib/worker-autoscaling";
+import { WorkerAutoscalingPanel } from "./worker-autoscaling-ui";
+import {
+  fetchTokenConsumption,
+  fetchTokenPolicies,
+  fetchTokenRecommendations,
+  fetchTokenScorecard,
+} from "../lib/token-efficiency";
+import { TokenEfficiencyPanel } from "./token-efficiency-ui";
+import { fetchObservabilitySuiteFeed } from "../lib/observability-suite";
+import { ObservabilitySuitePanel } from "./observability-suite-ui";
+import { fetchKnowledgeGraphFeed } from "../lib/knowledge-graph";
+import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
+import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
+import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
 
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
@@ -248,71 +295,6 @@ function formatRecommendation(decision: DecisionFeedItem): string {
   return "review required";
 }
 
-// The approval rule that raised this decision (derived from recommendation.action).
-function decisionRuleLabel(decision: DecisionFeedItem): string {
-  const action = typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
-  const tool = typeof decision.recommendation.tool === "string" ? ` (${decision.recommendation.tool})` : "";
-  const map: Record<string, string> = {
-    execute_agent_tool: `Agent tool requires approval${tool}`,
-    resume_agent_run: `Agent action gated — deferred tool${tool}`,
-    review_plan_draft: "Plan ready for review",
-    review_pull_request: "Pull request review",
-    review_deployment: "Deployment review",
-    review_infra_provisioning: "Infrastructure provisioning review",
-    "role.autonomy_change": "Role autonomy change",
-  };
-  if (map[action]) return map[action];
-  if (action) return action.replaceAll("_", " ").replace(/\./g, " · ");
-  return "governance gate";
-}
-
-// Plain-English description of what approving a decision actually triggers,
-// keyed off recommendation.action (mirrors decisions._handle_approved_follow_on).
-// Makes the otherwise-silent follow-on legible so "approve did nothing" is clear.
-function approvalEffectLabel(recommendation: Record<string, unknown>): string {
-  const action = typeof recommendation.action === "string" ? recommendation.action : "";
-  // Meeting PRD publish also auto-starts a governed code task.
-  if (
-    action === "execute_agent_tool" &&
-    (recommendation.start_code_task === true || recommendation.tool === "publish_document")
-  ) {
-    return "Approving publishes the PRD and starts a governed code task for this task.";
-  }
-  switch (action) {
-    case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
-    case "resume_code_task": return "Approving resumes the paused code task.";
-    case "review_pull_request": return "Approving authorizes the pull-request merge.";
-    case "review_deployment": return "Approving authorizes the deployment.";
-    case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
-    case "execute_agent_tool": return "Approving runs the deferred agent tool now.";
-    case "resume_agent_run": return "Approving resumes the paused agent run.";
-    case "role.autonomy_change": return "Approving applies the role autonomy change.";
-    case "github.community.dispatch_plan": return "Approving dispatches the community plan into tasks.";
-    case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
-    case "self_improvement.begin_canary":
-    case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
-    default: return "Approving records your decision — this type has no automated follow-on (no code task is started).";
-  }
-}
-
-// Decision Queue (handoff format): category chip for what kind of effect the
-// proposal is, colored by the signal palette.
-function decisionImpact(decision: DecisionFeedItem): { label: string; tone: string } {
-  const action =
-    typeof decision.recommendation.action === "string" ? decision.recommendation.action : "";
-  if (action === "resume_code_task" || action === "review_plan_draft") return { label: "plan", tone: "amber" };
-  if (action === "review_pull_request" || action.startsWith("github.")) return { label: "merge", tone: "blue" };
-  if (action === "review_deployment") return { label: "deploy", tone: "teal" };
-  if (action === "review_infra_provisioning") return { label: "infra", tone: "amber" };
-  if (action === "role.autonomy_change") return { label: "access", tone: "red" };
-  if (action.startsWith("self_improvement")) return { label: "rollout", tone: "teal" };
-  if (action === "execute_agent_tool") return { label: "publish", tone: "teal" };
-  if (action === "resume_agent_run") return { label: "agent tool", tone: "teal" };
-  if (action === "resume_code_task") return { label: "plan", tone: "amber" };
-  const rule = decisionRuleLabel(decision);
-  return { label: rule.length > 18 ? rule.slice(0, 18).trimEnd() + "…" : rule, tone: "muted" };
-}
-
 function roleInitials(name: string): string {
   const words = name.replace(/[_-]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "CP";
@@ -321,15 +303,8 @@ function roleInitials(name: string): string {
   return initials.toUpperCase();
 }
 
-function waitedLabel(createdAt: string): string {
-  const created = Date.parse(createdAt);
-  if (Number.isNaN(created)) return "";
-  const minutes = Math.max(0, Math.floor((Date.now() - created) / 60_000));
-  if (minutes < 60) return `waited ${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `waited ${hours}h`;
-  return `waited ${Math.floor(hours / 24)}d`;
-}
+// Relative "waited Xm" labels use ClientRelativeTime (absolute UTC on SSR,
+// relative after mount) so decision-queue rows never trip React #418.
 
 // Command Center coordination graph: the handoff's node positions (percent of
 // the stage) with their SVG line endpoints (520x340 viewBox) and staggered
@@ -349,14 +324,6 @@ function formatMsDuration(ms?: number): string {
   if (s < 60) return `${s.toFixed(1)}s`;
   const m = Math.floor(s / 60);
   return `${m}m ${Math.round(s % 60)}s`;
-}
-
-function formatDeadline(deadlineAt?: string): string {
-  if (!deadlineAt) {
-    return "No deadline";
-  }
-  // Shared UTC formatter — same string the client islands use (no TZ drift).
-  return formatDateTimeShared(deadlineAt, "No deadline");
 }
 
 function formatDateTime(value?: string): string {
@@ -467,30 +434,6 @@ function routingRejectionSummary(rejectedSources: Array<Record<string, unknown>>
   return summary.length > 0 ? summary.join("; ") : "No rejected-source details recorded.";
 }
 
-function decisionStatusDetail(decision: DecisionFeedItem): string {
-  if (decision.status === "delegated" && decision.delegatedTo) {
-    return `Delegated to ${decision.delegatedTo}${
-      decision.delegatedBy ? ` by ${decision.delegatedBy}` : ""
-    }${decision.delegatedAt ? ` at ${formatDeadline(decision.delegatedAt)}` : ""}.`;
-  }
-  if (decision.status === "revision_requested") {
-    return decision.resolutionNote
-      ? `Revision requested: ${decision.resolutionNote}`
-      : "Revision was requested on this decision.";
-  }
-  if (decision.status === "executed") {
-    return decision.externalRef
-      ? `Executed with evidence: ${decision.externalRef}`
-      : "This decision has been marked executed.";
-  }
-  if (decision.approvedBy) {
-    return `Approved by ${decision.approvedBy} at ${formatDeadline(
-      decision.approvedAt,
-    )}.`;
-  }
-  return "This card remains explicit until it is approved, rejected, delegated, revised, or safely expired.";
-}
-
 type HomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -521,6 +464,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const requestedProjectId =
     getParam(resolvedSearchParams?.project_id) ?? PROJECT_ID;
   const requestedArea = getParam(resolvedSearchParams?.area);
+  const requestedDecisionFilter = parseDecisionInboxFilter(
+    getParam(resolvedSearchParams?.decision_filter),
+  );
   const requestedWorkTask = getParam(resolvedSearchParams?.task);
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
@@ -727,6 +673,44 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchCostInsights(activeProjectId),
     fetchLlmSpend(activeProjectId),
   ]);
+  // Platform ops panels nested into existing Mission Control areas (no new nav).
+  const [
+    identityProvidersFeed,
+    oncallSreStatus,
+    securityScanners,
+    latestSecurityScan,
+    releaseStatus,
+    releaseBoard,
+    releasePlans,
+    workerAutoscalingStatus,
+    workerAutoscalingHistory,
+    tokenScorecard,
+    tokenConsumption,
+    tokenPolicies,
+    tokenRecommendations,
+    observabilitySuiteFeed,
+    knowledgeGraphFeed,
+    cicdCatalog,
+    cicdStatus,
+  ] = await Promise.all([
+    fetchIdentityProvidersFeed(activeProjectId),
+    fetchOncallSreStatus(activeProjectId),
+    fetchSecurityScanners(),
+    fetchLatestSecurityScan(activeProjectId),
+    fetchReleaseStatus(activeProjectId),
+    fetchReleaseBoard(activeProjectId),
+    fetchReleases(activeProjectId),
+    fetchWorkerAutoscalingStatus(activeProjectId),
+    fetchWorkerAutoscalingHistory(activeProjectId),
+    fetchTokenScorecard(activeProjectId),
+    fetchTokenConsumption(activeProjectId),
+    fetchTokenPolicies(activeProjectId),
+    fetchTokenRecommendations(activeProjectId),
+    fetchObservabilitySuiteFeed(activeProjectId, obsHost),
+    fetchKnowledgeGraphFeed(activeProjectId),
+    fetchCICDCatalog(),
+    fetchCICDStatus(activeProjectId),
+  ]);
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
@@ -769,6 +753,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const ccVerifiedToday = receipts.items.filter(
     (receipt) => Date.now() - Date.parse(receipt.createdAt) < 86_400_000,
   ).length;
+  const editionId = normalizeEditionId(
+    commercial.edition?.editionId ?? selfImprovement.editionId,
+  );
+  const communityEdition = isCommunityEdition(editionId);
 
   return (
     <ConsoleShell
@@ -783,11 +771,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         actor: activeActor?.displayName ?? activeActorId,
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
+      editionId={editionId}
       initialArea={requestedArea}
     >
       <div className="frame">
         <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
           <AgentChat projectId={activeProjectId} actor={activeActorId} initialTaskId={requestedWorkTask || undefined} />
+        </section>
+        <section className="panel-stack" data-area="metatron" aria-label="Metatron captain">
+          <MetatronCaptain
+            projectId={activeProjectId}
+            actor={activeActorId}
+          />
         </section>
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
@@ -796,11 +791,29 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Cross-phase control snapshot</h2>
             </div>
           </div>
-          <DashboardPanel snapshot={dashboardSnapshot} />
+          <DashboardPanel feed={dashboardSnapshot} />
         </section>
 
         <section className="panel-stack" data-area="assurance" aria-label="Assurance Center">
           <AssuranceCenter feed={assuranceFeed} />
+        </section>
+
+        <section className="panel-stack" data-area="assurance" aria-label="Security scanning">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Security scan</span>
+              <h2>OSS vulnerability scanning with a governed go/no-go gate.</h2>
+            </div>
+            <p className="status-meta">
+              Semgrep · Trivy · OSV · Gitleaks — receipted runs for project{" "}
+              {activeProjectId}.
+            </p>
+          </div>
+          <SecurityScanCard
+            projectId={activeProjectId}
+            initialRun={latestSecurityScan}
+            scanners={securityScanners}
+          />
         </section>
 
         <RepoActivityPanel repos={repoActivity} />
@@ -828,6 +841,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
+          <FocusedAgents
+            projectId={activeProjectId}
+            actor={activeActorId}
+          />
           <AgentStudio
             feed={agentStudioFeed}
             roles={roles.items}
@@ -839,6 +856,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <WorkOrchestration
             feed={workOrchestrationFeed}
             actor={activeActorId}
+          />
+        </section>
+
+        <section className="panel-stack" data-area="portfolio" aria-label="Release planning">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Release planning</span>
+              <h2>Built / building / planned / blocked — release board and plans.</h2>
+            </div>
+            <p className="status-meta">
+              Source: `/v1/release-planning/*` for project {activeProjectId}.
+            </p>
+          </div>
+          <ReleasePlanningPanel
+            snapshot={releaseStatus}
+            board={releaseBoard}
+            plans={releasePlans}
           />
         </section>
 
@@ -981,6 +1015,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="overview" aria-label="Design-partner setup">
+          <OnboardingHelpCard />
+        </section>
+
         <section className="stack-grid" data-area="overview">
           <article className="stack-card">
             <div className="section-head">
@@ -988,6 +1026,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 <span className="eyebrow">Metatron</span>
                 <h2>Status Query</h2>
               </div>
+              <AreaLink className="ov-action" area="metatron" orgId={activeOrgId}>
+                Open captain
+              </AreaLink>
             </div>
             <form method="get" className="composer">
               <input type="hidden" name="project_id" value={activeProjectId} />
@@ -1647,6 +1688,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <TokenEfficiencyPanel
+          scorecard={tokenScorecard}
+          consumption={tokenConsumption}
+          policies={tokenPolicies}
+          recommendations={tokenRecommendations}
+        />
+
         <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
           <div className="section-head">
             <div>
@@ -1781,6 +1829,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           />
 
           <InfraFabricPanel feed={infraFabric} />
+
+          <WorkerAutoscalingPanel
+            feed={workerAutoscalingStatus}
+            history={workerAutoscalingHistory}
+          />
 
           {providerOps.apiReachable ? (
             <>
@@ -2621,6 +2674,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             Rate limit {health.rateLimitStatus} / cap{" "}
                             {health.usageCapStatus}
                           </p>
+                          <p className="detail">
+                            Billing {health.billingStatus ?? "unknown"} /
+                            confidence {health.billingConfidence ?? "unknown"}
+                            {health.billingMessage
+                              ? ` — ${health.billingMessage}`
+                              : ""}
+                          </p>
                         </div>
                         <code className="mono">
                           {formatDateTime(health.lastCheckedAt)}
@@ -2658,11 +2718,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </code>
                       </div>
                     ))}
+                    {providerOps.resourceReceipts.length === 0 ? (
+                      <p className="detail">
+                        No resource receipts yet. Receipts prove provider
+                        actions; they are not invoices and do not imply $0.00
+                        spend.
+                      </p>
+                    ) : null}
                     {providerOps.providerHealth.length === 0 &&
                     providerOps.driftReports.length === 0 &&
                     providerOps.resourceReceipts.length === 0 ? (
                       <p className="detail">
-                        No ProviderOps health, drift, or receipt records yet.
+                        No ProviderOps health or drift records yet.
                       </p>
                     ) : null}
                   </div>
@@ -2670,6 +2737,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
                 <article className="stack-card" id="provider-finops">
                   <h3>Cost and Reconciliation Ledger</h3>
+                  {(() => {
+                    const honesty = describeSpendHonesty({
+                      costs: providerOps.costs,
+                      health: providerOps.providerHealth,
+                      runs: providerOps.reconciliationRuns,
+                    });
+                    return (
+                      <p className="detail" data-testid="provider-ledger-honesty">
+                        {honesty.label}
+                        {honesty.amountUsdMicros == null
+                          ? " — "
+                          : ` ${formatMicros(honesty.amountUsdMicros)} — `}
+                        {honesty.helper}
+                      </p>
+                    );
+                  })()}
                   <div className="feed-list">
                     {providerOps.costAnomalies.slice(0, 4).map((anomaly) => (
                       <div className="feed-row" key={anomaly.id}>
@@ -2697,8 +2780,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             {cost.provider} / {cost.category}
                           </h4>
                           <p className="detail">
-                            {formatMicros(cost.amountUsdMicros)} /{" "}
-                            {cost.costLayer} / {cost.confidence}
+                            {cost.confidence === "unknown"
+                              ? "amount unknown"
+                              : formatMicros(cost.amountUsdMicros)}{" "}
+                            / {cost.costLayer} / {cost.confidence}
                           </p>
                           <p className="detail">
                             {cost.sourceRef ?? formatDateTime(cost.createdAt)}
@@ -2715,12 +2800,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </h4>
                           <p className="detail">
                             {run.resourcesSeen} resources seen /{" "}
-                            {run.resourcesChanged} changed / {run.costsSeen} costs
+                            {run.resourcesChanged} changed / {run.costsSeen} cost
+                            events / billing {run.billingStatus ?? "unknown"}
                           </p>
                           <p className="detail">
                             Started by {run.startedBy} at{" "}
                             {formatDateTime(run.startedAt)}
                           </p>
+                          {run.billingMessage ? (
+                            <p className="detail">{run.billingMessage}</p>
+                          ) : null}
                           {run.inventorySnapshotArtifactId ? (
                             <p className="detail">
                               Inventory snapshot: {run.inventorySnapshotArtifactId}
@@ -2734,7 +2823,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     providerOps.costs.length === 0 &&
                     providerOps.reconciliationRuns.length === 0 ? (
                       <p className="detail">
-                        No provider cost or reconciliation records yet.
+                        No provider cost or reconciliation records yet. Empty is
+                        not $0.00.
                       </p>
                     ) : null}
                   </div>
@@ -3024,7 +3114,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <RouterHealthCard
               projectId={activeProjectId}
               actor={activeActorId}
-              providerHealth={dashboardSnapshot?.providerHealth}
+              providerHealth={dashboardSnapshot.snapshot?.providerHealth}
             />
             <SkillInvokeCard projectId={activeProjectId} invocations={skillInvocations} />
           </div>
@@ -3252,46 +3342,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </article>
 
               <article className="stack-card" data-testid="improvement-programs-panel">
-                <h3>Improvement programs</h3>
-                <p className="detail">
-                  Community-class trial ledger at{" "}
-                  <code className="mono">/v1/improvement-programs</code>. Promote into SIM
-                  proposals only when the enterprise surface is mounted.
-                </p>
-                {!selfImprovement.programsApiReachable ? (
-                  <p className="detail">
-                    {selfImprovement.programsBlockedReason ??
-                      "Improvement programs API is unavailable."}
-                  </p>
-                ) : selfImprovement.improvementPrograms.length === 0 ? (
-                  <p className="detail">
-                    No improvement programs recorded yet. Programs pin QA baselines and
-                    deterministic trial policy without requiring enterprise SIM routes.
-                  </p>
-                ) : (
-                  <div className="feed-list">
-                    {selfImprovement.improvementPrograms.map((program) => (
-                      <div className="feed-row" key={program.id}>
-                        <div>
-                          <h4>{program.name}</h4>
-                          <p className="detail">
-                            {program.status}
-                            {program.updatedAt
-                              ? ` / ${formatDateTime(program.updatedAt)}`
-                              : ""}
-                          </p>
-                          <p className="detail">{program.objective}</p>
-                          {program.baselineEvaluationId ? (
-                            <p className="detail">
-                              Baseline: {program.baselineEvaluationId}
-                            </p>
-                          ) : null}
-                        </div>
-                        <code className="mono">{program.id}</code>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <ImprovementProgramsPanel
+                  programs={selfImprovement.improvementPrograms}
+                  programsApiReachable={selfImprovement.programsApiReachable}
+                  programsBlockedReason={selfImprovement.programsBlockedReason}
+                  projectId={activeProjectId}
+                  actor={activeActorId}
+                />
               </article>
             </div>
           ) : (
@@ -3750,31 +3807,46 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           {message.channel} / {message.status} / {formatDateTime(message.createdAt)}
                         </p>
                         <p className="detail">
-                          {message.receiptId ?? message.body}
+                          {message.status === "dry_run"
+                            ? "dry-run — no provider send"
+                            : (message.receiptId ?? message.body)}
                         </p>
                       </div>
-                      {message.status === "draft" ? (
-                        <form action={queueOutboxMessageAction}>
-                          <input type="hidden" name="message_id" value={message.id} />
-                          <input type="hidden" name="project_id" value={activeProjectId} />
-                          <input type="hidden" name="actor" value={activeActorId} />
-                          <label className="field">
-                            <span>Urgency</span>
-                            <select
-                              aria-label={`Delivery urgency for ${message.id}`}
-                              className="input"
-                              defaultValue="normal"
-                              name="urgency"
-                            >
-                              <option value="low">Low</option>
-                              <option value="normal">Normal</option>
-                              <option value="urgent">Urgent</option>
-                            </select>
-                          </label>
-                          <SubmitButton className="button secondary" type="submit">
-                            Queue send
-                          </SubmitButton>
-                        </form>
+                      {message.status === "draft" || message.status === "dry_run" ? (
+                        <div>
+                          {message.status === "dry_run" ? (
+                            <p className="detail">dry-run — no provider send</p>
+                          ) : null}
+                          <form action={dryRunOutboxMessageAction}>
+                            <input type="hidden" name="message_id" value={message.id} />
+                            <input type="hidden" name="project_id" value={activeProjectId} />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <SubmitButton className="button secondary" type="submit">
+                              Dry-run deliver
+                            </SubmitButton>
+                          </form>
+                          <form action={queueOutboxMessageAction}>
+                            <input type="hidden" name="message_id" value={message.id} />
+                            <input type="hidden" name="project_id" value={activeProjectId} />
+                            <input type="hidden" name="actor" value={activeActorId} />
+                            <label className="field">
+                              <span>Urgency</span>
+                              <select
+                                aria-label={`Delivery urgency for ${message.id}`}
+                                className="input"
+                                defaultValue="normal"
+                                name="urgency"
+                              >
+                                <option value="low">Low</option>
+                                <option value="normal">Normal</option>
+                                <option value="urgent">Urgent</option>
+                              </select>
+                            </label>
+                            <SubmitButton className="button secondary" type="submit">
+                              Queue send
+                            </SubmitButton>
+                          </form>
+                        </div>
                       ) : (
                         <code className="mono">{message.id}</code>
                       )}
@@ -3850,7 +3922,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                         </p>
                       </div>
                       {pack.installed ? (
-                        <span className="pill">installed</span>
+                        <div>
+                          <span className="pill">installed</span>
+                          <PackExportButton
+                            projectId={activeProjectId}
+                            packId={pack.packId}
+                            actor={activeActorId}
+                          />
+                        </div>
                       ) : (
                         <form action={installPackAction}>
                           <input type="hidden" name="pack_id" value={pack.packId} />
@@ -3865,6 +3944,37 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                   ))}
                 </div>
               )}
+              <PackImportForm projectId={activeProjectId} actor={activeActorId} />
+            </article>
+
+            <article className="stack-card">
+              <h3>Community skill YAML</h3>
+              {!skills.apiReachable ? (
+                <p className="detail">
+                  {skills.blockedReason ?? "Skill API is unavailable."}
+                </p>
+              ) : skills.items.length === 0 ? (
+                <p className="detail">No skills are registered to export.</p>
+              ) : (
+                <div className="feed-list">
+                  {skills.items.slice(0, 6).map((skill) => (
+                    <div className="feed-row" key={skill.id}>
+                      <div>
+                        <h4>{skill.id}</h4>
+                        <p className="detail">
+                          {titleCaseToken(skill.kind)} / risk {skill.riskTier}
+                        </p>
+                      </div>
+                      <SkillExportButton
+                        projectId={activeProjectId}
+                        skillId={skill.id}
+                        actor={activeActorId}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              <SkillImportForm projectId={activeProjectId} actor={activeActorId} />
             </article>
 
             <article className="stack-card">
@@ -3917,6 +4027,30 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
+        </section>
+
+        <section
+          className="panel-stack"
+          data-area="enterprise"
+          aria-label="Identity providers"
+          data-testid="sso-identity-section"
+          data-community-included="true"
+        >
+          <div className="section-head">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span className="eyebrow">Identity providers</span>
+              {communityEdition ? <CommunityIncludedBadge label="SSO · Community" /> : null}
+            </div>
+            <h2>Workforce and developer IdP packs — OIDC, SAML, SCIM blueprints.</h2>
+            <p className="status-meta">
+              Catalog and dry-run setup for project {activeProjectId}. Secrets stay out of
+              the catalog responses. Self-hosted SSO is included in Community.
+            </p>
+          </div>
+          <IdentityProvidersCatalogView
+            feed={identityProvidersFeed}
+            projectId={activeProjectId}
+          />
         </section>
 
         <section className="panel-stack" data-area="enterprise" aria-label="SOC2 evidence">
@@ -4287,7 +4421,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                     </span>
                   </div>
 
-                  {commercial.edition.accountConnectOrg ? (
+                  {communityEdition ? (
+                    <div className="feed-row" data-testid="account-connect-edition-gated">
+                      <div>
+                        <h4>Account Connect link controls</h4>
+                        <p className="detail">
+                          Hosted Account Connect link/sync/unlink CTAs are Cloud-only on
+                          this Community edition. Prefer BOSS Cloud Easy Connect above when
+                          you want an optional hosted link — or run fully self-hosted without
+                          Account Connect.
+                        </p>
+                      </div>
+                      <PaidTierBadge surface="account_connect" />
+                    </div>
+                  ) : commercial.edition.accountConnectOrg ? (
                     <div className="feed-row">
                       <div>
                         <h4>{commercial.edition.accountConnectOrg.hostedOrgId}</h4>
@@ -4432,7 +4579,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
+            <PaidSurfaceGate editionId={editionId} surface="account_connect" title="Account Connect">
+            <article className="stack-card" data-testid="account-connect-health-card">
               <h3>Account Connect health</h3>
               {!commercial.apiReachable ? (
                 <p className="detail">
@@ -4912,8 +5060,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </>
               )}
             </article>
+            </PaidSurfaceGate>
 
-            <article className="stack-card">
+            <PaidSurfaceGate editionId={editionId} surface="enterprise_clusters" title="Enterprise clusters">
+            <article className="stack-card" data-testid="enterprise-clusters-card">
               <h3>Enterprise cluster records</h3>
               {!enterprise.apiReachable ? (
                 <p className="detail">
@@ -5402,12 +5552,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </>
               )}
             </article>
+            </PaidSurfaceGate>
 
-            <article className="stack-card">
-              <h3>Enterprise identity providers</h3>
+            <article
+              className="stack-card"
+              data-testid="sso-enterprise-identity-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="Self-hosted identity providers"
+                editionId={editionId}
+                communityIncluded
+              />
+              <p className="detail" style={{ marginTop: 8 }}>
+                Self-hosted OIDC, SAML, and SCIM IdP registry — included in Community.
+              </p>
               {!enterprise.apiReachable ? (
                 <p className="detail">
-                  {enterprise.blockedReason ?? "Enterprise API is unavailable."}
+                  {enterprise.blockedReason ?? "Identity provider API is unavailable."}
                 </p>
               ) : (
                 <>
@@ -5523,8 +5685,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>Identity rollout policies</h3>
+            <article
+              className="stack-card"
+              data-testid="sso-identity-rollout-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="Identity rollout policies"
+                editionId={editionId}
+                communityIncluded
+              />
               {!enterprise.apiReachable ? (
                 <p className="detail">
                   {enterprise.blockedReason ?? "Enterprise API is unavailable."}
@@ -5624,8 +5794,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article className="stack-card">
-              <h3>SCIM provisioning</h3>
+            <article
+              className="stack-card"
+              data-testid="sso-scim-card"
+              data-community-included="true"
+            >
+              <SurfaceHeading
+                title="SCIM provisioning"
+                editionId={editionId}
+                communityIncluded
+              />
               {!enterprise.apiReachable ? (
                 <p className="detail">
                   {enterprise.blockedReason ?? "Enterprise API is unavailable."}
@@ -5750,19 +5928,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack">
+        <section className="panel-stack" data-area="org" aria-label="Agent marketplace">
           <div className="section-head">
-            <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span className="eyebrow" data-area="org">Agent Marketplace</span>
-              <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
+              {communityEdition ? <PaidTierBadge surface="marketplace" /> : null}
             </div>
+            <h2>Packaged worker modules with contained prompts, skills, and runtime policy.</h2>
             <p className="status-meta">
               Modules are installable catalog units that can own a role charter, prompt bundle,
               runtime job kinds, and configuration defaults.
+              {communityEdition
+                ? " Hosted marketplace sync is Cloud-only; local modules remain available."
+                : ""}
             </p>
           </div>
 
-          <article className="stack-card">
+          <PaidSurfaceGate editionId={editionId} surface="marketplace" title="Hosted marketplace catalog">
+          <article className="stack-card" data-testid="hosted-marketplace-card">
             <h3>Hosted marketplace catalog</h3>
             {!agentModules.apiReachable ? (
               <p className="detail">
@@ -5881,6 +6064,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </>
             )}
           </article>
+          </PaidSurfaceGate>
 
           <article className="stack-card">
             <h3>Available agent modules</h3>
@@ -6664,13 +6848,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <MeetingsHome
             projectId={activeProjectId}
             orgId={activeOrgId}
+            actor={activeActorId}
             meetings={meetingRooms.items}
             roles={meetingRooms.roles}
             tasks={tasks.items.map((t) => ({ id: t.id, title: t.title }))}
             apiReachable={meetingRooms.apiReachable}
           />
           <div className="stack-grid" style={{ marginTop: 14 }}>
-            <MeetingConsensusCard projectId={activeProjectId} actor={activeActorId} />
+            <MeetingConsensusCard
+              projectId={activeProjectId}
+              actor={activeActorId}
+              meetings={meetingRooms.items.map((item) => ({ id: item.id, title: item.title }))}
+            />
           </div>
         </section>
 
@@ -6689,6 +6878,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             deployments={recentDeployments} />
         </section>
 
+        <section className="panel-stack" data-area="delivery" aria-label="Pipeline generators">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Pipeline generators</span>
+              <h2>Generate and validate CI config for GitHub Actions and peers.</h2>
+            </div>
+            <p className="status-meta">
+              Source: `/v1/cicd/*` for project {activeProjectId}.
+            </p>
+          </div>
+          <CICDPipelinesPanel
+            projectId={activeProjectId}
+            catalog={cicdCatalog}
+            status={cicdStatus}
+            initialRuns={cicdStatus.recent_runs ?? []}
+          />
+        </section>
+
         {/* Monitoring is its own area: "did it ship" and "is it working" are different
             questions asked at different times, and one page answering both buries whichever
             you did not come for. */}
@@ -6705,6 +6912,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <MonitoringArea health={deploymentHealth} observability={observability}
                           hostTargetId={obsHost} />
+        </section>
+
+        <section className="panel-stack" data-area="monitoring" aria-label="Observability suite">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Observability suite</span>
+              <h2>Recommended OSS stack, gaps, and source health checks.</h2>
+            </div>
+            <p className="status-meta">
+              Metrics · logs · traces · visualization — project {activeProjectId}.
+            </p>
+          </div>
+          <ObservabilitySuitePanel feed={observabilitySuiteFeed} />
         </section>
 
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
@@ -6729,10 +6949,27 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             codeTasks={codeTasksFeed.items}
             apiReachable={codeTasksFeed.apiReachable}
-            previews={previewFeed}
+            previews={previewFeed.items}
+            previewBlockedReason={previewFeed.blockedReason}
             benchmarks={qaBenchmarkApps}
             actor={activeActorId}
+            githubPlane={wipStatus?.githubPlane}
+            githubPlaneLabel={wipStatus?.githubPlaneReason}
+            githubFullName={wipStatus?.githubFullName}
           />
+          <article className="stack-card">
+            <div className="section-head">
+              <div>
+                <span className="eyebrow">Previews</span>
+                <h3>Operator Views — fixture HTML is not a customer app.</h3>
+              </div>
+            </div>
+            <PreviewsPanel
+              feed={previewFeed}
+              projectId={activeProjectId}
+              actor={activeActorId}
+            />
+          </article>
         </section>
 
         <section data-area="foundations" aria-label="Design foundations">
@@ -6743,6 +6980,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <ComponentsScreen />
         </section>
 
+        <section className="panel-stack" data-area="reliability" aria-label="On-call SRE">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">On-call</span>
+              <h2>Schedules, escalation policies, and open pages for this project.</h2>
+            </div>
+            <p className="status-meta">
+              Notify adapters default to dry-run until a token or webhook is configured.
+            </p>
+          </div>
+          <OncallSreHome status={oncallSreStatus} />
+        </section>
+
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
           <div className="section-head">
             <div>
@@ -6751,6 +7001,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ReliabilityHome feed={reliabilityFeed} />
+        </section>
+
+        <section className="panel-stack" data-area="reliability" aria-label="Knowledge graph">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Knowledge graph</span>
+              <h2>Service topology, known causes, and RCA context for reliability.</h2>
+            </div>
+            <p className="status-meta">
+              Seed from infra fabric; query known causes per service.
+            </p>
+          </div>
+          <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
         </section>
 
         <section className="panel-stack" data-area="discovery" aria-label="Discovery">
@@ -7149,270 +7412,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section
-          aria-labelledby="decision-inbox-title"
-          className="panel-stack decision-inbox-section"
-          data-area="decisions"
-          id="decision-inbox"
-          tabIndex={-1}
-        >
-          <div className="section-head">
-            <div>
-              <span className="eyebrow">Decision Queue</span>
-              <h2 id="decision-inbox-title">
-                Agents proposed — <span className="dq-you-decide">you decide</span>.
-              </h2>
-            </div>
-            <p className="status-meta">
-              Decisions are served by the control plane API and expire to a safe
-              default when their deadline passes.
-            </p>
-          </div>
-
-          {!decisions.apiReachable ? (
-            <article className="decision-card empty">
-              <h3>Decision API unavailable</h3>
-              <p className="detail">
-                {decisions.blockedReason ??
-                  "The executive console could not reach the decision inbox."}
-              </p>
-            </article>
-          ) : decisions.items.length === 0 ? (
-            <article className="decision-card empty">
-              <h3>No active decisions</h3>
-              <p className="detail">
-                The control plane does not currently need an approval, rejection,
-                or safe-default expiration.
-              </p>
-            </article>
-          ) : (
-            <div className="dq">
-              {decisions.items.map((decision) => {
-                const estimatedCost =
-                  typeof decision.costSummary.estimated_usd_micros === "number"
-                    ? decision.costSummary.estimated_usd_micros
-                    : undefined;
-                const isPending =
-                  decision.status === "pending" || decision.status === "delegated";
-                const isApproved = decision.status === "approved";
-                const linkedTask = decision.taskId
-                  ? tasks.items.find((task) => task.id === decision.taskId)
-                  : undefined;
-                const ownerRole = linkedTask?.ownerRoleId
-                  ? roles.items.find((role) => role.id === linkedTask.ownerRoleId)
-                  : undefined;
-                const who = ownerRole?.displayName ?? "Control plane";
-                const impact = decisionImpact(decision);
-                const rec = decision.recommendation;
-                const why = typeof rec.why === "string" ? rec.why : "";
-                const plan = typeof rec.plan === "string" ? rec.plan : "";
-                const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
-                // The thing being approved. For a PRD publish the entire drafted document
-                // travels in the payload (recommendation.args.markdown) and was never shown:
-                // the card asked "approve publishing the PRD" while withholding the PRD.
-                const recArgs =
-                  rec.args && typeof rec.args === "object"
-                    ? (rec.args as Record<string, unknown>)
-                    : {};
-                const subject =
-                  typeof recArgs.markdown === "string"
-                    ? recArgs.markdown
-                    : typeof recArgs.content === "string"
-                      ? recArgs.content
-                      : "";
-                const subjectTitle =
-                  typeof recArgs.title === "string" ? recArgs.title : "Document to publish";
-
-                return (
-                  <article className="dq-row" key={decision.id}>
-                    <div className="dq-body">
-                      <div className="dq-orb" aria-hidden>{roleInitials(who)}</div>
-                      <div className="dq-main">
-                        <div className="dq-propose">
-                          <span className="dq-who"><b>{who}</b> proposes</span>
-                          <span className={`dq-impact ${impact.tone}`}>{impact.label}</span>
-                        </div>
-                        <h3 className="dq-title">{decision.question}</h3>
-                        <p className="dq-rationale">
-                          {why || formatRecommendation(decision)}
-                        </p>
-                        {subject ? (
-                          <details className="decision-plan-details">
-                            <summary>
-                              Read the full document before approving
-                              <span className="dq-doc-size">
-                                {" · "}
-                                {subject.length.toLocaleString()} characters
-                              </span>
-                            </summary>
-                            <div className="decision-plan-sec">
-                              <h4>{subjectTitle}</h4>
-                              <pre className="decision-doc">{subject}</pre>
-                            </div>
-                          </details>
-                        ) : null}
-                        {plan || review ? (
-                          <details className="decision-plan-details">
-                            <summary>Read the technical plan{review ? " & automated review" : ""}</summary>
-                            {plan ? (
-                              <div className="decision-plan-sec">
-                                <h4>Technical plan</h4>
-                                <pre>{plan}</pre>
-                              </div>
-                            ) : null}
-                            {review ? (
-                              <div className="decision-plan-sec">
-                                <h4>Automated plan review</h4>
-                                <pre>{review}</pre>
-                              </div>
-                            ) : null}
-                          </details>
-                        ) : null}
-                        <div className="dq-evidence">
-                          <span className="dq-ev-label">evidence</span>
-                          {linkedTask ? (
-                            <span className="dq-ev">
-                              T-{decision.taskId?.slice(-4)} · {linkedTask.title.slice(0, 44)}
-                              {linkedTask.title.length > 44 ? "…" : ""}
-                            </span>
-                          ) : null}
-                          <span className="dq-ev">risk tier {decision.riskTier}</span>
-                          <span className="dq-ev">default {decision.defaultAction ?? "hold"}</span>
-                          {estimatedCost != null ? (
-                            <span className="dq-ev">{formatMicros(estimatedCost)}</span>
-                          ) : null}
-                          <span className="dq-ev">{formatDeadline(decision.deadlineAt)}</span>
-                        </div>
-                        {isPending ? (
-                          <p className="dq-effect">{approvalEffectLabel(decision.recommendation)}</p>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="dq-foot">
-                      {isPending ? (
-                        <form action={resolveDecisionAction} className="dq-actions">
-                          <input type="hidden" name="decision_id" value={decision.id} />
-                          <input type="hidden" name="project_id" value={activeProjectId} />
-                          <input type="hidden" name="actor" value={activeActorId} />
-                          <SubmitButton className="dq-btn approve" name="action" value="approve">
-                            Approve
-                          </SubmitButton>
-                          <SubmitButton className="dq-btn neutral" name="action" value="revise">
-                            Request changes
-                          </SubmitButton>
-                          <SubmitButton className="dq-btn reject" name="action" value="reject">
-                            Reject
-                          </SubmitButton>
-                          <details className="dq-more">
-                            <summary>Note · delegate</summary>
-                            <div className="dq-more-body">
-                              <textarea
-                                aria-label={`Decision note for ${decision.id}`}
-                                className="textarea decision-note"
-                                name="note"
-                                rows={3}
-                                placeholder="Optional note or required revision request rationale."
-                              />
-                              <input
-                                aria-label={`Delegate target for ${decision.id}`}
-                                className="input"
-                                name="delegate_to"
-                                placeholder="Delegate to role or approver"
-                              />
-                              <SubmitButton className="dq-btn neutral" name="action" value="delegate">
-                                Delegate
-                              </SubmitButton>
-                            </div>
-                          </details>
-                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
-                        </form>
-                      ) : (
-                        <>
-                          <span
-                            className={`dq-verdict ${
-                              isApproved || decision.status === "executed"
-                                ? "green"
-                                : decision.status === "rejected"
-                                  ? "red"
-                                  : "muted"
-                            }`}
-                          >
-                            {decision.status.toUpperCase()}
-                          </span>
-                          <span className="dq-note">{decisionStatusDetail(decision)}</span>
-                          {isApproved ? (
-                            <details className="dq-more">
-                              <summary>Mark executed</summary>
-                              <form action={resolveDecisionAction} className="dq-more-body">
-                                <input type="hidden" name="decision_id" value={decision.id} />
-                                <input type="hidden" name="project_id" value={activeProjectId} />
-                                <input type="hidden" name="actor" value={activeActorId} />
-                                <textarea
-                                  aria-label={`Execution note for ${decision.id}`}
-                                  className="textarea decision-note"
-                                  name="note"
-                                  rows={2}
-                                  placeholder="Record what was executed."
-                                />
-                                <input
-                                  aria-label={`Execution external reference for ${decision.id}`}
-                                  className="input"
-                                  name="external_ref"
-                                  placeholder="External reference (PR URL, commit SHA, ticket)"
-                                />
-                                <SubmitButton className="dq-btn approve" name="action" value="execute">
-                                  Mark executed
-                                </SubmitButton>
-                              </form>
-                            </details>
-                          ) : null}
-                          <span className="dq-waited">{waitedLabel(decision.createdAt)}</span>
-                        </>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-
-          {decisions.apiReachable ? (
-            <details className="dq-digest">
-              <summary>Create decision digest</summary>
-              <div className="dq-digest-body">
-                <p className="detail">
-                  Creates a durable digest artifact. Optional channel creates an
-                  outbox draft only; sending still requires a budgeted queue action.
-                </p>
-                <form action={createDecisionDigestAction} className="decision-actions">
-                  <input type="hidden" name="project_id" value={activeProjectId} />
-                  <input type="hidden" name="actor" value={activeActorId} />
-                  <label className="field">
-                    <span>Max items</span>
-                    <input
-                      className="input"
-                      defaultValue={20}
-                      max={100}
-                      min={1}
-                      name="max_items"
-                      type="number"
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Optional outbox channel</span>
-                    <input
-                      className="input"
-                      name="channel"
-                      placeholder="email:founder@example.com or slack:#ops"
-                    />
-                  </label>
-                  <SubmitButton className="button secondary" type="submit">
-                    Create digest
-                  </SubmitButton>
-                </form>
-              </div>
-            </details>
-          ) : null}
+        <section data-area="decisions" aria-label="Decision inbox">
+          <DecisionInbox
+            feed={decisions}
+            tasks={tasks.items}
+            roles={roles.items}
+            projectId={activeProjectId}
+            actorId={activeActorId}
+            orgId={activeOrgId}
+            initialFilter={requestedDecisionFilter}
+          />
         </section>
 
         <section className="panel-stack approval-rules-section" aria-label="Approval rules">

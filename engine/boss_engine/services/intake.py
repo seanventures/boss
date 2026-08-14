@@ -6,6 +6,7 @@ from typing import Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from ..config import Settings
 from .budget import BudgetGovernor
@@ -59,41 +60,64 @@ class CommandIntakeService:
         if parent and parent in dependencies:
             raise ValueError("parent_task_id cannot also be listed as a dependency.")
 
-        connection.execute(
+        # Fail closed on project-scoped dedupe before INSERT so unique violations
+        # never surface as unhandled 500s from the API layer.
+        existing = connection.execute(
             text(
                 """
-                INSERT INTO tasks (
-                    id, project_id, title, description, status, owner_role_id,
-                    parent_task_id, dependency_task_ids, due_at, priority, risk_tier,
-                    inputs, required_artifacts, budget_allocation_id, data_boundary,
-                    dedupe_key
-                )
-                VALUES (
-                    :id, :project_id, :title, :description, 'open', :owner_role_id,
-                    :parent_task_id, CAST(:dependency_task_ids AS JSONB), :due_at,
-                    :priority, :risk_tier, CAST(:inputs AS JSONB),
-                    CAST(:required_artifacts AS JSONB), NULL, :data_boundary,
-                    :dedupe_key
-                )
+                SELECT id FROM tasks
+                WHERE project_id = :project_id AND dedupe_key = :dedupe_key
+                LIMIT 1
                 """
             ),
-            {
-                "id": task_id,
-                "project_id": project_id,
-                "title": title,
-                "description": description,
-                "owner_role_id": owner,
-                "parent_task_id": parent,
-                "dependency_task_ids": json.dumps(dependencies),
-                "due_at": due_at,
-                "priority": priority,
-                "risk_tier": risk_tier,
-                "inputs": json.dumps(inputs or {}),
-                "required_artifacts": json.dumps(required_artifacts or []),
-                "data_boundary": boundary,
-                "dedupe_key": dedupe_key,
-            },
-        )
+            {"project_id": project_id, "dedupe_key": dedupe_key},
+        ).first()
+        if existing:
+            raise ValueError(
+                f"Task with dedupe_key already exists in this project: {dedupe_key}"
+            )
+
+        try:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO tasks (
+                        id, project_id, title, description, status, owner_role_id,
+                        parent_task_id, dependency_task_ids, due_at, priority, risk_tier,
+                        inputs, required_artifacts, budget_allocation_id, data_boundary,
+                        dedupe_key
+                    )
+                    VALUES (
+                        :id, :project_id, :title, :description, 'open', :owner_role_id,
+                        :parent_task_id, CAST(:dependency_task_ids AS JSONB), :due_at,
+                        :priority, :risk_tier, CAST(:inputs AS JSONB),
+                        CAST(:required_artifacts AS JSONB), NULL, :data_boundary,
+                        :dedupe_key
+                    )
+                    """
+                ),
+                {
+                    "id": task_id,
+                    "project_id": project_id,
+                    "title": title,
+                    "description": description,
+                    "owner_role_id": owner,
+                    "parent_task_id": parent,
+                    "dependency_task_ids": json.dumps(dependencies),
+                    "due_at": due_at,
+                    "priority": priority,
+                    "risk_tier": risk_tier,
+                    "inputs": json.dumps(inputs or {}),
+                    "required_artifacts": json.dumps(required_artifacts or []),
+                    "data_boundary": boundary,
+                    "dedupe_key": dedupe_key,
+                },
+            )
+        except IntegrityError as exc:
+            # Race-safe fallback if a concurrent insert won the unique index.
+            raise ValueError(
+                f"Task with dedupe_key already exists in this project: {dedupe_key}"
+            ) from exc
         emit_event(
             connection,
             project_id,

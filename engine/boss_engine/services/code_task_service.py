@@ -180,6 +180,21 @@ def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[
     return row[0] if row else None
 
 
+# Simulated fixture: create→persist→read without a model, reservation, job, or PR.
+# This is NOT a sealed factory path. It exists so Community GA can prove the
+# code-task API fail-closes cleanly without spending tokens. Real workers ignore
+# status='simulated' (WIP counts only status='running').
+SIMULATED_FIXTURE_STATUS = "simulated"
+SIMULATED_FIXTURE_PHASE = "fixture"
+
+
+def is_simulated_run(run: Optional[dict]) -> bool:
+    if not isinstance(run, dict):
+        return False
+    spec = run.get("spec") or {}
+    return bool(run.get("status") == SIMULATED_FIXTURE_STATUS or spec.get("simulated"))
+
+
 def start_code_task(
     connection, *, project_id: str, task_id: Optional[str], title: str,
     instructions: str, acceptance_criteria: list[str], test_commands: list[str],
@@ -188,9 +203,13 @@ def start_code_task(
     model_config: Optional[dict] = None, open_pr: Optional[bool] = None,
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
     substrate: Optional[str] = None, repo_host: Optional[str] = None,
-    allow_duplicate: bool = False,
+    allow_duplicate: bool = False, simulated: bool = False,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
+
+    ``simulated=True`` is the no-spend fixture: persist a clearly labeled run with
+    fixture evidence and do **not** enqueue a job, reserve budget, or call a model.
+    ``open_pr=True`` with ``simulated=True`` fail-closes.
 
     Refuses to start work that is ALREADY RUNNING, returning the in-flight run instead.
 
@@ -205,6 +224,10 @@ def start_code_task(
     and `allow_duplicate=True` exists for a caller that genuinely wants two at once (a
     bake-off comparing two runs of one spec).
     """
+    if simulated and open_pr is True:
+        raise ValueError(
+            "simulated=true cannot open a PR (fail-closed; fixture has no sandbox or model)"
+        )
     settings = getattr(jobs, "settings", None)
     if settings is not None:
         bad = preflight_test_commands(settings, test_commands)
@@ -284,19 +307,51 @@ def start_code_task(
         spec["review_panel_size"] = review_panel_size
     if open_pr is False:  # eval/bake-off runs: verify via the gate, do not open a PR
         spec["open_pr"] = False
+    if simulated:
+        spec["simulated"] = True
+        spec["open_pr"] = False
+        # Never persist a live model route on a fixture — it looks like spend happened.
+        spec.pop("model_config", None)
+    run_status = SIMULATED_FIXTURE_STATUS if simulated else "running"
+    run_phase = SIMULATED_FIXTURE_PHASE if simulated else "queued"
+    run_state = (
+        {
+            "simulated": True,
+            "summary": "Simulated fixture — no sandbox, no model, no PR, no job.",
+            "tests_passed": None,
+            "diff_summary": "",
+            "evidence": {
+                "kind": "factory_fixture",
+                "llm_called": False,
+                "budget_reserved": False,
+                "job_enqueued": False,
+                "reason": (
+                    "POST /v1/code-tasks simulated=true seals create→persist→read "
+                    "without spend. This is not a sealed factory path."
+                ),
+            },
+        }
+        if simulated
+        else {}
+    )
+    run_usage = {"cost_usd_micros": 0, "simulated": True, "model": None} if simulated else {}
+    run_finalize = dict(finalize_ctx or {})
+    if simulated:
+        run_finalize["simulated"] = True
+        run_finalize["fixture"] = True
     if hasattr(connection, "save_run"):
         connection.save_run(
             run_id,
             {
                 "project_id": project_id,
                 "task_id": task_id,
-                "status": "running",
-                "phase": "queued",
+                "status": run_status,
+                "phase": run_phase,
                 "title": title,
                 "spec": spec,
-                "state": {},
-                "usage": {},
-                "finalize_ctx": finalize_ctx or {},
+                "state": run_state,
+                "usage": run_usage,
+                "finalize_ctx": run_finalize,
                 "reservation_id": None,
                 "pull_request_url": None,
                 "pull_request_number": None,
@@ -309,11 +364,13 @@ def start_code_task(
             sql(
                 """
                 INSERT INTO code_task_runs (
-                    id, project_id, task_id, status, phase, title, spec, finalize_ctx
+                    id, project_id, task_id, status, phase, title, spec,
+                    state, usage, finalize_ctx
                 )
                 VALUES (
-                    :id, :p, :t, 'running', 'queued', :title,
-                    CAST(:spec AS JSONB), CAST(:fc AS JSONB)
+                    :id, :p, :t, :status, :phase, :title,
+                    CAST(:spec AS JSONB), CAST(:state AS JSONB),
+                    CAST(:usage AS JSONB), CAST(:fc AS JSONB)
                 )
                 """
             ),
@@ -321,11 +378,33 @@ def start_code_task(
                 "id": run_id,
                 "p": project_id,
                 "t": task_id,
+                "status": run_status,
+                "phase": run_phase,
                 "title": title,
                 "spec": json.dumps(spec),
-                "fc": json.dumps(finalize_ctx or {}),
+                "state": json.dumps(run_state),
+                "usage": json.dumps(run_usage),
+                "fc": json.dumps(run_finalize),
             },
         )
+    if simulated:
+        emit_event(
+            connection,
+            project_id,
+            "code_task.simulated_fixture",
+            "boss",
+            "code_task_run",
+            run_id,
+            {
+                "task_id": task_id,
+                "title": title,
+                "repo": f"{owner}/{repo}",
+                "llm_called": False,
+                "budget_reserved": False,
+                "job_enqueued": False,
+            },
+        )
+        return run_id
     jobs.create_job(connection, project_id=project_id, task_id=task_id,
                     kind="code.task", priority=46, payload={"run_id": run_id})
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
@@ -372,6 +451,10 @@ def start_followup_task(
     run = load_code_task_run(connection, parent_run_id)
     if run is None:
         raise ValueError(f"code task run not found: {parent_run_id}")
+    if is_simulated_run(run):
+        raise ValueError(
+            "cannot follow up a simulated fixture run; create a real code-task instead"
+        )
     spec = run.get("spec") or {}
     fctx = run.get("finalize_ctx") or {}
     parent_title = run.get("title") or "this app"
@@ -445,6 +528,10 @@ def retry_code_task(
         prev = load_code_task_run(c, run_id)
     if prev is None:
         raise ValueError(f"code task run not found: {run_id}")
+    if is_simulated_run(prev):
+        raise ValueError(
+            "cannot retry a simulated fixture run; create a real code-task instead"
+        )
     spec = prev.get("spec") or {}
     state = prev.get("state") or {}
     fctx_prev = prev.get("finalize_ctx") or {}
@@ -838,9 +925,90 @@ def classify_pipeline_exception(reason: str) -> tuple[str, str]:
     """Map a pipeline exception onto the failure taxonomy. Most unexpected exceptions ARE infra
     (platform's fault) — but an agent that exhausted its turn cap is a RECOVERABLE task-shaped
     failure: retrying with more turns / on the existing branch is the fix, and it must NOT trigger
-    the infra substrate-fallback or circuit breaker."""
-    if "error_max_turns" in reason:
+    the infra substrate-fallback or circuit breaker.
+
+    Model TPM / rate-limit / credits / budget exhaustion is needs_human: escalate to a Decision
+    rather than retrying forever into the DLQ (W2.5 / W-REL-03).
+    """
+    r = (reason or "").lower()
+    if "error_max_turns" in r or "max turns" in r or "max_turns" in r:
         return "recoverable", "max_turns_exhausted"
+    # Model capacity / economics — human or capacity change required; not silent requeue.
+    if any(
+        sig in r
+        for sig in (
+            "tpm",
+            "tokens per minute",
+            "rate limit",
+            "rate_limit",
+            "ratelimit",
+            "too many requests",
+            "429",
+            "usage limit",
+            "spend limit",
+            "credit",
+            "quota",
+            "resource exhausted",
+            "overloaded",
+            "throttl",
+        )
+    ):
+        return "needs_human", "model_rate_limit"
+    if any(
+        sig in r
+        for sig in (
+            "budget reservation denied",
+            "budget denied",
+            "budget exhaust",
+            "reservation denied",
+            "insufficient budget",
+        )
+    ):
+        return "needs_human", "budget_exhausted"
+    if any(
+        sig in r
+        for sig in (
+            "no such file or directory: 'git'",
+            'no such file or directory: "git"',
+            "missing git",
+            "not a git repository",
+        )
+    ):
+        return "infra", "missing_git"
+    if any(
+        sig in r
+        for sig in (
+            "claims_frozen",
+            "not claimed for community ga",
+            "boss_microvm_claims_frozen",
+        )
+    ):
+        return "needs_human", "microvm_claims_frozen"
+    if any(
+        sig in r
+        for sig in (
+            "sandbox host task missing",
+            "sandbox task missing",
+            "sandbox not found",
+            "sandbox task 404",
+            "sandbox host 404",
+        )
+    ) or ("404" in r and "sandbox" in r):
+        # Host task is gone — retry/DLQ cannot recreate it. Fail closed.
+        return "needs_human", "sandbox_task_missing"
+    if any(sig in r for sig in ("sandbox", "microvm", "not allowlisted", "rootfs")):
+        return "infra", "sandbox_error"
+    if any(
+        sig in r
+        for sig in (
+            "github",
+            "pull request",
+            "installation token",
+            "bad credentials",
+            "api.github",
+        )
+    ):
+        return "infra", "github_error"
     return "infra", "pipeline_exception"
 
 

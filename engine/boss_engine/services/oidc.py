@@ -3,12 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Optional
+from urllib.error import URLError
 
 import jwt
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWTError
 
 from ..config import Settings
+
+# Explicit JWKS HTTP timeout. PyJWKClient defaults to 30s if omitted; a slow or
+# wedged IdP must not hang an authenticated request open. Fail closed below.
+JWKS_HTTP_TIMEOUT_SECONDS = 5.0
+
+_JWKS_TRANSPORT_ERRORS = (TimeoutError, URLError, OSError, ConnectionError)
 
 
 class OidcConfigurationError(RuntimeError):
@@ -28,8 +35,10 @@ class OidcPrincipal:
 
 
 @lru_cache(maxsize=16)
-def jwks_client_for_url(jwks_url: str) -> PyJWKClient:
-    return PyJWKClient(jwks_url)
+def jwks_client_for_url(
+    jwks_url: str, timeout: float = JWKS_HTTP_TIMEOUT_SECONDS
+) -> PyJWKClient:
+    return PyJWKClient(jwks_url, timeout=timeout)
 
 
 class OidcAuthenticator:
@@ -56,6 +65,10 @@ class OidcAuthenticator:
                 issuer=self.settings.oidc_issuer,
                 options={"require": ["exp", "iss", "aud", "sub"]},
             )
+        except _JWKS_TRANSPORT_ERRORS as error:
+            raise OidcAuthenticationError(
+                f"OIDC JWKS fetch failed: {error}"
+            ) from error
         except PyJWTError as error:
             raise OidcAuthenticationError(f"Invalid OIDC bearer token: {error}") from error
 

@@ -76,6 +76,185 @@ class SoftwareFactoryService:
         self.decisions = decision_sink or resolved_ports.decisions
         self.specpack = SpecPackService(settings)
         self.sandbox_validation = SandboxValidationAdapter(settings)
+        # Dual-plane honesty: factory historically used BOSS_GITHUB_TOKEN / App env
+        # (legacy_env). When a Mission Control primary binding is present we prefer it
+        # (mission_control_binding). Callers and API responses surface which plane ran.
+        self.github_plane: str = "legacy_env"
+        self.github_binding_id: Optional[str] = None
+        self.github_connection_id: Optional[str] = None
+
+    def bind_project_github(
+        self,
+        connection: Any,
+        project_id: str,
+        *,
+        selector: Optional[str] = None,
+        owner: Optional[str] = None,
+        repo: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Prefer the project's primary Mission Control binding for factory GitHub I/O.
+
+        When a binding exists and its credentials resolve, rebinds ``self.github`` (and
+        pipeline) to that adapter and sets ``github_plane=mission_control_binding``.
+        Otherwise keeps the legacy env/App adapter and sets ``github_plane=legacy_env``.
+
+        Returns a plane descriptor suitable for API honesty fields.
+        """
+        from .github_connections import (
+            GitHubConnectionService,
+            GitHubConnectionStateError,
+            GitHubRepositoryBindingNotFoundError,
+        )
+        from .repo_registry import RepositoryResolutionError, resolve_repository_target
+
+        plane = {
+            "github_plane": "legacy_env",
+            "github_binding_id": None,
+            "github_connection_id": None,
+            "owner": owner or getattr(self.github, "owner", None),
+            "repo": repo or getattr(self.github, "repo", None),
+            "full_name": getattr(self.github, "repository_full_name", None),
+            "source": "legacy_settings",
+        }
+        try:
+            target = resolve_repository_target(
+                connection,
+                self.settings,
+                project_id,
+                selector=selector
+                or (
+                    f"{owner}/{repo}"
+                    if owner and repo
+                    else None
+                ),
+                allow_legacy_fallback=True,
+            )
+        except RepositoryResolutionError:
+            self.github_plane = "legacy_env"
+            self.github_binding_id = None
+            self.github_connection_id = None
+            return plane
+
+        plane["owner"] = target.get("owner") or plane["owner"]
+        plane["repo"] = target.get("repo") or plane["repo"]
+        plane["full_name"] = target.get("full_name") or plane["full_name"]
+        plane["source"] = target.get("source") or plane["source"]
+        binding_id = target.get("binding_id")
+        if not binding_id:
+            # Registry fell back to BOSS_TARGET_GITHUB_* — still the legacy plane.
+            if plane["owner"] and plane["repo"]:
+                self.github = GitHubAdapter(
+                    self.settings, owner=plane["owner"], repo=plane["repo"]
+                )
+                self.pipeline = make_pipeline_adapter(self.settings, github=self.github)
+            self.github_plane = "legacy_env"
+            self.github_binding_id = None
+            self.github_connection_id = target.get("connection_id")
+            plane["github_plane"] = "legacy_env"
+            return plane
+
+        try:
+            gh_conn = GitHubConnectionService(self.settings)
+            adapter, connection_row, binding = gh_conn.adapter_for_binding(
+                connection,
+                project_id=project_id,
+                binding_id=binding_id,
+            )
+        except (
+            GitHubConnectionStateError,
+            GitHubRepositoryBindingNotFoundError,
+            Exception,
+        ):
+            # Binding present but credentials/connection not usable — fall back honestly.
+            if plane["owner"] and plane["repo"]:
+                self.github = GitHubAdapter(
+                    self.settings, owner=plane["owner"], repo=plane["repo"]
+                )
+                self.pipeline = make_pipeline_adapter(self.settings, github=self.github)
+            self.github_plane = "legacy_env"
+            self.github_binding_id = binding_id
+            self.github_connection_id = target.get("connection_id")
+            plane["github_plane"] = "legacy_env"
+            plane["github_binding_id"] = binding_id
+            plane["github_connection_id"] = target.get("connection_id")
+            plane["source"] = "binding_fallback_legacy_env"
+            return plane
+
+        self.github = adapter
+        self.pipeline = make_pipeline_adapter(self.settings, github=self.github)
+        self.github_plane = "mission_control_binding"
+        self.github_binding_id = binding.get("id") or binding_id
+        self.github_connection_id = (
+            (connection_row or {}).get("id") or target.get("connection_id")
+        )
+        plane.update(
+            {
+                "github_plane": "mission_control_binding",
+                "github_binding_id": self.github_binding_id,
+                "github_connection_id": self.github_connection_id,
+                "owner": binding.get("owner") or plane["owner"],
+                "repo": binding.get("name") or plane["repo"],
+                "full_name": binding.get("full_name") or plane["full_name"],
+                "source": target.get("source") or "registry:primary",
+            }
+        )
+        return plane
+
+    def _github_plane_fields(self) -> dict[str, Any]:
+        return {
+            "github_plane": self.github_plane,
+            "github_binding_id": self.github_binding_id,
+            "github_connection_id": self.github_connection_id,
+        }
+
+    def describe_github_plane(
+        self,
+        connection: Any,
+        project_id: str,
+        *,
+        selector: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Read-only dual-plane honesty for operator cards.
+
+        Does **not** rebind adapters or resolve SecretRefs — safe on GET /factory/wip.
+        Reports whether a Mission Control primary binding exists vs the legacy
+        ``BOSS_GITHUB_TOKEN`` / ``BOSS_TARGET_GITHUB_*`` settings plane.
+        """
+        from .repo_registry import RepositoryResolutionError, resolve_repository_target
+
+        plane: dict[str, Any] = {
+            "github_plane": "legacy_env",
+            "github_binding_id": None,
+            "github_connection_id": None,
+            "owner": getattr(self.github, "owner", None),
+            "repo": getattr(self.github, "repo", None),
+            "full_name": getattr(self.github, "repository_full_name", None),
+            "source": "legacy_settings",
+        }
+        try:
+            target = resolve_repository_target(
+                connection,
+                self.settings,
+                project_id,
+                selector=selector,
+                allow_legacy_fallback=True,
+            )
+        except RepositoryResolutionError as error:
+            plane["reason"] = str(error)[:240]
+            return plane
+
+        plane["owner"] = target.get("owner") or plane["owner"]
+        plane["repo"] = target.get("repo") or plane["repo"]
+        plane["full_name"] = target.get("full_name") or plane["full_name"]
+        plane["source"] = target.get("source") or plane["source"]
+        binding_id = target.get("binding_id")
+        if not binding_id:
+            return plane
+
+        plane["github_plane"] = "mission_control_binding"
+        plane["github_binding_id"] = binding_id
+        plane["github_connection_id"] = target.get("connection_id")
+        return plane
 
     def _validation_follow_up(
         self, validation: PullRequestValidationResult
@@ -1353,6 +1532,22 @@ class SoftwareFactoryService:
         agent_module_id: Optional[str] = None,
         actual_usd_micros: Optional[int] = None,
     ) -> dict:
+        # Prefer Mission Control primary binding credentials when present (P0-6).
+        # Surface github_plane on every return path so dual-path is never silent.
+        plane = self.bind_project_github(
+            connection,
+            project_id,
+            owner=getattr(self.github, "owner", None),
+            repo=getattr(self.github, "repo", None),
+        )
+        plane_fields = {
+            "github_plane": plane.get("github_plane") or self.github_plane,
+            "github_binding_id": plane.get("github_binding_id") or self.github_binding_id,
+            "github_connection_id": (
+                plane.get("github_connection_id") or self.github_connection_id
+            ),
+        }
+
         reservation = self.budget.assert_active_reservation(
             connection, project_id, reservation_id
         )
@@ -1366,7 +1561,7 @@ class SoftwareFactoryService:
                 {},
                 "missing_reservation",
             )
-            return {"status": "blocked", "decision_id": decision_id}
+            return {"status": "blocked", "decision_id": decision_id, **plane_fields}
 
         boundary_block = self._block_github_effect_for_data_boundary(
             connection,
@@ -1382,7 +1577,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because data-boundary policy blocked the GitHub PR effect.",
             )
-            return boundary_block
+            return {**boundary_block, **plane_fields}
 
         module_spec = self._resolve_agent_module(
             connection,
@@ -1406,7 +1601,7 @@ class SoftwareFactoryService:
                 reservation_id,
                 "Released reservation because no eligible model entitlement source was available.",
             )
-            return route["blocked"]
+            return {**route["blocked"], **plane_fields}
 
         scope = self._scope(connection, project_id)
         pr_receipt, created = self.receipts.create_or_reuse(
@@ -1449,6 +1644,7 @@ class SoftwareFactoryService:
                 "branch_name": result.get("branch_name"),
                 "validation_status": result.get("validation_status"),
                 "validation_summary": result.get("validation_summary"),
+                **plane_fields,
             }
 
         try:
@@ -1493,6 +1689,7 @@ class SoftwareFactoryService:
                 "status": "blocked",
                 "decision_id": decision_id,
                 "message": str(error),
+                **plane_fields,
             }
         except Exception as error:
             self.receipts.mark_failed(
@@ -1517,6 +1714,7 @@ class SoftwareFactoryService:
                 "status": "failed",
                 "receipt_id": pr_receipt["id"],
                 "message": str(error),
+                **plane_fields,
             }
 
         try:
@@ -1564,6 +1762,7 @@ class SoftwareFactoryService:
                 "status": "blocked",
                 "decision_id": decision_id,
                 "message": str(error),
+                **plane_fields,
             }
         except Exception as error:
             self.receipts.mark_failed(
@@ -1588,6 +1787,7 @@ class SoftwareFactoryService:
                 "status": "failed",
                 "receipt_id": pr_receipt["id"],
                 "message": str(error),
+                **plane_fields,
             }
 
         branch_head_sha = commit_shas[-1] if commit_shas else self.github.ensure_branch(
@@ -1883,6 +2083,7 @@ class SoftwareFactoryService:
             "validation_summary": validation_summary,
             "validation_sources": validation_sources,
             "local_validation_receipt_id": local_validation_receipt_id,
+            **plane_fields,
         }
 
     def merge_pull_request(

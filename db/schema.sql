@@ -2682,6 +2682,29 @@ ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS requeued_job_id TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_by TEXT;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
 ALTER TABLE deadletters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Operator remediations attached to a deadletter (A5 / BOSS-342 residual).
+-- Every retry/requeue/hold/escalate writes a row so operator actions never silently drop.
+CREATE TABLE IF NOT EXISTS deadletter_remediations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  deadletter_id TEXT NOT NULL REFERENCES deadletters(id),
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  requeued_job_id TEXT,
+  decision_id TEXT,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_deadletter_remediations_project
+  ON deadletter_remediations(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deadletter_remediations_dlq
+  ON deadletter_remediations(deadletter_id, created_at DESC);
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -2852,6 +2875,103 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_created
   ON agent_messages(thread_id, created_at, id);
+
+-- Metatron Captain: goals, durable memory, watch ticks (always-on oversight).
+-- Chat persistence reuses agent_threads (surface=chat, external_ref=metatron:captain).
+CREATE TABLE IF NOT EXISTS metatron_goals (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  target JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_score NUMERIC,
+  last_measured_at TIMESTAMPTZ,
+  last_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  auto_drive BOOLEAN NOT NULL DEFAULT false,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('working_software', 'budget', 'queue', 'quality', 'custom')),
+  CHECK (status IN ('active', 'paused', 'achieved', 'failed'))
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_goals_project
+  ON metatron_goals(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS metatron_memories (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  thread_id TEXT,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  content TEXT NOT NULL,
+  salience NUMERIC NOT NULL DEFAULT 0.5,
+  source TEXT NOT NULL DEFAULT 'chat',
+  refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (kind IN ('fact', 'decision', 'lesson', 'goal_note', 'watch')),
+  CHECK (salience >= 0 AND salience <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_memories_project
+  ON metatron_memories(project_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS metatron_watch_ticks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  findings JSONB NOT NULL DEFAULT '[]'::jsonb,
+  proposed_moves JSONB NOT NULL DEFAULT '[]'::jsonb,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cycle TEXT NOT NULL DEFAULT 'watch',
+  verify JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_metatron_watch_project
+  ON metatron_watch_ticks(project_id, created_at DESC);
+
+-- Focused always-on agents (thin builder + duty loop; Studio stays the full registry).
+CREATE TABLE IF NOT EXISTS focused_agents (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  focus TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  mode TEXT NOT NULL DEFAULT 'hybrid',
+  interval_seconds INTEGER NOT NULL DEFAULT 120,
+  wake_on JSONB NOT NULL DEFAULT '[]'::jsonb,
+  allowed_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  last_tick_at TIMESTAMPTZ,
+  last_wake_at TIMESTAMPTZ,
+  last_status TEXT,
+  last_score NUMERIC,
+  last_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, agent_key)
+);
+CREATE INDEX IF NOT EXISTS idx_focused_agents_project
+  ON focused_agents(project_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS focused_agent_ticks (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES focused_agents(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  trigger TEXT NOT NULL,
+  observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+  planned JSONB NOT NULL DEFAULT '[]'::jsonb,
+  validation JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied JSONB NOT NULL DEFAULT '[]'::jsonb,
+  rejected JSONB NOT NULL DEFAULT '[]'::jsonb,
+  verify JSONB NOT NULL DEFAULT '{}'::jsonb,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_focused_agent_ticks_agent
+  ON focused_agent_ticks(agent_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
@@ -4001,14 +4121,22 @@ CREATE TABLE IF NOT EXISTS kg_nodes (
   attrs JSONB NOT NULL DEFAULT '{}'::jsonb,
   layer TEXT NOT NULL DEFAULT 'deterministic'
     CHECK (layer IN ('deterministic', 'inferred')),
-  source TEXT NOT NULL DEFAULT 'manual',
+  source TEXT NOT NULL DEFAULT 'manual',  -- provenance source (manual|infra_resources|investigation|walk|…)
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  valid_from TIMESTAMPTZ,           -- temporal validity window start (NULL = unbounded)
+  valid_to TIMESTAMPTZ,             -- temporal validity window end (NULL = unbounded)
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, kind, node_key)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_nodes_project
   ON kg_nodes(project_id, kind, last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_source
+  ON kg_nodes(project_id, source);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_confidence
+  ON kg_nodes(project_id, confidence);
+CREATE INDEX IF NOT EXISTS idx_kg_nodes_valid
+  ON kg_nodes(project_id, valid_from, valid_to);
 
 CREATE TABLE IF NOT EXISTS kg_edges (
   id TEXT PRIMARY KEY,
@@ -4021,12 +4149,27 @@ CREATE TABLE IF NOT EXISTS kg_edges (
     CHECK (layer IN ('deterministic', 'inferred')),
   source TEXT NOT NULL DEFAULT 'manual',
   confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  valid_from TIMESTAMPTZ,
+  valid_to TIMESTAMPTZ,
   first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (project_id, src_id, dst_id, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_kg_edges_src ON kg_edges(src_id, kind);
 CREATE INDEX IF NOT EXISTS idx_kg_edges_dst ON kg_edges(dst_id, kind);
+
+-- BOSS-357: knowledge retrieval evaluation snapshots (coverage + regression alarms)
+CREATE TABLE IF NOT EXISTS kg_eval_snapshots (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  coverage_score DOUBLE PRECISION NOT NULL,
+  metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  alarm BOOLEAN NOT NULL DEFAULT FALSE,
+  threshold DOUBLE PRECISION NOT NULL DEFAULT 0.35,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_kg_eval_snapshots_project
+  ON kg_eval_snapshots(project_id, created_at DESC);
 
 -- ── AI SRE reliability pipeline (RB-3/RB-4) ───────────────────────────────────
 -- A telemetry source (a connected observability tool). Scan can also run against an
@@ -4956,3 +5099,248 @@ CREATE INDEX IF NOT EXISTS idx_provider_slo_evaluations_def
 CREATE INDEX IF NOT EXISTS idx_provider_slo_evaluations_project
   ON provider_slo_evaluations(project_id, provider, status, evaluated_at DESC);
 
+-- Platform ops: on-call SRE
+CREATE TABLE IF NOT EXISTS oncall_schedules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL,
+  timezone TEXT NOT NULL DEFAULT 'UTC',
+  layers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_oncall_schedules_project
+  ON oncall_schedules(project_id, enabled);
+
+CREATE TABLE IF NOT EXISTS oncall_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  name TEXT NOT NULL,
+  schedule_id TEXT,
+  steps JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_oncall_policies_project
+  ON oncall_policies(project_id);
+
+CREATE TABLE IF NOT EXISTS oncall_pages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  reliability_incident_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'warning',
+  status TEXT NOT NULL DEFAULT 'open',
+  schedule_id TEXT,
+  policy_id TEXT,
+  current_step INTEGER NOT NULL DEFAULT 0,
+  assignee TEXT NOT NULL DEFAULT '',
+  service TEXT NOT NULL DEFAULT '',
+  kg_node_id TEXT,
+  kg_node_key TEXT,
+  adapter TEXT NOT NULL DEFAULT 'slack_webhook',
+  notify_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  acked_at TIMESTAMPTZ,
+  resolved_at TIMESTAMPTZ,
+  UNIQUE (project_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_oncall_pages_project
+  ON oncall_pages(project_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_oncall_pages_incident
+  ON oncall_pages(project_id, reliability_incident_id);
+
+
+-- Platform ops: release planning
+CREATE TABLE IF NOT EXISTS release_plans (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  target_date DATE,
+  status TEXT NOT NULL DEFAULT 'planned',
+  item_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  issue_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_release_plans_project
+  ON release_plans(project_id, target_date NULLS LAST, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS release_board_items (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  column_key TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT,
+  external_url TEXT,
+  tracker TEXT,
+  issue_key TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, source_type, source_id),
+  CHECK (column_key IN ('built', 'building', 'planned', 'blocked'))
+);
+CREATE INDEX IF NOT EXISTS idx_release_board_items_project_col
+  ON release_board_items(project_id, column_key, sort_order, updated_at DESC);
+
+
+-- Platform ops: worker autoscaling
+CREATE TABLE IF NOT EXISTS worker_autoscaling_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pool_key TEXT NOT NULL DEFAULT 'default',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  min_workers INTEGER NOT NULL DEFAULT 0,
+  max_workers INTEGER NOT NULL DEFAULT 8,
+  scale_up_threshold INTEGER NOT NULL DEFAULT 1,
+  cooldown_seconds INTEGER NOT NULL DEFAULT 30,
+  max_queue_depth_per_worker INTEGER NOT NULL DEFAULT 5,
+  kind TEXT NOT NULL DEFAULT 'local',
+  provider_account_id TEXT REFERENCES provider_accounts(id) ON DELETE SET NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_applied_at TIMESTAMPTZ,
+  last_scale_direction TEXT,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, pool_key)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_autoscaling_policies_project
+  ON worker_autoscaling_policies(project_id, enabled, pool_key);
+
+CREATE TABLE IF NOT EXISTS worker_autoscaling_history (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  pool_key TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  queue_depth INTEGER NOT NULL DEFAULT 0,
+  leased_jobs INTEGER NOT NULL DEFAULT 0,
+  running_jobs INTEGER NOT NULL DEFAULT 0,
+  desired_workers INTEGER NOT NULL DEFAULT 0,
+  actual_workers INTEGER NOT NULL DEFAULT 0,
+  previous_desired INTEGER NOT NULL DEFAULT 0,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  elastic_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT,
+  actor TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_worker_autoscaling_history_project
+  ON worker_autoscaling_history(project_id, pool_key, created_at DESC);
+
+
+-- Platform ops: token efficiency policies
+CREATE TABLE IF NOT EXISTS token_budget_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT '*',
+  max_prompt_tokens INTEGER,
+  max_completion_tokens INTEGER,
+  max_total_tokens_per_call INTEGER,
+  max_tokens_per_day BIGINT,
+  max_cost_usd_micros_per_day BIGINT,
+  alert_at_pct NUMERIC NOT NULL DEFAULT 0.80,
+  preferred_model_class TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, stage),
+  CHECK (preferred_model_class IS NULL
+         OR preferred_model_class IN ('low_cost', 'strong')),
+  CHECK (alert_at_pct > 0 AND alert_at_pct <= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_token_budget_policies_project
+  ON token_budget_policies (project_id, stage);
+
+
+-- BOSS-11: durable persistent preview sandbox reservations (Workload B)
+CREATE TABLE IF NOT EXISTS preview_sandboxes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  run_id TEXT,
+  repo TEXT,
+  branch TEXT,
+  image_or_build TEXT,
+  run_cmd TEXT,
+  env_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  port INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  host_ref TEXT,
+  url TEXT,
+  internal_url TEXT,
+  error TEXT,
+  simulate BOOLEAN NOT NULL DEFAULT false,
+  ttl_seconds INTEGER NOT NULL DEFAULT 3600,
+  expires_at TIMESTAMPTZ,
+  last_heartbeat_at TIMESTAMPTZ,
+  reserved_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, app_id)
+);
+CREATE INDEX IF NOT EXISTS idx_preview_sandboxes_project
+  ON preview_sandboxes (project_id, created_at DESC);
+
+-- Agent KMS (agent ownership, grants, leases)
+CREATE TABLE IF NOT EXISTS agent_key_entries (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  secret_ref_id TEXT NOT NULL,
+  owner_agent TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT 'general',
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_key_entries_project
+  ON agent_key_entries(project_id, owner_agent, status);
+
+CREATE TABLE IF NOT EXISTS agent_key_grants (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  key_entry_id TEXT NOT NULL REFERENCES agent_key_entries(id) ON DELETE CASCADE,
+  grantee_agent TEXT NOT NULL,
+  permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  granted_by TEXT NOT NULL,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (key_entry_id, grantee_agent)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_key_grants_grantee
+  ON agent_key_grants(project_id, grantee_agent);
+
+CREATE TABLE IF NOT EXISTS agent_key_leases (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  key_entry_id TEXT NOT NULL,
+  secret_ref_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  purpose TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  reveal_count INT NOT NULL DEFAULT 0,
+  max_reveals INT NOT NULL DEFAULT 1,
+  receipt_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_key_leases_agent
+  ON agent_key_leases(project_id, agent_id, expires_at);

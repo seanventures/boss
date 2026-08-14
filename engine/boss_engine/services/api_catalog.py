@@ -41,6 +41,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/events",
             "/v1/budget",
             "/v1/deadletters",
+            "/v1/deadletters/classify",
         ],
     },
     "agents": {
@@ -72,6 +73,13 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/deployment",
             "/v1/workflow-runs",
             "/v1/repo",
+            "/v1/ci-config",
+            "/v1/pipeline-config",
+            "/v1/pipeline-adapters",
+            "/v1/verification-target",
+            "/v1/design-prompts",
+            "/v1/design-routing",
+            "/v1/verifier-debate",
         ],
     },
     "providers": {
@@ -89,6 +97,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/resource",
             "/v1/worker-pools",
             "/v1/autoscaler",
+            "/v1/aws",
         ],
     },
     "goldeneye": {
@@ -126,8 +135,13 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
     },
     "models": {
         "title": "Model gateway",
-        "description": "Model leases, invocations, credentials, usage.",
-        "prefixes": ["/v1/model-gateway", "/v1/models"],
+        "description": "Model leases, invocations, credentials, usage, llm_calls ledger.",
+        "prefixes": [
+            "/v1/model-gateway",
+            "/v1/models",
+            "/v1/llm-calls",
+            "/v1/token-efficiency",
+        ],
     },
     "ops": {
         "title": "Ops, reliability, observability",
@@ -148,6 +162,55 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/meetings",
             "/v1/self-improvement",
             "/v1/improvement-programs",
+            "/v1/telemetry",
+            "/v1/change-correlation",
+            "/v1/redaction",
+            "/v1/platform-standards",
+            "/v1/oncall-sre",
+            "/v1/oncall",
+            "/v1/observability-suite",
+            "/v1/observability",
+            "/v1/security-scan",
+            "/v1/worker-autoscaling",
+            "/v1/kms",
+            "/v1/secrets",
+            "/v1/secret-refs",
+        ],
+    },
+    "identity": {
+        "title": "Identity providers",
+        "description": "IdP catalog, OIDC/SAML/SCIM blueprints for top enterprise providers.",
+        "prefixes": [
+            "/v1/identity-providers",
+            "/v1/enterprise",
+            "/v1/auth",
+            "/saml/v2",
+            "/scim/v2",
+        ],
+    },
+    "delivery_cicd": {
+        "title": "CI/CD & release planning",
+        "description": "Multi-vendor pipelines, release boards, feature status.",
+        "prefixes": [
+            "/v1/cicd",
+            "/v1/ci-config",
+            "/v1/release-planning",
+            "/v1/features",
+            "/v1/delivery",
+            "/v1/pipeline-config",
+            "/v1/pipeline-adapters",
+        ],
+    },
+    "knowledge": {
+        "title": "Knowledge & learning",
+        "description": "Context packing, knowledge graph, learning loop, feature catalog.",
+        "prefixes": [
+            "/v1/knowledge",
+            "/v1/learning",
+            "/v1/features",
+            "/v1/capability-manifest",
+            "/v1/intent",
+            "/v1/platform-standards",
         ],
     },
 }
@@ -222,6 +285,18 @@ def build_api_catalog(
             }
         )
 
+    # Cheap operator note: which catalog domains currently expose mounted routes.
+    services_with_routes = [
+        {
+            "id": d["id"],
+            "title": d["title"],
+            "route_count": d["route_count"],
+            "documented_count": d["documented_count"],
+        }
+        for d in domains_out
+        if d.get("route_count", 0) > 0
+    ]
+
     return {
         "version": 1,
         "product": "boss",
@@ -231,6 +306,7 @@ def build_api_catalog(
         "documentation_coverage": (
             round(documented / total, 4) if total else 0.0
         ),
+        "services_with_routes": services_with_routes,
         "domains": domains_out,
         "openapi_url": "/openapi.json",
         "docs": {
