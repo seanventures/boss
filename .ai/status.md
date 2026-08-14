@@ -1,5 +1,10 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-14 Metatron Captain validated drive
+
+- `f1fb273`: every drive move runs `validate_move` before apply. Auto-drive may restart a preview or enqueue a governed `code.task`. Decisions/DLQ never auto-apply. BOSS self-change is a PR.
+- FEATURES.md captain stays ◐ until live shared-tag dogfood. `make qa-metatron-captain` is unit/island only. Do not stamp public GA.
+
 ## 2026-08-14 Metatron Captain Community UI
 
 - `ai/grok/community-ga` now mounts a Community-safe captain island on Mission Control overview beside the existing Status Query. Chat/goals/watch/drive post to `/v1/metatron/*`. Drive is proposal-only. HTTP 404 is honest unavailable — no invented session.

@@ -59,6 +59,7 @@ Do **not** say these for Community GA, private preview, or public “autonomous 
 | Zero open deadletters / production-hardened private main + Actions green | Ops residual |
 | Public multi-tenant SaaS GA | Separate Cloud track |
 | “Managed elastic workers available now” without catalog honesty | Catalog must say planned when planned |
+| Metatron captain silently writes BOSS or auto-resolves decisions/DLQ | Drive **validates then may apply** preview restart or a governed `code.task`. Decisions/deadletters stay human. BOSS self-change is a PR only. FEATURES.md stays ◐ until live dogfood. |
 
 ---
 
