@@ -9,9 +9,12 @@ Subcommands:
   chat                        interactive BOSS Agent session
   serve-mcp [--stdio|--http]  expose the tool layer over MCP for external agents
 
-This is the OSS entrypoint: it constructs an EngineContext (settings + DB + the
-service singletons) with no FastAPI in sight, and drives the engine through the
-same tool layer the agent and MCP use.
+This is the Community/engine entrypoint: it constructs an EngineContext
+(settings + DB + the service singletons) with no FastAPI in sight, and drives
+the engine through the same tool layer the agent and MCP use.
+
+Private design-partner onboarding (monorepo): docs/operations/DESIGN_PARTNER_ONBOARDING.md
+Engine-only pack: engine/DESIGN_PARTNER_ONBOARDING.md. Not a public-release flip.
 """
 from __future__ import annotations
 

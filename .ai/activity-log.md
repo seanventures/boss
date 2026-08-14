@@ -313,6 +313,20 @@ Evidence: **126** domain tests passed (~5m). Plane: OPS credentials unavailable.
 All 15-min terminal updates and major milestones appended here. Chronological, newest at top.
 
 ---
+## 2026-08-13 — Grok — BOSS-292 design-partner onboarding (private repo)
+
+- Added checkable week-1 path `docs/operations/DESIGN_PARTNER_ONBOARDING.md`:
+  human access request, `make dev` / `make smoke` / `make qa-live` (no secret
+  echo), Community BYOK paste, GitHub MC bind, claims freeze, Community vs
+  Cloud, Plane/ops filing without inventing credentials, week-1 success list.
+- CLI pointer: `make onboard`. Mission Control Command Center card
+  `OnboardingHelpCard` (honest: private eval, not public OSS, sandboxes not
+  guaranteed).
+- Linked from README, engine pack, community quickstart, mkdocs, docs index.
+- Residual: private-repo access remains a human GitHub invite. Plane/ops
+  credentials were unavailable in this session so BOSS-292 state was not
+  moved via API.
+
 ## 2026-08-12 18:54 UTC — domain E2E API packs (ai/grok/api-e2e-completeness)
 
 - Added focused live-Postgres E2E packs:

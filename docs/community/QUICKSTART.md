@@ -2,6 +2,10 @@
 
 Goal: a working self-hosted control plane with BYO keys in minutes on a developer machine.
 
+> Invited onto the **private** repo as a design partner? Start at
+> [`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](../operations/DESIGN_PARTNER_ONBOARDING.md)
+> (`make onboard`). Access is a human GitHub invite; this quickstart is not a
+> public-clone substitute.  
 > For production goldeneye-style deploy, see `docs/operations/GOLDENEYE_DEPLOYMENT.md`.  
 > For the full product contract, see [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md).
 

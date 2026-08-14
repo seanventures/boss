@@ -69,6 +69,7 @@ import {
   SurfaceHeading,
 } from "./edition-ui";
 import { isCommunityEdition, normalizeEditionId } from "../lib/edition";
+import { OnboardingHelpCard } from "./onboarding-help-card";
 import { AgentChat } from "./agent-ui";
 import { WorkBoard, WorkflowHealth } from "./workflow-ui";
 import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
@@ -87,7 +88,6 @@ import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
 import { PreviewsPanel } from "./previews-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
-import { OnboardingHelpCard } from "./onboarding-help-card";
 import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";

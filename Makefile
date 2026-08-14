@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard
 
 install: install-node install-python
 
@@ -32,6 +32,24 @@ $(PYTHON_REQUIREMENTS_STAMP): apps/api/requirements.txt apps/worker/requirements
 
 wait-db: install-python
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
+
+# Private design-partner first commands. Prints paths only — never secret values.
+onboard:
+	@echo "BOSS design-partner onboarding (private repository)"
+	@echo "Guide:     docs/operations/DESIGN_PARTNER_ONBOARDING.md"
+	@echo "Engine:    engine/DESIGN_PARTNER_ONBOARDING.md"
+	@echo "Community: docs/community/QUICKSTART.md"
+	@echo
+	@echo "Week-1 local path (do not cat or echo secrets):"
+	@echo "  1. Request GitHub access from the BOSS owner (human gate)."
+	@echo "  2. cp .env.example .env    # edit locally; never commit"
+	@echo "  3. make install && make seed && make dev"
+	@echo "  4. make smoke"
+	@echo "  5. Optional control-plane gate: make qa-live"
+	@echo "     (requires BOSS_API_KEY in the environment; this target does not print it)"
+	@echo
+	@echo "Community is self-hosted BYOK. Cloud is optional. Sandboxes/previews are not guaranteed."
+	@echo "File friction as a GitHub issue on this private repo. Do not invent Plane credentials."
 
 dev: install
 	docker compose -f infra/docker-compose.yml up -d db

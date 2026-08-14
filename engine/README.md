@@ -32,6 +32,12 @@ boss_engine/
 3. **MCP server** (`boss_engine.mcp`) — the same tools over MCP JSON-RPC, so an
    external agent (GitHub Copilot, Claude, Cursor) can be "the BOSS Agent".
 
+Private design-partner week-1 (monorepo + Mission Control): see
+[`docs/operations/DESIGN_PARTNER_ONBOARDING.md`](../docs/operations/DESIGN_PARTNER_ONBOARDING.md)
+or run `make onboard` from the repository root. Engine-only Docker/MCP steps
+are in [`DESIGN_PARTNER_ONBOARDING.md`](./DESIGN_PARTNER_ONBOARDING.md). This
+package is not a public-release announcement.
+
 ## Quickstart
 
 ```bash
