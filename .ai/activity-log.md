@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — v1-lock image packaging (BOSS-396)
+
+- Branch `ai/grok/closeout-v1-lock-image` from `d806916`. Worktree `/tmp/boss-closeout-packaging`.
+- Live `GET /v1/v1-lock` was 200 `{in:0,out:0,cloud:0}` because `docs/product/V1_FEATURE_LOCK.md` was not in the image.
+- Narrow COPY of `V1_FEATURE_LOCK.md` + `TRACEABILITY.md` into root Dockerfile api+worker and engine/Dockerfile.
+- Tests: distribution contract + packaged-path load + runtime image COPY assertions. Not GA. Did not deploy. Cloud/Ent stay `cloud_enterprise`.
+
 ## 2026-08-15 — Grok — E2E infra + UI v1 cut (BOSS-391)
 
 - Branch `ai/grok/e2e-infra-ui` from `02c86dd`. Not GA. No Firecracker thaw. No main merge.

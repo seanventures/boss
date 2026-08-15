@@ -60,6 +60,12 @@ COPY tools ./tools
 # Post-split the API's config/db/services are shims importing boss_engine, so the
 # runtime image must carry engine/ on PYTHONPATH (same as infra/containers/api.Dockerfile).
 COPY engine ./engine
+# Runtime-read product ledgers. Settings.repo_root is /app in this image.
+# Missing V1_FEATURE_LOCK.md makes GET /v1/v1-lock return honest zeros
+# ({in:0, out:0, cloud:0}) rather than invented counts. TRACEABILITY.md
+# seeds the feature catalog. Narrow copy — do not dump all of docs/.
+COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md
+COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md
 ENV PYTHONPATH=/app:/app/engine
 
 RUN mkdir -p /var/lib/boss/artifacts \
@@ -100,6 +106,9 @@ COPY scripts ./scripts
 COPY tools ./tools
 # Worker drives the same engine code paths — bundle engine/ like the api target.
 COPY engine ./engine
+# Same runtime ledgers as the api stage (v1 lock + catalog seed).
+COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md
+COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md
 ENV PYTHONPATH=/app:/app/engine
 
 RUN mkdir -p /var/lib/boss/artifacts \

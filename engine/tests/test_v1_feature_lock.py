@@ -101,3 +101,39 @@ def test_summarize_lock_is_in_out_cloud_counts_only():
     assert summary["out"] >= 14
     assert summary["cloud"] == 12
     assert all(isinstance(value, int) and value >= 0 for value in summary.values())
+
+
+def test_load_v1_feature_lock_on_packaged_image_path_is_non_empty(tmp_path):
+    """Production images root Settings.repo_root at /app.
+
+    The lock is copied to /app/docs/product/V1_FEATURE_LOCK.md. A missing file
+    loads as [] and GET /v1/v1-lock returns {in:0, out:0, cloud:0} — honest
+    zeros, not invented counts. The packaged path must parse non-empty.
+    """
+    packaged_root = tmp_path / "app"
+    dest = default_v1_feature_lock_path(packaged_root)
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(LOCK_PATH.read_bytes())
+
+    rows = load_v1_feature_lock(dest)
+    assert rows, "packaged lock path must parse to non-empty rows"
+    assert lock_rows_are_honest(rows) == []
+
+    summary = summarize_v1_feature_lock(rows)
+    assert set(summary) == {"in", "out", "cloud"}
+    assert summary["in"] > 0
+    assert summary["out"] > 0
+    assert summary["cloud"] > 0
+    assert all(row["lock"] != "ga" for row in rows)
+    assert all(
+        row["features"] != "✅" for row in rows if row["lock"] == "cloud_enterprise"
+    )
+
+
+def test_missing_packaged_lock_is_empty_not_invented():
+    missing = default_v1_feature_lock_path("/app")
+    if missing.is_file():
+        return
+    rows = load_v1_feature_lock(missing)
+    assert rows == []
+    assert summarize_v1_feature_lock(rows) == {"in": 0, "out": 0, "cloud": 0}
