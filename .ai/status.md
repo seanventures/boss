@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Isolated Goldeneye / signals / CI / OS-scan E2E
+
+- Branch `ai/grok/e2e-goldeneye-sec` (from `7be1ec2`). Isolated tests green.
+- `GET /v1/goldeneye/status` empty-200 `not_configured`, `metrics=null`, `host.connected=false`.
+- telemetry_mining + anomalies.scan honesty: no invented scores.
+- CI generate embeds Semgrep/Trivy/OSV gate for all 5 vendors; live Actions `requires_credentials`.
+- Security-scan: simulated five-scanner run + receipt; Snyk 400; `GET /latest` empty is 200 `not_configured` not 404.
+- **Not public GA.** Do not merge main. Do not invent Snyk.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto

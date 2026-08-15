@@ -46,12 +46,12 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 
 ## Isolated swarm
 
-| Item | Code surface | Prior live note | This slice (`ai/grok/v1-verify-goldeneye-sec`) |
+| Item | Code surface | Prior live note | This slice (`ai/grok/e2e-goldeneye-sec`) |
 |---|---|---|---|
-| Goldeneye features / metrics | `/v1/goldeneye/*`, elastic | 500 `goldeneye_nodes` | **CODE.** Community = self-hosted kit + optional `/v1/goldeneye/*` (simulated default). Platform-only = managed multi-tenant fleet / hosted metal / Cloud Easy Connect as node source. `GET /status` now `ensure_tables` + honest `not_configured` empty-200; `host.connected=false` and `metrics=null` unless a node actually heartbeated. Never invents Sean's dogfood host. Elastic 500 stays out of this slice. Not GA. |
-| Signals analysis | reliability.scan, telemetry_mining, anomalies | exists | **CODE.** Tests: `test_reliability.py` + `test_e2e_reliability_ops.py` (scan), `test_telemetry_mining.py` (mine, no invented scores; `inf` → `None`), `test_anomalies_scan.py` (empty list; retry_storm uses measured deadletter count, no score field). Not GA. |
-| Complete CI/CD | cicd + delivery + security-scan gate | provenance yes; live Actions gated | **CODE.** Catalog/generate/validate/provenance E2E in `test_cicd_pipelines.py` + `test_cicd_pipelines_api.py`. Generated templates now include a Semgrep/Trivy/OSV (comments + optional PATH steps) security-scan gate. Live GitHub Actions remains `requires_credentials=true` on `/v1/pipeline-adapters/catalog`. Not GA. |
-| Security vuln scanning (OS/code) | `/v1/security-scan` Semgrep/Trivy/OSV/Gitleaks/Checkov | scanners 200; latest 404 empty | **CODE.** OSS only: FS (Trivy) + deps (OSV) + secrets (Gitleaks) + SAST (Semgrep) + IaC (Checkov). `simulated=true` fixtures. Snyk catalog-only fail-closed. Receipts `security_scan:{project}:{run}`. `GET /latest` is honest 200 `not_configured` (no 404). Not a commercial Snyk claim. Not GA. |
+| Goldeneye features / metrics | `/v1/goldeneye/*`, elastic | 500 `goldeneye_nodes` | **CODE.** Isolated E2E green: `GET /v1/goldeneye/status` is 200 `not_configured`, `metrics=null`, `host.connected=false`. Community kit + optional control plane; platform-only hosted fleet stays named. Elastic 500 out of slice. Not GA. |
+| Signals analysis | reliability.scan, telemetry_mining, anomalies | exists | **CODE.** Isolated honesty tests green: `telemetry_mining` calm logs emit no signals; `inf` serializes as `None`; `POST /v1/anomalies/scan` empty list, retry_storm uses measured deadletter count, no invented `score`. Not GA. |
+| Complete CI/CD | cicd + delivery + security-scan gate | provenance yes; live Actions gated | **CODE.** Isolated E2E green: generate embeds Semgrep/Trivy/OSV gate for all 5 vendors. Live GitHub Actions stays `requires_credentials=true`. Not GA. |
+| Security vuln scanning (OS/code) | `/v1/security-scan` Semgrep/Trivy/OSV/Gitleaks/Checkov | scanners 200; latest 404 empty | **CODE.** Isolated E2E green: simulated five-scanner run + receipt; Snyk POST is 400 (never invoked); `GET /latest` empty is 200 `not_configured` not 404. Not a commercial Snyk claim. Not GA. |
 
 ## Swarm rules
 
