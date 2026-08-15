@@ -66,11 +66,10 @@ test: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm test
 
-# Optional Go scaffolds (S2 gateway, S3 dispatcher). Not part of Community `make test`.
-# Engine does not require Go. Binaries are not mounted on goldeneye.
+# Optional S2 tenant gateway. Not part of Community `make test`.
+# Engine does not require Go. Binary is not mounted on goldeneye.
 test-go:
 	cd go/tenant-gateway && go test ./...
-	cd services/webhook-dispatcher && go test ./...
 
 lint: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm lint
