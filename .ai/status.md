@@ -1,5 +1,12 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 V1 test system lock (BOSS-393) (◐)
+
+- `make test-v1-lock` is the unit layer of the test pyramid.
+- Factory `npm run verify` stays app-scoped. Official inspect stays honesty-only.
+- Official BugBox/HookWatch/ApproveIt **not** 5/5. qa-live calendar is separate.
+- Ledger Test system row: PARTIAL. **Not public GA.**
+
 ## 2026-08-15 V1 feature verification swarm (Plane)
 
 - Plane SoR umbrella **BOSS-388** In Progress: *V1 feature verification swarm

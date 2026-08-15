@@ -1,5 +1,14 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — V1 verify test system (BOSS-393)
+
+- Branch `ai/grok/v1-verify-test-system` from `ai/grok/v1-feature-verify` (`a5c8951`).
+- Focused lock: engine 34 passed, `test_official_reports` 5, web `qa-scorecard` 2.
+- Added `make test-v1-lock` (unit layer). Documented pyramid in
+  `docs/product/V1_FEATURE_VERIFICATION.md`. Test system row stays **PARTIAL**.
+- Official BugBox/HookWatch/ApproveIt are **not** certified 5/5. No invented scores.
+- Not GA. Did not merge official PRs. Did not merge main.
+
 ## 2026-08-15 — Grok — v1 verify KG + on-call
 
 - Branch `ai/grok/v1-verify-kg-oncall` from `ai/grok/v1-feature-verify` `a5c8951`.
