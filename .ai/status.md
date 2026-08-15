@@ -40,6 +40,18 @@
   commented on the issue. **Nothing is GA.** Evidence-only; no invented closes.
 - This branch `ai/grok/v1-verify-plane` is docs-only tracking. Do not merge main.
 
+## 2026-08-15 AI SRE E2E stack (◐, not GA)
+
+- Branch `ai/grok/e2e-ai-sre` merges kernel + overwatch + runbooks + noise/ask +
+  postmortem + MCP/UI/bench onto `origin/main`. Do **not** merge to main.
+- HTTP E2E `apps/api/tests/test_e2e_ai_sre.py` on isolated Postgres:
+  capabilities 200/`public_ga=false`/runbooks+sre_bench not shipped;
+  overwatch empty never remediates; postmortem 404 + draft no invented RCA;
+  `page_oncall` held+simulated receipt; unknown step fail-closed;
+  noise zeros; ask unknown not fake PromQL; bench fixtures only, unknown
+  confidence < 0.3; MCP TOOLS include list_capabilities/verify/page.
+- FEATURES stays ◐. Not public GA. Plane BOSS-387.
+
 ## 2026-08-15 AI SRE MCP + Mission Control + bench
 
 - MCP: `list_capabilities` / `verify_incident` / `page_incident` on stdio JSON-RPC.
