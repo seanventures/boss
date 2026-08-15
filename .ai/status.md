@@ -1,5 +1,15 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 V1 feature verification swarm (Plane)
+
+- Plane SoR umbrella **BOSS-388** In Progress: *V1 feature verification swarm
+  (token, workers, spec lock, KG, on-call, identity, CI/CD, KMS, Goldeneye/security)*.
+- Deduped; no prior umbrella named like “v1 feature verification” / token
+  efficiency / worker autoscaling. Related shipped tickets left untouched.
+- Ledger `docs/product/V1_FEATURE_VERIFICATION.md` (`a5c8951`). Item list
+  commented on the issue. **Nothing is GA.** Evidence-only; no invented closes.
+- This branch `ai/grok/v1-verify-plane` is docs-only tracking. Do not merge main.
+
 ## 2026-08-15 AI SRE MCP + Mission Control + bench
 
 - MCP: `list_capabilities` / `verify_incident` / `page_incident` on stdio JSON-RPC.
