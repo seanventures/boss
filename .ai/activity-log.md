@@ -1,5 +1,15 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Official verify env (fundamental)
+
+- Official trio failed because `npm run verify` ran without `npm install`,
+  image-global `playwright` has no `test` command, model stubs used `echo`,
+  ESLint 6 lacked `eslint-plugin-react`, and `vite` was missing from deps.
+- `harden_web_package` + `prepare_web_verify_env` now restore deps/scripts
+  and `_run_verify` always `npm install`s first. Sandbox PATH prefers
+  `node_modules/.bin`. Scaffold pins `npx --package=` runners.
+- Not GA. Needs shared-tag deploy before live official retries pick this up.
+
 ## 2026-08-15 — Grok — Union closeout branches onto main
 
 - Unioned `ai/grok/closeout-v1-lock-image` (`24a8a20`), `ai/grok/closeout-half-baked` (`2a9e237`), and `ai/grok/closeout-engine-failover` (`971f149`) onto `ai/grok/closeout-union` from `d806916`.

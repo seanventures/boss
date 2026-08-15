@@ -19,6 +19,7 @@ the command set automatically gives Amplify **build/typecheck/e2e failure eviden
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +42,34 @@ PYTHON_TEST_CMD = "python3 -m unittest discover -v"
 # happen in a clean tree where node_modules doesn't exist yet — without it, `npm run build` exits
 # 127 and the failure reads as the task's fault when it's the environment's).
 _WEB_INSTALL = "[ -d node_modules ] || npm install --no-audit --no-fund --loglevel=error"
+NPM_INSTALL_CMD = "npm install --no-audit --no-fund --loglevel=error"
 _WEB_STEPS = ["npm run build", "npm run typecheck", "npm run lint", "npm run test:e2e"]
 WEB_TEST_CMD = " && ".join([_WEB_INSTALL, *_WEB_STEPS])
+
+# Live official BugBox/HookWatch/ApproveIt failed because the model rewrote
+# package.json away from the scaffold: echo stubs, ESLint 6, bare `playwright
+# test` (image-global CLI has no `test` command), and `vite` not listed so
+# `vite: not found`. These deps make `npm install` + `npm run verify` honest.
+REQUIRED_WEB_DEV_DEPS = {
+    "vite": "^5.3.1",
+    "@playwright/test": "^1.45.0",
+    "typescript": "^5.4.5",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "@typescript-eslint/eslint-plugin": "^7.13.1",
+    "@typescript-eslint/parser": "^7.13.1",
+}
+
+_STUB_SCRIPT = re.compile(
+    r"""(?:^|[;&|])\s*(?:echo\s+|process\.exit\(0\))|skipping""",
+    re.I,
+)
+_BARE_VITE = re.compile(r"(^|[;&|]\s*)vite\b")
+_PLAYWRIGHT_BARE = re.compile(
+    r"^(?:npx\s+)?playwright(?:\s+test)?$",
+    re.I,
+)
 
 _WEB_KINDS = {"web", "spa", "frontend", "site", "landing", "nextjs", "vite"}
 
@@ -132,3 +159,86 @@ def official_app_id(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | 
             return value
     value = str(bench.get("id") or "").strip().strip("/")
     return value or None
+
+
+def _semver_major(value: str) -> int | None:
+    match = re.search(r"(\d+)", str(value or ""))
+    return int(match.group(1)) if match else None
+
+
+def harden_web_package(app_dir: Path | str) -> dict[str, Any]:
+    """Make a model-written package.json self-sufficient for ``npm run verify``.
+
+    Does not invent a passing verify. It only restores the env the scaffold
+    promised: real runner binaries, no echo stubs, eslint 8+.
+    """
+    pkg_path = Path(app_dir) / "package.json"
+    changed: list[str] = []
+    if not pkg_path.is_file():
+        return {"changed": changed, "path": str(pkg_path)}
+    try:
+        payload = json.loads(pkg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"changed": changed, "path": str(pkg_path), "error": "unreadable"}
+    if not isinstance(payload, dict):
+        return {"changed": changed, "path": str(pkg_path), "error": "not_object"}
+
+    scripts = payload.get("scripts")
+    if not isinstance(scripts, dict):
+        scripts = {}
+        payload["scripts"] = scripts
+    deps = payload.get("dependencies")
+    if not isinstance(deps, dict):
+        deps = {}
+        payload["dependencies"] = deps
+    dev = payload.get("devDependencies")
+    if not isinstance(dev, dict):
+        dev = {}
+        payload["devDependencies"] = dev
+
+    for name, version in REQUIRED_WEB_DEV_DEPS.items():
+        if name not in dev and name not in deps:
+            dev[name] = version
+            changed.append(f"add:{name}")
+
+    for bucket in (dev, deps):
+        current = str(bucket.get("eslint") or "")
+        major = _semver_major(current)
+        if current and major is not None and major < 8:
+            bucket["eslint"] = REQUIRED_WEB_DEV_DEPS["eslint"]
+            changed.append("upgrade:eslint")
+
+    e2e = str(scripts.get("test:e2e") or "").strip()
+    if e2e and _PLAYWRIGHT_BARE.match(e2e):
+        scripts["test:e2e"] = "npx --package=@playwright/test playwright test"
+        changed.append("pin:playwright")
+
+    for key in ("build", "dev", "preview", "verify"):
+        raw = str(scripts.get(key) or "")
+        if raw and "npx" not in raw and _BARE_VITE.search(raw):
+            scripts[key] = _BARE_VITE.sub(r"\1npx --package=vite vite", raw)
+            changed.append(f"pin:vite:{key}")
+
+    stub_replacements = {
+        "typecheck": "tsc --noEmit",
+        "build": "npx --package=vite vite build",
+        "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
+        "test:e2e": "npx --package=@playwright/test playwright test",
+        "test:api": "node --test",
+    }
+    for key, replacement in stub_replacements.items():
+        raw = str(scripts.get(key) or "")
+        if raw and _STUB_SCRIPT.search(raw):
+            scripts[key] = replacement
+            changed.append(f"unstub:{key}")
+
+    if changed:
+        pkg_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return {"changed": changed, "path": str(pkg_path)}
+
+
+def prepare_web_verify_env(app_dir: Path | str) -> dict[str, Any]:
+    """Harden package.json and name the install command verify must run first."""
+    hardened = harden_web_package(app_dir)
+    hardened["install_command"] = NPM_INSTALL_CMD
+    return hardened

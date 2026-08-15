@@ -1816,6 +1816,25 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 verification_target.ensure_verify_script(cwd)
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
                 pass
+            try:
+                prep = verification_target.prepare_web_verify_env(cwd)
+            except Exception:  # noqa: BLE001
+                prep = {"install_command": verification_target.NPM_INSTALL_CMD, "changed": []}
+            if str(test_cmd or "").startswith("npm "):
+                install_timeout = max(
+                    300,
+                    int(getattr(settings, "sandbox_validation_timeout_seconds", 120) or 120),
+                )
+                install = sandbox.run(
+                    str(prep.get("install_command") or verification_target.NPM_INSTALL_CMD),
+                    cwd=str(cwd),
+                    timeout=install_timeout,
+                )
+                if install.exit_code != 0:
+                    last_verify_output = (
+                        (install.stdout or "") + "\n" + (install.stderr or "")
+                    )[-4000:]
+                    return install
             result = sandbox.run(test_cmd, cwd=str(cwd))
             last_verify_output = ((result.stdout or "") + "\n" + (result.stderr or ""))[-4000:]
             return result

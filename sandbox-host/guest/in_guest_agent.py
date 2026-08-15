@@ -247,7 +247,10 @@ def _verify_cwd(spec, work=None):
 def _run_tests(spec):
     results, passed = [], True
     cwd = _verify_cwd(spec)
-    for cmd in spec.get("test_commands", []):
+    cmds = list(spec.get("test_commands", []) or [])
+    if cmds and any(str(c).startswith("npm ") for c in cmds) and (Path(cwd) / "package.json").is_file():
+        cmds = ["npm install --no-audit --no-fund --loglevel=error", *cmds]
+    for cmd in cmds:
         t = time.monotonic()
         out = ""
         try:

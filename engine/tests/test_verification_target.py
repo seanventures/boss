@@ -47,6 +47,68 @@ def test_ensure_verify_script_chains_existing_scripts_and_does_not_overwrite(tmp
     assert json.loads(pkg.read_text(encoding="utf-8"))["scripts"]["verify"] == scripts["verify"]
 
 
+def test_harden_web_package_adds_missing_runners_and_unstubs(tmp_path: Path):
+    from boss_engine.services.verification_target import harden_web_package
+
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "scripts": {
+                    "typecheck": 'echo "typecheck passed"',
+                    "build": "echo \"build step skipped\"",
+                    "test:e2e": "playwright test",
+                    "verify": "npm run typecheck && npm run build && npm run test:e2e",
+                },
+                "devDependencies": {"eslint": "6.4.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = harden_web_package(tmp_path)
+    assert "add:vite" in result["changed"]
+    assert "add:@playwright/test" in result["changed"]
+    assert "add:eslint-plugin-react" in result["changed"]
+    assert "upgrade:eslint" in result["changed"]
+    assert "pin:playwright" in result["changed"]
+    assert "unstub:typecheck" in result["changed"]
+    assert "unstub:build" in result["changed"]
+    scripts = json.loads(pkg.read_text(encoding="utf-8"))
+    assert scripts["scripts"]["typecheck"] == "tsc --noEmit"
+    assert "npx --package=vite vite" in scripts["scripts"]["build"]
+    assert scripts["scripts"]["test:e2e"] == (
+        "npx --package=@playwright/test playwright test"
+    )
+    assert scripts["devDependencies"]["eslint"].startswith("^8")
+    assert "vite" in scripts["devDependencies"]
+    assert "@playwright/test" in scripts["devDependencies"]
+
+
+def test_harden_web_package_pins_bare_vite_build(tmp_path: Path):
+    from boss_engine.services.verification_target import harden_web_package
+
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps({"scripts": {"build": "tsc --noEmit && vite build"}}),
+        encoding="utf-8",
+    )
+    harden_web_package(tmp_path)
+    scripts = json.loads(pkg.read_text(encoding="utf-8"))["scripts"]
+    assert scripts["build"] == "tsc --noEmit && npx --package=vite vite build"
+
+
+def test_prepare_web_verify_env_names_npm_install(tmp_path: Path):
+    from boss_engine.services.verification_target import (
+        NPM_INSTALL_CMD,
+        prepare_web_verify_env,
+    )
+
+    (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+    prep = prepare_web_verify_env(tmp_path)
+    assert prep["install_command"] == NPM_INSTALL_CMD
+    assert "add:vite" in prep["changed"]
+
+
 def test_official_app_id_reads_benchmark_context():
     assert official_app_id(
         {}, {"qa_benchmark": {"id": "approveit", "app_root": "approveit"}}

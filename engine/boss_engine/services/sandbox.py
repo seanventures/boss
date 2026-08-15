@@ -203,11 +203,20 @@ class EphemeralSandbox:
         limit = timeout or self.settings.sandbox_validation_timeout_seconds
         started = time.monotonic()
         workdir = cwd or self.path
+        env = {**os.environ, "CI": "1"}
+        # Image-global `playwright` (browser install CLI) has no `test` command.
+        # Prefer the app's node_modules/.bin so @playwright/test / vite win.
+        try:
+            local_bin = str(Path(workdir) / "node_modules" / ".bin")
+        except TypeError:
+            local_bin = ""
+        if local_bin and Path(local_bin).is_dir():
+            env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
         try:
             completed = subprocess.run(
                 argv,
                 cwd=workdir,
-                env={**os.environ, "CI": "1"},
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=limit,

@@ -21,13 +21,13 @@ from typing import Any
 
 # Verification scripts APP-3 consumes; present in every scaffold's package.json.
 _SCRIPTS = {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npx --package=vite vite",
+    "build": "tsc --noEmit && npx --package=vite vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
-    "test:e2e": "playwright test",
+    "test:e2e": "npx --package=@playwright/test playwright test",
     "verify": "npm run typecheck && npm run build && npm run lint && npm run test:e2e",
-    "preview": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",
+    "preview": "npx --package=vite vite preview --host 0.0.0.0 --port ${PORT:-4173}",
 }
 
 # --- the design-system token layer (the load-bearing coherence primitive) ----
@@ -287,7 +287,7 @@ def _package_json(name: str, *, fullstack: bool = False) -> str:
         # that preview, deploy and the e2e suite all use.
         scripts.update({
             "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
-            "dev:web": "vite",
+            "dev:web": "npx --package=vite vite",
             "dev:api": "PORT=${API_PORT:-3001} node server/index.js",
             "start": "node server/index.js",
             "migrate": "node -e \"import('./server/db.js').then(m=>m.migrate())\"",
@@ -304,6 +304,7 @@ def _package_json(name: str, *, fullstack: bool = False) -> str:
             "@types/react": "^18.3.3", "@types/react-dom": "^18.3.0",
             "@typescript-eslint/eslint-plugin": "^7.13.1", "@typescript-eslint/parser": "^7.13.1",
             "@vitejs/plugin-react": "^4.3.1", "autoprefixer": "^10.4.19", "eslint": "^8.57.0",
+            "eslint-plugin-react": "^7.34.3",
             "eslint-plugin-react-hooks": "^4.6.2", "eslint-plugin-react-refresh": "^0.4.7",
             "postcss": "^8.4.38", "tailwindcss": "^3.4.4", "typescript": "^5.4.5",
             "vite": "^5.3.1", "@playwright/test": "^1.45.0",

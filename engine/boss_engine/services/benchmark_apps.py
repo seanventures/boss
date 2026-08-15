@@ -227,7 +227,10 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
         "repo-root tests that belong to other products. "
         f"`npm run verify` must exist and pass inside `{benchmark['id']}/` "
         "(not the monorepo root). Write API and browser tests under that app so its own "
-        "scripts run them."
+        "scripts run them. Do not stub typecheck/build/lint with `echo` or "
+        "`process.exit(0)`. `vite` and `@playwright/test` must be real "
+        "devDependencies; e2e must run `npx --package=@playwright/test playwright test` "
+        "so the image-global Playwright install CLI is not used."
     )
     return {
         "benchmark": benchmark,
