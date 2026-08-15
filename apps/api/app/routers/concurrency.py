@@ -13,7 +13,10 @@ from fastapi import APIRouter, HTTPException, Query
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
-from boss_engine.services.concurrency_governance import ConcurrencyGovernanceService
+from boss_engine.services.concurrency_governance import (
+    ConcurrencyGovernanceService,
+    go_scale_track,
+)
 
 router = APIRouter(prefix="/v1/concurrency", tags=["concurrency"])
 
@@ -29,6 +32,7 @@ def get_policy() -> dict[str, Any]:
     policy = svc.policy()
     return {
         "policy": policy,
+        "go_scale_track": go_scale_track(settings=get_settings()),
         "env_aliases": {
             "max_concurrent_vms_per_host": "BOSS_CONCURRENCY_MAX_VMS_PER_HOST",
             "max_queue_depth_per_worker": "BOSS_CONCURRENCY_MAX_QUEUE_DEPTH_PER_WORKER",

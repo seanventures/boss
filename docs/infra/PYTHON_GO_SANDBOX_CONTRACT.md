@@ -16,6 +16,8 @@ Firecracker service) and never blocks a worker on the execution: **submit → po
 - **Transport:** HTTP/JSON. **Auth:** shared secret header `X-Sandbox-Token` (from the ops secret store; rotate there, never in code).
 - **Ownership:** the Python side is canonical; the Go side conforms. Changes are **additive** and bump `contract_version`.
 - **`contract_version`:** `1.0` (sent on every submit; the service SHOULD reject an unknown major version).
+- **In-repo Go S1:** `services/sandbox-service/` implements this contract as a **fail-closed scaffold**. It does not boot Firecracker. When `BOSS_MICROVM_CLAIMS_FROZEN=true`, coding submit/preview return **422** `{reason: "microvm_claims_frozen"}`. Unfrozen-but-no-backend returns **422** `{reason: "firecracker_not_enabled"}`. Health never sets `ok: true` unless a live Firecracker backend exists (this scaffold never does).
+- **Lease / heartbeat (additive):** `POST /v1/sandbox/tasks/{id}/heartbeat` extends the job lease. Expired leases become `status=timeout` with `reason=lease_expired` — never a silent drop. Success `DELETE` releases; failed jobs are retained.
 
 ## Operations
 

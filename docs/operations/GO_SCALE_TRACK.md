@@ -13,7 +13,7 @@
 | Claim | Truth |
 |---|---|
 | Community GA needs a Go runtime | **No.** Community ships the Python API + Python worker + (optional) Python sandbox host. |
-| In-repo Go services exist | **No.** Zero `*.go` files, no `go.mod`, no Helm/compose Go workload. |
+| In-repo Go services exist | **S1 scaffold only.** `services/sandbox-service/` is a fail-closed HTTP contract + lease store. It does **not** boot Firecracker and is **not** a live/GA runtime. S2/S3 still do not exist. |
 | A live Go tenant gateway is mounted | **No.** Edge is Traefik (compose) or the FastAPI process itself. |
 | A live Go webhook/event dispatcher is mounted | **No.** Fan-out is `event_dispatch.py` + leased `webhook.outbound.deliver`. |
 | S1 Firecracker exists somewhere | **Yes, as Python** on goldeneye (`sandbox-service.py` on `:8077`), plus in-repo `sandbox-host/` (Python). The HTTP contract is named “Python ⇄ Go”; the conforming host today is **not Go**. |
@@ -28,7 +28,7 @@ Community GA language must not say “Go gateway”, “Go dispatcher”, or “
 | Ticket | Planned Go service | Community / current equivalent (shipped, Python) | GA required? |
 |---|---|---|---|
 | **BOSS-97** | Parent: Go concurrency services for 100s of concurrent tasks | Horizontal **Python workers** (`apps/worker/boss_worker/`), Postgres leases, **BOSS-100** `/v1/concurrency/*`, **BOSS-103** stub load harness, **elastic fabric** + **worker autoscaling** | **No** |
-| **BOSS-98** (S1, child of 97; not this slice) | Go Firecracker sandbox pool (warm-pool, density) | `LocalSubprocessProvider` (OSS default); `MicroVMProvider` HTTP client; in-repo `sandbox-host/sandbox_agent.py`; goldeneye **Python** Firecracker host. Contract: `sandbox_contract.py` / [`PYTHON_GO_SANDBOX_CONTRACT.md`](../infra/PYTHON_GO_SANDBOX_CONTRACT.md) | **No** (sandbox claims are a separate freeze — [`SANDBOX_GA_STATUS.md`](../product/SANDBOX_GA_STATUS.md)) |
+| **BOSS-98** (S1, child of 97) | Go Firecracker sandbox pool (warm-pool, density) | `LocalSubprocessProvider` (OSS default); `MicroVMProvider` HTTP client; in-repo Go **scaffold** `services/sandbox-service/` (typed job API, lease/TTL/heartbeat, fail-closed when `BOSS_MICROVM_CLAIMS_FROZEN=true`); in-repo `sandbox-host/sandbox_agent.py`; goldeneye **Python** Firecracker host. Contract: `sandbox_contract.py` / [`PYTHON_GO_SANDBOX_CONTRACT.md`](../infra/PYTHON_GO_SANDBOX_CONTRACT.md) | **No** (sandbox claims stay frozen — [`SANDBOX_GA_STATUS.md`](../product/SANDBOX_GA_STATUS.md)) |
 | **BOSS-101** (S2) | Go tenant gateway / proxy (TLS, tenant routing, auth passthrough, rate limit, backpressure vs sandbox pool) | Compose/Goldeneye **Traefik** host routers; FastAPI as the control-plane listener; **model gateway** (`/v1/model-gateway/*`) is MEB/BYOK — **not** S2 | **No** |
 | **BOSS-102** (S3) | Go high-fanout event + webhook dispatcher | `event_dispatch.py` (same-txn allowlisted enqueue), `event_subscription_service.py`, `webhooks.py` (HMAC outbound + signed inbound), worker kind `webhook.outbound.deliver` with Receipt + retry/deadletter. Runbook: [`WEBHOOKS.md`](WEBHOOKS.md) | **No** |
 
@@ -62,10 +62,19 @@ Searched the tree for Go sources, Go modules, and Go deployables. Result: **none
 
 ### What does **not** exist
 
-- No `*.go`, `go.mod`, `go.sum`, or Go Dockerfile
-- No Envoy / Go proxy binary or chart
-- No Go event/webhook process
-- No API field that may report `go_runtime_shipped: true` today
+- No live Firecracker pool, warm-pool, snapshot-resume, or baked rootfs in this repo
+- No Envoy / Go proxy binary or chart (S2)
+- No Go event/webhook process (S3)
+- No API field that may report `go_runtime_shipped: true` or `s1_go_sandbox_service: true` today
+- Helm/compose still do **not** mount a Go workload
+
+### What exists (Go scaffold, fail-closed)
+
+| Area | Path | Role |
+|---|---|---|
+| S1 scaffold | `services/sandbox-service/` | Compilable HTTP service conforming to the v1.0 contract. Default `BOSS_MICROVM_CLAIMS_FROZEN=true`. Health reports `ok=false`, `firecracker_live=false`. Coding submit → 422 named reason. Echo+test_mode is a stub, not a VM. |
+
+`s1_in_repo_scaffold=true` means the sources compile. It is **not** a live probe and does **not** unfreeze claims.
 
 ### Do not confuse these with S2
 
@@ -119,7 +128,8 @@ Exit criteria for *starting* S2/S3 code: a linked soak report showing the Python
 |---|---|
 | `community_ga_required` | `false` |
 | `go_runtime_shipped` | `false` |
-| `s1_go_sandbox_service` | `false` |
+| `s1_go_sandbox_service` | `false` (no live Firecracker probe) |
+| `s1_in_repo_scaffold` | `true` (fail-closed sources only) |
 | `s2_go_tenant_gateway` | `false` |
 | `s3_go_event_dispatcher` | `false` |
 | `doc` | `docs/operations/GO_SCALE_TRACK.md` |

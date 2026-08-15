@@ -154,3 +154,8 @@ def test_get_policy_endpoint(policy_client):
     assert body["policy"]["max_concurrent_vms_per_host"] >= 1
     assert "BOSS_CONCURRENCY_MAX_VMS_PER_HOST" in body["env_aliases"].values()
     assert "concurrency_governance_policy.yaml" in body["specpack"]
+    track = body["go_scale_track"]
+    assert track["go_runtime_shipped"] is False
+    assert track["s1_go_sandbox_service"] is False
+    assert track["s1_in_repo_scaffold"] is True
+    assert track["community_ga_required"] is False

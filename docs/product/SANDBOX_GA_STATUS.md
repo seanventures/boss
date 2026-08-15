@@ -36,6 +36,7 @@
 | Console proxy | `engine/boss_engine/services/sandbox_console.py` | Health, retained-rootfs tree/logs/hold |
 | Contract | `engine/boss_engine/services/sandbox_contract.py` | Versioned Python⇄Go submit envelope |
 | Repo stand-in host | `sandbox-host/sandbox_agent.py` + `guest/` | ContainerBackend + guest agent (dev/sim) |
+| In-repo Go S1 scaffold | `services/sandbox-service/` | Typed job API + lease/TTL/heartbeat. **Fail-closed.** Not live Firecracker. Not GA. |
 | Production host | Host `sandbox-service` (Firecracker) on goldeneye `:8077` | Not part of boss-app compose |
 
 Settings:

@@ -1,5 +1,12 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 BOSS-98 S1 Go sandbox scaffold (fail-closed)
+
+- Branch `ai/grok/boss-98-sandbox-go-harden`. In-repo `services/sandbox-service/` implements the v1.0 contract with typed jobs, lease/TTL/heartbeat.
+- **Does not boot Firecracker.** `BOSS_MICROVM_CLAIMS_FROZEN` default + tmpl stay **true**. `s1_go_sandbox_service=false`. FEATURES sandbox plane is ◐ frozen.
+- Engine still defaults to `LocalSubprocessProvider`. Frozen/unbacked submit is 422 named reason. No invented `host.connected=true`.
+- **Not public GA.** Residual: live Firecracker, warm-pool, rootfs bake, unfreeze.
+
 ## 2026-08-15 Release v0.13.0
 
 - Cut from `main` after FF of `cf433e4`. PR #174 sealed canary **not** merged.

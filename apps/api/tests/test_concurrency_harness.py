@@ -58,6 +58,11 @@ def test_sweep_finds_saturation():
 def test_endpoint_stub_default(client):
     body = client.post("/v1/concurrency-load", json={"n": 20, "concurrency": 5, "stub_duration_ms": 1}).json()
     assert body["tasks"] == 20 and body["throughput_per_s"] > 0
+    assert body["runner"] == "python_stub"
+    assert body["go_scale_track"]["s1_go_sandbox_service"] is False
+    assert body["go_scale_track"]["go_runtime_shipped"] is False
     sweep = client.post("/v1/concurrency-load",
                         json={"sweep": [1, 4], "n": 10, "stub_duration_ms": 1}).json()
     assert "saturation_at_concurrency" in sweep
+    assert sweep["runner"] == "python_stub"
+    assert sweep["go_scale_track"]["s1_go_sandbox_service"] is False

@@ -34,6 +34,33 @@ def _auth_headers(settings: Settings) -> dict:
     return {"X-Sandbox-Token": settings.sandbox_token} if settings.sandbox_token else {}
 
 
+def interpret_sandbox_host_health(health, *, claims_frozen: bool, url: str = "") -> dict:
+    """Honest host view from a health payload.
+
+    ``connected`` is true only when the host *explicitly* says ``ok: true``.
+    A 200 from the in-repo S1 scaffold (ok=false, firecracker_live=false)
+    must not invent host.connected=true — especially while claims are frozen.
+    """
+    payload = health if isinstance(health, dict) else {}
+    connected = payload.get("ok") is True
+    execution_ready = payload.get("execution_ready") is True
+    firecracker_live = payload.get("firecracker_live") is True
+    return {
+        "connected": connected,
+        "kind": payload.get("kind") or "Firecracker micro-VM",
+        "backend": payload.get("backend"),
+        "capacity": payload.get("capacity"),
+        "available": payload.get("available"),
+        "running": payload.get("running"),
+        "url": url or payload.get("url"),
+        "execution_ready": execution_ready,
+        "firecracker_live": firecracker_live,
+        "claims_frozen": claims_frozen,
+        "claims_message": MICROVM_CLAIMS_FROZEN_MESSAGE if claims_frozen else None,
+        "reason": payload.get("reason"),
+    }
+
+
 def _require_host(settings: Settings) -> str:
     """Fail closed when the sandbox host URL is missing (503, never 500)."""
     base = _base(settings)
@@ -73,30 +100,35 @@ def list_sandboxes(settings: Settings) -> dict:
     if not base:
         return {
             "sandboxes": [],
-            "host": {"connected": False, **claims},
+            "host": {
+                "connected": False,
+                "execution_ready": False,
+                "firecracker_live": False,
+                **claims,
+            },
             "unavailable": "sandbox host not configured (BOSS_SANDBOX_AGENT_URL is empty)",
         }
     try:
         with httpx.Client(timeout=10) as c:
             r = c.get(f"{base}/v1/sandbox/health", headers=_auth_headers(settings))
         r.raise_for_status()
-        h = r.json()
+        h = r.json() if hasattr(r, "json") else {}
+        if not isinstance(h, dict):
+            h = {}
         return {
             "sandboxes": [],
-            "host": {
-                "connected": bool(h.get("ok")),
-                "kind": "Firecracker micro-VM",
-                "capacity": h.get("capacity"),
-                "available": h.get("available"),
-                "running": h.get("running"),
-                "url": base,
-                **claims,
-            },
+            "host": interpret_sandbox_host_health(h, claims_frozen=frozen, url=base),
         }
     except Exception as e:  # noqa: BLE001 — fail closed, never 500
         return {
             "sandboxes": [],
-            "host": {"connected": False, "url": base, **claims},
+            "host": {
+                "connected": False,
+                "url": base,
+                "execution_ready": False,
+                "firecracker_live": False,
+                **claims,
+            },
             "unavailable": str(e)[:200],
         }
 
