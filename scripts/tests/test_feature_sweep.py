@@ -258,6 +258,7 @@ def test_github_bindings_use_canonical_path():
     assert "/v1/assurance/seed-demo" in paths
     assert "/v1/providers/easy-connect" in paths
     assert "/v1/entitlements/sources/approved_local_model_host/openai-compatible" in paths
+    assert "/v1/activity" in paths
 
 
 def test_run_feature_sweep_sets_phase_and_never_logs_key():
@@ -311,6 +312,7 @@ WORKFORCE_CATALOG = {
     "workforce.metatron-goals": "/v1/metatron/goals",
     "workforce.metatron-session": "/v1/metatron/session",
     "workforce.process-manager": "/v1/process-manager",
+    "workforce.activity": "/v1/activity",
 }
 
 
@@ -402,6 +404,7 @@ def test_run_feature_sweep_workforce_404_is_skip_evidence_not_pass():
             "/v1/metatron/goals": 404,
             "/v1/metatron/session": 404,
             "/v1/process-manager": 404,
+            "/v1/activity": 404,
             "/v1/diag/sandbox-echo": 422,
         }
     )

@@ -1,5 +1,11 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Global activity log (BOSS-379)
+
+- GET /v1/activity: search/filter/sort over events + process steps + jobs + DLQ + receipts.
+- Mission Control area Activity log: searchable table, status/kind filters, redacted detail.
+- Never invents success. Secrets redacted. FEATURES ◐. Not GA.
+
 ## 2026-08-14 — Grok — Process authoring + PM steward swarm
 
 - 15-agent bake merged locally: NL compiler, compile API, Mission Control builder, Metatron/intent create-start-list, process harden (receipts + fail-closed panel), PM runtime + API/worker/UI.

@@ -239,3 +239,11 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(process_manager_router)
     except ImportError:
         pass
+
+    # Global searchable activity log (BOSS-379)
+    try:
+        from .activity import router as activity_router
+
+        app.include_router(activity_router)
+    except ImportError:
+        pass

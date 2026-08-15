@@ -84,6 +84,7 @@ import { AgentStudio } from "./agent-studio-ui";
 import { FocusedAgents } from "./focused-agents-ui";
 import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
+import { ActivityLog } from "./activity-log-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
@@ -7064,6 +7065,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             unavailable={sandboxFeed.unavailable}
             host={sandboxFeed.host}
           />
+        </section>
+
+        <section className="panel-stack" data-area="activity" aria-label="Activity log">
+          <ActivityLog projectId={activeProjectId} actor={activeActorId} />
         </section>
 
         <section className="panel-stack" data-area="work" aria-label="Task runs">

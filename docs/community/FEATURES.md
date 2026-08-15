@@ -12,6 +12,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Job leases, heartbeat, fencing | ✅ |
 | Deadletters and remediations | ✅ |
 | Event / audit feed | ✅ |
+| Global activity log | ◐ Searchable/sortable Mission Control area. **Not GA.** |
 | Decision inbox (approve / reject / escalate) | ✅ |
 | Receipts with unique dedupe keys | ✅ |
 | Budget quote → reserve → consume / release | ✅ |

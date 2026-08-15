@@ -207,6 +207,14 @@ def build_probes(
             required=False,
             expect=EXPECT_2XX_OR_404,
         ),
+        # BOSS-379 global activity log. Optional GET; 404 on older tags is skip.
+        Probe(
+            "workforce.activity",
+            "/v1/activity",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
         # Identity — Community catalog, must be 2xx not 404
         Probe("identity.identity-providers", "/v1/identity-providers"),
         # Paid expected 404 on Community (edition honesty). 500 fails.
