@@ -1,5 +1,10 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Isolated E2E tokens / workers / jobs
+
+- Branch `ai/grok/e2e-tokens-workers`. Isolated Postgres HTTP E2E for token-efficiency, worker-autoscaling evaluate-without-provision, job dedupe/lease/heartbeat/reclaim.
+- 34 focused tests green. Not live dogfood. FEATURES not stamped. Not public GA.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto

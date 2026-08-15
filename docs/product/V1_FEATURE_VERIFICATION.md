@@ -95,3 +95,19 @@ Plane: BOSS-388 (umbrella). **Not public GA. FEATURES not stamped.**
 | Remaining live gap | Worker process is live on goldeneye; this pass did not SSH-probe poll/heartbeat on the shared tag. Not E2E |
 
 Focused pytest (2026-08-15): 6 engine noconftest + 27 API (token/worker/job lease+dedupe) passed against isolated Postgres.
+
+### Isolated HTTP E2E (2026-08-15) — not live dogfood, not public GA
+
+Branch: `ai/grok/e2e-tokens-workers` from `596828a`.
+Database: throwaway Postgres `boss_e2e_tokens_workers` (not the shared `boss` DB).
+Plane: BOSS-388. FEATURES not stamped. Goldeneye not deployed.
+
+| Item | Isolated HTTP E2E | Result |
+|---|---|---|
+| Token GETs after DROP `token_budget_policies` | `/scorecard` `/policies` `/consumption` | 200 empty/defaults; `ensure_tables` recreates |
+| PUT policy then GET consumption | no `llm_calls` rows | `calls=0` `total_tokens=0` `cost_usd_micros=0`; stored caps only |
+| Worker GETs empty + missing tables | `/status` `/policies` `/history` | 200 empty |
+| Queue-driven evaluate | PUT policy, enqueue 5 jobs, POST `/evaluate` | `needed_workers=3`; `worker_instances=0`; no apply/capacity events while `BOSS_INFRA_REAL_PROVISION_ALLOWED` is false |
+| Jobs | POST same `dedupe_key` twice; two polls; heartbeat; expire+reclaim | one job; exclusive lease; heartbeat 200; reclaim `attempt=2` + `job.lease_reclaimed` even after heartbeat flipped status to `running` |
+
+34 focused tests passed (new E2E file + prior token/worker/lease tests). Live dogfood still unproven until this tag is deployed. **Not public GA.**
