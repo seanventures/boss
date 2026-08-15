@@ -58,6 +58,9 @@ export type ElasticStatusFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
+  status: "ok" | "not_configured" | "error";
+  configured: boolean;
+  hostConnected: boolean;
   poolCount: number;
   instanceCounts: ElasticInstanceCounts;
   /** True only when BOSS_INFRA_REAL_PROVISION_ALLOWED is on — Community default is false. */
@@ -77,6 +80,9 @@ export type GoldeneyeStatusFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
+  status: "ok" | "not_configured" | "error";
+  configured: boolean;
+  hostConnected: boolean;
   product?: string;
   nodeCount: number;
   appCount: number;
@@ -110,6 +116,8 @@ export type ProviderUsageSummaryFeed = {
   projectId: string;
   apiReachable: boolean;
   blockedReason?: string;
+  status: "ok" | "not_configured" | "error";
+  configured: boolean;
   providers: ProviderUsageProviderRollup[];
   generatedAt?: string;
 };
@@ -189,11 +197,15 @@ export function emptyMultiCloudCatalog(reason?: string): MultiCloudCatalogFeed {
 export function emptyElasticStatus(
   reason?: string,
   projectId = PROJECT_ID,
+  status: ElasticStatusFeed["status"] = "not_configured",
 ): ElasticStatusFeed {
   return {
     projectId: resolveProjectId(projectId),
-    apiReachable: false,
+    apiReachable: status !== "error",
     blockedReason: reason,
+    status,
+    configured: false,
+    hostConnected: false,
     poolCount: 0,
     instanceCounts: {
       total: 0,
@@ -210,11 +222,15 @@ export function emptyElasticStatus(
 export function emptyGoldeneyeStatus(
   reason?: string,
   projectId = PROJECT_ID,
+  status: GoldeneyeStatusFeed["status"] = "not_configured",
 ): GoldeneyeStatusFeed {
   return {
     projectId: resolveProjectId(projectId),
-    apiReachable: false,
+    apiReachable: status !== "error",
     blockedReason: reason,
+    status,
+    configured: false,
+    hostConnected: false,
     nodeCount: 0,
     appCount: 0,
     packageInstallCount: 0,
@@ -229,11 +245,14 @@ export function emptyGoldeneyeStatus(
 export function emptyProviderUsageSummary(
   reason?: string,
   projectId = PROJECT_ID,
+  status: ProviderUsageSummaryFeed["status"] = "not_configured",
 ): ProviderUsageSummaryFeed {
   return {
     projectId: resolveProjectId(projectId),
-    apiReachable: false,
+    apiReachable: status !== "error",
     blockedReason: reason,
+    status,
+    configured: false,
     providers: [],
   };
 }
@@ -365,9 +384,14 @@ export async function fetchElasticStatus(
     const payload = asRecord(await client.getElasticStatus(resolved));
     const counts = asRecord(payload.instance_counts);
     const pools = mapElasticPools(payload.pools);
+    const host = asRecord(payload.host);
+    const configured = pools.length > 0 || asNumber(counts.total) > 0;
     return {
       projectId: asString(payload.project_id, resolved),
       apiReachable: true,
+      status: configured ? "ok" : "not_configured",
+      configured,
+      hostConnected: asBool(host.connected, false),
       poolCount: pools.length,
       instanceCounts: {
         total: asNumber(counts.total),
@@ -381,7 +405,14 @@ export async function fetchElasticStatus(
       pools,
     };
   } catch (error) {
-    return emptyElasticStatus(failureReason(error), resolved);
+    const reason = failureReason(error);
+    const schemaMiss =
+      error instanceof BossApiError && (error.status === 500 || error.status === 503);
+    return emptyElasticStatus(
+      schemaMiss ? "Elastic fabric is not configured on this runtime." : reason,
+      resolved,
+      schemaMiss ? "not_configured" : "error",
+    );
   }
 }
 
@@ -398,18 +429,27 @@ export async function fetchGoldeneyeStatus(
       { headers: authHeaders(), cache: "no-store" },
     );
     if (!response.ok) {
+      const schemaMiss = response.status === 500 || response.status === 503;
       return emptyGoldeneyeStatus(
-        `Goldeneye status returned HTTP ${response.status}`,
+        schemaMiss
+          ? "Goldeneye fleet is not configured on this runtime."
+          : `Goldeneye status returned HTTP ${response.status}`,
         resolved,
+        schemaMiss ? "not_configured" : "error",
       );
     }
     const payload = asRecord(await response.json());
     const kit = asRecord(payload.kit);
+    const host = asRecord(payload.host);
+    const nodeCount = asNumber(payload.node_count);
     return {
       projectId: asString(payload.project_id, resolved),
       apiReachable: true,
+      status: nodeCount > 0 ? "ok" : "not_configured",
+      configured: nodeCount > 0,
+      hostConnected: asBool(host.connected, false),
       product: asString(payload.product) || undefined,
-      nodeCount: asNumber(payload.node_count),
+      nodeCount,
       appCount: asNumber(payload.app_count),
       packageInstallCount: asNumber(payload.package_install_count),
       readyNodes: asNumber(payload.ready_nodes),
@@ -419,7 +459,7 @@ export async function fetchGoldeneyeStatus(
       packageCount: asNumber(kit.package_count),
     };
   } catch (error) {
-    return emptyGoldeneyeStatus(failureReason(error), resolved);
+    return emptyGoldeneyeStatus(failureReason(error), resolved, "error");
   }
 }
 
@@ -432,14 +472,24 @@ export async function fetchProviderUsageSummary(
   const resolved = resolveProjectId(projectId);
   try {
     const payload = asRecord(await client.getProviderUsageSummary(resolved));
+    const providers = mapUsageProviders(payload.providers);
     return {
       projectId: asString(payload.project_id, resolved),
       apiReachable: true,
-      providers: mapUsageProviders(payload.providers),
+      status: providers.length > 0 ? "ok" : "not_configured",
+      configured: providers.length > 0,
+      providers,
       generatedAt: asString(payload.generated_at) || undefined,
     };
   } catch (error) {
-    return emptyProviderUsageSummary(failureReason(error), resolved);
+    const reason = failureReason(error);
+    const schemaMiss =
+      error instanceof BossApiError && (error.status === 500 || error.status === 503);
+    return emptyProviderUsageSummary(
+      schemaMiss ? "Provider usage ledger is not configured on this runtime." : reason,
+      resolved,
+      schemaMiss ? "not_configured" : "error",
+    );
   }
 }
 
@@ -462,13 +512,13 @@ export async function fetchInfraFabricFeed(
   if (!multiCloud.apiReachable && multiCloud.blockedReason) {
     partialFailures.push(`Multi-cloud: ${multiCloud.blockedReason}`);
   }
-  if (!elastic.apiReachable && elastic.blockedReason) {
+  if (elastic.status === "error" && elastic.blockedReason) {
     partialFailures.push(`Elastic: ${elastic.blockedReason}`);
   }
-  if (!goldeneye.apiReachable && goldeneye.blockedReason) {
+  if (goldeneye.status === "error" && goldeneye.blockedReason) {
     partialFailures.push(`Goldeneye: ${goldeneye.blockedReason}`);
   }
-  if (!providerUsage.apiReachable && providerUsage.blockedReason) {
+  if (providerUsage.status === "error" && providerUsage.blockedReason) {
     partialFailures.push(`Provider usage: ${providerUsage.blockedReason}`);
   }
 

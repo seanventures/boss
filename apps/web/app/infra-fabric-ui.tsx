@@ -123,9 +123,15 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
         </section>
 
         {/* Elastic fabric */}
-        <section aria-label="Elastic fabric">
+        <section aria-label="Elastic fabric" data-fabric-status={elastic.status}>
           <h4>Elastic fabric</h4>
-          {!elastic.apiReachable ? (
+          {elastic.status === "not_configured" || !elastic.configured ? (
+            <p className="detail" data-empty-state="elastic-not-configured">
+              Elastic fabric is not configured. No worker instances and
+              host.connected=false — Community does not invent a managed fleet.
+              {elastic.blockedReason ? ` ${elastic.blockedReason}` : ""}
+            </p>
+          ) : elastic.status === "error" ? (
             <p className="detail">
               Elastic status unavailable
               {elastic.blockedReason ? `: ${elastic.blockedReason}` : "."}
@@ -192,9 +198,15 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
         </section>
 
         {/* Goldeneye */}
-        <section aria-label="Goldeneye PaaS">
+        <section aria-label="Goldeneye PaaS" data-fabric-status={goldeneye.status}>
           <h4>Goldeneye PaaS</h4>
-          {!goldeneye.apiReachable ? (
+          {goldeneye.status === "not_configured" || !goldeneye.configured ? (
+            <p className="detail" data-empty-state="goldeneye-not-configured">
+              Goldeneye is not configured. No registered nodes and
+              host.connected=false — this is not a managed BOSS fleet.
+              {goldeneye.blockedReason ? ` ${goldeneye.blockedReason}` : ""}
+            </p>
+          ) : goldeneye.status === "error" ? (
             <p className="detail">
               Goldeneye status unavailable
               {goldeneye.blockedReason ? `: ${goldeneye.blockedReason}` : "."}
@@ -243,9 +255,9 @@ export function InfraFabricPanel({ feed }: { feed: InfraFabricFeed }) {
         </section>
 
         {/* Provider usage */}
-        <section aria-label="Provider usage summary">
+        <section aria-label="Provider usage summary" data-fabric-status={providerUsage.status}>
           <h4>Provider usage</h4>
-          {!providerUsage.apiReachable ? (
+          {providerUsage.status === "error" ? (
             <p className="detail">
               Usage summary unavailable
               {providerUsage.blockedReason

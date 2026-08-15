@@ -34,6 +34,63 @@ def _utcnow() -> datetime:
 ACTIVE_INSTANCE_STATUSES = ("requested", "provisioning", "running", "simulated", "draining")
 
 
+_FABRIC_DDL = """
+CREATE TABLE IF NOT EXISTS worker_instances (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  worker_pool_id TEXT NOT NULL REFERENCES worker_pools(id) ON DELETE CASCADE,
+  instance_key TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'local',
+  provider TEXT,
+  provider_account_id TEXT REFERENCES provider_accounts(id) ON DELETE SET NULL,
+  external_id TEXT,
+  status TEXT NOT NULL DEFAULT 'requested',
+  endpoint TEXT,
+  region TEXT,
+  size TEXT,
+  capability_tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  scale_plan_id TEXT,
+  changeset_id TEXT,
+  resource_receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  cost_event_id TEXT REFERENCES cost_events(id) ON DELETE SET NULL,
+  last_heartbeat_at TIMESTAMPTZ,
+  provisioned_at TIMESTAMPTZ,
+  terminated_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_worker_instances_pool
+  ON worker_instances(project_id, worker_pool_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_worker_instances_provider
+  ON worker_instances(project_id, provider, status);
+CREATE TABLE IF NOT EXISTS provider_usage_events (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  provider_account_id TEXT REFERENCES provider_accounts(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  quantity DOUBLE PRECISION NOT NULL DEFAULT 1,
+  unit TEXT NOT NULL DEFAULT 'count',
+  cost_usd_micros BIGINT,
+  resource_ref TEXT,
+  worker_instance_id TEXT REFERENCES worker_instances(id) ON DELETE SET NULL,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  source TEXT NOT NULL DEFAULT 'control_plane',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_project_provider
+  ON provider_usage_events(project_id, provider, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_usage_account
+  ON provider_usage_events(project_id, provider_account_id, category, occurred_at DESC);
+"""
+
+
 class ElasticFabricService:
     """Project-scoped elastic capacity + per-provider usage ledger."""
 
@@ -45,6 +102,13 @@ class ElasticFabricService:
         self.settings = settings
         self.resource_plane = resource_plane or ResourcePlaneService(settings)
         self.receipts = ReceiptService()
+
+    def ensure_tables(self, connection: Connection) -> None:
+        """Idempotent DDL so drifted live DBs return honest empty instead of 500."""
+        for stmt in _FABRIC_DDL.split(";"):
+            s = stmt.strip()
+            if s:
+                connection.execute(text(s))
 
     # ------------------------------------------------------------------
     # Capacity + pools
@@ -68,6 +132,7 @@ class ElasticFabricService:
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Request elastic capacity for a project pool (agents / nodes / jobs)."""
+        self.ensure_tables(connection)
         if desired_workers < 0:
             raise ValueError("desired_workers must be non-negative.")
         pool = self._resolve_pool(
@@ -442,6 +507,7 @@ class ElasticFabricService:
         active_only: bool = False,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        self.ensure_tables(connection)
         clauses = ["project_id = :project_id"]
         params: dict[str, Any] = {"project_id": project_id, "limit": limit}
         if worker_pool_id:
@@ -711,6 +777,7 @@ class ElasticFabricService:
         actor: str = "system",
         occurred_at: Optional[datetime] = None,
     ) -> dict[str, Any]:
+        self.ensure_tables(connection)
         event_id = make_id("pue")
         when = occurred_at or _utcnow()
         connection.execute(
@@ -759,6 +826,7 @@ class ElasticFabricService:
         category: Optional[str] = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        self.ensure_tables(connection)
         clauses = ["project_id = :project_id"]
         params: dict[str, Any] = {"project_id": project_id, "limit": limit}
         if provider:
@@ -795,6 +863,7 @@ class ElasticFabricService:
         provider: Optional[str] = None,
     ) -> dict[str, Any]:
         """Aggregate usage by provider and category (monitor view)."""
+        self.ensure_tables(connection)
         clauses = ["project_id = :project_id"]
         params: dict[str, Any] = {"project_id": project_id}
         if provider:
@@ -889,9 +958,11 @@ class ElasticFabricService:
             inst = instance_rollups.setdefault(key, {"provider": key, "by_status": {}})
             inst["by_status"][row["status"]] = row["n"]
 
+        providers = list(by_provider.values())
         return {
             "project_id": project_id,
-            "providers": list(by_provider.values()),
+            "status": "ok" if providers else "not_configured",
+            "providers": providers,
             "instances": list(instance_rollups.values()),
             "generated_at": _utcnow().isoformat(),
         }
@@ -1009,12 +1080,30 @@ class ElasticFabricService:
     def fabric_status(
         self, connection: Connection, project_id: str
     ) -> dict[str, Any]:
+        self.ensure_tables(connection)
         pools = self.resource_plane.list_worker_pools(connection, project_id)
         instances = self.list_instances(connection, project_id, limit=500)
         active = [i for i in instances if i["status"] in ACTIVE_INSTANCE_STATUSES]
         usage = self.usage_summary(connection, project_id)
+        live = [
+            inst
+            for inst in instances
+            if inst.get("status") == "running"
+            and not (inst.get("metadata") or {}).get("simulated")
+            and inst.get("last_heartbeat_at")
+        ]
+        configured = bool(pools or instances)
         return {
             "project_id": project_id,
+            "status": "ok" if configured else "not_configured",
+            "host": {
+                "connected": bool(live),
+                "reason": (
+                    "heartbeat_running_instance"
+                    if live
+                    else "no_live_heartbeat"
+                ),
+            },
             "pools": pools,
             "instance_counts": {
                 "total": len(instances),

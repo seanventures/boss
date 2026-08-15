@@ -35,14 +35,14 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 
 ## After v1
 
-| Item | Code surface | Prior live note | 2026-08-15 verify (`ai/grok/v1-verify-identity-keys-feedback`) |
+| Item | Code surface | Prior live note | 2026-08-15 verify |
 |---|---|---|---|
 | Identity integration | `/v1/identity-providers`, OIDC/SAML/SCIM catalog | Community SSO ✅; paid gates 404 | **CODE** (+ catalog E2E). Live Community: `GET /v1/edition?project_id=boss-dogfood` `edition_id=community`, `account_connect_required=false`. Catalog 200, 10 packs, `configured_count=0` (honest empty). Unknown pack 404. Blueprint `apply=true` 422. `GET /v1/account-connect/link` **404** (not hosted Cloud identity). SAML metadata 200; ACS 503 until `BOSS_ENTERPRISE_SAML_ENABLED`; SCIM 401 without bearer. Tests: missing IdP fail-closed (`test_oidc_enabled_without_idp_config_fails_closed`, `test_oidc_enabled_without_provider_config_fails_closed`, SAML ACS no-provider 403, SCIM no-provider 403). **Do not claim hosted Cloud identity. Not public GA.** |
 | CI/CD pipeline | `/v1/cicd/*` + delivery | catalog 200; live poll credential-gated | (other slice) |
 | Key management | Agent KMS + SecretRefs | local_vault ok on last deploy | **CODE** (local_vault health E2E). Live `GET /v1/kms/health` `local_vault.ok=true`; Vault/OpenBao/platform store honest `ok=false` when unset. SecretRefs 200, 8 items, `sref_6b00a2d6a9424abba8a0` `local_vault`, no `secret_value`. Engine: `test_secretref_consumption` + `test_credential_resolve` (bound-but-broken fail-closed; env last-resort only when no usable ref). No new KMS hole. **Not public GA.** |
 | Autonomous feedback loop | feedback_agent, learning_loop, Metatron | no silent self-mod | **CODE** (no-silent-self-mod E2E). Live `POST /v1/metatron/drive auto=false` `status=proposed`, 0 applied; decisions/DLQ `needs_human`. Overwatch `validation.ok=true`, applied 0, "Decisions and deadletters stay human." Factory apply always `open_pr=True` + "Open a PR only / Do not apply to production in place." Preview feedback proposes then requires confirm (`dispatched=false` until confirm). Learning loop `suggest_tuning` only. AGENTS.md: no silent self-mod. **Not public GA.** |
-| Infra management | Resource Plane + ProviderOps | kernel 200; elastic/goldeneye 500 | (other slice) |
-| UI simplification v1 | Mission Control areas | needs cut list | (other slice) |
+| Infra management | Resource Plane + ProviderOps | kernel 200; elastic/goldeneye 500 | **CODE** `ensure_tables` + honest empty; real provision fail-closed without `BOSS_INFRA_REAL_PROVISION_ALLOWED`; ChangeSet/ResourceReceipt on blocked write. Live 2xx unproven this slice (not E2E). |
+| UI simplification v1 | Mission Control areas | needs cut list | **CODE** cut list `docs/product/UI_V1_CUT.md`; Community primary nav = activity/jobs/decisions/reliability/factory+QA/budget/SSO; Cloud/elastic/goldeneye gated or `not_configured` |
 
 ## Isolated swarm
 
@@ -155,3 +155,15 @@ Focused tests (isolated `boss_idp_test` + engine noconftest):
 - Did **not** run API tests against live `boss` DB (deadlock / pollution).
 
 Not public GA. Do not merge to `main` from this verify branch.
+
+## 2026-08-15 — infra + UI v1 (`ai/grok/v1-verify-infra-ui`)
+
+- Plane **BOSS-391** (parent BOSS-388). Not public GA. Do not merge `main`.
+- Elastic / Goldeneye / provider-usage: `ensure_tables` + `status=not_configured`
+  + `host.connected=false` unless a live heartbeat exists. Never invent connected.
+- `InfrastructureService.create_droplet` fail-closes before the adapter when
+  `BOSS_INFRA_REAL_PROVISION_ALLOWED` is false; writes Receipt + ResourceReceipt.
+- Community home nav cut documented in `UI_V1_CUT.md`. Areas not deleted.
+- Tests: `apps/api/tests/test_infra_v1_honesty.py`, edition-visibility v1 cut,
+  infra-fabric 500→not_configured. Firecracker stays frozen.
+

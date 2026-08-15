@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 BOSS-391 infra + UI v1 (◐)
+
+- Branch `ai/grok/v1-verify-infra-ui` from `a5c8951`. Not public GA.
+- Elastic/Goldeneye/provider-usage: ensure_tables + honest empty; never fake host.connected.
+- Real droplet provision fail-closed without `BOSS_INFRA_REAL_PROVISION_ALLOWED` (Receipt + ResourceReceipt).
+- Community primary nav cut: activity, jobs, decisions, reliability, factory/QA, budget, SSO.
+- Cloud Easy Connect CTAs gated. Docs: `docs/product/UI_V1_CUT.md`.
+- Do not merge main. Do not unfreeze Firecracker.
+
 ## 2026-08-15 V1 verify identity / keys / feedback (CODE, not GA)
 
 - Branch `ai/grok/v1-verify-identity-keys-feedback` from `a5c8951`. Plane BOSS-388.

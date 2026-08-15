@@ -4144,6 +4144,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             </article>
 
+            <PaidSurfaceGate editionId={editionId} surface="account_connect" title="BOSS Cloud Easy Connect">
             <article className="stack-card" data-testid="cloud-easy-connect">
               <h3>BOSS Cloud — Easy Connect</h3>
               <p className="detail">
@@ -4388,6 +4389,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                 </p>
               ) : null}
             </article>
+            </PaidSurfaceGate>
             <article className="stack-card">
               <h3>Edition detail</h3>
               {!commercial.apiReachable ? (
