@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 BOSS-391 infra + UI v1 E2E (◐)
+
+- Branch `ai/grok/e2e-infra-ui` from `02c86dd`. Isolated HTTP + web E2E.
+- Empty fabric status 200 `not_configured`, `host.connected=false`, no invented metrics.
+- `POST /v1/infra/droplets` blocked without provision flag; failed Receipt + ResourceReceipt.
+- Community nav does not show Cloud Easy Connect un-gated; AreaId still includes hidden areas.
+- Firecracker frozen. **Not public GA. Do not merge main.**
+
 ## 2026-08-15 BOSS-391 infra + UI v1 (◐)
 
 - Branch `ai/grok/v1-verify-infra-ui` from `a5c8951`. Not public GA.

@@ -109,6 +109,23 @@ Skipped on this branch (join the gate when they land; Makefile does not fail):
 - `test_v1_feature_lock.py`
 
 `make test` is the full repo suite (Postgres + pnpm test). Do not treat it as the v1 lock; it is hours-class when the DB is cold.
+| Item | Code surface | Prior live note |
+|---|---|---|
+| Identity integration | `/v1/identity-providers`, OIDC/SAML | Community SSO ✅; paid gates 404 |
+| CI/CD pipeline | `/v1/cicd/*` + delivery | catalog 200; live poll credential-gated |
+| Key management | Agent KMS + SecretRefs | local_vault ok on last deploy |
+| Autonomous feedback loop | feedback_agent, learning_loop, Metatron | no silent self-mod |
+| Infra management | Resource Plane + ProviderOps | Isolated **E2E**: empty GET `/v1/elastic/status`, `/v1/goldeneye/status`, `/v1/provider-usage/summary` → 200 `not_configured`, `host.connected=false`, no invented metrics. `POST /v1/infra/droplets` without `BOSS_INFRA_REAL_PROVISION_ALLOWED` → blocked + failed Receipt + ResourceReceipt. Live dogfood 2xx still unproven. Not public GA. |
+| UI simplification v1 | Mission Control areas | Isolated **E2E**: `docs/product/UI_V1_CUT.md`; Community primary nav hides Cloud Easy Connect; `AreaId` still includes hidden areas. Not public GA. |
+
+## Isolated swarm
+
+| Item | Code surface | Prior live note |
+|---|---|---|
+| Goldeneye features / metrics | `/v1/goldeneye/*`, elastic | Isolated E2E 200 `not_configured` + `host.connected=false` after `ensure_tables` |
+| Signals analysis | reliability.scan, telemetry_mining, anomalies | exists |
+| Complete CI/CD | cicd + delivery + security-scan gate | provenance yes; live Actions gated |
+| Security vuln scanning (OS/code) | `/v1/security-scan` Semgrep/Trivy/OSV/Gitleaks/Checkov | scanners 200; latest 404 empty |
 
 ## Swarm rules
 
@@ -189,6 +206,15 @@ Focused tests (isolated `boss_idp_test` + engine noconftest):
 - Did **not** run API tests against live `boss` DB (deadlock / pollution).
 
 Not public GA. Do not merge to `main` from this verify branch.
+
+## 2026-08-15 — infra + UI v1 E2E (`ai/grok/e2e-infra-ui`)
+
+- Plane **BOSS-391** (parent BOSS-388). Not public GA. Do not merge `main`.
+- Isolated HTTP E2E: empty + missing-schema GETs stay 200 `not_configured`.
+- Isolated HTTP E2E: `POST /v1/infra/droplets` fail-closes without the provision
+  flag and records a failed Receipt + ResourceReceipt.
+- Web: Community nav does not show Cloud Easy Connect un-gated; `AreaId` still
+  includes hidden areas. Firecracker stays frozen.
 
 ## 2026-08-15 — infra + UI v1 (`ai/grok/v1-verify-infra-ui`)
 
