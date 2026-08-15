@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 AI SRE observe-only overwatch
+
+- `tick(engine, settings, project_id=…)` + `POST /v1/ai-sre/overwatch` + worker
+  60s hook. Scan persist when sources exist; diagnose open/critical with no
+  investigation; optional dry-run page. Receipt `ai_sre:overwatch:{project}:{window}`.
+- No sources → honest empty. Never remediates / auto-applies Decisions / merges.
+- Branch `ai/grok/ai-sre-overwatch` on kernel `e35e711`. FEATURES stays ◐. Not GA.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto
