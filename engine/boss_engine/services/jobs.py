@@ -514,7 +514,7 @@ class JobLeaseService:
 
             event_type = (
                 "job.lease_reclaimed"
-                if candidate["status"] == "leased"
+                if candidate["status"] in {"leased", "running"}
                 else "job.leased"
             )
             emit_event(

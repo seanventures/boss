@@ -167,3 +167,18 @@ Not public GA. Do not merge to `main` from this verify branch.
 - Tests: `apps/api/tests/test_infra_v1_honesty.py`, edition-visibility v1 cut,
   infra-fabric 500→not_configured. Firecracker stays frozen.
 
+### Isolated HTTP E2E (2026-08-15) — not live dogfood, not public GA
+
+Branch: `ai/grok/e2e-tokens-workers` from `596828a`.
+Database: throwaway Postgres `boss_e2e_tokens_workers` (not the shared `boss` DB).
+Plane: BOSS-388. FEATURES not stamped. Goldeneye not deployed.
+
+| Item | Isolated HTTP E2E | Result |
+|---|---|---|
+| Token GETs after DROP `token_budget_policies` | `/scorecard` `/policies` `/consumption` | 200 empty/defaults; `ensure_tables` recreates |
+| PUT policy then GET consumption | no `llm_calls` rows | `calls=0` `total_tokens=0` `cost_usd_micros=0`; stored caps only |
+| Worker GETs empty + missing tables | `/status` `/policies` `/history` | 200 empty |
+| Queue-driven evaluate | PUT policy, enqueue 5 jobs, POST `/evaluate` | `needed_workers=3`; `worker_instances=0`; no apply/capacity events while `BOSS_INFRA_REAL_PROVISION_ALLOWED` is false |
+| Jobs | POST same `dedupe_key` twice; two polls; heartbeat; expire+reclaim | one job; exclusive lease; heartbeat 200; reclaim `attempt=2` + `job.lease_reclaimed` even after heartbeat flipped status to `running` |
+
+34 focused tests passed (new E2E file + prior token/worker/lease tests). Live dogfood still unproven until this tag is deployed. **Not public GA.**

@@ -22,6 +22,16 @@
 - `sync-from-features` applies lock metadata; catalog unchanged. CE rows not Community shipped.
 - Tests: `engine/tests/test_v1_feature_lock.py` + `test_oss_vs_commercial_rows_are_not_community_shipped`.
 - Verification ledger updated. **Not GA.** Do not merge main.
+## 2026-08-15 — Grok — isolated E2E tokens / workers / jobs
+
+- Branch `ai/grok/e2e-tokens-workers` from `596828a` (`ai/grok/v1-verify-tokens-workers`).
+- HTTP E2E against isolated Postgres `boss_e2e_tokens_workers` (not shared `boss` DB).
+- Token GETs stay 200 empty/defaults after DROP; PUT policy + GET consumption is real zeros.
+- Worker GET empty-200; queue-driven evaluate does not provision when `BOSS_INFRA_REAL_PROVISION_ALLOWED` is false.
+- Jobs: same `dedupe_key` → one job; exclusive lease; heartbeat; expire+reclaim.
+- Reclaim of a `running` (post-heartbeat) expired lease now emits `job.lease_reclaimed`.
+- 34 focused tests + ruff clean. FEATURES not stamped. Goldeneye not deployed. Not public GA.
+- Plane: BOSS-388 (no new issue).
 
 ## 2026-08-15 — Grok — V1 verify tokens / workers / jobs
 

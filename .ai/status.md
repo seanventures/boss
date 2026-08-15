@@ -91,6 +91,10 @@
   investigation; optional dry-run page. Receipt `ai_sre:overwatch:{project}:{window}`.
 - No sources → honest empty. Never remediates / auto-applies Decisions / merges.
 - Branch `ai/grok/ai-sre-overwatch` on kernel `e35e711`. FEATURES stays ◐. Not GA.
+## 2026-08-15 Isolated E2E tokens / workers / jobs
+
+- Branch `ai/grok/e2e-tokens-workers`. Isolated Postgres HTTP E2E for token-efficiency, worker-autoscaling evaluate-without-provision, job dedupe/lease/heartbeat/reclaim.
+- 34 focused tests green. Not live dogfood. FEATURES not stamped. Not public GA.
 
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
