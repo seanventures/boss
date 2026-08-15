@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Release v0.13.0
+
+- Cut from `main` after FF of `cf433e4`. PR #174 sealed canary **not** merged.
+- Superseded leftover branches `ai/grok/boss-370-qa-feature-sweep` and
+  `ai/grok/boss-375-factory-e2e-quality` were not re-merged (already on main via
+  later 3af9c64 expansions).
+- **Not public GA.**
+
 ## 2026-08-15 Next five operator slices (382–386)
 
 - Decision GET + reason, receipt GET by id, official QA scorecard island, live jobs sort, inbox hold reason.

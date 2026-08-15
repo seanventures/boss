@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.13.0 - 2026-08-15
+
+This feature release is the operator system-of-record cut after v0.12.0:
+SecretRef consumption, a live sealed factory proof (hold, not merged), an
+honest official QA path, process authoring, and Mission Control surfaces for
+activity, remediations, decisions, receipts, live jobs, and QA scorecards.
+
+### Added
+
+- SecretRef-first credential resolve (factory, OpenAI, GitHub, Plane). Bound
+  unusable refs fail closed; env is last-resort only when no ref is bound.
+- Durable local_vault BYOK bind on live dogfood (`BOSS_KMS_MASTER_KEY_FILE`).
+- Official QA `/reports` honesty helper and inspect gate. Missing UI/UX stays
+  `not_scored`. Mission Control scorecard island never invents scores.
+- Sealed E2E contract plus one live canary: receipt
+  `github.pull_request.create` + hold Decision. PR #174 stays open and is
+  **not** merged by this release.
+- Agent process handoffs (PRD → review → build → QA/UX → panel → accept),
+  NL/manual/Metatron authoring, and a no-spend Project Manager steward.
+- Factory quality pass after green verify; unknown JTBD / a11y stay
+  `not_scored`.
+- Global searchable activity log, DLQ remediations on Mission Control, Agent
+  Studio workflow seed, and honest A2A `not_configured`.
+- Operator SoR: `GET /v1/decisions/{id}` with hold `reason`,
+  `GET /v1/receipts/{id}` by receipt id or dedupe_key, live jobs
+  `sort=updated|created`, inbox default_action + reason.
+
+### Fixed
+
+- Activity log AreaId + constructor so Mission Control builds on a shared tag.
+- Official `/reports` inspect with `project_id`; GitHub SecretRef uses the
+  live connection.
+- Benchmark built-badge and rebuild guard share one reportable rule.
+- Preview View loopback is refused by feature-sweep and factory gates.
+
+### Release notes
+
+- Application, engine, API client, Helm, and Kubernetes versions and image
+  tags are aligned on `v0.13.0`.
+- Live dogfood shared tag during this cut was `3af9c64` (api + worker + web).
+- **Does not stamp public Community GA.** Official Cloud/Enterprise remain
+  Partial. BOSS-300 legal, two-partner self-serve, 14-day qa-live, and PR #174
+  hold remain open. GitHub Actions remain intentionally disabled.
+
 ## v0.12.0 - 2026-08-14
 
 This feature release is the Community integration cut: Metatron as an always-on

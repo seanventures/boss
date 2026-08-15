@@ -1,5 +1,11 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Cut v0.13.0
+
+- Fast-forwarded `main` to include `cf433e4`. Did not merge PR #174 (hold).
+- `make clean`. Version surfaces aligned to `0.13.0`. Changelog written.
+- Not public GA.
+
 ## 2026-08-15 — Grok — Next five operator slices (382–386)
 
 - Branch `ai/grok/next-five-operator-slices`. Not GA. No official scores invented.

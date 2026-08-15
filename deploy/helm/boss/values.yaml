@@ -6,13 +6,13 @@ global:
 images:
   api:
     repository: ghcr.io/seanheiney/boss-api
-    tag: "0.12.0"
+    tag: "0.13.0"
   web:
     repository: ghcr.io/seanheiney/boss-web
-    tag: "0.12.0"
+    tag: "0.13.0"
   worker:
     repository: ghcr.io/seanheiney/boss-worker
-    tag: "0.12.0"
+    tag: "0.13.0"
 
 project:
   orgId: org_boss
