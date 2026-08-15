@@ -143,6 +143,7 @@ export function ActivityLog({
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [status, setStatus] = useState("");
   const [kind, setKind] = useState("");
+  const [actorFilter, setActorFilter] = useState("");
   const [sort, setSort] = useState<SortKey>("created_at");
   const [order, setOrder] = useState<SortOrder>("desc");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -169,6 +170,7 @@ export function ActivityLog({
         q: debouncedSearch || undefined,
         kind: kind || undefined,
         status: status || undefined,
+        actor: actorFilter || undefined,
         sort: serverSort,
         order: serverOrder,
         limit: 50,
@@ -180,7 +182,7 @@ export function ActivityLog({
     return () => {
       alive = false;
     };
-  }, [projectId, debouncedSearch, kind, status, serverSort, serverOrder]);
+  }, [projectId, debouncedSearch, kind, status, actorFilter, serverSort, serverOrder]);
 
   const items = useMemo(
     () => sortItems(feed.items ?? [], sort, order),
@@ -197,7 +199,8 @@ export function ActivityLog({
 
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const selectedPayload = selected ? redactPayload(selected.data) : "";
-  const hasFilters = Boolean(debouncedSearch || status || kind);
+  const hasFilters = Boolean(debouncedSearch || status || kind || actorFilter);
+  const stuckCount = items.filter((item) => item.status === "stuck").length;
   const unavailable = !loading && !feed.apiReachable;
   const empty = !loading && feed.apiReachable && items.length === 0;
   const blocked =
@@ -280,6 +283,19 @@ export function ActivityLog({
           </select>
         </label>
         <label className="field">
+          <span>Actor</span>
+          <input
+            className="input"
+            type="search"
+            name="actor"
+            value={actorFilter}
+            onChange={(event) => setActorFilter(event.target.value)}
+            placeholder="Filter by actor…"
+            autoComplete="off"
+            data-testid="activity-log-actor-filter"
+          />
+        </label>
+        <label className="field">
           <span>Kind</span>
           <select
             className="input"
@@ -297,6 +313,12 @@ export function ActivityLog({
           </select>
         </label>
       </form>
+
+      {stuckCount > 0 ? (
+        <p className="error-banner" role="status" data-testid="activity-log-stuck">
+          {stuckCount} stuck {stuckCount === 1 ? "item" : "items"} in this view.
+        </p>
+      ) : null}
 
       {loading ? (
         <p className="loading" role="status" data-testid="activity-log-loading">

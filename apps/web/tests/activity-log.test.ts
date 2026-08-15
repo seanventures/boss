@@ -69,6 +69,7 @@ describe("Activity log island", () => {
     expect(markup).toContain('data-testid="activity-log-filters"');
     expect(markup).toContain('data-testid="activity-log-status-filter"');
     expect(markup).toContain('data-testid="activity-log-kind-filter"');
+    expect(markup).toContain('data-testid="activity-log-actor-filter"');
     expect(markup).toContain('name="q"');
     expect(markup).toContain('name="status"');
     expect(markup).toContain('name="kind"');

@@ -106,6 +106,8 @@ def test_dry_run_structure_passes():
     assert "structure.process_compiler_module" in names
     assert "structure.process_manager_module" in names
     assert "structure.scorecard_honesty" in names
+    assert "structure.preview_operator_urls" in names
+    assert "structure.official_reports_honesty" in names
     # env docs check present as optional
     docs = next(c for c in checks if c.name == "structure.live_env_docs")
     assert docs.ok
@@ -563,6 +565,10 @@ def test_dry_run_structure_includes_quality_surface_checks():
     assert honesty.evidence["invents_a11y_violations"] is False
     assert honesty.evidence["invents_contrast_ok"] is False
     assert honesty.evidence["unknown_jtbd_not_scored"] is True
+    preview = by_name["structure.preview_operator_urls"]
+    assert preview.ok is True
+    official = by_name["structure.official_reports_honesty"]
+    assert official.ok is True
 
 
 def test_dry_run_never_posts_budgeted_code_task(monkeypatch, tmp_path):
@@ -676,6 +682,8 @@ def test_quality_surface_includes_process_and_honesty_checks():
     assert honesty.evidence["invents_a11y_violations"] is False
     assert honesty.evidence["invents_contrast_ok"] is False
     assert honesty.evidence["unknown_jtbd_not_scored"] is True
+    assert by_name["structure.preview_operator_urls"].ok is True
+    assert by_name["structure.official_reports_honesty"].ok is True
 
 
 def test_inspect_process_and_honesty_fall_back_when_import_fails(monkeypatch):

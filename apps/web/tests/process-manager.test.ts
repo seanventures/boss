@@ -51,6 +51,7 @@ describe("Process manager island", () => {
     );
     expect(markup).toContain('data-testid="process-manager"');
     expect(markup).toContain("Tick now");
+    expect(markup).toContain("never auto-builds");
     expect(markup).toContain("Last tick");
     expect(markup).toContain("Metrics");
     expect(markup).toContain("Proposals");

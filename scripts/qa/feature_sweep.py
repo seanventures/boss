@@ -199,11 +199,24 @@ def build_probes(
             required=False,
             expect=EXPECT_2XX_OR_404,
         ),
-        # BOSS-378 PM steward is not mounted yet. Probe presence; 404 = skip.
+        # BOSS-378 PM steward is mounted on current main; 404 on older tags is skip.
         Probe(
             "workforce.process-manager",
             "/v1/process-manager",
             query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.agent-studio-catalog",
+            "/v1/agent-studio/catalog",
+            query=q,
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.kms-health",
+            "/v1/kms/health",
             required=False,
             expect=EXPECT_2XX_OR_404,
         ),
@@ -427,6 +440,25 @@ def _payload_count(payload: Any) -> int | None:
     return None
 
 
+def loopback_preview_open_urls(payload: Any) -> list[str]:
+    """Operator-facing preview urls that are still loopback (BOSS-341)."""
+    if isinstance(payload, dict):
+        items = payload.get("previews") or payload.get("items") or []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        return []
+    leaked: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for key in ("url", "open_url"):
+            value = str(item.get(key) or "")
+            if "127.0.0.1" in value or "localhost" in value.lower():
+                leaked.append(f"{item.get('id')}:{key}")
+    return leaked
+
+
 def classify_verdict(probe: Probe, status: int | None, ok: bool) -> str:
     """Honest pass / fail / skip. 404 on optional probes is skip, never a pass."""
     if not ok or status is None:
@@ -552,6 +584,18 @@ def run_feature_sweep(client: BossClient) -> list[CheckResult]:
             continue
 
         ok, detail = evaluate(probe, status, payload)
+        if (
+            probe.name == "factory.previews"
+            and ok
+            and is_2xx(status)
+        ):
+            leaked = loopback_preview_open_urls(payload)
+            if leaked:
+                ok = False
+                detail = (
+                    f"{probe.method} {probe.path} → {status} "
+                    "operator url is loopback (BOSS-341)"
+                )
         verdict = classify_verdict(probe, status, ok)
         checks.append(
             CheckResult(

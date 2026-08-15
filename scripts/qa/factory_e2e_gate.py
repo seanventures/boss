@@ -544,6 +544,48 @@ def inspect_quality_loop_contract() -> dict[str, Any]:
     }
 
 
+def inspect_preview_operator_urls() -> dict[str, Any]:
+    """Operator View URLs must never be loopback (BOSS-341)."""
+    try:
+        from boss_engine.services.preview_service import publicize_preview
+    except ImportError:
+        return {"imported": False, "safe": False}
+    record = publicize_preview(
+        {
+            "id": "prev_gate",
+            "status": "running",
+            "url": "http://127.0.0.1:41635",
+        }
+    )
+    open_url = str(record.get("open_url") or "")
+    url = str(record.get("url") or "")
+    safe = (
+        "127.0.0.1" not in open_url
+        and "localhost" not in open_url.lower()
+        and "127.0.0.1" not in url
+        and "localhost" not in url.lower()
+    )
+    return {
+        "imported": True,
+        "safe": safe,
+        "open_url": open_url,
+        "url": url,
+        "internal_url": record.get("internal_url"),
+    }
+
+
+def inspect_official_reports_honesty() -> dict[str, Any]:
+    """Official /reports helper exists and never invents scores."""
+    path = REPO_ROOT / "scripts/qa/official_reports.py"
+    bench = _try_import_engine("boss_engine.services.benchmark_apps")
+    has_honesty = bool(bench and callable(getattr(bench, "report_honesty", None)))
+    return {
+        "script_exists": path.is_file(),
+        "report_honesty": has_honesty,
+        "ok": path.is_file() and has_honesty,
+    }
+
+
 def inspect_scorecard_v11() -> dict[str, Any]:
     """Scorecard v1.1 must include dedicated ui and ux dimensions."""
     path = REPO_ROOT / BENCHMARK_APPS_RELPATH
@@ -1035,6 +1077,30 @@ def quality_surface_checks() -> list[CheckResult]:
             ok="/v1/factory/wip" in paths and "/v1/code-tasks" in paths,
             detail=f"paths={paths}",
             evidence={"paths": paths},
+        )
+    )
+
+    preview_urls = inspect_preview_operator_urls()
+    checks.append(
+        CheckResult(
+            name="structure.preview_operator_urls",
+            ok=bool(preview_urls.get("imported") and preview_urls.get("safe")),
+            detail=(
+                "publicize_preview never hands loopback as View"
+                if preview_urls.get("safe")
+                else f"loopback still operator-facing: {preview_urls}"
+            ),
+            evidence=preview_urls,
+        )
+    )
+
+    official = inspect_official_reports_honesty()
+    checks.append(
+        CheckResult(
+            name="structure.official_reports_honesty",
+            ok=bool(official.get("ok")),
+            detail="official_reports.py + report_honesty (never invent scores)",
+            evidence=official,
         )
     )
 

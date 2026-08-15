@@ -23,6 +23,7 @@ from scripts.qa.feature_sweep import (  # noqa: E402
     classify_verdict,
     dry_run_catalog,
     evaluate,
+    loopback_preview_open_urls,
     run_feature_sweep,
 )
 
@@ -75,6 +76,30 @@ def test_dry_run_catalog_count_and_required_surfaces():
     assert "comms-dry-run" in names
     assert "providers-easy-connect" in names
     assert "openai-compatible-source" in names
+    assert "agent-studio-catalog" in names
+    assert "kms-health" in names
+    assert "process-manager" in names
+
+
+def test_loopback_preview_open_urls_detects_operator_leak():
+    leaked = loopback_preview_open_urls(
+        {
+            "previews": [
+                {
+                    "id": "prev_bad",
+                    "url": "http://127.0.0.1:41635",
+                    "open_url": "http://127.0.0.1:41635",
+                },
+                {
+                    "id": "prev_ok",
+                    "url": "/v1/previews/prev_ok/web/",
+                    "open_url": "/v1/previews/prev_ok/web/",
+                },
+            ]
+        }
+    )
+    assert leaked == ["prev_bad:url", "prev_bad:open_url"]
+    assert loopback_preview_open_urls({"previews": []}) == []
 
 
 def test_evaluate_200_ok_500_not_ok():
@@ -303,6 +328,32 @@ def test_run_feature_sweep_sets_phase_and_never_logs_key():
     }
     assert any(path == "/v1/deadletters/remediations" for _, path, _ in client.calls)
     assert any(path == "/v1/edition" for _, path, _ in client.calls)
+
+
+def test_factory_previews_fail_when_operator_url_is_loopback():
+    class _LoopbackClient(_FakeClient):
+        def request(self, method, path, **kwargs):
+            if path == "/v1/previews":
+                self.calls.append((method.upper(), path, True))
+                return (
+                    200,
+                    {
+                        "previews": [
+                            {
+                                "id": "prev_bad",
+                                "url": "http://127.0.0.1:9",
+                                "open_url": "http://127.0.0.1:9",
+                            }
+                        ]
+                    },
+                    1,
+                )
+            return super().request(method, path, **kwargs)
+
+    checks = run_feature_sweep(_LoopbackClient())
+    preview = next(c for c in checks if c.name == "factory.previews")
+    assert preview.ok is False
+    assert "loopback" in preview.detail
 
 
 WORKFORCE_CATALOG = {

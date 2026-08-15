@@ -137,6 +137,7 @@ export function ProcessManager({
       <p className="detail">
         Operate, test, validate, and propose improvements to agent workflows.
         Tick is fail-closed. Decisions stay human. No invented scores.
+        Tick never spends, never auto-builds, never rewrites a published template.
       </p>
 
       {error ? (
@@ -186,6 +187,17 @@ export function ProcessManager({
             </p>
             {typeof state.lastTick.operate === "string" ? (
               <p className="detail">{state.lastTick.operate}</p>
+            ) : null}
+            {typeof state.lastTick.canary_run_id === "string" && state.lastTick.canary_run_id ? (
+              <p className="detail">
+                Simulated canary <code>{state.lastTick.canary_run_id}</code>
+              </p>
+            ) : null}
+            {Array.isArray(state.lastTick.rejected) && state.lastTick.rejected.length > 0 ? (
+              <p className="detail" data-testid="process-manager-rejected">
+                Rejected {state.lastTick.rejected.length} move
+                {state.lastTick.rejected.length === 1 ? "" : "s"} (never silent).
+              </p>
             ) : null}
           </div>
         </div>

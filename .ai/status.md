@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Five-slice finish (341 / 370 / 375 / 379 / 378)
+
+- Preview View URLs: feature sweep fails if `url`/`open_url` is loopback; factory gate proves `publicize_preview` never hands 127.0.0.1 as View.
+- Feature sweep: catalog + KMS health probes; PM comment matches mounted route.
+- Factory E2E gate: official_reports honesty + preview operator-url structure checks.
+- Activity log: actor filter + stuck-count banner.
+- Process manager: rejected moves and no-spend/no-auto-build copy.
+- Not GA. Live still `b6d8ccc`.
+
 ## 2026-08-15 Agent Studio first-run includes workflows + honest A2A (BOSS-347)
 
 - Catalog seed now installs specpack workflows alongside 13 agents / 3 panels. Idempotent, no spend.

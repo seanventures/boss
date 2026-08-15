@@ -12,7 +12,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Job leases, heartbeat, fencing | ✅ |
 | Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
 | Event / audit feed | ✅ |
-| Global activity log | ◐ Searchable/sortable Mission Control area. **Not GA.** |
+| Global activity log | ◐ Searchable/sortable Mission Control area (status, kind, actor, stuck banner). **Not GA.** |
 | Decision inbox (approve / reject / escalate) | ✅ |
 | Receipts with unique dedupe keys | ✅ |
 | Budget quote → reserve → consume / release | ✅ |
