@@ -29,8 +29,14 @@ def test_benchmark_task_is_pinned_to_the_governed_evidence_contract():
     assert task["title"].startswith("QA benchmark: HookWatch")
     assert task["test_commands"] == ["npm run verify"]
     assert task["finalize_ctx"]["qa_benchmark"]["id"] == "hookwatch"
+    assert task["app_root"] == "hookwatch"
+    assert task["project_kind"] == "web"
+    assert task["repair_retries"] == 2
+    assert task["finalize_ctx"]["qa_benchmark"]["app_root"] == "hookwatch"
     assert "built-in mock destination" in task["instructions"]
     assert "npm run test:e2e" in task["instructions"]
+    assert "work ONLY under `hookwatch/`" in task["instructions"]
+    assert "not the monorepo root" in task["instructions"]
 
 
 def test_completion_report_never_certifies_missing_evidence():

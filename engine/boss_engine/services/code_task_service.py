@@ -303,6 +303,11 @@ def start_code_task(
         spec["model_config"] = model_config
     if isinstance(repair_retries, int):  # VAG Phase 3: per-run repair-loop budget override
         spec["repair_retries"] = repair_retries
+    bench = (finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
+    if bench.get("app_root"):
+        spec["app_root"] = bench["app_root"]
+    if bench.get("project_kind"):
+        spec["project_kind"] = bench["project_kind"]
     if isinstance(review_panel_size, int):  # VAG Phase 1 (#9): per-run refute-panel size override
         spec["review_panel_size"] = review_panel_size
     if open_pr is False:  # eval/bake-off runs: verify via the gate, do not open a PR

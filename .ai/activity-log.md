@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — official app-scoped verify
+
+- HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote
+  Python unittest the npm contract never runs. repair_max was 0.
+- Factory now runs `npm run verify` in `{app}/`, seeds a fullstack scaffold when
+  that dir has no package.json, and official launches get repair_retries=2.
+- 34 focused tests pass. Not GA.
+
 ## 2026-08-15 — Grok — official report evidence
 
 - Deployed shared-tag `71c9e07` (api+worker+web). Official reports now expose ui/ux/capability; Decision GET 200.

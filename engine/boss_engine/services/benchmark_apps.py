@@ -222,7 +222,12 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
         "hierarchy readable; cover the acceptance scenarios as JTBD walkthroughs. Attach "
         "`ui_evidence` (a11y_violations, states_covered, contrast_ok) and `ux_evidence` "
         "(jtbd pass/fail plus rubric 1–5 for task_success, clarity, trust, delight, "
-        "accessibility). Missing UI/UX evidence stays not_scored — do not invent scores."
+        "accessibility). Missing UI/UX evidence stays not_scored — do not invent scores.\n"
+        f"APP SCOPE: work ONLY under `{benchmark['id']}/`. Do not edit sibling apps or "
+        "repo-root tests that belong to other products. "
+        f"`npm run verify` must exist and pass inside `{benchmark['id']}/` "
+        "(not the monorepo root). Write API and browser tests under that app so its own "
+        "scripts run them."
     )
     return {
         "benchmark": benchmark,
@@ -235,10 +240,17 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
         # The existing code-task executor runs one authoritative command. `verify` must invoke
         # every required script and makes a single durable, replayable evidence record.
         "test_commands": ["npm run verify"],
+        "project_kind": "web",
+        "app_root": benchmark["id"],
+        # Default BOSS_CODE_REPAIR_MAX_RETRIES is 0. Official canaries need real
+        # repair depth — HookWatch/ApproveIt failed after one implement pass.
+        "repair_retries": 2,
         "finalize_ctx": {
             "qa_benchmark": {
                 "id": benchmark["id"],
                 "name": benchmark["name"],
+                "app_root": benchmark["id"],
+                "project_kind": "web",
                 "verification_commands": verification,
                 "completion_contract": list(COMPLETION_CONTRACT),
                 "scoring_dimensions": [

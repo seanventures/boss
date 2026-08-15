@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Official app-scoped verify (HookWatch / ApproveIt)
+
+- Root cause: official canaries build inside `paramg/boss-sandbox` (a monorepo) but
+  `npm run verify` ran at clone root; QA wrote Python unittest at repo-root `tests/`;
+  `repair_max` was 0. BugBox lucked out; HookWatch/ApproveIt failed verify.
+- Fix: resolve verify cwd to `{app_id}/`, seed fullstack scaffold if missing, add
+  `verify` script if absent, web QA/impl prompts, official `repair_retries=2`.
+- Branch `ai/grok/official-app-scoped-verify`. Not public GA. 381 stays open.
+
 ## 2026-08-15 Official report evidence (factory-shaped verify)
 
 - Live shared-tag `71c9e07` (api+worker+web). `/health` 200. Decision GET works. KMS local_vault ok.

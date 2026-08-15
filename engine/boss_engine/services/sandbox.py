@@ -193,8 +193,8 @@ class EphemeralSandbox:
         self.path = None
 
     # -- commands -----------------------------------------------------------
-    def run(self, command: str, *, timeout: Optional[int] = None) -> CommandResult:
-        """Run an allowlisted build/test command inside the sandbox cwd."""
+    def run(self, command: str, *, timeout: Optional[int] = None, cwd: Optional[str] = None) -> CommandResult:
+        """Run an allowlisted build/test command inside the sandbox cwd (or an app subdir)."""
         self._require_provisioned()
         argv = shlex.split(command)
         if not argv:
@@ -202,10 +202,11 @@ class EphemeralSandbox:
         self._assert_allowed_executable(argv[0])
         limit = timeout or self.settings.sandbox_validation_timeout_seconds
         started = time.monotonic()
+        workdir = cwd or self.path
         try:
             completed = subprocess.run(
                 argv,
-                cwd=self.path,
+                cwd=workdir,
                 env={**os.environ, "CI": "1"},
                 capture_output=True,
                 text=True,

@@ -589,7 +589,25 @@ def _ctx_block(title, instructions, criteria) -> str:
     )
 
 
-def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
+def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None):
+    if web:
+        scope = f"`{app_root}/`" if app_root else "the app directory"
+        return (
+            _ctx_block(title, instructions, criteria)
+            + "You are a QA engineer for a web application. Your ONLY job is to author tests "
+            "that the authoritative `npm run verify` command will actually run.\n\n"
+            "RULES:\n"
+            f"- Write JS/TS API tests and a Playwright/e2e spec under {scope}. "
+            "Prefer `tests/` and `e2e/` inside that app.\n"
+            "- Do NOT write Python unittest files. Do NOT put tests at the monorepo root.\n"
+            "- Do NOT edit sibling apps or repo-root tests that belong to other products.\n"
+            f"- You MAY add `{app_root or '.'}/package.json` scripts "
+            "(verify, test:api, test:e2e, typecheck, lint, build, healthcheck) if they are missing.\n"
+            "- Do NOT create the product implementation.\n"
+            f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
+            "- End with a one-line summary of the cases you wrote.\n"
+            + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
+        )
     return (
         _ctx_block(title, instructions, criteria)
         + "You are a QA engineer. Your ONLY job is to author tests for the task above, BEFORE any "
@@ -605,16 +623,22 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False):
     )
 
 
-def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False):
+def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False, app_root=None):
     tf = ", ".join(test_files) or "(the test files in this repo)"
+    scope = (
+        f"- Work ONLY under `{app_root}/`. Do not edit sibling apps.\n"
+        if app_root else ""
+    )
     return (
         _ctx_block(title, instructions, criteria)
         + "You are a software engineer. QA has ALREADY written the tests; implement the change to "
         "make those existing tests pass.\n\n"
         f"RULES:\n"
+        f"{scope}"
         f"- Edit/create implementation files ONLY. You MUST NOT edit, delete, or weaken any test file "
         f"({tf}) — they are the spec. If a test looks wrong, STOP and explain rather than change it.\n"
-        f"- Run `{test_cmd}` and iterate until the tests pass.\n"
+        f"- Run `{test_cmd}` from the app directory and iterate until the tests pass. "
+        "Create parent directories for SQLite/data files before opening them.\n"
         "- Do NOT commit. End with a one-line summary of what you changed.\n"
         + (_IAC_GUIDANCE if iac else "")
         + (design_prompts.design_impl_clause() if ui else "")  # APP-2: design axis for UI tasks
@@ -664,7 +688,21 @@ def _repair_resume_prompt(evidence: str, attempt: int) -> str:
     )
 
 
-def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False):
+def _solo_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None):
+    if web:
+        scope = f"`{app_root}/`" if app_root else "the app directory"
+        return (
+            _ctx_block(title, instructions, criteria)
+            + "You are a software engineer. Implement the web app AND the tests that "
+            f"`{test_cmd}` will run inside {scope}.\n\n"
+            "RULES:\n"
+            f"- Work ONLY under {scope}. Do not edit sibling apps.\n"
+            "- Write JS/TS API and e2e tests, not Python unittest.\n"
+            f"- Run `{test_cmd}` from {scope} and iterate until it passes. "
+            "Create parent directories for SQLite/data files before opening them.\n"
+            "- Do NOT commit. End with a one-line summary of what you built.\n"
+            + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
+        )
     return (
         _ctx_block(title, instructions, criteria)
         + "You are a software engineer. Implement the task above AND write tests for it, then make "
@@ -1741,6 +1779,55 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         sandbox.provision(owner, repo, base_branch=base_branch,
                           work_branch=work_branch, token=token)
         root = sandbox.path
+        _app_id = verification_target.official_app_id(spec, fctx)
+        _web_verify = (
+            verification_target.detect_kind(spec, title) == "web"
+            or str(test_cmd or "").startswith("npm ")
+            or bool(_app_id)
+        )
+        last_verify_cwd = None
+        last_verify_output = ""
+
+        def _run_verify():
+            """Authoritative test command, scoped to the official app directory."""
+            nonlocal last_verify_cwd, last_verify_output
+            cwd = verification_target.resolve_verify_cwd(root, app_id=_app_id)
+            try:
+                last_verify_cwd = str(cwd.relative_to(root)) if cwd != root else "."
+            except ValueError:
+                last_verify_cwd = str(cwd)
+            try:
+                verification_target.ensure_verify_script(cwd)
+            except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
+                pass
+            result = sandbox.run(test_cmd, cwd=str(cwd))
+            last_verify_output = ((result.stdout or "") + "\n" + (result.stderr or ""))[-4000:]
+            return result
+
+        if _app_id and not (root / _app_id / "package.json").is_file():
+            try:
+                from .scaffold_service import scaffold_project
+
+                seeded = scaffold_project(name=_app_id, kind="fullstack")
+                app_dir = root / _app_id
+                for rel, content in (seeded.get("files") or {}).items():
+                    dest = app_dir / Path(rel)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        dest.write_text(content, encoding="utf-8")
+                with _transaction(engine) as c:
+                    emit_event(
+                        c, project_id, "code_task.app_scaffold_seeded", "boss",
+                        "code_task_run", run_id,
+                        {"app_root": _app_id, "kind": "fullstack"},
+                    )
+            except Exception:  # noqa: BLE001 — missing seed must not sink the run
+                pass
+        elif _app_id:
+            try:
+                verification_target.ensure_verify_script(root / _app_id)
+            except Exception:  # noqa: BLE001
+                pass
 
         # REGRESSION FLOOR — applies at EVERY tier, costs no agent time.
         # The gate set below tier 2 was only {code_written, written_tests_pass}: `nothing_broke`
@@ -1947,7 +2034,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 """One QA/write-tests pass → (r1, test_files, test_changes|None). escalate
                 forces the frontier model + a sharper prompt to recover a weak first pass."""
                 nonlocal cost
-                prompt = _qa_prompt(title, instructions, criteria, test_cmd, iac=iac_task)
+                prompt = _qa_prompt(
+                    title, instructions, criteria, test_cmd,
+                    iac=iac_task, web=_web_verify, app_root=_app_id,
+                )
                 # AUGMENT, DON'T RE-AUTHOR. On a repair the prior attempt's tests are ALREADY in
                 # the working tree (the retry clones the lineage branch), and the review names the
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
@@ -2067,11 +2157,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _abort_if_cancelled("implement")
         with _transaction(engine) as c:
             _phase(c, "implement")
-        base_impl_prompt = (_impl_prompt(title, instructions, test_files, test_cmd, criteria=criteria,
-                                         iac=iac_task, ui=ui_task)
+        base_impl_prompt = (_impl_prompt(
+                                title, instructions, test_files, test_cmd, criteria=criteria,
+                                iac=iac_task, ui=ui_task, app_root=_app_id)
                             if do_separate_tests
-                            else _solo_prompt(title, instructions, criteria, test_cmd,
-                                              iac=iac_task))
+                            else _solo_prompt(
+                                title, instructions, criteria, test_cmd,
+                                iac=iac_task, web=_web_verify, app_root=_app_id))
         max_repair = max(0, min(5, int(
             spec.get("repair_retries", settings.code_repair_max_retries) or 0)))
         repair_attempts = 0
@@ -2255,7 +2347,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # Authoritative verification — BOSS runs the tests itself.
                 with _transaction(engine) as c:
                     _phase(c, "run_tests")
-                test_result = sandbox.run(test_cmd)
+                test_result = _run_verify()
                 tests_passed = bool(test_result.ok)
                 test_exit_code = test_result.exit_code
                 fail_output = ((test_result.stdout or "") + (test_result.stderr or ""))
@@ -2342,7 +2434,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     set_llm_context(stage="quality")
                     qa, qm = _route("implement")
                     qa.run_role(q_prompt, root, model=qm)
-                    q_test = sandbox.run(test_cmd)
+                    q_test = _run_verify()
                     q_ok = bool(q_test.ok)
                     if q_ok:
                         tests_passed = True
@@ -2480,7 +2572,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                       engine_override="echo")
                     panel["full"] = bool(rr.tests_passed)
                 else:
-                    panel["full"] = bool(sandbox.run(test_cmd).ok)   # APP-3
+                    panel["full"] = bool(_run_verify().ok)   # APP-3
 
             def _do_consistency():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
@@ -2624,7 +2716,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     a, m = _route("check_tests")
                     r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
                     cost += int(r5.get("cost_usd_micros") or 0)
-                    mut = sandbox.run(test_cmd)
+                    mut = _run_verify()
                     mutation_caught = not bool(mut.ok)
                     for p, content in orig.items():
                         (root / p).write_text(content, encoding="utf-8")
@@ -2818,6 +2910,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "tests_passed": tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
             "test_command": test_cmd, "test_exit_code": test_exit_code,
+            "verify_cwd": last_verify_cwd,
+            "last_verify_output": last_verify_output,
             "tests": (
                 [{
                     "command": test_cmd,
@@ -2895,7 +2989,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # round spent against it is wasted.
                     if ("written_tests_pass" in failing
                             and getattr(settings, "code_test_arbiter_enabled", True)):
-                        _tr = sandbox.run(test_cmd)
+                        _tr = _run_verify()
                         if not _tr.ok:
                             with _transaction(engine) as c:
                                 _phase(c, "test_arbitration")
@@ -2961,7 +3055,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         r2 = {**r2, "summary": (rfix.get("summary") or r2.get("summary", ""))}
                     # Re-verify against the oracle. `nothing_broke` is the same full-suite run
                     # (regressions_ok = panel["full"]), so one execution refreshes both gates.
-                    _post = sandbox.run(test_cmd)
+                    _post = _run_verify()
                     tests_passed = bool(_post.ok)
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:

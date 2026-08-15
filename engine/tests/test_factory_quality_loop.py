@@ -158,6 +158,22 @@ def test_governed_pipeline_calls_the_quality_loop_hooks():
     assert '"code_task.quality_pass"' in src
 
 
+def test_web_qa_prompt_does_not_ask_for_python_unittest():
+    from boss_engine.services.governed_code_task_service import _qa_prompt, _impl_prompt
+
+    web = _qa_prompt("HookWatch", "build it", [], "npm run verify", web=True, app_root="hookwatch")
+    assert "Do NOT write Python unittest files" in web
+    assert "using the stdlib `unittest` module" not in web
+    assert "hookwatch/" in web
+    assert "Playwright" in web or "e2e" in web
+    py = _qa_prompt("lib", "add fn", [], "python3 -m unittest discover -v")
+    assert "using the stdlib `unittest` module" in py
+    impl = _impl_prompt("HookWatch", "build it", ["hookwatch/e2e/x.spec.ts"], "npm run verify",
+                        app_root="hookwatch")
+    assert "Work ONLY under `hookwatch/`" in impl
+    assert "parent directories for SQLite" in impl
+
+
 def test_governed_pipeline_restores_impl_when_quality_pass_fails():
     src = _governed_pipeline_source()
     assert "if not q_ok and snapshot:" in src
@@ -171,3 +187,5 @@ def test_governed_pipeline_writes_ui_ux_evidence_into_run_state():
     assert '"ux_evidence": (workspace_evidence or {}).get("ux_evidence")' in src
     assert "bind_test_outcomes(" in src
     assert '"command": test_cmd' in src
+    assert "def _run_verify(" in src
+    assert "resolve_verify_cwd(" in src

@@ -18,9 +18,20 @@ the command set automatically gives Amplify **build/typecheck/e2e failure eviden
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from .design_prompts import is_ui_bearing
+
+VERIFY_SCRIPT_STEPS = (
+    "typecheck",
+    "build",
+    "lint",
+    "test:api",
+    "test:e2e",
+    "healthcheck",
+)
 
 PYTHON_TEST_CMD = "python3 -m unittest discover -v"
 
@@ -59,3 +70,65 @@ def verification_profile(spec: dict[str, Any], title: str = "") -> dict[str, Any
     return {"kind": kind,
             "steps": list(_WEB_STEPS) if kind == "web" else [PYTHON_TEST_CMD],
             "command": (WEB_TEST_CMD if kind == "web" else PYTHON_TEST_CMD)}
+
+
+def resolve_verify_cwd(
+    root: Path | str,
+    *,
+    app_id: str | None = None,
+    changed: list[str] | None = None,
+) -> Path:
+    """Directory where the authoritative test command must run.
+
+    Official canaries live as subdirectories in a shared sandbox monorepo.
+    Running ``npm run verify`` at the clone root either misses the script or
+    executes a sibling app. Prefer the named app, then a changed-file
+    package.json ancestor, then the repo root.
+    """
+    base = Path(root)
+    aid = str(app_id or "").strip().strip("/")
+    if aid and (base / aid / "package.json").is_file():
+        return base / aid
+    for rel in changed or []:
+        parts = Path(str(rel)).parts
+        for depth in range(len(parts), 0, -1):
+            candidate = base.joinpath(*parts[:depth])
+            if candidate.is_dir() and (candidate / "package.json").is_file():
+                return candidate
+    return base
+
+
+def ensure_verify_script(app_dir: Path | str) -> bool:
+    """Add a ``verify`` script that chains existing required scripts. Never overwrites."""
+    pkg_path = Path(app_dir) / "package.json"
+    if not pkg_path.is_file():
+        return False
+    try:
+        payload = json.loads(pkg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    scripts = payload.get("scripts")
+    if not isinstance(scripts, dict):
+        scripts = {}
+        payload["scripts"] = scripts
+    if str(scripts.get("verify") or "").strip():
+        return False
+    chain = [name for name in VERIFY_SCRIPT_STEPS if str(scripts.get(name) or "").strip()]
+    if not chain:
+        return False
+    scripts["verify"] = " && ".join(f"npm run {name}" for name in chain)
+    pkg_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def official_app_id(spec: dict[str, Any] | None, finalize_ctx: dict[str, Any] | None) -> str | None:
+    """Named official/QA app directory, if this run is a pinned benchmark."""
+    bench = (finalize_ctx or {}).get("qa_benchmark") if isinstance((finalize_ctx or {}).get("qa_benchmark"), dict) else {}
+    for source in (spec or {}, bench):
+        value = str(source.get("app_root") or "").strip().strip("/")
+        if value:
+            return value
+    value = str(bench.get("id") or "").strip().strip("/")
+    return value or None

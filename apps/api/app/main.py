@@ -6481,6 +6481,11 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 # pass an explicit profile, and `usable_profile` has the final say either way.
                 profile=(payload or {}).get("profile") or "balanced",
                 risk_tier=int((payload or {}).get("risk_tier") or 1),
+                repair_retries=(
+                    int((payload or {}).get("repair_retries"))
+                    if isinstance((payload or {}).get("repair_retries"), int)
+                    else int(task.get("repair_retries") or 2)
+                ),
                 simulated=simulated,
             )
     except PermissionError as error:
