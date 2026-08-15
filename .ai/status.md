@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 10-agent E2E Plane track + live probe (not GA)
+
+- Branch `ai/grok/e2e-plane-probe` from `origin/main` @ `6370178`. No deploy. No merge.
+- Plane BOSS-388 / BOSS-387 commented (10-agent E2E stack in flight). Left In Progress.
+- Live status codes only in `docs/product/V1_LIVE_PROBE.md`. `/v1/ai-sre/capabilities` 404. Not public GA.
+
 ## 2026-08-15 Official app-scoped verify (HookWatch / ApproveIt)
 
 - Root cause: official canaries build inside `paramg/boss-sandbox` (a monorepo) but
