@@ -1,7 +1,7 @@
 # Remaining human / time blockers (not agent-closable)
 
 **Date:** 2026-08-15  
-**Live tag:** `3af9c64`  
+**Live tag:** `71c9e07` (report-evidence follow-up pending next shared-tag)  
 **Not GA.** Agents must not close these.
 
 Agent-closable named blockers from this sweep are **done**:

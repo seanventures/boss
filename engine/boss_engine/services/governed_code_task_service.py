@@ -49,6 +49,7 @@ from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
 from .factory_quality_loop import (
+    bind_test_outcomes,
     collect_workspace_evidence_from_root,
     quality_improve_prompt,
     quality_pass_record,
@@ -2300,8 +2301,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # tests, restore the last green implementation files.
         workspace_evidence: dict = {}
         quality_passes_used = 0
+        _app_id = str((fctx.get("qa_benchmark") or {}).get("id") or "").strip() or None
         try:
-            workspace_evidence = collect_workspace_evidence_from_root(root)
+            workspace_evidence = collect_workspace_evidence_from_root(root, app_id=_app_id)
         except Exception:  # noqa: BLE001
             workspace_evidence = {}
         if should_run_quality_pass(
@@ -2365,7 +2367,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 gaps=[{"dimension": "ui"}, {"dimension": "ux"}],
             ))
             try:
-                workspace_evidence = collect_workspace_evidence_from_root(root)
+                workspace_evidence = collect_workspace_evidence_from_root(root, app_id=_app_id)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -2751,6 +2753,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             + (["review_code", "security_check", "check_tests", "run_all_tests", "consistency_check"]
                if do_review else []) \
             + (["iac_verify"] if iac_result is not None else [])
+        workspace_evidence = bind_test_outcomes(
+            workspace_evidence or {}, tests_passed=bool(tests_passed),
+        )
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
@@ -2813,6 +2818,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "tests_passed": tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
             "test_command": test_cmd, "test_exit_code": test_exit_code,
+            "tests": (
+                [{
+                    "command": test_cmd,
+                    "exit_code": test_exit_code,
+                    "timed_out": False,
+                    "ok": bool(tests_passed),
+                }]
+                if test_cmd and test_exit_code is not None
+                else []
+            ),
+            "files_changed": (len(impl_files) + len(test_files)) or None,
+            "turns": (
+                sum(
+                    int((res or {}).get("turns") or ((res or {}).get("usage") or {}).get("turns") or 0)
+                    for res in (r1, r2, r3, r4, r5, r6)
+                    if isinstance(res, dict)
+                ) or None
+            ),
             # VAG Phase 3 repair loop: how many evidence-fed retries the implementer used
             # (0 = passed/failed first try) and the per-attempt outcome trail.
             "repair_attempts": repair_attempts, "repair_max": max_repair,

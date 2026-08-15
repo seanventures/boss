@@ -8,6 +8,7 @@ evidence may mark a benchmark as passed.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from typing import Any
 
@@ -439,18 +440,57 @@ def _score_interface(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
     return round(100 * len(covered & required) / len(required)), [f"states={sorted(covered & required)}"]
 
 
+_JUNK_EVIDENCE_PARTS = {
+    ".pytest_cache",
+    "test-results",
+    "playwright-report",
+    "node_modules",
+    ".git",
+    "coverage",
+    "__pycache__",
+    ".next",
+    "testdata",
+}
+_JUNK_EVIDENCE_NAMES = re.compile(
+    r"(?:^|/)(?:playwright|vitest|jest|cypress)\.config\.[^/]+$",
+    re.I,
+)
+
+
+def is_junk_evidence_path(path: str) -> bool:
+    """True for cache/config/testdata paths that must not inflate capability."""
+    text = str(path or "").strip()
+    if not text or "/" not in text and "\\" not in text:
+        return False
+    parts = {part.lower() for part in text.replace("\\", "/").split("/")}
+    if parts & _JUNK_EVIDENCE_PARTS:
+        return True
+    return bool(_JUNK_EVIDENCE_NAMES.search(text.replace("\\", "/")))
+
+
 def _score_capability(evidence: dict[str, Any], benchmark: dict[str, Any]) -> tuple[int, list[str]] | None:
     mapping = evidence.get("scenario_mapping") or evidence.get("scenarios") or []
     expected = benchmark.get("acceptance_scenarios") or []
     if not isinstance(mapping, list) or not mapping:
         return None
+    usable = [
+        item
+        for item in mapping
+        if not (
+            isinstance(item, dict)
+            and is_junk_evidence_path(str(item.get("id") or item.get("path") or ""))
+        )
+        and not (isinstance(item, str) and is_junk_evidence_path(item))
+    ]
+    if not usable:
+        return None
     covered = 0
-    for item in mapping:
+    for item in usable:
         if isinstance(item, dict) and (item.get("covered") or item.get("tested") or item.get("passed")):
             covered += 1
         elif isinstance(item, str) and item.strip():
             covered += 1
-    total = max(len(expected), len(mapping), 1)
+    total = max(len(expected), len(usable), 1)
     return min(100, round(100 * covered / total)), [f"{covered}/{total} scenarios mapped"]
 
 
@@ -491,7 +531,24 @@ def benchmark_scorecard(
         if isinstance(call, dict)
     )
     turns = state.get("turns")
+    if turns is None:
+        call_turns = [
+            int(call.get("turns") or 0)
+            for call in calls
+            if isinstance(call, dict) and call.get("turns") is not None
+        ]
+        if call_turns:
+            turns = sum(call_turns)
     files_changed = state.get("files_changed")
+    if files_changed is None:
+        impl = state.get("impl_files") or []
+        test_files = state.get("test_files") or []
+        if isinstance(impl, list) or isinstance(test_files, list):
+            n = len(impl if isinstance(impl, list) else []) + len(
+                test_files if isinstance(test_files, list) else []
+            )
+            if n:
+                files_changed = n
     repair_attempts = len(context.get("repair_log") or [])
     observed_reviews: list[bool] = []
     if state.get("tests_passed") is not None:
@@ -834,21 +891,74 @@ def tuning_proposal_inputs(
     }
 
 
+def observed_verify(run: dict[str, Any]) -> dict[str, Any] | None:
+    """Read the authoritative verify command from factory-recorded state.
+
+    Official runs persist ``test_command`` / ``test_exit_code`` / ``tests_passed``
+    and often omit ``state.tests[]``. Missing still stays not_recorded.
+    """
+    state = run.get("state") or {}
+    tests = state.get("tests") or []
+    if isinstance(tests, list):
+        for row in tests:
+            if isinstance(row, dict) and row.get("command") == "npm run verify":
+                return row
+    command = state.get("test_command")
+    if command != "npm run verify":
+        return None
+    if state.get("test_exit_code") is not None:
+        return {
+            "command": "npm run verify",
+            "exit_code": state.get("test_exit_code"),
+            "timed_out": bool(state.get("test_timed_out")),
+        }
+    if isinstance(state.get("tests_passed"), bool):
+        return {
+            "command": "npm run verify",
+            "exit_code": 0 if state["tests_passed"] else 1,
+            "timed_out": False,
+        }
+    return None
+
+
+def apply_observed_test_outcomes(run: dict[str, Any], *, verify_status: str) -> dict[str, Any]:
+    """When verify passed, JTBD rows extracted from those tests are observed-pass.
+
+    Does not invent outcomes when verify is missing or failed. Does not mint
+    rubric scores.
+    """
+    if verify_status != "pass":
+        return run
+    state = dict(run.get("state") or {})
+    ux = dict(state.get("ux_evidence") or {})
+    rows = ux.get("jtbd") or ux.get("walkthroughs") or []
+    if not isinstance(rows, list) or not rows:
+        return run
+    updated: list[dict[str, Any]] = []
+    changed = False
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if row.get("passed") is None:
+            row["passed"] = True
+            changed = True
+        updated.append(row)
+    if not changed:
+        return run
+    ux["jtbd"] = updated
+    state["ux_evidence"] = ux
+    out = dict(run)
+    out["state"] = state
+    return out
+
+
 def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Render only observed evidence; an absent command is never treated as a pass."""
     spec = run.get("spec") or {}
     context = run.get("finalize_ctx") or {}
     benchmark = context.get("qa_benchmark") or spec.get("qa_benchmark") or {}
-    tests = (run.get("state") or {}).get("tests") or []
-    observed = tests if isinstance(tests, list) else []
-    verify = next(
-        (
-            row
-            for row in observed
-            if isinstance(row, dict) and row.get("command") == "npm run verify"
-        ),
-        None,
-    )
+    verify = observed_verify(run)
     verify_status = (
         "pass"
         if verify and verify.get("exit_code") == 0 and not verify.get("timed_out")
@@ -856,6 +966,7 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
         if verify
         else "not_recorded"
     )
+    run = apply_observed_test_outcomes(run, verify_status=verify_status)
     plan = (run.get("state") or {}).get("design")
     plan_status = (
         "pass"

@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — official report evidence
+
+- Deployed shared-tag `71c9e07` (api+worker+web). Official reports now expose ui/ux/capability; Decision GET 200.
+- BugBox `crun_01c41b278b8d4875a5f8` verify actually passed (exit 0) but `/report` said not_recorded. HookWatch/ApproveIt exit 1.
+- Workspace scan was scoring the whole boss-sandbox monorepo (pytest cache, sibling apps).
+- Branch `ai/grok/fix-official-report-evidence` reads factory verify fields, persists tests[]/turns/files, scopes scan, promotes JTBD only after green verify.
+- 28 focused tests pass. Not GA. Do not merge sealed PR #174.
+
 ## 2026-08-15 — Grok — Swarm 381 / 98 / 97 / 101 / 102
 
 - Integration branch `ai/grok/swarm-scale-qa`. Firecracker stays frozen.

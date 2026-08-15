@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Official report evidence (factory-shaped verify)
+
+- Live shared-tag `71c9e07` (api+worker+web). `/health` 200. Decision GET works. KMS local_vault ok.
+- Official leftover: reports treated factory `test_command`/`test_exit_code` as missing verify. BugBox actually had `tests_passed=true` exit 0; HookWatch/ApproveIt exit 1.
+- Branch `ai/grok/fix-official-report-evidence`: read factory verify fields; promote JTBD only after green verify; persist `state.tests[]` / turns / files_changed; scope workspace scan off monorepo junk.
+- UX/effort stay evidence-only. Innovation still requires an independent assessment.
+- Not public GA. 381 stays open until new `/report`s exist after the next shared-tag.
+
 ## 2026-08-15 BOSS-98 S1 Go sandbox scaffold (fail-closed)
 
 - Branch `ai/grok/boss-98-sandbox-go-harden`. In-repo `services/sandbox-service/` implements the v1.0 contract with typed jobs, lease/TTL/heartbeat.

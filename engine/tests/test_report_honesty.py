@@ -120,3 +120,84 @@ def test_workspace_scan_scores_ui_without_inventing_ux_or_a11y_zero():
     assert isinstance(report["ui"]["score"], (int, float))
     assert report["ux"]["status"] == "not_scored"
     assert report["ux"]["score"] is None
+
+
+def test_factory_recorded_verify_is_not_treated_as_missing():
+    """Live official runs write test_command/test_exit_code, not state.tests[]."""
+    report = completion_report(
+        {
+            "id": "crun_01c41b278b8d4875a5f8",
+            "status": "completed",
+            "spec": {},
+            "finalize_ctx": {
+                "qa_benchmark": {
+                    "id": "bugbox",
+                    "name": "BugBox",
+                    "verification_commands": ["npm run verify"],
+                    "completion_contract": [],
+                }
+            },
+            "state": {
+                "design": {"plan": "ship the canary"},
+                "test_command": "npm run verify",
+                "test_exit_code": 0,
+                "tests_passed": True,
+                "impl_files": ["bugbox/src/index.ts"],
+                "test_files": ["bugbox/tests/api/issues.test.ts"],
+                "ui_evidence": {
+                    "states_covered": ["empty", "error", "loading", "ok"],
+                },
+                "ux_evidence": {
+                    "jtbd": [
+                        {
+                            "id": "creates and round-trips an issue",
+                            "passed": None,
+                            "source": "bugbox/tests/api/issues.test.ts",
+                        }
+                    ]
+                },
+            },
+        }
+    )
+    assert report["results"][1]["status"] == "pass"
+    assert report["results"][1]["exit_code"] == 0
+    assert report["passed"] is True
+    dims = {item["id"]: item for item in report["scorecard"]["dimensions"]}
+    assert dims["functionality"]["status"] == "scored"
+    assert dims["functionality"]["score"] == 100
+    assert dims["reliability"]["status"] == "scored"
+    assert dims["ux"]["status"] == "scored"
+    assert dims["effort"]["status"] == "scored"
+    assert report["honesty"]["honest"] is True
+    assert report["honesty"]["invented_scores"] == []
+
+
+def test_factory_recorded_verify_fail_does_not_promote_jtbd():
+    report = completion_report(
+        {
+            "id": "crun_d15a1f5556e946ab865a",
+            "status": "completed",
+            "spec": {},
+            "finalize_ctx": {
+                "qa_benchmark": {"id": "hookwatch", "name": "HookWatch"}
+            },
+            "state": {
+                "design": {"plan": "build it"},
+                "test_command": "npm run verify",
+                "test_exit_code": 1,
+                "tests_passed": False,
+                "ux_evidence": {
+                    "jtbd": [
+                        {"id": "creates an inbox", "passed": None, "source": "t.ts"}
+                    ]
+                },
+            },
+        }
+    )
+    assert report["results"][1]["status"] == "fail"
+    assert report["passed"] is False
+    dims = {item["id"]: item for item in report["scorecard"]["dimensions"]}
+    assert dims["functionality"]["status"] == "scored"
+    assert dims["functionality"]["score"] == 0
+    assert dims["ux"]["status"] == "not_scored"
+    assert report["honesty"]["invented_scores"] == []

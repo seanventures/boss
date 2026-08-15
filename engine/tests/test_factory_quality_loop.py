@@ -3,11 +3,13 @@
 from boss_engine.services.factory_quality_loop import (
     MAX_QUALITY_PASSES,
     attach_evidence_to_run,
+    bind_test_outcomes,
     collect_workspace_evidence,
     measured_quality_gaps,
     quality_improve_prompt,
     score_run_with_workspace,
     should_run_quality_pass,
+    _is_real_test_path,
 )
 
 
@@ -96,9 +98,41 @@ def test_scorecard_receives_workspace_evidence_without_inventing_rubric():
     card = score_run_with_workspace(run, evidence)
     dims = {item["id"]: item for item in card["dimensions"]}
     assert dims["ui"]["status"] == "scored"
-    assert dims["ux"]["status"] == "not_scored"  # no rubric, jtbd.passed is None
+    # Verify passed and JTBD came from those tests — observed, not a minted rubric.
+    assert dims["ux"]["status"] == "scored"
+    assert attached["state"]["ux_evidence"]["rubric"] == {}
     gaps = measured_quality_gaps(card)
-    assert any(item["dimension"] == "ux" for item in gaps)
+    assert not any(item["dimension"] == "ux" and item["status"] == "not_scored" for item in gaps)
+
+
+def test_junk_paths_are_not_capability_or_jtbd_evidence():
+    evidence = collect_workspace_evidence(
+        {
+            ".pytest_cache/v/cache/lastfailed": "x",
+            "hookwatch/test-results/.last-run.json": "{}",
+            "sudoku_core/testdata/scoring_vectors.json": "{}",
+            "hookwatch/tests/playwright.config.mts": "export default {}",
+            "hookwatch/tests/api/hookwatch.test.ts": "test('creates an inbox', () => {})",
+        }
+    )
+    mapping_ids = [
+        item["id"] for item in evidence["capability_evidence"]["scenario_mapping"]
+    ]
+    assert mapping_ids == ["hookwatch/tests/api/hookwatch.test.ts"]
+    assert evidence["ux_evidence"]["jtbd"][0]["id"] == "creates an inbox"
+    assert _is_real_test_path("hookwatch/tests/api/hookwatch.test.ts")
+    assert not _is_real_test_path(".pytest_cache/v/cache/lastfailed")
+    assert not _is_real_test_path("hookwatch/tests/playwright.config.mts")
+
+
+def test_bind_test_outcomes_marks_jtbd_only_when_verify_passed():
+    evidence = collect_workspace_evidence(
+        {"tests/create.test.ts": "it('create issue', () => {})"}
+    )
+    still_unknown = bind_test_outcomes(evidence, tests_passed=False)
+    assert still_unknown["ux_evidence"]["jtbd"][0]["passed"] is None
+    bound = bind_test_outcomes(evidence, tests_passed=True)
+    assert bound["ux_evidence"]["jtbd"][0]["passed"] is True
 
 
 def _governed_pipeline_source() -> str:
@@ -135,3 +169,5 @@ def test_governed_pipeline_writes_ui_ux_evidence_into_run_state():
     src = _governed_pipeline_source()
     assert '"ui_evidence": (workspace_evidence or {}).get("ui_evidence")' in src
     assert '"ux_evidence": (workspace_evidence or {}).get("ux_evidence")' in src
+    assert "bind_test_outcomes(" in src
+    assert '"command": test_cmd' in src

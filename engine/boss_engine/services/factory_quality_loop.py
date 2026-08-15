@@ -47,7 +47,7 @@ def collect_workspace_evidence(files: dict[str, str]) -> dict[str, Any]:
     """Deterministic evidence from path→content. Pure. Never spends."""
     paths = list(files)
     contents = "\n".join(files.values())
-    test_paths = [p for p in paths if _TEST_HINT.search(p)]
+    test_paths = [p for p in paths if _is_real_test_path(p)]
     e2e_paths = [p for p in test_paths if re.search(r"e2e|playwright", p, re.I)]
     api_test_paths = [p for p in test_paths if re.search(r"api|request|route", p, re.I)]
     pkg = _package_scripts(files)
@@ -84,18 +84,49 @@ def collect_workspace_evidence(files: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def collect_workspace_evidence_from_root(root: Path, *, limit: int = 200) -> dict[str, Any]:
-    """Read a working tree. Skips node_modules / .git / binaries."""
+def collect_workspace_evidence_from_root(
+    root: Path, *, limit: int = 200, app_id: str | None = None
+) -> dict[str, Any]:
+    """Read a working tree. Skips caches / node_modules / .git / binaries.
+
+    Official sandbox checkouts are a monorepo. When ``app_id`` matches a
+    subdirectory (bugbox/, hookwatch/, approveit/), scan that tree plus
+    top-level tests that mention the app — never the sibling canaries.
+    """
     files: dict[str, str] = {}
-    skip = {".git", "node_modules", ".next", "dist", "coverage", "__pycache__"}
+    skip = {
+        ".git",
+        "node_modules",
+        ".next",
+        "dist",
+        "coverage",
+        "__pycache__",
+        ".pytest_cache",
+        "test-results",
+        "playwright-report",
+        ".turbo",
+        ".cache",
+    }
     if not root.is_dir():
         return collect_workspace_evidence({})
+    scoped = root / app_id if app_id and (root / app_id).is_dir() else None
     for path in sorted(root.rglob("*")):
         if any(part in skip for part in path.parts):
             continue
         if not path.is_file():
             continue
         rel = str(path.relative_to(root))
+        if scoped is not None:
+            try:
+                path.relative_to(scoped)
+                in_app = True
+            except ValueError:
+                in_app = False
+            if not in_app:
+                if not _is_real_test_path(rel):
+                    continue
+                if app_id and app_id.lower() not in rel.lower():
+                    continue
         if len(files) >= limit:
             break
         try:
@@ -106,6 +137,41 @@ def collect_workspace_evidence_from_root(root: Path, *, limit: int = 200) -> dic
             text = text[:80_000]
         files[rel] = text
     return collect_workspace_evidence(files)
+
+
+def bind_test_outcomes(evidence: dict[str, Any], *, tests_passed: bool | None) -> dict[str, Any]:
+    """Attach observed verify outcome to JTBD rows. Never invents rubric scores."""
+    if tests_passed is not True:
+        return evidence
+    ux = dict(evidence.get("ux_evidence") or {})
+    rows = []
+    changed = False
+    for item in ux.get("jtbd") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if row.get("passed") is None:
+            row["passed"] = True
+            changed = True
+        rows.append(row)
+    if not changed:
+        return evidence
+    ux["jtbd"] = rows
+    out = dict(evidence)
+    out["ux_evidence"] = ux
+    mapping = []
+    for item in (out.get("capability_evidence") or {}).get("scenario_mapping") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if row.get("passed") is None and row.get("tested"):
+            row["passed"] = True
+        mapping.append(row)
+    if mapping:
+        cap = dict(out.get("capability_evidence") or {})
+        cap["scenario_mapping"] = mapping
+        out["capability_evidence"] = cap
+    return out
 
 
 def attach_evidence_to_run(run: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
@@ -229,11 +295,38 @@ def _package_scripts(files: dict[str, str]) -> list[str]:
     return [str(name) for name in scripts]
 
 
+def _is_real_test_path(path: str) -> bool:
+    """True for executable test files. Configs, caches, and testdata stay out."""
+    text = path.replace("\\", "/")
+    parts = {part.lower() for part in text.split("/")}
+    if parts & {
+        ".pytest_cache",
+        "test-results",
+        "playwright-report",
+        "node_modules",
+        ".git",
+        "coverage",
+        "testdata",
+    }:
+        return False
+    if re.search(r"(?:playwright|vitest|jest|cypress)\.config\.", text, re.I):
+        return False
+    if text.endswith(".json"):
+        return False
+    return bool(
+        _TEST_HINT.search(text)
+        and text.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"))
+    )
+
+
 def _jtbd_from_tests(files: dict[str, str], test_paths: list[str]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for path in test_paths[:16]:
         text = files.get(path) or ""
         names = re.findall(r"(?:it|test|describe)\(\s*['\"]([^'\"]+)['\"]", text)
         for name in names[:8]:
-            out.append({"id": name[:80], "source": path, "passed": None})
+            cleaned = name.strip()
+            if not cleaned or cleaned in {";", "{", "}"}:
+                continue
+            out.append({"id": cleaned[:80], "source": path, "passed": None})
     return out

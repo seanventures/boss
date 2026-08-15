@@ -334,3 +334,23 @@ def test_tuning_proposal_endpoint_routes_measured_evidence_into_existing_change_
     assert recorded["change_ref"] == "github://boss/pull/141"
     assert "functionality" in recorded["expected_impact"][0]
     assert "Revert" in recorded["rollback_plan"][0]
+
+
+def test_capability_score_ignores_cache_and_config_paths():
+    from boss_engine.services.benchmark_apps import _score_capability
+
+    score = _score_capability(
+        {
+            "scenario_mapping": [
+                {"id": ".pytest_cache/v/cache/lastfailed", "tested": True},
+                {"id": "hookwatch/tests/playwright.config.mts", "tested": True},
+                {"id": "hookwatch/tests/api/hookwatch.test.ts", "tested": True},
+                "Create an inbox",
+            ]
+        },
+        {"acceptance_scenarios": ["Create an inbox"]},
+    )
+    assert score is not None
+    # junk paths dropped; real test + named scenario remain
+    assert score[0] == 100
+    assert "2/2" in score[1][0]
