@@ -95,14 +95,14 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "awesome": "LLM-Powered DevOps Tools",
         "status": "partial",
         "surfaces": ["scripts/reliability_mcp_server.py", "software factory"],
-        "gap": "MCP exposes list/diagnose only.",
+        "gap": "MCP exposes list/diagnose/capabilities/verify/page; no live vendor notify.",
     },
     {
         "id": "sre_bench",
         "awesome": "Agent Benchmarks",
-        "status": "missing",
+        "status": "partial",
         "surfaces": ["/v1/ai-sre/bench"],
-        "gap": "No deterministic SRE-agent bench slice.",
+        "gap": "Deterministic InvestigationEngine fixtures only; not a vendor bench.",
     },
 )
 

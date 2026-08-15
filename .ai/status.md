@@ -1,5 +1,12 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 AI SRE MCP + Mission Control + bench
+
+- MCP: `list_capabilities` / `verify_incident` / `page_incident` on stdio JSON-RPC.
+  No live vendor calls. Branch `ai/grok/ai-sre-mcp-ui`.
+- Mission Control island `ai-sre` next to Reliability renders GET /v1/ai-sre/capabilities.
+- Deterministic `GET /v1/ai-sre/bench` via InvestigationEngine fixtures. Not public GA.
+
 ## 2026-08-15 AI SRE evidence-only postmortems
 
 - On-demand `POST/GET /v1/reliability/incidents/{id}/postmortem` drafts a durable
