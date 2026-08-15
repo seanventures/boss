@@ -310,3 +310,49 @@ def test_apply_is_idempotent_when_no_change(client):
     assert result["status"] == "no_change"
     assert result["desired_workers"] == 0
     assert result["receipt_id"] is None
+
+
+def test_ensure_tables_and_unconfigured_status_are_honest(client, engine):
+    from sqlalchemy import text
+
+    from apps.api.app.db import begin
+    from boss_engine.config import get_settings
+    from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
+
+    svc = WorkerAutoscalingService(get_settings())
+    with begin(engine) as connection:
+        assert svc.ensure_tables(connection) is True
+        assert svc.ensure_tables(connection) is True
+        present = connection.execute(
+            text(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_name IN "
+                "('worker_autoscaling_policies', 'worker_autoscaling_history')"
+            )
+        ).fetchall()
+        names = {row[0] for row in present}
+        assert "worker_autoscaling_policies" in names
+        assert "worker_autoscaling_history" in names
+
+    status = client.get(
+        "/v1/worker-autoscaling/status",
+        params={"project_id": "proj_as_none"},
+    )
+    assert status.status_code == 200, status.text
+    body = status.json()
+    assert body["configured"] is False
+    assert body["queue_depth"] == 0
+    assert isinstance(body["pools"], list)
+    history = client.get(
+        "/v1/worker-autoscaling/history",
+        params={"project_id": "proj_as_none"},
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()["items"] == []
+    policies = client.get(
+        "/v1/worker-autoscaling/policies",
+        params={"project_id": "proj_as_none"},
+    )
+    assert policies.status_code == 200, policies.text
+    assert policies.json()["items"] == []
+    assert policies.json()["count"] == 0

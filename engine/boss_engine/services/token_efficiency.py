@@ -9,7 +9,8 @@ Surfaced at ``/v1/token-efficiency/*``.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Optional
+from contextlib import contextmanager
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -21,6 +22,94 @@ from .pipeline_profiles import DEFAULT_PROFILE, PROFILES, model_for_step, resolv
 # Heuristic used across BOSS for packing (toolchain_registry, knowledge pack).
 # chars/4 ≈ token count without tiktoken; intentional and documented.
 _CHARS_PER_TOKEN = 4
+
+# Recovery DDL — IF NOT EXISTS, no invented rows. Matches db/schema.sql.
+_TOKEN_BUDGET_POLICIES_DDL = """
+CREATE TABLE IF NOT EXISTS token_budget_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT '*',
+  max_prompt_tokens INTEGER,
+  max_completion_tokens INTEGER,
+  max_total_tokens_per_call INTEGER,
+  max_tokens_per_day BIGINT,
+  max_cost_usd_micros_per_day BIGINT,
+  alert_at_pct NUMERIC NOT NULL DEFAULT 0.80,
+  preferred_model_class TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, stage)
+)
+"""
+_TOKEN_BUDGET_POLICIES_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_token_budget_policies_project
+  ON token_budget_policies (project_id, stage)
+"""
+
+
+def is_missing_relation(exc: BaseException) -> bool:
+    """True for UndefinedTable / missing-relation SQL errors."""
+    orig = getattr(exc, "orig", None)
+    name = type(orig).__name__ if orig is not None else type(exc).__name__
+    blob = str(orig or exc).lower()
+    return name == "UndefinedTable" or "does not exist" in blob
+
+
+@contextmanager
+def _savepoint(connection: Connection) -> Iterator[None]:
+    """Isolate a statement so a missing table does not abort the outer txn."""
+    begin_nested = getattr(connection, "begin_nested", None)
+    nested = None
+    if callable(begin_nested):
+        try:
+            nested = begin_nested()
+        except Exception:
+            nested = None
+    try:
+        yield
+        if nested is not None:
+            nested.commit()
+    except Exception:
+        if nested is not None:
+            try:
+                nested.rollback()
+            except Exception:
+                pass
+        raise
+
+
+def ensure_tables(connection: Connection) -> bool:
+    """Create token_budget_policies if missing. False when DDL cannot run."""
+    try:
+        with _savepoint(connection):
+            connection.execute(text(_TOKEN_BUDGET_POLICIES_DDL))
+            connection.execute(text(_TOKEN_BUDGET_POLICIES_INDEX))
+        return True
+    except Exception as exc:
+        blob = str(exc).lower()
+        if is_missing_relation(exc) or "permission" in blob or "read-only" in blob:
+            return False
+        raise
+
+
+def unconfigured_policies(project_id: str) -> dict[str, Any]:
+    """Documented defaults only — no stored rows, no invented consumption."""
+    pid = (project_id or "").strip()
+    stages = [PROJECT_DEFAULT_STAGE] + [
+        s for s in KNOWN_STAGES if s in _DEFAULT_STAGE_CAPS
+    ]
+    policies = [_default_policy_row(pid, stage) for stage in stages]
+    return {
+        "project_id": pid,
+        "count": len(policies),
+        "policies": policies,
+        "default_stage_key": PROJECT_DEFAULT_STAGE,
+        "schema_ready": False,
+        "configured": False,
+    }
+
 
 # Project-wide stage key in token_budget_policies.stage
 PROJECT_DEFAULT_STAGE = "*"
@@ -350,20 +439,29 @@ def list_policies(connection: Connection, project_id: str) -> dict[str, Any]:
     if not (project_id or "").strip():
         raise ValueError("project_id is required.")
     pid = project_id.strip()
-    rows = connection.execute(
-        text(
-            """
-            SELECT id, project_id, stage, max_prompt_tokens, max_completion_tokens,
-                   max_total_tokens_per_call, max_tokens_per_day,
-                   max_cost_usd_micros_per_day, alert_at_pct, preferred_model_class,
-                   enabled, version, updated_at, created_at
-            FROM token_budget_policies
-            WHERE project_id = :p
-            ORDER BY CASE WHEN stage = '*' THEN 0 ELSE 1 END, stage
-            """
-        ),
-        {"p": pid},
-    ).mappings().all()
+    ready = ensure_tables(connection)
+    if not ready:
+        return unconfigured_policies(pid)
+    try:
+        with _savepoint(connection):
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT id, project_id, stage, max_prompt_tokens, max_completion_tokens,
+                           max_total_tokens_per_call, max_tokens_per_day,
+                           max_cost_usd_micros_per_day, alert_at_pct, preferred_model_class,
+                           enabled, version, updated_at, created_at
+                    FROM token_budget_policies
+                    WHERE project_id = :p
+                    ORDER BY CASE WHEN stage = '*' THEN 0 ELSE 1 END, stage
+                    """
+                ),
+                {"p": pid},
+            ).mappings().all()
+    except Exception as exc:
+        if is_missing_relation(exc):
+            return unconfigured_policies(pid)
+        raise
     stored = {_row_from_db(r)["stage"]: _row_from_db(r) for r in rows}
 
     stages = [PROJECT_DEFAULT_STAGE] + [
@@ -386,6 +484,8 @@ def list_policies(connection: Connection, project_id: str) -> dict[str, Any]:
         "count": len(policies),
         "policies": policies,
         "default_stage_key": PROJECT_DEFAULT_STAGE,
+        "schema_ready": True,
+        "configured": any(p.get("source") == "stored" for p in policies),
     }
 
 
@@ -402,6 +502,10 @@ def upsert_policies(
     items = list(policies or [])
     if not items:
         raise ValueError("policies must contain at least one entry.")
+    if not ensure_tables(connection):
+        raise ValueError(
+            "token_budget_policies is not applied on this runtime; cannot store policies."
+        )
 
     now = now_utc()
     for idx, raw in enumerate(items):
@@ -516,6 +620,48 @@ def _window_clause(window_hours: Optional[int]) -> tuple[str, dict[str, Any]]:
     return " AND created_at >= now() - (:hours || ' hours')::interval", {"hours": str(hours)}
 
 
+def empty_scorecard(
+    project_id: str,
+    window_hours: Optional[int] = None,
+    *,
+    schema_ready: bool = False,
+) -> dict[str, Any]:
+    """Honest zero scorecard. Never invents calls, tokens, or cost."""
+    return {
+        "project_id": project_id,
+        "window_hours": int(window_hours) if window_hours is not None else None,
+        "calls": 0,
+        "ok_calls": 0,
+        "failed_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cache_ratio": None,
+        "failed_burn_usd_micros": 0,
+        "failed_burn_ratio": 0.0,
+        "avg_tokens_per_call": 0.0,
+        "cost_usd_micros": 0,
+        "ok_cost_usd_micros": 0,
+        "cost_per_ok_call_usd_micros": None,
+        "cost_per_call_usd_micros": None,
+        "avg_latency_ms": 0.0,
+        "grades": {
+            "cache_ratio": "n/a",
+            "failed_burn": "n/a",
+            "avg_tokens": "n/a",
+        },
+        "targets": {
+            "cache_ratio": _CACHE_RATIO_TARGET,
+            "failed_burn_ratio": _FAILED_BURN_RATIO_WARN,
+            "avg_tokens_per_call": _AVG_TOKENS_WARN,
+        },
+        "by_stage": [],
+        "schema_ready": schema_ready,
+    }
+
+
 def build_scorecard(
     connection: Connection,
     project_id: str,
@@ -529,30 +675,36 @@ def build_scorecard(
     extra, params = _window_clause(window_hours)
     params = {"p": pid, **params}
 
-    totals = connection.execute(
-        text(
-            f"""
-            SELECT
-              count(*) AS calls,
-              COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0) AS ok_calls,
-              COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END), 0) AS failed_calls,
-              COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-              COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-              COALESCE(SUM(total_tokens), 0) AS total_tokens,
-              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-              COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-              COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros,
-              COALESCE(SUM(CASE WHEN NOT ok THEN cost_usd_micros ELSE 0 END), 0)
-                AS failed_cost_usd_micros,
-              COALESCE(SUM(CASE WHEN ok THEN cost_usd_micros ELSE 0 END), 0)
-                AS ok_cost_usd_micros,
-              COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
-            FROM llm_calls
-            WHERE project_id = :p{extra}
-            """
-        ),
-        params,
-    ).mappings().one()
+    try:
+        with _savepoint(connection):
+            totals = connection.execute(
+                text(
+                    f"""
+                    SELECT
+                      count(*) AS calls,
+                      COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0) AS ok_calls,
+                      COALESCE(SUM(CASE WHEN NOT ok THEN 1 ELSE 0 END), 0) AS failed_calls,
+                      COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                      COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                      COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                      COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                      COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+                      COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros,
+                      COALESCE(SUM(CASE WHEN NOT ok THEN cost_usd_micros ELSE 0 END), 0)
+                        AS failed_cost_usd_micros,
+                      COALESCE(SUM(CASE WHEN ok THEN cost_usd_micros ELSE 0 END), 0)
+                        AS ok_cost_usd_micros,
+                      COALESCE(AVG(latency_ms), 0) AS avg_latency_ms
+                    FROM llm_calls
+                    WHERE project_id = :p{extra}
+                    """
+                ),
+                params,
+            ).mappings().one()
+    except Exception as exc:
+        if is_missing_relation(exc):
+            return empty_scorecard(pid, window_hours, schema_ready=False)
+        raise
 
     calls = int(totals["calls"] or 0)
     ok_calls = int(totals["ok_calls"] or 0)
@@ -601,26 +753,32 @@ def build_scorecard(
     else:
         grades["avg_tokens"] = "poor"
 
-    by_stage_rows = connection.execute(
-        text(
-            f"""
-            SELECT COALESCE(stage, '?') AS stage,
-                   count(*) AS calls,
-                   COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0) AS ok_calls,
-                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                   COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-                   COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-                   COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros,
-                   COALESCE(SUM(CASE WHEN NOT ok THEN cost_usd_micros ELSE 0 END), 0)
-                     AS failed_cost_usd_micros
-            FROM llm_calls
-            WHERE project_id = :p{extra}
-            GROUP BY 1
-            ORDER BY cost_usd_micros DESC
-            """
-        ),
-        params,
-    ).mappings().all()
+    try:
+        with _savepoint(connection):
+            by_stage_rows = connection.execute(
+                text(
+                    f"""
+                    SELECT COALESCE(stage, '?') AS stage,
+                           count(*) AS calls,
+                           COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0) AS ok_calls,
+                           COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                           COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                           COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+                           COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros,
+                           COALESCE(SUM(CASE WHEN NOT ok THEN cost_usd_micros ELSE 0 END), 0)
+                             AS failed_cost_usd_micros
+                    FROM llm_calls
+                    WHERE project_id = :p{extra}
+                    GROUP BY 1
+                    ORDER BY cost_usd_micros DESC
+                    """
+                ),
+                params,
+            ).mappings().all()
+    except Exception as exc:
+        if is_missing_relation(exc):
+            return empty_scorecard(pid, window_hours, schema_ready=False)
+        raise
 
     by_stage = []
     for r in by_stage_rows:
@@ -670,6 +828,7 @@ def build_scorecard(
             "avg_tokens_per_call": _AVG_TOKENS_WARN,
         },
         "by_stage": by_stage,
+        "schema_ready": True,
     }
 
 
@@ -702,7 +861,8 @@ def build_consumption(
     token_util = None
     cost_util = None
     alerts: list[dict[str, Any]] = []
-    if token_cap and token_cap > 0:
+    have_usage = bool(score.get("schema_ready", True))
+    if have_usage and token_cap and token_cap > 0:
         token_util = score["total_tokens"] / token_cap
         if token_util >= alert_pct:
             alerts.append(
@@ -717,7 +877,7 @@ def build_consumption(
                               "or raise the daily token cap deliberately.",
                 }
             )
-    if cost_cap and cost_cap > 0:
+    if have_usage and cost_cap and cost_cap > 0:
         cost_util = score["cost_usd_micros"] / cost_cap
         if cost_util >= alert_pct:
             alerts.append(
@@ -733,23 +893,29 @@ def build_consumption(
                 }
             )
 
-    # Hourly rollup for charts
-    series = connection.execute(
-        text(
-            """
-            SELECT date_trunc('hour', created_at) AS bucket,
-                   count(*) AS calls,
-                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                   COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros
-            FROM llm_calls
-            WHERE project_id = :p
-              AND created_at >= now() - (:hours || ' hours')::interval
-            GROUP BY 1
-            ORDER BY 1
-            """
-        ),
-        {"p": pid, "hours": str(hours)},
-    ).mappings().all()
+    # Hourly rollup for charts — empty when llm_calls is missing, never invented.
+    series: list[Any] = []
+    try:
+        with _savepoint(connection):
+            series = connection.execute(
+                text(
+                    """
+                    SELECT date_trunc('hour', created_at) AS bucket,
+                           count(*) AS calls,
+                           COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                           COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros
+                    FROM llm_calls
+                    WHERE project_id = :p
+                      AND created_at >= now() - (:hours || ' hours')::interval
+                    GROUP BY 1
+                    ORDER BY 1
+                    """
+                ),
+                {"p": pid, "hours": str(hours)},
+            ).mappings().all()
+    except Exception as exc:
+        if not is_missing_relation(exc):
+            raise
 
     return {
         "project_id": pid,
@@ -788,6 +954,9 @@ def build_consumption(
             }
             for r in series
         ],
+        "schema_ready": bool(score.get("schema_ready", True))
+        and bool(policies.get("schema_ready", True)),
+        "configured": bool(policies.get("configured")),
     }
 
 

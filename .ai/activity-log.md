@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — V1 verify tokens / workers / jobs
+
+- Branch `ai/grok/v1-verify-tokens-workers` from `ai/grok/v1-feature-verify` (`a5c8951`).
+- Token + worker-autoscaling: `ensure_tables` IF NOT EXISTS; GET fail-closed empty-200 when tables missing; never invent consumption/worker counts.
+- Jobs: lease/heartbeat/reclaim tests already existed; added enqueue `dedupe_key` HTTP + tests.
+- Ledger updated CODE, not E2E. Live 500 remains until redeploy. Not public GA.
+- Plane: BOSS-388 (no new issue).
+
 ## 2026-08-15 — Grok — official app-scoped verify
 
 - HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote
