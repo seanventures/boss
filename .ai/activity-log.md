@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — v1 verify identity / KMS / feedback
+
+- Branch `ai/grok/v1-verify-identity-keys-feedback` (base `a5c8951`). Not GA. Not merged.
+- Identity: Community OIDC/SAML/SCIM catalog vs paid Account Connect 404. Missing IdP fail-closed.
+- KMS: ran `test_secretref_consumption` + `test_credential_resolve`; no new hole.
+- Feedback: preview propose→confirm; Metatron validate-then-apply; learning loop suggest-only; factory `open_pr=True`.
+- Ledger updated. Plane comment on BOSS-388.
+
 ## 2026-08-15 — Grok — v1 feature lock + release-planning honesty
 
 - Branch `ai/grok/v1-verify-spec-release` from `ai/grok/v1-feature-verify` (`a5c8951`).

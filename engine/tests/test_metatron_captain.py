@@ -6,8 +6,10 @@ applies BOSS self-modifications, and goals are scored from observed snapshots.
 
 from boss_engine.services.metatron_captain import (
     ACTION_KINDS,
+    BLOCKED_APPLY_KINDS,
     HELP_REPLY,
     MUTATING_INTENTS,
+    MetatronCaptain,
     findings_from_snapshot,
     interpret_turn,
     matches_default_process_story,
@@ -406,3 +408,52 @@ def test_scorecard_gap_findings_never_auto_apply_decisions():
     assert human
     assert all(move.get("status") != "applied" for move in moves)
     assert any(move["kind"] == "launch_factory_job" for move in moves)
+
+
+def test_factory_launch_is_pr_only_never_silent_production_write(monkeypatch):
+    """AGENTS.md: autonomous feedback proposes a PR; it never writes production."""
+    from types import SimpleNamespace
+
+    from boss_engine.config import Settings
+
+    captured: dict = {}
+
+    def fake_start(_connection, **kwargs):
+        captured.update(kwargs)
+        return "crun_self_mod"
+
+    class FakeJobs:
+        def __init__(self, _settings):
+            pass
+
+    monkeypatch.setattr(
+        "boss_engine.services.code_task_service.start_code_task", fake_start
+    )
+    monkeypatch.setattr("boss_engine.services.jobs.JobLeaseService", FakeJobs)
+
+    captain = MetatronCaptain(Settings())
+    captain.receipts = SimpleNamespace(
+        create_or_reuse=lambda *args, **kwargs: ({"id": "rcpt_self_mod"}, False)
+    )
+    captain._scope = lambda _connection, _project_id: {
+        "org_id": "org_test",
+        "workspace_id": "ws_test",
+    }
+
+    result = captain._apply_validated_move(
+        SimpleNamespace(),
+        project_id="boss-dogfood",
+        actor="ceo",
+        move={"kind": "launch_factory_job", "detail": "Improve BOSS self-improvement"},
+        verify_run=None,
+        directive="change BOSS captain overwatch",
+    )
+    assert result["status"] == "applied"
+    assert result["self_mod"] is True
+    assert captured["open_pr"] is True
+    assert captured["finalize_ctx"]["open_pr"] is True
+    assert captured["finalize_ctx"]["self_mod"] is True
+    assert "Open a PR only" in captured["instructions"]
+    assert "Do not apply to production in place." in captured["instructions"]
+    assert "escalate_decision" in BLOCKED_APPLY_KINDS
+    assert "propose_deadletter_review" in BLOCKED_APPLY_KINDS

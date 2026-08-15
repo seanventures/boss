@@ -15,6 +15,7 @@ from boss_engine.services.oidc import (
     JWKS_HTTP_TIMEOUT_SECONDS,
     OidcAuthenticationError,
     OidcAuthenticator,
+    OidcConfigurationError,
     jwks_client_for_url,
 )
 
@@ -50,6 +51,26 @@ def _clear_jwks_cache():
     jwks_client_for_url.cache_clear()
     yield
     jwks_client_for_url.cache_clear()
+
+
+def test_oidc_disabled_rejects_bearer():
+    """Missing IdP is fail-closed: disabled OIDC never authenticates."""
+    settings = Settings()
+    settings.oidc_enabled = False
+    with pytest.raises(OidcAuthenticationError, match="not enabled"):
+        OidcAuthenticator(settings).verify_bearer_token("any-token")
+
+
+def test_oidc_enabled_without_idp_config_fails_closed():
+    """Enabled-but-unconfigured IdP is 503-class fail-closed, not anonymous auth."""
+    settings = Settings()
+    settings.oidc_enabled = True
+    settings.oidc_issuer = None
+    settings.oidc_audience = None
+    settings.oidc_jwks_url = None
+    assert settings.oidc_configured is False
+    with pytest.raises(OidcConfigurationError, match="not configured"):
+        OidcAuthenticator(settings).verify_bearer_token("any-token")
 
 
 def test_jwks_client_sets_explicit_http_timeout():
