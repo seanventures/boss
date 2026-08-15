@@ -1,5 +1,14 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — AIOps noise view + NL query plan
+
+- Branch `ai/grok/ai-sre-noise` from `e35e711`.
+- `sre_noise.noise_report` + `GET /v1/ai-sre/noise`: raw vs clustered, top
+  signatures, suppressed duplicates. Empty = zeros. No invented reduction.
+- `sre_ask.plan_query` + `POST /v1/ai-sre/ask`: keyword map only, `executed=false`.
+  Unknown questions stay unknown (no fake PromQL).
+- Tests: 5 engine + 4 API green. Not public GA. Do not merge main.
+
 ## 2026-08-15 — Grok — first-class SRE runbooks
 
 - Branch `ai/grok/ai-sre-runbooks` off `e35e711` (AI SRE kernel).
