@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — expand test-v1-lock gate (BOSS-393)
+
+- Branch `ai/grok/e2e-test-gate` from `origin/ai/grok/v1-verify-test-system` (`dfb828f`).
+- Makefile now skip-if-missing: SRE/token/lock candidates join when present.
+- Present: honesty, verification target, factory quality, benchmark apps, AI SRE kernel, official reports, qa-scorecard, edition-visibility.
+- Skipped: overwatch, runbooks, sre_ask, sre_bench, reliability_mcp_tools, token_worker_fail_closed, v1_feature_lock.
+- `make test-v1-lock`: 39 python + 18 web = 57 passed. Official **not** 5/5. Not GA.
+
 ## 2026-08-15 — Grok — V1 verify test system (BOSS-393)
 
 - Branch `ai/grok/v1-verify-test-system` from `ai/grok/v1-feature-verify` (`a5c8951`).

@@ -1,5 +1,12 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 V1 e2e test gate (BOSS-393) (◐)
+
+- Branch `ai/grok/e2e-test-gate` from `dfb828f`.
+- `make test-v1-lock` is the single unit-layer gate (noconftest; skip-if-missing).
+- Ran: 39 python + 18 web = 57 passed. Official canaries **not** 5/5.
+- Test system row stays PARTIAL. **Not public GA.** Did not merge main.
+
 ## 2026-08-15 V1 test system lock (BOSS-393) (◐)
 
 - `make test-v1-lock` is the unit layer of the test pyramid.
