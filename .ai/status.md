@@ -1,5 +1,12 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Shared-tag dogfood `3af9c64`
+
+- Built api/worker/web natively on goldeneye; IMAGE lines only; no `--env-template`.
+- `/health` 200. Closed with live evidence: 341, 347, 370, 372, 375–380.
+- Held: 351 (allow-create), 369 (KMS master), 381 (official flag), 300 legal, 337/314/293 GA umbrellas, 292 partners.
+- Not public GA.
+
 ## 2026-08-15 Five-slice finish (341 / 370 / 375 / 379 / 378)
 
 - Preview View URLs: feature sweep fails if `url`/`open_url` is loopback; factory gate proves `publicize_preview` never hands 127.0.0.1 as View.

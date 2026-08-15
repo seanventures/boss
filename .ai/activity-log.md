@@ -1,5 +1,20 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Cert 347 / 372 / 380
+
+- Live GETs only. No seed POST (catalog 13/3 not empty). No remediations POST. No BYOK. No spend. Not GA.
+- 347: catalog 200, 13 published agents + 3 panels; seed route 405 GET. Recommend CLOSE. Residual: workflows=0, A2A still false-red degraded.
+- 372: remediations 200, honest empty, actions advertised. Recommend CLOSE. ~43 historical DLs remain.
+- 380: resolver wired; kms/health 200; secret-refs 200, 7 env refs, no raw values / last4. Recommend CLOSE. 369 still owns vault bind.
+- Tests: 19 noconftest (credential_resolve / a2a honesty / github secret) + 115 related no-DB passed.
+- Wrote `.ai/cert-studio-dlq-380.md`. Plane comments 347/`b8182649` 372/`8c6ee2c7` 380/`050a57fe`. Issues left In Progress for owner close.
+
+## 2026-08-15 — Grok — HOLD cert 351/369/381/300/337/314/293
+
+- Independent no-spend re-probe. Auth from live. Flags not enabled. Not GA.
+- `BOSS_FACTORY_ALLOW_CREATE` grep -c = 0. `GET /v1/kms/health` `local_vault.ok=false`. Official catalog reports missing/not_scored. Legal UNDECIDED.
+- Wrote `.ai/cert-blocked-351-369-381.md`. Each ticket HOLD with named blocker. Do not close.
+
 ## 2026-08-15 — Grok — Official QA /reports live inspect (BOSS-381)
 
 - Evidence-only probe. `BOSS_QA_ALLOW_OFFICIAL` unset — named blocker; no official POST.
