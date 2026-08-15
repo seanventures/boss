@@ -34,6 +34,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # AI SRE observe-only overwatch tick (do not fold into ai_sre.py)
+    try:
+        from .ai_sre_overwatch import router as ai_sre_overwatch_router
+
+        app.include_router(ai_sre_overwatch_router)
+    except ImportError:
+        pass
+
     # Security vulnerability scanning (Semgrep/Trivy/OSV)
     try:
         from .security_scan import router as security_router

@@ -1,5 +1,14 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — AI SRE observe-only overwatch
+
+- Branch `ai/grok/ai-sre-overwatch` from kernel `e35e711`.
+- `tick()` + `POST /v1/ai-sre/overwatch` + worker 60s hook. Scan persist,
+  diagnose open/critical without investigation, optional dry-run page.
+- Receipt `ai_sre:overwatch:{project}:{window}`. No sources → honest empty.
+- Never remediates / auto-applies Decisions / merges PRs. FEATURES stays ◐.
+- Tests: `engine/tests/test_ai_sre_overwatch.py` + kernel + worker. Not GA.
+
 ## 2026-08-15 — Grok — official app-scoped verify
 
 - HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote
