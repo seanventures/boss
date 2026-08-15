@@ -7,11 +7,17 @@ False/None on error rather than raising.
 
 Auth + base URL come from the same config as the inbound service (`PLANE_API_KEY` token,
 `PLANE_BASE_URL`/`PLANE_WORKSPACE`, deriving base+workspace from `PLANE_PROJECT_URL` when unset).
+
+Token resolution is SecretRef-first: if ``plane_api_secret_ref_id`` is set, or the configured
+key looks like ``sref_...``, the value comes from ``resolve_secret_ref``. Raw
+``settings.plane_api_token`` / ``PLANE_API_KEY`` is last-resort only when no ref is bound.
+The token is never logged.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import ssl
 import urllib.request
@@ -20,13 +26,61 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def _looks_like_secret_ref(value: object) -> bool:
+    return str(value or "").strip().startswith("sref_")
+
+
 class PlaneClient:
     def __init__(self, settings) -> None:
         self.settings = settings
         self._state_cache: dict[str, dict[str, str]] = {}   # project_id -> {state_name_lower: id}
         self._ctx_cls = ssl._create_unverified_context()
+        self._connection = None
 
     # --- connection ----------------------------------------------------------
+    def _secret_ref_id(self) -> str:
+        """Bound SecretRef id, or empty when the client should use last-resort env/token."""
+        explicit = str(getattr(self.settings, "plane_api_secret_ref_id", None) or "").strip()
+        if explicit:
+            return explicit
+        for candidate in (
+            getattr(self.settings, "plane_api_key", None),
+            getattr(self.settings, "plane_api_token", None),
+            os.environ.get("PLANE_API_KEY"),
+            os.environ.get("PLANE_API_TOKEN"),
+        ):
+            value = str(candidate or "").strip()
+            if _looks_like_secret_ref(value):
+                return value
+        return ""
+
+    def _resolve_secret_ref(self, secret_ref_id: str) -> str:
+        from .secret_backends import resolve_secret_ref
+
+        conn = self._connection
+        if conn is not None:
+            return resolve_secret_ref(conn, secret_ref_id, self.settings)
+        from ..db import get_engine
+
+        with get_engine(self.settings).connect() as opened:
+            return resolve_secret_ref(opened, secret_ref_id, self.settings)
+
+    def _token(self) -> str:
+        """Outbound Plane API token. SecretRef first; env/token only if no ref is bound."""
+        ref_id = self._secret_ref_id()
+        if ref_id:
+            try:
+                return str(self._resolve_secret_ref(ref_id) or "")
+            except Exception as exc:  # noqa: BLE001 — outbound Plane calls are best-effort
+                logger.warning("plane_client: secret ref resolution failed: %s", exc)
+                return ""
+        token = str(getattr(self.settings, "plane_api_token", None) or "").strip()
+        if token:
+            return token
+        return str(
+            os.environ.get("PLANE_API_KEY") or os.environ.get("PLANE_API_TOKEN") or ""
+        ).strip()
+
     def _ctx(self) -> tuple[str, str, str]:
         """(base_url, workspace, token) — mirrors PlaneWebhookService._api_ctx."""
         base = (self.settings.plane_base_url or "").rstrip("/")
@@ -37,7 +91,7 @@ class PlaneClient:
             if m:
                 base = base or m.group(1)
                 ws = ws or m.group(2)
-        return base, (ws or "default"), (self.settings.plane_api_token or "")
+        return base, (ws or "default"), self._token()
 
     def enabled(self) -> bool:
         base, _ws, token = self._ctx()

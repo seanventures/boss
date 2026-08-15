@@ -531,6 +531,38 @@ def benchmark_scorecard(
     }
 
 
+def report_honesty(report: dict[str, Any]) -> dict[str, Any]:
+    """Name missing UI/UX/capability evidence. Never invent a score.
+
+    Official /reports must stay evidence-only: a dimension without attached
+    evidence is ``not_scored``. A scored dimension with a null score is treated
+    as invented and marked dishonest so callers cannot stamp a 5/5 from silence.
+    """
+    scorecard = report.get("scorecard") or {}
+    dimensions = scorecard.get("dimensions") or []
+    missing: list[dict[str, Any]] = []
+    invented: list[str] = []
+    scored: list[str] = []
+    for item in dimensions:
+        if not isinstance(item, dict):
+            continue
+        dim_id = str(item.get("id") or "")
+        status = item.get("status")
+        if status == "not_scored":
+            missing.append({"id": dim_id, "reason": item.get("reason")})
+        elif status == "scored":
+            if item.get("score") is None:
+                invented.append(dim_id)
+            else:
+                scored.append(dim_id)
+    return {
+        "honest": not invented,
+        "scored": scored,
+        "missing_evidence": missing,
+        "invented_scores": invented,
+    }
+
+
 def tuning_recommendation(report: dict[str, Any]) -> dict[str, Any]:
     """Turn observed benchmark evidence into a proposal-ready, non-mutating packet.
 
@@ -712,6 +744,12 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
         and run.get("status") == "completed"
         and all(row["status"] == "pass" for row in command_results)
     )
+    scorecard = benchmark_scorecard(
+        run,
+        benchmark=benchmark,
+        verify_status=verify_status,
+        llm_calls=llm_calls,
+    )
     return {
         "run_id": run.get("id"),
         "benchmark_id": benchmark.get("id"),
@@ -723,12 +761,8 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
         "results": command_results,
         "simulated": simulated,
         "passed": is_complete,
-        "scorecard": benchmark_scorecard(
-            run,
-            benchmark=benchmark,
-            verify_status=verify_status,
-            llm_calls=llm_calls,
-        ),
+        "scorecard": scorecard,
+        "honesty": report_honesty({"scorecard": scorecard}),
         "message": (
             "Simulated fixture is not a certified benchmark pass."
             if simulated

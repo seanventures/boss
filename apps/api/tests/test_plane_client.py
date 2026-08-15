@@ -77,6 +77,24 @@ def test_create_issue_returns_canonical_provider_payload(monkeypatch):
     ]
 
 
+def test_secret_ref_pointer_is_preferred_over_raw_token(monkeypatch):
+    c = _client(plane_api_token="sref_plane_token", plane_api_key="sref_plane_token")
+    monkeypatch.setattr(c, "_resolve_secret_ref", lambda ref_id: "tok-from-ref")
+    assert c._secret_ref_id() == "sref_plane_token"
+    assert c._token() == "tok-from-ref"
+
+
+def test_bound_secret_ref_does_not_fall_back_to_env(monkeypatch):
+    c = _client(plane_api_secret_ref_id="sref_plane", plane_api_token="env-token")
+    monkeypatch.setattr(
+        c,
+        "_resolve_secret_ref",
+        lambda ref_id: (_ for _ in ()).throw(RuntimeError("unavailable")),
+    )
+    # fail-closed: bound ref that cannot resolve does not become the env token
+    assert c._token() == ""
+
+
 def test_request_failure_is_fail_safe(monkeypatch):
     # a network error yields None (logged), never raises -> set_state/add_comment return False
     c = _client()

@@ -714,3 +714,44 @@ def test_sealed_contract_fails_closed_without_decision_or_evidence():
     assert sealed["governed_passes_evidence"] is True
     for name in gate.SEALED_CONTRACT_EXPORTS:
         assert sealed["exports"][name] is True, name
+
+def test_simulated_process_is_not_sealed_on_the_gate_contract():
+    """Fixture/simulated work is never a sealed factory PR. Dry-run stays 22/22."""
+    inspection = gate.inspect_process_handoff()
+    assert inspection["simulated_no_spend"] is True
+
+    module = gate._try_import_engine("boss_engine.services.sealed_e2e_contract")
+    assert module is not None
+    assert module.simulated_is_not_sealed(simulated=True, auto_build=True) is False
+
+    attach = module.attach_sealed_receipt_result
+    validate = module.validate_sealed_receipt
+    simulated = {
+        "dedupe_key": "code:task:sim",
+        "effect_kind": "github.pull_request.create",
+        "status": "succeeded",
+        "simulated": True,
+        "result": attach(
+            {
+                "decision_id": "dec_sim",
+                "pull_request_url": "https://example.test/pull/1",
+                "receipt_id": "rcpt_sim",
+                "artifact_id": "art_sim",
+            }
+        ),
+    }
+    verdict = validate(simulated)
+    assert verdict.get("ok") is False
+    assert "not_simulated" in verdict.get("missing", [])
+    assert verdict.get("proven_live") is False
+
+    checks = gate.validate_dry_run_structure(
+        api_base="https://boss-api.example",
+        project_id="boss-dogfood",
+    )
+    required = [c for c in checks if c.required]
+    assert all(c.ok for c in required)
+    assert len(required) >= 20
+    by_name = {c.name: c for c in checks}
+    assert by_name["structure.process_simulated_no_spend"].ok is True
+    assert by_name["structure.sealed_receipt_contract"].ok is True

@@ -198,10 +198,16 @@ class OpenAIAdapter:
         *,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        connection=None,
+        project_id: Optional[str] = None,
+        provider: str = "openai",
     ):
         self.settings = settings
         self._base_url_override = (base_url or "").strip() or None
         self._api_key_override = api_key
+        self._connection = connection
+        self._project_id = (project_id or "").strip() or None
+        self._provider = (provider or "openai").strip() or "openai"
 
     def _resolved_base_url(self) -> str:
         if self._base_url_override:
@@ -211,6 +217,16 @@ class OpenAIAdapter:
     def _resolved_api_key(self) -> Optional[str]:
         if self._api_key_override is not None:
             return self._api_key_override
+        if self._connection is not None and self._project_id:
+            from .credential_resolve import resolve_project_credential
+
+            return resolve_project_credential(
+                self._connection,
+                self.settings,
+                project_id=self._project_id,
+                provider=self._provider,
+                env_fallback_attr="openai_api_key",
+            )
         return self.settings.openai_api_key
 
     def _azure_enabled(self) -> bool:

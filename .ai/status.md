@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 SecretRef consumption + official QA honesty
+
+- `resolve_project_credential` is the single lookup: SecretRef first, env last-resort only when no usable ref is bound. Bound-but-broken refs fail closed.
+- Wired into OpenAIAdapter, `make_code_agent`, factory `_guest_engine_fields`, GitHub `_resolve_secret`, Plane `_token`.
+- Official QA: `report_honesty` on `/reports`; `scripts/qa/official_reports.py` inspects BugBox/HookWatch/ApproveIt and never invents scores. Official POST requires `BOSS_QA_ALLOW_OFFICIAL=1`.
+- Sealed E2E contract tests extended; live receipt+hold still BOSS-351. Live BYOK paste still BOSS-369.
+- FEATURES consumption + official /reports stay ◐. Do not stamp public GA.
+
 ## 2026-08-14 Factory quality loop (docs)
 
 - One improve pass after green verify when UI/UX evidence is thin. Frozen tests stay frozen; failed pass restores last green impl.

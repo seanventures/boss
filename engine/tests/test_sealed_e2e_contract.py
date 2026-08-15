@@ -165,6 +165,130 @@ def test_simulated_process_is_never_a_sealed_factory_path():
     assert simulated_is_not_sealed(simulated=True, auto_build=False) is False
     assert simulated_is_not_sealed(simulated=False, auto_build=False) is False
     assert simulated_is_not_sealed(simulated=False, auto_build=True) is True
+    # Simulated + auto_build is still a process handoff, not a sealed factory PR.
+    assert simulated_is_not_sealed(simulated=True, auto_build=True) is False
+
+
+def test_simulated_receipt_is_not_sealed():
+    """A structurally complete PR receipt is still not sealed if it is simulated."""
+    top = _complete_receipt(simulated=True)
+    top_verdict = validate_sealed_receipt(top)
+    assert top_verdict["ok"] is False
+    assert "not_simulated" in top_verdict["missing"]
+    assert top_verdict["proven_live"] is False
+    assert top_verdict["sealed"] is False
+
+    nested = _complete_receipt()
+    nested["result"] = dict(nested["result"])
+    nested["result"]["simulated"] = True
+    nested_verdict = validate_sealed_receipt(nested)
+    assert nested_verdict["ok"] is False
+    assert "not_simulated" in nested_verdict["missing"]
+    assert nested_verdict["proven_live"] is False
+
+
+def test_receipt_missing_identity_or_pr_url_is_not_sealed():
+    no_dedupe = _complete_receipt(dedupe_key="")
+    assert "dedupe_key" in validate_sealed_receipt(no_dedupe)["missing"]
+
+    wrong_kind = _complete_receipt(effect_kind="code.task.simulated")
+    assert "effect_kind" in validate_sealed_receipt(wrong_kind)["missing"]
+
+    failed = _complete_receipt(status="failed")
+    assert "status" in validate_sealed_receipt(failed)["missing"]
+
+    no_pr = _complete_receipt(provider_ref="")
+    no_pr["result"] = dict(no_pr["result"])
+    no_pr["result"].pop("pull_request_url", None)
+    assert "result.pull_request_url" in validate_sealed_receipt(no_pr)["missing"]
+
+    empty = validate_sealed_receipt(None)
+    assert empty["ok"] is False
+    assert empty["proven_live"] is False
+    assert "dedupe_key" in empty["missing"]
+
+
+def test_decision_missing_evidence_or_auto_merge_is_not_sealed():
+    rec = dict(_complete_decision()["recommendation"])
+    rec.pop("ui_evidence")
+    rec.pop("ux_evidence")
+    rec.pop("capability_evidence")
+    missing = validate_sealed_decision(_complete_decision(recommendation=rec))
+    assert missing["ok"] is False
+    assert "recommendation.ui_evidence" in missing["missing"]
+    assert "recommendation.ux_evidence" in missing["missing"]
+    assert "recommendation.capability_evidence" in missing["missing"]
+
+    mergeable = dict(_complete_decision()["recommendation"])
+    mergeable["no_auto_merge"] = False
+    auto_merge = validate_sealed_decision(_complete_decision(recommendation=mergeable))
+    assert auto_merge["ok"] is False
+    assert "no_auto_merge" in auto_merge["missing"]
+
+    approved = validate_sealed_decision(_complete_decision(status="approved"))
+    assert approved["ok"] is False
+    assert "status" in approved["missing"]
+    assert approved["proven_live"] is False
+
+    wrong_action = dict(_complete_decision()["recommendation"])
+    wrong_action["action"] = "merge_pull_request"
+    action = validate_sealed_decision(_complete_decision(recommendation=wrong_action))
+    assert action["ok"] is False
+    assert "recommendation.action" in action["missing"]
+
+
+def test_none_or_non_dict_evidence_fails_closed_and_never_proves_live():
+    none_values = validate_evidence_attach(
+        {"ui_evidence": None, "ux_evidence": None, "capability_evidence": None}
+    )
+    assert none_values["ok"] is False
+    assert set(none_values["missing"]) == set(SEALED_EVIDENCE_KEYS)
+    assert none_values["proven_live"] is False
+
+    not_dicts = validate_evidence_attach(
+        {
+            "ui_evidence": "ok",
+            "ux_evidence": [],
+            "capability_evidence": 0,
+        }
+    )
+    assert not_dicts["ok"] is False
+    assert set(not_dicts["missing"]) == set(SEALED_EVIDENCE_KEYS)
+
+    receipt = _complete_receipt()
+    receipt["result"] = dict(receipt["result"])
+    for key in SEALED_EVIDENCE_KEYS:
+        receipt["result"][key] = None
+    verdict = validate_sealed_receipt(receipt)
+    assert verdict["ok"] is False
+    assert f"result.{SEALED_EVIDENCE_KEYS[0]}" in verdict["missing"]
+    assert verdict["proven_live"] is False
+
+
+def test_attach_result_holds_merge_and_never_claims_live_proof():
+    attached = attach_sealed_receipt_result(
+        {"decision_id": "dec_1", "pull_request_url": "https://example.test/pull/1"},
+        evidence={},
+        receipt_id="rcpt_hold",
+        quality_gate_id="qg_1",
+    )
+    assert attached["no_auto_merge"] is True
+    assert attached["receipt_id"] == "rcpt_hold"
+    assert attached["quality_gate_id"] == "qg_1"
+    assert attached["ui_evidence"] == {}
+    assert attached["ux_evidence"] == {}
+    assert attached["capability_evidence"] == {}
+    receipt = {
+        "id": "rcpt_hold",
+        "dedupe_key": "code:task:hold",
+        "effect_kind": SEALED_EFFECT_KIND,
+        "status": "succeeded",
+        "provider_ref": "https://example.test/pull/1",
+        "result": attached,
+    }
+    verdict = validate_sealed_receipt(receipt)
+    assert verdict["ok"] is True
+    assert verdict["proven_live"] is False
 
 
 def test_process_handoff_catalog_covers_ceo_to_accept():

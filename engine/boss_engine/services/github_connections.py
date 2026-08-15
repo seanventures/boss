@@ -53,7 +53,9 @@ class GitHubConnectionService:
         self.receipts = ReceiptService()
         self.secret_refs = SecretRefService()
         self.adapter_factory = adapter_factory or GitHubAdapter
+        self._custom_secret_resolver = secret_resolver
         self.secret_resolver = secret_resolver or self._resolve_secret
+        self._active_connection: Optional[Connection] = None
 
     def list_connections(
         self, connection: Connection, project_id: str
@@ -958,7 +960,11 @@ class GitHubConnectionService:
             project_id=project_id,
             credential_ref=credential_ref,
         )
-        credential = self.secret_resolver(secret_ref)
+        self._active_connection = connection
+        try:
+            credential = self.secret_resolver(secret_ref)
+        finally:
+            self._active_connection = None
         if not credential:
             raise GitHubConnectionStateError(
                 "GitHub SecretRef could not be resolved by this execution node."
@@ -1128,13 +1134,26 @@ class GitHubConnectionService:
             raise GitHubConnectionNotFoundError("GitHub connection not found.")
         return str(value)
 
-    @staticmethod
-    def _resolve_secret(secret_ref: dict[str, Any]) -> str:
-        if secret_ref["ref_kind"] != "env":
-            raise GitHubConnectionStateError(
-                "This execution node only resolves env SecretRefs."
-            )
-        return os.environ.get(str(secret_ref["ref_key"]), "")
+    def _resolve_secret(self, secret_ref: dict[str, Any]) -> str:
+        """Resolve a GitHub credential. SecretRef backends first, env last-resort.
+
+        A bound SecretRef id is resolved through ``resolve_secret_ref`` when a
+        DB connection is active (set by ``_make_adapter``). Env pointers remain
+        the last resort when no id is present or no connection is bound, so
+        existing env-only tests and custom resolvers stay intact.
+        """
+        ref_id = str(secret_ref.get("id") or "").strip()
+        conn = self._active_connection
+        if ref_id and conn is not None:
+            from .secret_backends import resolve_secret_ref
+
+            return resolve_secret_ref(conn, ref_id, self.settings)
+        if secret_ref.get("ref_kind") == "env":
+            return os.environ.get(str(secret_ref.get("ref_key") or ""), "")
+        raise GitHubConnectionStateError(
+            "This execution node cannot resolve this SecretRef "
+            "(need a bound ref id + connection, or an env pointer)."
+        )
 
     @staticmethod
     def _scope(connection: Connection, project_id: str) -> dict[str, str]:

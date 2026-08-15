@@ -856,11 +856,80 @@ def _wrap_paced(agent: "CodeAgent", settings: Settings) -> "CodeAgent":
     return PacedCodeAgent(agent, limiter)
 
 
-def make_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:
+def make_code_agent(
+    settings: Settings,
+    engine: Optional[str] = None,
+    *,
+    connection=None,
+    project_id: Optional[str] = None,
+) -> CodeAgent:
     """Build a CodeAgent. ``engine`` overrides ``settings.code_agent_engine`` so the
     governed pipeline can run builder roles on one model and adversary roles on another.
-    The returned agent is paced by the model rate limiter (#111) unless burst mode is on."""
-    return _wrap_paced(_build_code_agent(settings, engine), settings)
+    The returned agent is paced by the model rate limiter (#111) unless burst mode is on.
+
+    When ``connection`` + ``project_id`` are supplied, lane keys come from
+    ``resolve_project_credential`` (SecretRef first, env last-resort). Bound
+    but unresolvable refs fail closed instead of silently billing a different key.
+    """
+    bound = _bind_lane_credentials(
+        settings, engine, connection=connection, project_id=project_id
+    )
+    return _wrap_paced(_build_code_agent(bound, engine), bound)
+
+
+def _bind_lane_credentials(
+    settings: Settings,
+    engine: Optional[str],
+    *,
+    connection=None,
+    project_id: Optional[str] = None,
+) -> Settings:
+    if connection is None or not project_id:
+        return settings
+    from .credential_resolve import resolve_project_credential
+    from .model_rate_limiter import provider_of
+
+    lane = (engine or settings.code_agent_engine or "claude_code").lower()
+    if lane == "echo":
+        return settings
+    if lane == "claude_code":
+        token = resolve_project_credential(
+            connection,
+            settings,
+            project_id=project_id,
+            provider=provider_of(lane),
+            env_fallback_attr="claude_code_oauth_token",
+        )
+        return settings.model_copy(update={"claude_code_oauth_token": token})
+    if lane == "azure":
+        key = resolve_project_credential(
+            connection,
+            settings,
+            project_id=project_id,
+            provider=provider_of(lane),
+            env_fallback_attr="azure_openai_key",
+        )
+        return settings.model_copy(update={"azure_openai_key": key})
+    if lane in _PROVIDER_LANES:
+        key_field, _url_field = _PROVIDER_LANES[lane]
+        key = resolve_project_credential(
+            connection,
+            settings,
+            project_id=project_id,
+            provider=provider_of(lane),
+            env_fallback_attr=key_field,
+        )
+        return settings.model_copy(update={key_field: key})
+    if lane in ("native", "openai"):
+        key = resolve_project_credential(
+            connection,
+            settings,
+            project_id=project_id,
+            provider=provider_of(lane),
+            env_fallback_attr="openai_api_key",
+        )
+        return settings.model_copy(update={"openai_api_key": key})
+    return settings
 
 
 def _build_code_agent(settings: Settings, engine: Optional[str] = None) -> CodeAgent:

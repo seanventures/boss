@@ -1038,33 +1038,72 @@ def _parse_consistency(summary: str) -> str:
     return "consistent" if m[-1] == "YES" else "drift"
 
 
-def _guest_engine_fields(settings: Settings, engine_name: str, model) -> dict:
+def _lane_api_key(
+    settings: Settings,
+    engine_name: str,
+    attr: str,
+    *,
+    connection=None,
+    project_id: str | None = None,
+):
+    """SecretRef first when a project is bound; settings attr is last-resort only."""
+    if connection is not None and project_id:
+        from .credential_resolve import resolve_project_credential
+        from .model_rate_limiter import provider_of
+
+        return resolve_project_credential(
+            connection,
+            settings,
+            project_id=project_id,
+            provider=provider_of(engine_name),
+            env_fallback_attr=attr,
+        )
+    return getattr(settings, attr, None)
+
+
+def _guest_engine_fields(
+    settings: Settings,
+    engine_name: str,
+    model,
+    *,
+    connection=None,
+    project_id: str | None = None,
+) -> dict:
     """Map a routed engine lane onto guest_spec credential fields (hybrid substrate).
     OpenAI-compatible lanes (openrouter/groq/deepseek) run as the guest 'openai' engine
     pointed at the lane's base_url; claude_code rides the OAuth token; echo = no agent
-    (clone + run test_commands only, used for the regression stage)."""
+    (clone + run test_commands only, used for the regression stage).
+
+    When ``connection`` + ``project_id`` are supplied, keys come from
+    ``resolve_project_credential`` (SecretRef first, env last-resort).
+    """
+    def key(attr: str):
+        return _lane_api_key(
+            settings, engine_name, attr, connection=connection, project_id=project_id
+        )
+
     if engine_name == "echo":
         return {"engine": "echo"}
     if engine_name == "claude_code":
         return {"engine": "claude_code",
-                "claude_oauth_token": settings.claude_code_oauth_token}
+                "claude_oauth_token": key("claude_code_oauth_token")}
     if engine_name == "openrouter":
-        return {"engine": "openai", "openai_api_key": settings.openrouter_api_key,
+        return {"engine": "openai", "openai_api_key": key("openrouter_api_key"),
                 "openai_base_url": settings.openrouter_base_url, "model": model}
     if engine_name == "groq":
-        return {"engine": "openai", "openai_api_key": settings.groq_api_key,
+        return {"engine": "openai", "openai_api_key": key("groq_api_key"),
                 "openai_base_url": settings.groq_base_url, "model": model}
     if engine_name == "deepseek":
-        return {"engine": "openai", "openai_api_key": settings.deepseek_api_key,
+        return {"engine": "openai", "openai_api_key": key("deepseek_api_key"),
                 "openai_base_url": settings.deepseek_base_url, "model": model}
     if engine_name == "ollama":
         # Local-model lane. Note for sandboxed guests: "localhost" is the guest,
         # not the host — point OLLAMA_BASE_URL at a host-reachable address
         # (e.g. http://host.docker.internal:11434/v1) when tasks run in a VM.
-        return {"engine": "openai", "openai_api_key": settings.ollama_api_key,
+        return {"engine": "openai", "openai_api_key": key("ollama_api_key"),
                 "openai_base_url": settings.ollama_base_url, "model": model}
     if engine_name == "vllm":
-        return {"engine": "openai", "openai_api_key": settings.vllm_api_key,
+        return {"engine": "openai", "openai_api_key": key("vllm_api_key"),
                 "openai_base_url": settings.vllm_base_url, "model": model}
     if engine_name == "azure":
         # Explicit Azure frontier lane in a guest VM. A routed model (azure:<deploy>)
@@ -1072,15 +1111,15 @@ def _guest_engine_fields(settings: Settings, engine_name: str, model) -> dict:
         return {"engine": "openai", "azure_endpoint": settings.azure_openai_endpoint,
                 "azure_deployment": model or settings.azure_openai_deployment,
                 "azure_api_version": settings.azure_openai_api_version,
-                "azure_key": settings.azure_openai_key}
+                "azure_key": key("azure_openai_key")}
     # native/openai/azure -> the platform lane, same env the simple path sends
-    return {"engine": "openai", "openai_api_key": settings.openai_api_key,
+    return {"engine": "openai", "openai_api_key": key("openai_api_key"),
             "openai_base_url": settings.openai_base_url,
             "model": model or settings.openai_model,
             "azure_endpoint": settings.azure_openai_endpoint,
             "azure_deployment": settings.azure_openai_deployment,
             "azure_api_version": settings.azure_openai_api_version,
-            "azure_key": settings.azure_openai_key}
+            "azure_key": key("azure_openai_key")}
 
 
 def _requires_plan_approval(risk_tier: int) -> bool:
@@ -1325,7 +1364,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     def _agent_for(engine_name: str):
         a = agents.get(engine_name)
         if a is None:
-            a = make_code_agent(settings, engine=engine_name)
+            with _transaction(engine) as c:
+                a = make_code_agent(
+                    settings,
+                    engine=engine_name,
+                    connection=c,
+                    project_id=project_id,
+                )
             if redact_external:
                 a.redact = True
             agents[engine_name] = a
@@ -1426,8 +1471,17 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "acceptance_criteria": [], "test_commands": test_cmds,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
             "max_turns": int(getattr(settings, "code_agent_guest_max_turns", 120) or 120),
-            **_guest_engine_fields(settings, eng_name, model),
         }
+        with _transaction(engine) as c:
+            guest_spec.update(
+                _guest_engine_fields(
+                    settings,
+                    eng_name,
+                    model,
+                    connection=c,
+                    project_id=project_id,
+                )
+            )
         set_llm_context(stage=stage_name)
         # BURST CONTROL (#111 extended to the guest lane): a whole guest build is one long,
         # turn-dense Anthropic consumer. Dispatch it under the model rate limiter's per-provider
