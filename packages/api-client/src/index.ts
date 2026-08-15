@@ -5108,6 +5108,53 @@ export type DeadletterIncidentRequest = {
   summary?: string;
 };
 
+export type DeadletterRemediationAction = "retry" | "requeue" | "escalate" | "hold";
+
+export type DeadletterRemediationItem = {
+  id: string;
+  project_id: string;
+  deadletter_id: string;
+  action: DeadletterRemediationAction | string;
+  status: "queued" | "applied" | "blocked" | "failed" | string;
+  actor: string;
+  reason?: string;
+  result?: Record<string, unknown>;
+  requeued_job_id?: string | null;
+  decision_id?: string | null;
+  error?: string | null;
+  created_at: string;
+  updated_at?: string;
+};
+
+export type DeadletterRemediationListResponse = {
+  project_id: string;
+  deadletter_id?: string | null;
+  items: DeadletterRemediationItem[];
+  actions: DeadletterRemediationAction[];
+};
+
+export type DeadletterRemediationCreateRequest = {
+  actor?: string;
+  action: DeadletterRemediationAction;
+  reason?: string;
+  run_after_seconds?: number;
+};
+
+export type DeadletterRemediationCreateResponse = {
+  remediation: DeadletterRemediationItem;
+  deadletter_id: string;
+  project_id: string;
+  status: string;
+  requeued_job_id?: string | null;
+  deadletter_status?: string;
+};
+
+export type DeadletterRetryRequest = {
+  actor?: string;
+  reason?: string;
+  run_after_seconds?: number;
+};
+
 export type DeadletterIncidentResponse = {
   status: string;
   deadletter: DeadletterItem;
@@ -8526,6 +8573,39 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DeadletterRequeueResponse>(
         "POST",
         `/v1/deadletters/${deadletterId}/requeue`,
+        { body: payload },
+      );
+    },
+    listDeadletterRemediations(
+      projectId: string,
+      options?: { deadletterId?: string; limit?: number },
+    ) {
+      return request<DeadletterRemediationListResponse>(
+        "GET",
+        "/v1/deadletters/remediations",
+        {
+          query: {
+            project_id: projectId,
+            deadletter_id: options?.deadletterId,
+            limit: options?.limit ?? 100,
+          },
+        },
+      );
+    },
+    createDeadletterRemediation(
+      deadletterId: string,
+      payload: DeadletterRemediationCreateRequest,
+    ) {
+      return request<DeadletterRemediationCreateResponse>(
+        "POST",
+        `/v1/deadletters/${deadletterId}/remediations`,
+        { body: payload },
+      );
+    },
+    retryDeadletter(deadletterId: string, payload: DeadletterRetryRequest) {
+      return request<DeadletterRemediationCreateResponse>(
+        "POST",
+        `/v1/deadletters/${deadletterId}/retry`,
         { body: payload },
       );
     },

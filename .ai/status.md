@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 DLQ remediations in Mission Control (BOSS-372)
+
+- Operator Retry / Escalate / Hold now create durable remediations instead of a silent requeue.
+- Feed lists latest remediation (404 on older live tags is honest empty, not a false red).
+- Classifier credit-vs-credential and remediations E2E already exist. Not GA.
+
 ## 2026-08-15 SecretRef consumption + official QA honesty
 
 - `resolve_project_credential` is the single lookup: SecretRef first, env last-resort only when no usable ref is bound. Bound-but-broken refs fail closed.

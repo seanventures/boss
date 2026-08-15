@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { BossApiError } from "@boss/api-client";
 
 vi.mock("../lib/client", () => ({
   PROJECT_ID: "boss-dogfood",
   resolveProjectId: (projectId?: string) => projectId?.trim() || "boss-dogfood",
   client: {
     listDeadletters: vi.fn(),
+    listDeadletterRemediations: vi.fn(),
   },
 }));
 
@@ -35,6 +37,23 @@ describe("deadletter related-effect visibility", () => {
       ],
     });
 
+    vi.mocked(client.listDeadletterRemediations).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      items: [
+        {
+          id: "dlr_1",
+          project_id: "boss-dogfood",
+          deadletter_id: "dlq_webhook",
+          action: "hold",
+          status: "applied",
+          actor: "ceo",
+          reason: "waiting_on_receiver",
+          created_at: "2026-07-15T14:05:00Z",
+        },
+      ],
+      actions: ["retry", "requeue", "escalate", "hold"],
+    });
+
     const feed = await fetchDeadletterFeed("boss-dogfood", 25);
 
     expect(feed.apiReachable).toBe(true);
@@ -45,5 +64,37 @@ describe("deadletter related-effect visibility", () => {
       relatedEntityId: "whd_123",
       relatedStatus: "deadlettered",
     });
+    expect(feed.items[0].latestRemediation).toMatchObject({
+      action: "hold",
+      status: "applied",
+    });
+  });
+
+  it("still lists deadletters when remediations are 404 on an older tag", async () => {
+    vi.mocked(client.listDeadletters).mockResolvedValueOnce({
+      project_id: "boss-dogfood",
+      limit: 25,
+      offset: 0,
+      items: [
+        {
+          id: "dlq_old",
+          project_id: "boss-dogfood",
+          source_kind: "job",
+          source_id: "job_old",
+          reason: "terminal",
+          payload: {},
+          status: "open",
+          created_at: "2026-07-15T14:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(client.listDeadletterRemediations).mockRejectedValueOnce(
+      new BossApiError("BOSS API request failed: 404", 404),
+    );
+
+    const feed = await fetchDeadletterFeed("boss-dogfood", 25);
+    expect(feed.apiReachable).toBe(true);
+    expect(feed.items[0].id).toBe("dlq_old");
+    expect(feed.items[0].remediations).toEqual([]);
   });
 });

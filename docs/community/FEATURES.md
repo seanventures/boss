@@ -10,7 +10,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 |---|---|
 | Durable tasks, plans, jobs (Postgres) | ✅ |
 | Job leases, heartbeat, fencing | ✅ |
-| Deadletters and remediations | ✅ |
+| Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
 | Event / audit feed | ✅ |
 | Global activity log | ◐ Searchable/sortable Mission Control area. **Not GA.** |
 | Decision inbox (approve / reject / escalate) | ✅ |

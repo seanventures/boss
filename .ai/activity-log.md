@@ -1,5 +1,11 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Official QA /reports live inspect (BOSS-381)
+
+- Evidence-only probe. `BOSS_QA_ALLOW_OFFICIAL` unset — named blocker; no official POST.
+- Catalog built report missing for all three canaries (HookWatch pointer 404). Existing /reports: ui/ux `not_scored`, no invented null scores.
+- Wrote `.ai/official-qa-live.md`. Plane comment posted; issue stays In Progress. Not GA.
+
 ## 2026-08-15 — Grok — Global activity log (BOSS-379)
 
 - GET /v1/activity: search/filter/sort over events + process steps + jobs + DLQ + receipts.

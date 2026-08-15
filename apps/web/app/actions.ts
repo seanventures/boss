@@ -1688,11 +1688,30 @@ export async function requeueDeadletterJobAction(
   if (typeof deadletterId !== "string" || !deadletterId.trim()) {
     throw new Error("deadletter_id is required");
   }
-  await client.requeueDeadletterJob(deadletterId.trim(), {
-    actor: getActor(formData),
-    reason: getOptionalString(formData, "reason") ?? "operator_requested_requeue",
-  });
+  const action = getOptionalString(formData, "remediation_action") ?? "retry";
+  const reason =
+    getOptionalString(formData, "reason") ?? "operator_requested_requeue";
+  if (action === "retry") {
+    await client.retryDeadletter(deadletterId.trim(), {
+      actor: getActor(formData),
+      reason,
+    });
+  } else if (action === "requeue" || action === "escalate" || action === "hold") {
+    await client.createDeadletterRemediation(deadletterId.trim(), {
+      actor: getActor(formData),
+      action,
+      reason,
+    });
+  } else {
+    throw new Error("remediation_action must be retry, requeue, escalate, or hold");
+  }
   revalidatePath("/");
+}
+
+export async function createDeadletterRemediationAction(
+  formData: FormData,
+): Promise<void> {
+  return requeueDeadletterJobAction(formData);
 }
 
 export async function createComplianceEvidenceBundleAction(

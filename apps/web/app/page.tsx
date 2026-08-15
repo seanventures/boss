@@ -8,6 +8,7 @@ import {
   createBreakGlassGrantAction,
   createComplianceEvidenceBundleAction,
   createDeadletterIncidentAction,
+  createDeadletterRemediationAction,
   createEntitlementConnectionSessionAction,
   createOpsDigestAction,
   createDeploymentRunAction,
@@ -35,7 +36,7 @@ import {
   revokeBreakGlassGrantAction,
   rollbackAgentModuleAction,
   rollbackSelfImprovementProposalAction,
-  requeueDeadletterJobAction,
+
   runAutoscalerPlanAction,
   runAccountConnectHealthCheckAction,
   runDeploymentHealthCheckAction,
@@ -7354,6 +7355,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                             {deadletter.resolvedBy ?? "unknown"}
                           </p>
                         ) : null}
+                        {deadletter.latestRemediation ? (
+                          <p className="detail">
+                            Last remediation {deadletter.latestRemediation.action} /{" "}
+                            {deadletter.latestRemediation.status}
+                            {deadletter.latestRemediation.error
+                              ? ` — ${deadletter.latestRemediation.error}`
+                              : ""}
+                          </p>
+                        ) : null}
                         {deadletter.relatedEntityId ? (
                           <p className="muted">
                             Related {deadletter.relatedEntityType ?? "entity"}: {" "}
@@ -7387,7 +7397,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                           </form>
                           {deadletter.sourceKind === "job" &&
                           !deadletter.requeuedJobId ? (
-                            <form action={requeueDeadletterJobAction}>
+                            <form action={createDeadletterRemediationAction}>
                               <input
                                 type="hidden"
                                 name="deadletter_id"
@@ -7405,14 +7415,79 @@ export default async function HomePage({ searchParams }: HomePageProps) {
                               />
                               <input
                                 type="hidden"
+                                name="remediation_action"
+                                value="retry"
+                              />
+                              <input
+                                type="hidden"
                                 name="reason"
-                                value="operator_requested_requeue"
+                                value="operator_requested_retry"
                               />
                               <SubmitButton className="button secondary" type="submit">
-                                Requeue job
+                                Retry
                               </SubmitButton>
                             </form>
                           ) : null}
+                          <form action={createDeadletterRemediationAction}>
+                            <input
+                              type="hidden"
+                              name="deadletter_id"
+                              value={deadletter.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="project_id"
+                              value={activeProjectId}
+                            />
+                            <input
+                              type="hidden"
+                              name="actor"
+                              value={activeActorId}
+                            />
+                            <input
+                              type="hidden"
+                              name="remediation_action"
+                              value="escalate"
+                            />
+                            <input
+                              type="hidden"
+                              name="reason"
+                              value="operator_requested_escalate"
+                            />
+                            <SubmitButton className="button secondary" type="submit">
+                              Escalate
+                            </SubmitButton>
+                          </form>
+                          <form action={createDeadletterRemediationAction}>
+                            <input
+                              type="hidden"
+                              name="deadletter_id"
+                              value={deadletter.id}
+                            />
+                            <input
+                              type="hidden"
+                              name="project_id"
+                              value={activeProjectId}
+                            />
+                            <input
+                              type="hidden"
+                              name="actor"
+                              value={activeActorId}
+                            />
+                            <input
+                              type="hidden"
+                              name="remediation_action"
+                              value="hold"
+                            />
+                            <input
+                              type="hidden"
+                              name="reason"
+                              value="operator_requested_hold"
+                            />
+                            <SubmitButton className="button secondary" type="submit">
+                              Hold
+                            </SubmitButton>
+                          </form>
                         </div>
                       </div>
                       <code className="mono">{deadletter.sourceId}</code>

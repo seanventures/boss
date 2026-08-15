@@ -3245,6 +3245,60 @@ describe("createBossApiClient", () => {
           requeued_job_id: "job_requeued",
         },
       },
+      {
+        status: 200,
+        body: {
+          project_id: "boss-dogfood",
+          deadletter_id: "dlq_1",
+          items: [
+            {
+              id: "dlr_1",
+              project_id: "boss-dogfood",
+              deadletter_id: "dlq_1",
+              action: "retry",
+              status: "applied",
+              actor: "ceo",
+              created_at: "2026-06-03T00:00:00Z",
+            },
+          ],
+          actions: ["retry", "requeue", "escalate", "hold"],
+        },
+      },
+      {
+        status: 200,
+        body: {
+          status: "applied",
+          deadletter_id: "dlq_1",
+          project_id: "boss-dogfood",
+          requeued_job_id: "job_requeued",
+          remediation: {
+            id: "dlr_retry",
+            project_id: "boss-dogfood",
+            deadletter_id: "dlq_1",
+            action: "retry",
+            status: "applied",
+            actor: "ceo",
+            created_at: "2026-06-03T00:00:00Z",
+          },
+        },
+      },
+      {
+        status: 201,
+        body: {
+          status: "applied",
+          deadletter_id: "dlq_1",
+          project_id: "boss-dogfood",
+          remediation: {
+            id: "dlr_hold",
+            project_id: "boss-dogfood",
+            deadletter_id: "dlq_1",
+            action: "hold",
+            status: "applied",
+            actor: "ceo",
+            created_at: "2026-06-03T00:00:00Z",
+          },
+        },
+      },
     ];
     const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), init });
@@ -3267,6 +3321,18 @@ describe("createBossApiClient", () => {
       actor: "ceo",
       reason: "root_cause_fixed",
     });
+    const remediations = await client.listDeadletterRemediations("boss-dogfood", {
+      deadletterId: "dlq_1",
+    });
+    const retried = await client.retryDeadletter("dlq_1", {
+      actor: "ceo",
+      reason: "root_cause_fixed",
+    });
+    const held = await client.createDeadletterRemediation("dlq_1", {
+      actor: "ceo",
+      action: "hold",
+      reason: "waiting_on_creds",
+    });
 
     expect(calls[0].url).toBe(
       "http://127.0.0.1:8000/v1/deadletters/dlq_1/incident",
@@ -3278,8 +3344,20 @@ describe("createBossApiClient", () => {
     expect(calls[1].url).toBe(
       "http://127.0.0.1:8000/v1/deadletters/dlq_1/requeue",
     );
+    expect(calls[2].url).toBe(
+      "http://127.0.0.1:8000/v1/deadletters/remediations?project_id=boss-dogfood&deadletter_id=dlq_1&limit=100",
+    );
+    expect(calls[3].url).toBe(
+      "http://127.0.0.1:8000/v1/deadletters/dlq_1/retry",
+    );
+    expect(calls[4].url).toBe(
+      "http://127.0.0.1:8000/v1/deadletters/dlq_1/remediations",
+    );
     expect(incident.incident_artifact_id).toBe("art_incident");
     expect(requeued.requeued_job_id).toBe("job_requeued");
+    expect(remediations.items[0]?.action).toBe("retry");
+    expect(retried.status).toBe("applied");
+    expect(held.status).toBe("applied");
   });
 
   it("uses ops queue inspection and digest API contracts", async () => {
