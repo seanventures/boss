@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — first-class SRE runbooks
+
+- Branch `ai/grok/ai-sre-runbooks` off `e35e711` (AI SRE kernel).
+- Named runbooks attach to a reliability incident. External steps hold on a
+  Decision; `page_oncall` may dry-run notify with receipt
+  `sre_runbook:{run_id}:{step}`. Never auto-apply. Not GA.
+- Plane BOSS-389 In Progress (child of BOSS-387).
+
 ## 2026-08-15 — Grok — AI SRE observe-only overwatch
 
 - Branch `ai/grok/ai-sre-overwatch` from kernel `e35e711`.
