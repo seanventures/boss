@@ -63,3 +63,52 @@ def test_invented_null_score_is_flagged_dishonest():
     assert honesty["honest"] is False
     assert "ui" in honesty["invented_scores"]
     assert honesty["missing_evidence"][0]["id"] == "ux"
+
+
+def test_workspace_scan_scores_ui_without_inventing_ux_or_a11y_zero():
+    """Live official runs attach scan markers. JTBD passed=null stays not_scored."""
+    report = completion_report(
+        {
+            "id": "crun_01c41b278b8d4875a5f8",
+            "status": "blocked",
+            "spec": {},
+            "finalize_ctx": {
+                "qa_benchmark": {
+                    "id": "bugbox",
+                    "name": "BugBox",
+                    "verification_commands": ["npm run verify"],
+                    "completion_contract": [],
+                }
+            },
+            "state": {
+                "tests": [],
+                "design": {"plan": "ship the canary"},
+                "ui_evidence": {
+                    "a11y_markers": 132,
+                    "states_covered": ["empty", "error", "loading", "ok"],
+                    "has_a11y_script": False,
+                },
+                "ux_evidence": {
+                    "jtbd": [
+                        {
+                            "id": "activity log",
+                            "passed": None,
+                            "source": "bugbox/tests/api/activity.test.ts",
+                        }
+                    ]
+                },
+            },
+        }
+    )
+    honesty = report["honesty"]
+    assert honesty["honest"] is True
+    assert honesty["invented_scores"] == []
+    assert "ui" in honesty["scored"]
+    assert "ux" not in honesty["scored"]
+    missing = {item["id"] for item in honesty["missing_evidence"]}
+    assert "ux" in missing
+    dims = {item["id"]: item for item in report["scorecard"]["dimensions"]}
+    assert dims["ui"]["status"] == "scored"
+    assert isinstance(dims["ui"]["score"], (int, float))
+    assert dims["ux"]["status"] == "not_scored"
+    assert dims["ux"]["score"] is None

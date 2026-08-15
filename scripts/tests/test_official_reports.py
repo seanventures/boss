@@ -86,3 +86,109 @@ def test_official_posts_are_blocked_without_flag(monkeypatch):
     checks = request_official_runs(client)
     assert checks[0].ok is True
     assert client.posts == []
+
+
+def test_inspect_reports_honest_when_ux_not_scored():
+    client = FakeClient(
+        {
+            ("GET", "/v1/qa/benchmark-apps"): (
+                200,
+                {
+                    "items": [
+                        {"id": "bugbox", "built": {"run_id": "run_live"}},
+                        {"id": "hookwatch"},
+                        {"id": "approveit"},
+                    ]
+                },
+            ),
+            ("GET", "/v1/qa/benchmark-apps/runs/run_live/report"): (
+                200,
+                {
+                    "passed": False,
+                    "honesty": {
+                        "honest": True,
+                        "scored": ["ui"],
+                        "invented_scores": [],
+                        "missing_evidence": [
+                            {"id": "ux", "reason": "JTBD passed is unknown"}
+                        ],
+                    },
+                    "scorecard": {
+                        "dimensions": [
+                            {"id": "ui", "status": "scored", "score": 100},
+                            {
+                                "id": "ux",
+                                "status": "not_scored",
+                                "score": None,
+                                "reason": "JTBD passed is unknown",
+                            },
+                        ]
+                    },
+                },
+            ),
+        }
+    )
+    checks = inspect_reports(client)
+    honesty = next(c for c in checks if c.name == "official.bugbox.honesty")
+    assert honesty.ok is True
+    assert honesty.evidence["invented_scores"] == []
+    assert honesty.evidence["passed"] is False
+
+
+def test_inspect_prefers_official_run_id_override(monkeypatch):
+    monkeypatch.setenv(
+        "BOSS_OFFICIAL_RUN_IDS",
+        "bugbox=crun_01c41b278b8d4875a5f8,hookwatch=crun_d15a1f5556e946ab865a",
+    )
+    client = FakeClient(
+        {
+            ("GET", "/v1/qa/benchmark-apps"): (
+                200,
+                {
+                    "items": [
+                        {
+                            "id": "bugbox",
+                            "built": {"run_id": "crun_stale_catalog"},
+                        },
+                        {"id": "hookwatch"},
+                        {"id": "approveit"},
+                    ]
+                },
+            ),
+            (
+                "GET",
+                "/v1/qa/benchmark-apps/runs/crun_01c41b278b8d4875a5f8/report",
+            ): (
+                200,
+                {
+                    "passed": False,
+                    "honesty": {
+                        "honest": True,
+                        "invented_scores": [],
+                        "missing_evidence": [{"id": "ux"}],
+                    },
+                },
+            ),
+            (
+                "GET",
+                "/v1/qa/benchmark-apps/runs/crun_d15a1f5556e946ab865a/report",
+            ): (
+                200,
+                {
+                    "passed": False,
+                    "honesty": {
+                        "honest": True,
+                        "invented_scores": [],
+                        "missing_evidence": [{"id": "ux"}],
+                    },
+                },
+            ),
+        }
+    )
+    checks = inspect_reports(client)
+    names = [c.name for c in checks]
+    assert "official.bugbox.honesty" in names
+    assert "official.hookwatch.honesty" in names
+    paths = [path for _method, path, _q in client.queries]
+    assert "/v1/qa/benchmark-apps/runs/crun_01c41b278b8d4875a5f8/report" in paths
+    assert "/v1/qa/benchmark-apps/runs/crun_stale_catalog/report" not in paths
