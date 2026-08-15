@@ -26,8 +26,21 @@ from ..config import Settings
 from .model_rate_limiter import rate_limiter_observability
 
 # Documented defaults — mirrored in packages/specpack/policies/concurrency_governance_policy.yaml
+def go_scale_track(*, settings: Optional[Settings] = None) -> dict[str, Any]:
+    """Honesty block for the Go scale track. Parent seam — no Go runtime shipped."""
+    from .go_scale import go_scale_track as _track
+
+    body = _track()
+    if settings is not None:
+        body["microvm_claims_frozen"] = bool(
+            getattr(settings, "microvm_claims_frozen", True)
+        )
+    return body
+
+
 DEFAULT_POLICY: dict[str, Any] = {
     "max_concurrent_vms_per_host": 8,
+    "max_in_flight": 16,
     "max_queue_depth_per_worker": 5,
     "backpressure_queue_depth_threshold": 20,
     "lease_contention_ratio_threshold": 0.75,
@@ -115,6 +128,9 @@ def policy_from_settings(settings: Optional[Settings] = None) -> dict[str, Any]:
     )
     policy["wip_limit"] = max(
         1, int(getattr(s, "concurrency_wip_limit", policy["wip_limit"]) or 5)
+    )
+    policy["max_in_flight"] = max(
+        1, int(getattr(s, "concurrency_max_in_flight", policy["max_in_flight"]) or 16)
     )
     # Model-lane knobs (existing settings)
     policy["model"] = {
@@ -232,6 +248,19 @@ def evaluate_backpressure(
             }
         )
 
+    in_flight = int(queue.get("in_flight") or 0)
+    if in_flight <= 0:
+        in_flight = int(queue.get("running_jobs") or 0) + int(queue.get("leased_jobs") or 0)
+    max_in_flight = int(policy.get("max_in_flight") or 0)
+    if max_in_flight > 0 and in_flight >= max_in_flight:
+        signals.append(
+            {
+                "code": "max_in_flight_overflow",
+                "severity": "high",
+                "detail": f"in_flight={in_flight} max_in_flight={max_in_flight}",
+            }
+        )
+
     # VM pool density
     capacity = vm_pool.get("capacity")
     running = vm_pool.get("running")
@@ -305,10 +334,68 @@ def evaluate_backpressure(
         "reason": reason,
         "signals": signals,
         "needed_workers_estimate": needed_workers,
+        "in_flight": in_flight,
+        "max_in_flight": max_in_flight,
         "provider_limits_bind_first": bool(policy.get("prefer_provider_rate_limits", True)),
         "budget_governor_overrides_scale": bool(
             policy.get("budget_governor_overrides_scale", True)
         ),
+    }
+
+
+def admit_or_reject(
+    *,
+    in_flight: int,
+    max_in_flight: int,
+    backpressure: Optional[dict[str, Any]] = None,
+    rate_limited: bool = False,
+) -> dict[str, Any]:
+    """Deterministic overflow hook. Rejects honestly — never silent drop."""
+    inflight = int(in_flight)
+    ceiling = int(max_in_flight)
+    if ceiling < 1:
+        return {
+            "admitted": False,
+            "code": "invalid_max_in_flight",
+            "http_status": 422,
+            "retryable": False,
+            "dropped_silently": False,
+            "reason": f"max_in_flight={ceiling} is not a usable ceiling",
+        }
+    if inflight >= ceiling:
+        return {
+            "admitted": False,
+            "code": "max_in_flight_overflow",
+            "http_status": 429,
+            "retryable": True,
+            "dropped_silently": False,
+            "reason": f"in_flight={inflight} >= max_in_flight={ceiling}",
+        }
+    if rate_limited:
+        return {
+            "admitted": False,
+            "code": "rate_limit_reject",
+            "http_status": 429,
+            "retryable": True,
+            "dropped_silently": False,
+            "reason": "provider rate limit binds first",
+        }
+    if backpressure and not backpressure.get("admit_new_work", True):
+        return {
+            "admitted": False,
+            "code": "backpressure_reject",
+            "http_status": 429,
+            "retryable": True,
+            "dropped_silently": False,
+            "reason": str(backpressure.get("reason") or "backpressure_active"),
+        }
+    return {
+        "admitted": True,
+        "code": "ok",
+        "http_status": 202,
+        "retryable": False,
+        "dropped_silently": False,
+        "reason": "admitted",
     }
 
 

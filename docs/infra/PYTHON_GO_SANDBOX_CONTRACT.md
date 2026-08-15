@@ -50,14 +50,26 @@ Response (normalized by `parse_status` / `parse_result`):
   }
 }
 ```
-- **Terminal statuses:** `done`, `failed`, `timeout`. `queued`/`running` → keep polling. An unknown/empty
+- **Terminal statuses:** `done`, `failed`, `timeout`, `cancelled`. `queued`/`running` → keep polling. An unknown/empty
   status is treated as `running` (never a false terminal). `result` is present on a terminal status.
 - Poll interval `BOSS_SANDBOX_POLL_INTERVAL_SECONDS` (≥3s); overall wait `BOSS_SANDBOX_AGENT_TIMEOUT_SECONDS`.
+  Timeouts are **fail-closed** (never treated as success).
 
-### 3. Release — `DELETE /v1/sandbox/tasks/{sandbox_task_id}`
+### 3. Cancel — `POST /v1/sandbox/tasks/{sandbox_task_id}/cancel`
+Additive (BOSS-97). Body: `{ "contract_version": "1.0", "op": "cancel", "job_id": "<id>", "reason": "…" }`.
+Terminal status becomes `cancelled`.
+
+### 4. Heartbeat — `POST /v1/sandbox/tasks/{sandbox_task_id}/heartbeat`
+Additive (BOSS-97). Body: `{ "contract_version": "1.0", "op": "heartbeat", "job_id": "<id>" }`.
+A missed heartbeat / exceeded timeout is fail-closed (`timeout`), never a silent success.
+
+### 5. Release — `DELETE /v1/sandbox/tasks/{sandbox_task_id}`
 Called on **success** to free capacity. **Failed VMs are intentionally NOT released** — the service
 retains the rootfs for inspection. Bounded retention for a rootfs-backed preview:
 `POST /v1/sandbox/tasks/{id}/hold {ttl_seconds, reason}` and `POST /v1/sandbox/tasks/{id}/preview {ttl_seconds, command}`.
+
+JSON Schema for the shared job envelope: `engine/boss_engine/contracts/go_job_v1.schema.json`.
+Python client: `boss_engine.services.go_job_contract.GoJobClient` (raises `GoServiceUnset` when the URL is empty).
 
 ## Conformance
 

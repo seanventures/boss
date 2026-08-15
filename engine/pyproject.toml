@@ -43,3 +43,7 @@ boss-engine = "boss_engine.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["boss_engine*"]
+
+[tool.setuptools.package-data]
+boss_engine = ["contracts/*.json"]
+

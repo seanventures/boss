@@ -9,6 +9,7 @@ scope:
 rules:
   density:
     max_concurrent_vms_per_host: 8
+    max_in_flight: 16
     document_ceiling_in_status: true
   queue_backpressure:
     max_queue_depth_per_worker: 5

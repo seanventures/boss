@@ -8,6 +8,7 @@ from apps.api.app.services import sandbox_contract as sc
 def test_version_and_statuses():
     assert sc.CONTRACT_VERSION == "1.0"
     assert sc.is_terminal("done") and sc.is_terminal("failed") and sc.is_terminal("timeout")
+    assert sc.is_terminal("cancelled")
     assert not sc.is_terminal("running") and not sc.is_terminal("queued") and not sc.is_terminal(None)
     assert sc.succeeded("done") and not sc.succeeded("failed")
 
@@ -22,6 +23,8 @@ def test_routes():
     assert sc.submit_path() == "/v1/sandbox/tasks"
     assert sc.status_path("sid1") == "/v1/sandbox/tasks/sid1"
     assert sc.release_path("sid1") == "/v1/sandbox/tasks/sid1"
+    assert sc.cancel_path("sid1") == "/v1/sandbox/tasks/sid1/cancel"
+    assert sc.heartbeat_path("sid1") == "/v1/sandbox/tasks/sid1/heartbeat"
 
 
 def test_build_submit_request():

@@ -8771,10 +8771,22 @@ def concurrency_load_endpoint(payload: Optional[dict] = None):
     def task_fn(i):
         return ch.stub_task(i, duration_s=dur, fail_every=fail_every)
 
+    from .services.concurrency_governance import go_scale_track
+
+    honesty = {
+        "runner": "python_stub",
+        "spent_usd_micros": 0,
+        "firecracker_required": False,
+        "go_scale_track": go_scale_track(settings=settings),
+    }
     if payload.get("sweep"):
         levels = [min(500, max(1, int(c))) for c in payload["sweep"]][:12]
-        return ch.sweep(task_fn, levels, n_per_level=min(500, n or 50))
-    return ch.run_load(task_fn, n, conc)
+        report = ch.sweep(task_fn, levels, n_per_level=min(500, n or 50))
+        report.update(honesty)
+        return report
+    report = ch.run_load(task_fn, n, conc)
+    report.update(honesty)
+    return report
 
 
 # --- Discovery pipeline: research-driven outcome discovery -------------------

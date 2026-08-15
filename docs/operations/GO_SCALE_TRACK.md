@@ -52,6 +52,9 @@ Searched the tree for Go sources, Go modules, and Go deployables. Result: **none
 | Concurrency governance | `engine/boss_engine/services/concurrency_governance.py` + `/v1/concurrency/{policy,status}` | Queue, lease contention, model rate limits, VM-host density (BOSS-100) |
 | Load harness | `engine/boss_engine/services/concurrency_harness.py` + `POST /v1/concurrency-load` | Python stub soak (BOSS-103). Not a Go pool. |
 | Sandbox contract | `engine/boss_engine/services/sandbox_contract.py` | Versioned submit/poll/release envelope (BOSS-99) |
+| Async job seam (BOSS-97 parent) | `engine/boss_engine/services/go_job_contract.py` + `contracts/go_job_v1.schema.json` | Enqueue / status / cancel / heartbeat + fail-closed timeouts. No Go binary. |
+| Overflow hooks | `concurrency_governance.admit_or_reject` | Honest 429 overflow (`max_in_flight`, backpressure, rate-limit). Never silent drop. |
+| Dry-run harness | `scripts/go_scale_dry_run.py` | Zero-spend stub; refuses `--live` / `--firecracker`. |
 | Sandbox providers | `engine/boss_engine/services/sandbox_provider.py` | `LocalSubprocessProvider` (default) + `MicroVMProvider` HTTP client |
 | In-repo sandbox host | `sandbox-host/sandbox_agent.py`, `sandbox-host/guest/` | Python FastAPI + ContainerBackend stand-in |
 | Goldeneye host (out of tree) | `/srv/sandbox/bin/sandbox-service.py` on `:8077` | Python Firecracker service; see [`BOSS-340_SANDBOX_HOST_DIAGNOSIS.md`](BOSS-340_SANDBOX_HOST_DIAGNOSIS.md) |
@@ -122,6 +125,7 @@ Exit criteria for *starting* S2/S3 code: a linked soak report showing the Python
 | `s1_go_sandbox_service` | `false` |
 | `s2_go_tenant_gateway` | `false` |
 | `s3_go_event_dispatcher` | `false` |
+| `engine_requires_go` | `false` |
 | `doc` | `docs/operations/GO_SCALE_TRACK.md` |
 
 `POST /v1/concurrency-load` also returns `runner: python_stub`. Do not flip any `*_shipped` / `s2_*` / `s3_*` flag to true without a real in-repo Go binary *and* a live probe. Tests pin the fail-closed defaults.

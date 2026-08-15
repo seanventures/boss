@@ -20,9 +20,16 @@ from typing import Any, Optional
 CONTRACT_VERSION = "1.0"
 
 # --- job status (the guest's poll response `status`) -------------------------
-QUEUED, RUNNING, DONE, FAILED, TIMEOUT = "queued", "running", "done", "failed", "timeout"
-_TERMINAL = {DONE, FAILED, TIMEOUT}
-_ALL_STATUSES = {QUEUED, RUNNING, DONE, FAILED, TIMEOUT}
+QUEUED, RUNNING, DONE, FAILED, TIMEOUT, CANCELLED = (
+    "queued",
+    "running",
+    "done",
+    "failed",
+    "timeout",
+    "cancelled",
+)
+_TERMINAL = {DONE, FAILED, TIMEOUT, CANCELLED}
+_ALL_STATUSES = {QUEUED, RUNNING, DONE, FAILED, TIMEOUT, CANCELLED}
 
 
 def is_terminal(status: Optional[str]) -> bool:
@@ -51,6 +58,16 @@ def status_path(sandbox_task_id: str) -> str:
 
 def release_path(sandbox_task_id: str) -> str:
     return f"/v1/sandbox/tasks/{sandbox_task_id}"     # DELETE on success; failed VMs are retained
+
+
+def cancel_path(sandbox_task_id: str) -> str:
+    """POST — operator/engine cancel. Additive (BOSS-97)."""
+    return f"/v1/sandbox/tasks/{sandbox_task_id}/cancel"
+
+
+def heartbeat_path(sandbox_task_id: str) -> str:
+    """POST — fail-closed liveness while a job is running. Additive (BOSS-97)."""
+    return f"/v1/sandbox/tasks/{sandbox_task_id}/heartbeat"
 
 
 # --- submit request ----------------------------------------------------------

@@ -682,6 +682,9 @@ class Settings(BaseSettings):
         default=True, alias="BOSS_CONCURRENCY_BUDGET_GOVERNOR_OVERRIDES_SCALE"
     )
     concurrency_wip_limit: int = Field(default=5, alias="BOSS_CONCURRENCY_WIP_LIMIT")
+    concurrency_max_in_flight: int = Field(
+        default=16, alias="BOSS_CONCURRENCY_MAX_IN_FLIGHT"
+    )
     # Which CodeAgent implementation runs the edit/test loop:
     #   claude_code = wrap `claude -p` headless WITH its file/bash tools enabled,
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).

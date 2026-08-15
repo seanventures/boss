@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boss.dev/schemas/go-job/v1.json",
+  "title": "BOSS Python⇄Go async job contract v1",
+  "description": "Shared enqueue/status/cancel/heartbeat envelope. Python is canonical; Go services conform. Additive changes only.",
+  "$defs": {
+    "contract_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "job_status": {
+      "type": "string",
+      "enum": ["queued", "running", "done", "failed", "timeout", "cancelled"]
+    },
+    "repo": {
+      "type": "object",
+      "required": ["owner", "name"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "base_branch": { "type": "string" },
+        "work_branch": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["effect_kind", "dedupe_key"],
+      "properties": {
+        "effect_kind": { "type": "string", "minLength": 1 },
+        "dedupe_key": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "EnqueueRequest": {
+      "type": "object",
+      "required": ["contract_version", "op", "task_id", "repo", "engine_env"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "op": { "type": "string", "const": "enqueue" },
+        "task_id": { "type": "string", "minLength": 1 },
+        "tenant_id": { "type": "string" },
+        "repo": { "$ref": "#/$defs/repo" },
+        "git_token": { "type": "string" },
+        "instructions": { "type": "string" },
+        "acceptance_criteria": { "type": "array" },
+        "test_commands": { "type": "array" },
+        "engine": { "type": "string" },
+        "engine_env": { "type": "object" },
+        "run_mutation": { "type": "boolean" },
+        "max_turns": {},
+        "timeout": {},
+        "timeout_s": { "type": "integer", "minimum": 1 },
+        "heartbeat_interval_s": { "type": "integer", "minimum": 1 },
+        "idempotency_key": { "type": "string" },
+        "dedupe_key": { "type": "string" },
+        "resources": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "EnqueueResponse": {
+      "type": "object",
+      "required": ["job_id", "status"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "job_id": { "type": "string", "minLength": 1 },
+        "sandbox_task_id": { "type": "string" },
+        "status": { "$ref": "#/$defs/job_status" },
+        "receipt": { "$ref": "#/$defs/receipt" }
+      },
+      "additionalProperties": true
+    },
+    "StatusResponse": {
+      "type": "object",
+      "required": ["job_id", "status"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "job_id": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/job_status" },
+        "phase": { "type": ["string", "null"] },
+        "terminal": { "type": "boolean" },
+        "succeeded": { "type": "boolean" },
+        "result": { "type": "object" },
+        "error": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "CancelRequest": {
+      "type": "object",
+      "required": ["contract_version", "op", "job_id"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "op": { "type": "string", "const": "cancel" },
+        "job_id": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "CancelResponse": {
+      "type": "object",
+      "required": ["job_id", "status"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "job_id": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/job_status" },
+        "terminal": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "HeartbeatRequest": {
+      "type": "object",
+      "required": ["contract_version", "op", "job_id"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "op": { "type": "string", "const": "heartbeat" },
+        "job_id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "HeartbeatResponse": {
+      "type": "object",
+      "required": ["job_id", "status"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "job_id": { "type": "string", "minLength": 1 },
+        "status": { "$ref": "#/$defs/job_status" },
+        "heartbeat_ok": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/contract_version" },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "retryable": { "type": "boolean" },
+        "http_status": { "type": "integer" }
+      },
+      "additionalProperties": true
+    }
+  }
+}
