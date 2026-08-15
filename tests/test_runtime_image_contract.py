@@ -142,6 +142,24 @@ def main() -> int:
         "the boss user has a real home (npm and the CLI write there)",
         bool(re.search(r"--home\s+/home/boss", DOCKERFILE.read_text())),
     )
+    lock_copy = "COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md"
+    trace_copy = "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md"
+    check(
+        "api stage copies V1_FEATURE_LOCK.md (GET /v1/v1-lock)",
+        lock_copy in api_stage,
+    )
+    check(
+        "api stage copies TRACEABILITY.md (feature catalog seed)",
+        trace_copy in api_stage,
+    )
+    check(
+        "worker stage copies V1_FEATURE_LOCK.md",
+        lock_copy in worker_stage,
+    )
+    check(
+        "worker stage copies TRACEABILITY.md",
+        trace_copy in worker_stage,
+    )
 
     print("\n== the BUILT images can actually run them ==")
     if not shutil.which("docker"):
@@ -199,6 +217,17 @@ def test_worker_dockerfile_run_line_includes_git() -> None:
 def test_api_dockerfile_run_line_includes_git() -> None:
     stage = stage_body("api")
     assert re.search(r"apt-get install[^\n]*\bgit\b", stage)
+
+
+def test_api_and_worker_stages_copy_v1_lock_file() -> None:
+    """Regression: live GET /v1/v1-lock returned {in:0,out:0,cloud:0} because
+    docs/product/V1_FEATURE_LOCK.md was not in the production image."""
+    lock_copy = "COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md"
+    trace_copy = "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md"
+    for target in ("api", "worker"):
+        stage = stage_body(target)
+        assert lock_copy in stage, f"{target} must vendor the v1 lock"
+        assert trace_copy in stage, f"{target} must vendor TRACEABILITY.md"
 
 
 if __name__ == "__main__":

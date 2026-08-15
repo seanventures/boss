@@ -43,6 +43,13 @@ def test_distribution_has_apache_license_evidence() -> None:
     assert (ROOT / "packages/specpack/LICENSE").is_file()
 
 
+def _stage_body(dockerfile: str, target: str) -> str:
+    marker = f"FROM python-base AS {target}"
+    start = dockerfile.index(marker)
+    nxt = dockerfile.find("\nFROM ", start + 1)
+    return dockerfile[start : nxt if nxt > 0 else len(dockerfile)]
+
+
 def test_container_boundaries_include_the_engine_without_api_source() -> None:
     standalone = (ENGINE / "Dockerfile").read_text(encoding="utf-8")
     assert "COPY engine/boss_engine engine/boss_engine" in standalone
@@ -52,6 +59,12 @@ def test_container_boundaries_include_the_engine_without_api_source() -> None:
     assert "COPY db/schema.sql db/schema.sql" in standalone
     assert "COPY packages/specpack packages/specpack" in standalone
     assert "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md" in standalone
+    # GET /v1/v1-lock (and engine-native load_v1_feature_lock) read this path via
+    # Settings.repo_root. Missing file yields honest zeros, not invented counts.
+    assert (
+        "COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md"
+        in standalone
+    )
     assert "apps/" not in "\n".join(
         line for line in standalone.splitlines() if line.lstrip().startswith("COPY ")
     )
@@ -60,6 +73,23 @@ def test_container_boundaries_include_the_engine_without_api_source() -> None:
         content = (ROOT / relative).read_text(encoding="utf-8")
         assert "COPY engine ./engine" in content
         assert "/app/engine" in content
+
+
+def test_runtime_images_copy_v1_lock_and_traceability() -> None:
+    """Live GET /v1/v1-lock reads /app/docs/product/V1_FEATURE_LOCK.md.
+
+    Root api + worker stages must vendor the lock (and TRACEABILITY.md, which
+    the feature catalog seeds from). Do not dump all of docs/.
+    """
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    lock_copy = "COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md"
+    trace_copy = "COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md"
+    for target in ("api", "worker"):
+        stage = _stage_body(dockerfile, target)
+        assert lock_copy in stage, f"{target} stage must COPY V1_FEATURE_LOCK.md"
+        assert trace_copy in stage, f"{target} stage must COPY TRACEABILITY.md"
+        assert "COPY docs ./" not in stage
+        assert "COPY docs ./docs" not in stage
 
 
 def test_local_entrypoints_include_the_engine_package() -> None:

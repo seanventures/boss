@@ -36,10 +36,13 @@ COPY engine/pyproject.toml engine/README.md engine/LICENSE engine/
 
 # Data the engine needs at runtime, resolved via Settings.repo_root (/app):
 # schema for `bootstrap`/ensure_schema, the spec pack (roles/skills/workflows),
-# and the traceability table the feature catalog seeds from.
+# the traceability table the feature catalog seeds from, and the Community v1
+# feature lock (load_v1_feature_lock / GET /v1/v1-lock counts). Missing lock
+# yields honest zeros, not invented GA counts.
 COPY db/schema.sql db/schema.sql
 COPY packages/specpack packages/specpack
 COPY docs/product/TRACEABILITY.md docs/product/TRACEABILITY.md
+COPY docs/product/V1_FEATURE_LOCK.md docs/product/V1_FEATURE_LOCK.md
 
 ENV PYTHONPATH=/app/engine
 ENV PYTHONUNBUFFERED=1
