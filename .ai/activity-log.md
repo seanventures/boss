@@ -13,6 +13,12 @@
 - ensure_tables on elastic fabric + Goldeneye; status 200 `not_configured` + `host.connected=false`.
 - `InfrastructureService.create_droplet` fail-closed without provision flag; ResourceReceipt recorded.
 - Community nav cut + Cloud Easy Connect `PaidSurfaceGate`. Ledger + `UI_V1_CUT.md`.
+## 2026-08-15 — Grok — E2E identity + KMS + autonomous feedback
+
+- Branch `ai/grok/e2e-identity-kms` from `3f6fecd`. Isolated DB `boss_e2e_identity_kms`. Not GA. Not merged.
+- Plane BOSS-394 In Progress (parent swarm BOSS-388 stays open).
+- Focused suite `apps/api/tests/test_e2e_identity_kms_feedback.py` proves catalog 200 / unknown 404 / apply=true 422; OIDC 503; SAML ACS 403; KMS local_vault; bound-but-broken SecretRef no env fallback; Metatron `auto=false` applies 0; factory `open_pr` only; feedback confirm before dispatch.
+- Do not claim Cloud Account Connect (404 on Community). No silent prod writes.
 
 ## 2026-08-15 — Grok — v1 verify identity / KMS / feedback
 

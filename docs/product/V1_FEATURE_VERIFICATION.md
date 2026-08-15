@@ -243,3 +243,21 @@ Plane: BOSS-388. FEATURES not stamped. Goldeneye not deployed.
 
 34 focused tests passed (new E2E file + prior token/worker/lease tests). Live dogfood still unproven until this tag is deployed. **Not public GA.**
 | Live shared-tag 2xx this session | **Not re-probed**. Prior note 200 stays historical. |
+## Evidence — isolated E2E (2026-08-15, `ai/grok/e2e-identity-kms`)
+
+Plane [BOSS-394](https://plane.local.sean.network) (In Progress). Parent
+BOSS-388 stays open. Isolated Postgres `boss_e2e_identity_kms` only — never
+live `boss`. Suite: `apps/api/tests/test_e2e_identity_kms_feedback.py`.
+
+Must stay green:
+
+1. Catalog 200 / unknown 404 / blueprint `apply=true` 422 dry-run-only.
+2. OIDC enabled without issuer → 503 config error. SAML ACS no provider → 403.
+3. `GET /v1/kms/health` `local_vault` present. Bound-but-broken SecretRef does
+   not fall back to env.
+4. Metatron `auto=false` applies 0. Factory launch `open_pr` only. Feedback
+   confirm required before dispatch.
+5. Isolated DB guard. `GET/POST /v1/account-connect/link` 404. **Do not claim
+   Cloud Account Connect.**
+
+Not public GA. Do not merge to `main`.

@@ -16,6 +16,14 @@
 - Community primary nav cut: activity, jobs, decisions, reliability, factory/QA, budget, SSO.
 - Cloud Easy Connect CTAs gated. Docs: `docs/product/UI_V1_CUT.md`.
 - Do not merge main. Do not unfreeze Firecracker.
+## 2026-08-15 E2E identity + KMS + autonomous feedback (◐)
+
+- Branch `ai/grok/e2e-identity-kms` from `3f6fecd`. Isolated DB `boss_e2e_identity_kms`.
+- Plane BOSS-394 In Progress. BOSS-388 umbrella stays open.
+- Suite `apps/api/tests/test_e2e_identity_kms_feedback.py` proves catalog/OIDC/SAML
+  fail-closed, local_vault + SecretRef no env fallback, Metatron/factory/feedback
+  never silent prod writes. Account Connect stays 404.
+- **Not public GA. Do not merge main.**
 
 ## 2026-08-15 V1 verify identity / keys / feedback (CODE, not GA)
 
