@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 V1 verify identity / keys / feedback (CODE, not GA)
+
+- Branch `ai/grok/v1-verify-identity-keys-feedback` from `a5c8951`. Plane BOSS-388.
+- Community SSO catalog live 200 (10 packs); Account Connect 404; edition community.
+- KMS `local_vault.ok=true`; bound-but-broken SecretRefs fail closed (existing tests).
+- Metatron drive/overwatch applied 0; factory launch is `open_pr=True` only.
+- **Not public GA.** Do not merge main.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto

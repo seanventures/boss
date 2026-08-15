@@ -35,14 +35,14 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 
 ## After v1
 
-| Item | Code surface | Prior live note |
-|---|---|---|
-| Identity integration | `/v1/identity-providers`, OIDC/SAML | Community SSO ✅; paid gates 404 |
-| CI/CD pipeline | `/v1/cicd/*` + delivery | catalog 200; live poll credential-gated |
-| Key management | Agent KMS + SecretRefs | local_vault ok on last deploy |
-| Autonomous feedback loop | feedback_agent, learning_loop, Metatron | no silent self-mod |
-| Infra management | Resource Plane + ProviderOps | kernel 200; elastic/goldeneye 500 |
-| UI simplification v1 | Mission Control areas | needs cut list |
+| Item | Code surface | Prior live note | 2026-08-15 verify (`ai/grok/v1-verify-identity-keys-feedback`) |
+|---|---|---|---|
+| Identity integration | `/v1/identity-providers`, OIDC/SAML/SCIM catalog | Community SSO ✅; paid gates 404 | **CODE** (+ catalog E2E). Live Community: `GET /v1/edition?project_id=boss-dogfood` `edition_id=community`, `account_connect_required=false`. Catalog 200, 10 packs, `configured_count=0` (honest empty). Unknown pack 404. Blueprint `apply=true` 422. `GET /v1/account-connect/link` **404** (not hosted Cloud identity). SAML metadata 200; ACS 503 until `BOSS_ENTERPRISE_SAML_ENABLED`; SCIM 401 without bearer. Tests: missing IdP fail-closed (`test_oidc_enabled_without_idp_config_fails_closed`, `test_oidc_enabled_without_provider_config_fails_closed`, SAML ACS no-provider 403, SCIM no-provider 403). **Do not claim hosted Cloud identity. Not public GA.** |
+| CI/CD pipeline | `/v1/cicd/*` + delivery | catalog 200; live poll credential-gated | (other slice) |
+| Key management | Agent KMS + SecretRefs | local_vault ok on last deploy | **CODE** (local_vault health E2E). Live `GET /v1/kms/health` `local_vault.ok=true`; Vault/OpenBao/platform store honest `ok=false` when unset. SecretRefs 200, 8 items, `sref_6b00a2d6a9424abba8a0` `local_vault`, no `secret_value`. Engine: `test_secretref_consumption` + `test_credential_resolve` (bound-but-broken fail-closed; env last-resort only when no usable ref). No new KMS hole. **Not public GA.** |
+| Autonomous feedback loop | feedback_agent, learning_loop, Metatron | no silent self-mod | **CODE** (no-silent-self-mod E2E). Live `POST /v1/metatron/drive auto=false` `status=proposed`, 0 applied; decisions/DLQ `needs_human`. Overwatch `validation.ok=true`, applied 0, "Decisions and deadletters stay human." Factory apply always `open_pr=True` + "Open a PR only / Do not apply to production in place." Preview feedback proposes then requires confirm (`dispatched=false` until confirm). Learning loop `suggest_tuning` only. AGENTS.md: no silent self-mod. **Not public GA.** |
+| Infra management | Resource Plane + ProviderOps | kernel 200; elastic/goldeneye 500 | (other slice) |
+| UI simplification v1 | Mission Control areas | needs cut list | (other slice) |
 
 ## Isolated swarm
 
@@ -60,3 +60,23 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 - Plane SoR: goldeneye / BOSS `cc97d5cc-e8c6-4893-ac14-7f646c37f3d7`.
 - FEATURES Cloud/Enterprise stay Partial. No public GA stamp.
 - `BOSS_MICROVM_CLAIMS_FROZEN` stays true.
+
+## Evidence — identity / keys / feedback (2026-08-15)
+
+Branch `ai/grok/v1-verify-identity-keys-feedback` from `a5c8951`. Plane umbrella
+[BOSS-388](https://plane.local.sean.network) (In Progress; this slice does not
+close the umbrella). Live host `https://boss-api.local.sean.network`.
+
+Focused tests (isolated `boss_idp_test` + engine noconftest):
+
+- Engine 55 passed: `test_oidc.py`, `test_credential_resolve.py`,
+  `test_secretref_consumption.py`, `test_metatron_captain.py` (incl. new
+  PR-only factory apply), `test_openai_adapter_secretref.py`,
+  `test_guest_engine_secretref.py`, `test_improvement_programs.py`.
+- API 103 passed: identity catalog 13, edition routers 65, preview feedback 8,
+  agent KMS 4, Metatron HTTP 4, learning loop 6, improvement programs 1,
+  `test_oidc_enabled_without_provider_config_fails_closed`, SAML runtime
+  (missing provider 403), SCIM runtime (missing provider 403).
+- Did **not** run API tests against live `boss` DB (deadlock / pollution).
+
+Not public GA. Do not merge to `main` from this verify branch.
