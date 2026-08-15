@@ -1,5 +1,15 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — AI SRE HTTP E2E stack
+
+- Branch `ai/grok/e2e-ai-sre` from `origin/main`. Merged slices e35e711 /
+  904768b / 0eae854 / fe75734 / c70f892 / 4b85ca8. Did not merge main.
+- Added `apps/api/tests/test_e2e_ai_sre.py` (isolated DB). Kernel ledger
+  stays honest: runbooks/sre_bench are partial, never shipped.
+- Verification: 21 engine + 16 API (E2E/noise/postmortem) passed against
+  dedicated `boss_ai_sre_e2e` Postgres. FEATURES stays ◐. Not GA.
+- Plane BOSS-387.
+
 ## 2026-08-15 — Grok — AI SRE MCP + Mission Control + bench
 
 - Branch `ai/grok/ai-sre-mcp-ui` from `ai/grok/ai-sre-kernel` (`e35e711`).

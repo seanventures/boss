@@ -18,10 +18,11 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "status": "partial",
         "surfaces": [
             "/v1/metatron/overwatch",
+            "/v1/ai-sre/overwatch",
             "/v1/focused-agents",
             "/v1/reliability/incidents/{id}/diagnose",
         ],
-        "gap": "Always-on overwatch does not yet tick reliability.scan/diagnose/page.",
+        "gap": "Observe-only tick scans/diagnoses/dry-run pages. Never remediates. Not GA.",
     },
     {
         "id": "production_debugging",
