@@ -704,6 +704,12 @@ class Settings(BaseSettings):
     #                 scoped to the ephemeral sandbox cwd (uses the Max plan).
     #   native      = (Phase 1) raw model API agent on the Agent SDK.
     code_agent_engine: str = Field(default="claude_code", alias="BOSS_CODE_AGENT_ENGINE")
+    # One-shot spend-cap failover when the builder is claude_code and Anthropic
+    # returns the org monthly spend limit. Empty + OPENAI_API_KEY set => "openai".
+    # Empty and no OpenAI key => no automatic hop (needs_human / escalate).
+    code_agent_failover_engine: str = Field(
+        default="", alias="BOSS_CODE_AGENT_FAILOVER_ENGINE"
+    )
     # Engine for the ADVERSARY roles (code review / security / consistency / mutation) in the
     # governed pipeline. Defaulting it to a DIFFERENT model than the builder removes self-review
     # bias — the model that wrote the code isn't the one judging it. Empty = same as the builder

@@ -6378,6 +6378,22 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
         raise HTTPException(status_code=404, detail=str(error)) from error
     actor = str((payload or {}).get("actor") or "executive_console").strip()
     simulated = bool((payload or {}).get("simulated"))
+    # payload.official is accepted for labeling only. This endpoint does not
+    # apply distinct official semantics — official is a labeled budgeted
+    # code.task. Do not invent a certified score from the flag.
+    engine_override = str((payload or {}).get("engine") or "").strip().lower()
+    model_config = None
+    if engine_override:
+        from boss_engine.services.spend_cap_failover import OFFICIAL_ENGINES, pin_engine_model_config
+
+        if engine_override not in OFFICIAL_ENGINES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown engine: {engine_override!r} (expected openai|native|claude_code)",
+            )
+        # simulated never spends — do not persist a live model route on a fixture.
+        if not simulated:
+            model_config = pin_engine_model_config(engine_override)
     # simulated=true is a no-spend fixture and must never convene the panel.
     # Default the route to direct when simulated; do not change the meeting path
     # for ordinary launches.
@@ -6442,7 +6458,11 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                     c, settings=settings, budget=budget, intake=intake, jobs=jobs,
                     project_id=project_id,
                     directive=task["instructions"],
-                    constraints={"source": "qa_benchmark", "benchmark_id": benchmark_id},
+                    constraints={
+                        "source": "qa_benchmark",
+                        "benchmark_id": benchmark_id,
+                        **({"engine": engine_override} if engine_override else {}),
+                    },
                 )
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
@@ -6481,6 +6501,7 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 # pass an explicit profile, and `usable_profile` has the final say either way.
                 profile=(payload or {}).get("profile") or "balanced",
                 risk_tier=int((payload or {}).get("risk_tier") or 1),
+                model_config=None if simulated else model_config,
                 repair_retries=(
                     int((payload or {}).get("repair_retries"))
                     if isinstance((payload or {}).get("repair_retries"), int)

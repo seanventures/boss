@@ -1385,7 +1385,21 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # judging it (removes self-review bias). VAG B2 layers per-STEP (engine, model) routing
     # on top: profile model_routing or spec["model_config"] may pin any step to any engine
     # (route_for_step), so e.g. implement runs native/deepseek while review stays claude_code.
-    build_engine = (settings.code_agent_engine or "claude_code").lower()
+    # Per-run model_config default (official POST engine=… or spend-cap failover)
+    # wins over the process default so route_for_step / _route_escalated stay on
+    # the pinned engine instead of silently falling back to claude_code.
+    _mc = spec.get("model_config") if isinstance(spec.get("model_config"), dict) else {}
+    _mc_default = _mc.get("default")
+    _pinned_engine = ""
+    if isinstance(_mc_default, dict):
+        _pinned_engine = str(_mc_default.get("engine") or "").strip().lower()
+    elif isinstance(_mc_default, str) and _mc_default.strip():
+        _pinned_engine = _mc_default.split(":", 1)[0].strip().lower()
+        if _pinned_engine not in ("claude_code", "openai", "native"):
+            _pinned_engine = ""
+    build_engine = (
+        _pinned_engine or settings.code_agent_engine or "claude_code"
+    ).lower()
     review_engine = (settings.code_review_engine or "").lower() or build_engine
     # Data-boundary enforcement: restricted/confidential tasks redact PII before any external
     # model call (spec §7.4 / §25). The flag rides on EVERY agent; each run_role honours it.
@@ -3644,6 +3658,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         reason = (str(exc).strip() or f"{type(exc).__name__} with no message")
         reason = f"{reason} [substrate={execution_substrate}]"
         from .code_task_service import classify_pipeline_exception
+        from .spend_cap_failover import apply_spend_cap_failover
         fclass, rcode = classify_pipeline_exception(reason)
         # SHIP WHAT EXISTS, EVEN ON A FAILURE — same helper every other exit uses, so the
         # rule lives in exactly one place and cannot drift between paths again.
@@ -3658,6 +3673,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                               "WHERE id=:id AND pull_request_url IS NULL"),
                           {"u": _partial_pr, "id": run_id})
                 reason = f"{reason} — partial work shipped as {_partial_pr}"
+            # Claude org monthly spend limit: hop this SAME run onto a configured
+            # alternate engine once. No invented pass, no Decision auto-apply.
+            # If no alternate is configured, fall through to today's escalate path.
+            failover = apply_spend_cap_failover(
+                c,
+                jobs=jobs,
+                project_id=project_id,
+                run_id=run_id,
+                task_id=task_id,
+                settings=settings,
+                current_engine=build_engine,
+                error=reason,
+                spec=spec,
+                finalize_ctx=fctx,
+                state=run.get("state") if isinstance(run, dict) else None,
+            )
+            if failover:
+                return failover
             # Model TPM/credits/budget exhaustion: escalate to a Decision so capacity
             # failures are visible in the inbox rather than silent DLQ churn (W2.5).
             decision_id = None
