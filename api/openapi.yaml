@@ -12875,6 +12875,12 @@ paths:
                 profile:
                   type: string
                   default: strict
+                official:
+                  type: boolean
+                  description: Official canary launch. Defaults route to direct and stamps finalize_ctx.
+                engine:
+                  type: string
+                  description: Per-run model engine failover (openai, claude_code, native, …).
       responses:
         '201':
           description: Budgeted benchmark code task queued

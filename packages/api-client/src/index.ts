@@ -5890,6 +5890,10 @@ export function createBossApiClient(config: BossApiClientConfig) {
       repo?: string;
       base_branch?: string;
       profile?: string;
+      /** Reportable official canary. Defaults the launch to the direct code-task path. */
+      official?: boolean;
+      /** Per-run model-engine failover (openai, claude_code, …). */
+      engine?: string;
       /** Build a SECOND copy of something already built. Omitted, the API answers with the
        *  existing run instead of spending another full build. */
       force?: boolean;

@@ -189,3 +189,4 @@ def test_governed_pipeline_writes_ui_ux_evidence_into_run_state():
     assert '"command": test_cmd' in src
     assert "def _run_verify(" in src
     assert "resolve_verify_cwd(" in src
+    assert 'guest_spec["app_root"] = _app_id' in src

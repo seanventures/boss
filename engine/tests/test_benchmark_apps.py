@@ -274,6 +274,49 @@ def test_launch_endpoint_routes_a_benchmark_into_the_governed_code_task(monkeypa
     assert recorded["finalize_ctx"]["qa_benchmark"]["id"] == "bugbox"
 
 
+def test_official_launch_honors_engine_and_stamps_official_on_direct_path(monkeypatch):
+    """Official POSTs used to drop payload.official and payload.engine."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://localhost/boss")
+    from apps.api.app import main as api_main
+    from boss_engine.services import code_task_service
+
+    recorded = {}
+
+    class _Transaction:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_start(connection, **kwargs):
+        recorded.update(kwargs)
+        return "crun_official"
+
+    monkeypatch.setattr(api_main, "database_is_reachable", lambda _engine: True)
+    monkeypatch.setattr(api_main, "begin", lambda _engine: _Transaction())
+    monkeypatch.setattr(api_main, "require_project_actor", lambda *_args: None)
+    monkeypatch.setattr(code_task_service, "start_code_task", fake_start)
+
+    result = api_main.start_qa_benchmark_app_endpoint(
+        "hookwatch",
+        {
+            "project_id": "boss-dogfood",
+            "actor": "executive_console",
+            "official": True,
+            "engine": "openai",
+        },
+    )
+
+    assert result["status"] == "queued"
+    assert result["run_id"] == "crun_official"
+    assert result.get("official") is True
+    assert recorded["finalize_ctx"]["qa_benchmark"]["id"] == "hookwatch"
+    assert recorded["finalize_ctx"]["qa_benchmark"]["official"] is True
+    assert recorded["finalize_ctx"]["official"] is True
+    assert recorded["model_config"]["default"]["engine"] == "openai"
+
+
 def test_tuning_proposal_endpoint_routes_measured_evidence_into_existing_change_control(
     monkeypatch,
 ):

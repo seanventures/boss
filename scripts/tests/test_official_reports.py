@@ -88,6 +88,32 @@ def test_official_posts_are_blocked_without_flag(monkeypatch):
     assert client.posts == []
 
 
+def test_official_posts_record_run_id_and_pass_engine(monkeypatch):
+    monkeypatch.setenv(ALLOW_OFFICIAL_FLAG, "1")
+    monkeypatch.setenv("BOSS_QA_ENGINE", "openai")
+    client = FakeClient(
+        {
+            ("POST", "/v1/qa/benchmark-apps/bugbox/runs"): (
+                201,
+                {"status": "queued", "run_id": "crun_official_1"},
+            ),
+            ("POST", "/v1/qa/benchmark-apps/hookwatch/runs"): (
+                201,
+                {"status": "queued", "run_id": "crun_official_2"},
+            ),
+            ("POST", "/v1/qa/benchmark-apps/approveit/runs"): (
+                201,
+                {"status": "queued", "run_id": "crun_official_3"},
+            ),
+        }
+    )
+    checks = request_official_runs(client)
+    assert [c.ok for c in checks] == [True, True, True]
+    assert checks[0].evidence["run_id"] == "crun_official_1"
+    assert client.posts[0][1]["official"] is True
+    assert client.posts[0][1]["engine"] == "openai"
+
+
 def test_inspect_reports_honest_when_ux_not_scored():
     client = FakeClient(
         {
