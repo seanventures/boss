@@ -36,6 +36,10 @@ def test_missing_ui_ux_stays_not_scored_and_honest():
     assert dims["ui"]["score"] is None
     assert dims["ux"]["status"] == "not_scored"
     assert dims["ux"]["score"] is None
+    assert report["ui"]["status"] == "not_scored"
+    assert report["ui"]["score"] is None
+    assert report["ux"]["status"] == "not_scored"
+    assert report["ux"]["score"] is None
 
 
 def test_falsy_a11y_does_not_become_a_perfect_score():
@@ -112,3 +116,7 @@ def test_workspace_scan_scores_ui_without_inventing_ux_or_a11y_zero():
     assert isinstance(dims["ui"]["score"], (int, float))
     assert dims["ux"]["status"] == "not_scored"
     assert dims["ux"]["score"] is None
+    assert report["ui"]["status"] == "scored"
+    assert isinstance(report["ui"]["score"], (int, float))
+    assert report["ux"]["status"] == "not_scored"
+    assert report["ux"]["score"] is None

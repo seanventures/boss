@@ -3342,11 +3342,35 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # all the work. The PR is the deliverable; opening it gets the same persistence as
         # any other critical step.
         for _pr_attempt in (2, 3):
-            if status in ("created", "succeeded"):
+            if status in ("created", "succeeded", "reused"):
                 break
             with _transaction(engine) as c:
                 emit_event(c, project_id, "code_task.pr_retry", "boss", "code_task_run", run_id,
                            {"attempt": _pr_attempt, "prior_status": status})
+                # First attempt may have released the reservation (model overflow,
+                # missing entitlement). Retries with the dead id only mint
+                # "Missing active reservation" decisions. Re-reserve each try.
+                try:
+                    if not budget.assert_active_reservation(c, project_id, reservation_id):
+                        renewed = budget.reserve(
+                            c, project_id, category="code_task",
+                            amount_usd_micros=int(settings.code_task_budget_usd_micros),
+                            reason=f"re-reserve PR retry {_pr_attempt}: {title[:48]}",
+                            expires_in_minutes=30, job_id=job_id, risk_tier=spec.get("risk_tier"))
+                        if renewed.get("status") == "reserved":
+                            reservation_id = renewed["reservation_id"]
+                            emit_event(
+                                c, project_id, "code_task.reservation_renewed", "boss",
+                                "code_task_run", run_id,
+                                {"reason": "retry after reservation release/expiry",
+                                 "attempt": _pr_attempt, "reservation_id": reservation_id},
+                            )
+                except Exception as exc:  # never let bookkeeping sink finished work
+                    emit_event(
+                        c, project_id, "code_task.reservation_renew_failed", "boss",
+                        "code_task_run", run_id,
+                        {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]},
+                    )
                 try:
                     proposal = sf.propose_pull_request(
                         c, project_id, task_id, reservation_id=reservation_id,

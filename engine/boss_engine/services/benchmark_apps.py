@@ -650,6 +650,30 @@ def benchmark_scorecard(
     }
 
 
+
+def scorecard_dimension_view(scorecard: dict[str, Any] | None, dim_id: str) -> dict[str, Any]:
+    """Project one scorecard dimension. Missing stays not_scored. Never invents a score."""
+    wanted = str(dim_id or "").strip()
+    for item in ((scorecard or {}).get("dimensions") or []):
+        if not isinstance(item, dict) or str(item.get("id") or "") != wanted:
+            continue
+        status = item.get("status") or "not_scored"
+        score = item.get("score")
+        if status == "scored" and isinstance(score, (int, float)) and not isinstance(score, bool):
+            return {
+                "status": "scored",
+                "score": score,
+                "reason": item.get("reason"),
+                "evidence": item.get("evidence") or [],
+            }
+        return {
+            "status": "not_scored",
+            "score": None,
+            "reason": item.get("reason") or "Evidence was not attached.",
+        }
+    return {"status": "not_scored", "score": None, "reason": "dimension not present"}
+
+
 def report_honesty(report: dict[str, Any]) -> dict[str, Any]:
     """Name missing UI/UX/capability evidence. Never invent a score.
 
@@ -881,6 +905,9 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
         "simulated": simulated,
         "passed": is_complete,
         "scorecard": scorecard,
+        "ui": scorecard_dimension_view(scorecard, "ui"),
+        "ux": scorecard_dimension_view(scorecard, "ux"),
+        "capability": scorecard_dimension_view(scorecard, "capability"),
         "honesty": report_honesty({"scorecard": scorecard}),
         "message": (
             "Simulated fixture is not a certified benchmark pass."
