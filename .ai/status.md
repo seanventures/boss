@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 AI SRE noise + NL query plan
+
+- `GET /v1/ai-sre/noise?project_id=` reports clustered vs raw signal counts from
+  persisted incidents/signals. Empty project is honest zeros. Never invents 95%.
+- `POST /v1/ai-sre/ask` returns a keyword-map query plan (connector, query,
+  window). Does not execute PromQL/Datadog. Unmapped → `status=unknown`.
+- Branch `ai/grok/ai-sre-noise` off `ai/grok/ai-sre-kernel` (e35e711). Not GA.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto
