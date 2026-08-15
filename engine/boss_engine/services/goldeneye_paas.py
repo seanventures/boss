@@ -221,6 +221,96 @@ def load_package_catalog() -> dict[str, Any]:
     }
 
 
+_GOLDENEYE_DDL = """
+CREATE TABLE IF NOT EXISTS goldeneye_nodes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  display_name TEXT,
+  roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status TEXT NOT NULL DEFAULT 'registered',
+  public_ip TEXT,
+  tailnet_ip TEXT,
+  ssh_host TEXT,
+  ssh_user TEXT NOT NULL DEFAULT 'root',
+  ssh_port INTEGER NOT NULL DEFAULT 22,
+  kit_version TEXT,
+  site_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_heartbeat_at TIMESTAMPTZ,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_goldeneye_nodes_project
+  ON goldeneye_nodes(project_id, status, created_at DESC);
+CREATE TABLE IF NOT EXISTS goldeneye_package_installs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL REFERENCES goldeneye_nodes(id) ON DELETE CASCADE,
+  package_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned',
+  layer INTEGER,
+  mode TEXT NOT NULL DEFAULT 'simulated',
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_goldeneye_pkg_installs_node
+  ON goldeneye_package_installs(project_id, node_id, package_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS goldeneye_apps (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL REFERENCES goldeneye_nodes(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned',
+  mode TEXT NOT NULL DEFAULT 'image',
+  image_ref TEXT,
+  previous_image_ref TEXT,
+  compose_ref TEXT,
+  domain TEXT,
+  public_url TEXT,
+  admin_url TEXT,
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_goldeneye_apps_project
+  ON goldeneye_apps(project_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_goldeneye_apps_node
+  ON goldeneye_apps(project_id, node_id, status);
+CREATE TABLE IF NOT EXISTS goldeneye_deploys (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  app_id TEXT NOT NULL REFERENCES goldeneye_apps(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL REFERENCES goldeneye_nodes(id) ON DELETE CASCADE,
+  action TEXT NOT NULL DEFAULT 'deploy',
+  status TEXT NOT NULL DEFAULT 'planned',
+  image_ref TEXT,
+  previous_image_ref TEXT,
+  mode TEXT NOT NULL DEFAULT 'simulated',
+  receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+  error JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_goldeneye_deploys_app
+  ON goldeneye_deploys(project_id, app_id, created_at DESC);
+"""
+
+
 class GoldeneyePaasService:
     """Project-scoped Goldeneye node/package/app control plane."""
 
@@ -234,6 +324,13 @@ class GoldeneyePaasService:
         self.receipts = ReceiptService()
         # Injected by tests; production falls back to SSHHostAdapter.
         self.ssh_runner = ssh_runner
+
+    def ensure_tables(self, connection: Connection) -> None:
+        """Idempotent DDL so drifted live DBs return honest empty instead of 500."""
+        for stmt in _GOLDENEYE_DDL.split(";"):
+            s = stmt.strip()
+            if s:
+                connection.execute(text(s))
 
     # ------------------------------------------------------------------
     # Catalog
@@ -395,6 +492,7 @@ class GoldeneyePaasService:
         display_name: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        self.ensure_tables(connection)
         name = (name or "").strip().lower().replace(" ", "-")
         if not name or not name.replace("-", "").replace("_", "").isalnum():
             raise ValueError("name must be a short alphanumeric node name")
@@ -517,6 +615,7 @@ class GoldeneyePaasService:
     def list_nodes(
         self, connection: Connection, project_id: str
     ) -> list[dict[str, Any]]:
+        self.ensure_tables(connection)
         rows = connection.execute(
             text(
                 """
@@ -872,6 +971,7 @@ class GoldeneyePaasService:
         *,
         node_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        self.ensure_tables(connection)
         sql = """
             SELECT * FROM goldeneye_package_installs
             WHERE project_id = :project_id
@@ -1130,6 +1230,7 @@ class GoldeneyePaasService:
     def list_apps(
         self, connection: Connection, project_id: str
     ) -> list[dict[str, Any]]:
+        self.ensure_tables(connection)
         rows = connection.execute(
             text(
                 """
@@ -1159,13 +1260,27 @@ class GoldeneyePaasService:
     def fleet_status(
         self, connection: Connection, project_id: str
     ) -> dict[str, Any]:
+        self.ensure_tables(connection)
         nodes = self.list_nodes(connection, project_id)
         apps = self.list_apps(connection, project_id)
         installs = self.list_package_installs(connection, project_id)
         catalog = self.package_catalog()
+        live = [
+            node
+            for node in nodes
+            if node.get("last_heartbeat_at")
+            and node.get("status") in {"ready", "bootstrapping"}
+        ]
         return {
             "project_id": project_id,
             "product": "goldeneye",
+            "status": "ok" if nodes else "not_configured",
+            "host": {
+                "connected": bool(live),
+                "reason": (
+                    "heartbeat_ready_node" if live else "no_live_heartbeat"
+                ),
+            },
             "kit": {
                 "version": catalog.get("kit_version") or "0.2.0",
                 "modular": bool(catalog.get("modular", True)),

@@ -328,7 +328,7 @@ export default function ConsoleShell({
     });
   }, [community]);
 
-  // Sidebar only: design-system lab is hide_nav on Community. Palette +
+  // Sidebar only: Community v1 home is a small cut (UI_V1_CUT.md). Palette +
   // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
   const navAreas = useMemo(
     () => areasForEdition.filter((a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition)),

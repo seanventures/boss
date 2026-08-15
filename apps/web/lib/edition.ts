@@ -127,8 +127,23 @@ export function editionDisplayName(editionId?: string | null): string {
  *
  * `enterprise` is NOT hidden: Community self-hosted SSO / IdP packs live there.
  * Only the Enterprise *label* is stripped via `communityNavCopy`.
+ *
+ * V1 Community home is a small cut (see docs/product/UI_V1_CUT.md). Areas are
+ * not deleted — they stay reachable via ⌘K and `?area=`.
  */
 const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
+
+const V1_COMMUNITY_PRIMARY_NAV = new Set([
+  "overview",
+  "activity",
+  "work",
+  "decisions",
+  "reliability",
+  "code_tasks",
+  "reports",
+  "budget",
+  "enterprise",
+]);
 
 /**
  * Nav chrome adjustments for Community honesty.
@@ -141,6 +156,24 @@ export function communityNavCopy(areaId: string): { label?: string; sub?: string
       label: "SSO",
       sub: "Self-hosted identity — OIDC, SAML, SCIM, and IdP packs",
       badge: "SSO",
+    };
+  }
+  if (areaId === "work") {
+    return {
+      label: "Jobs",
+      sub: "Task board, live jobs, and receipts",
+    };
+  }
+  if (areaId === "code_tasks") {
+    return {
+      label: "Factory",
+      sub: "Governed code tasks and gated PRs",
+    };
+  }
+  if (areaId === "reports") {
+    return {
+      label: "QA",
+      sub: "Evidence, official reports, and scorecards",
     };
   }
   if (areaId === "ops") {
@@ -162,7 +195,8 @@ export function isCommunityPrimaryNavVisible(
   editionId?: string | null,
 ): boolean {
   if (!isCommunityEdition(editionId)) return true;
-  return !COMMUNITY_HIDDEN_PRIMARY_NAV.has(areaId);
+  if (COMMUNITY_HIDDEN_PRIMARY_NAV.has(areaId)) return false;
+  return V1_COMMUNITY_PRIMARY_NAV.has(areaId);
 }
 
 export function shouldShowPaidNavBadge(areaId: string, editionId?: string | null): boolean {

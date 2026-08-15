@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — V1 infra + UI cut (BOSS-391)
+
+- Branch `ai/grok/v1-verify-infra-ui`. Not GA. No Firecracker thaw. No main merge.
+- ensure_tables on elastic fabric + Goldeneye; status 200 `not_configured` + `host.connected=false`.
+- `InfrastructureService.create_droplet` fail-closed without provision flag; ResourceReceipt recorded.
+- Community nav cut + Cloud Easy Connect `PaidSurfaceGate`. Ledger + `UI_V1_CUT.md`.
+
+
 ## 2026-08-15 — Grok — official app-scoped verify
 
 - HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote

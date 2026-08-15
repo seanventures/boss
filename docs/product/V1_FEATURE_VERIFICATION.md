@@ -41,8 +41,8 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 | CI/CD pipeline | `/v1/cicd/*` + delivery | catalog 200; live poll credential-gated |
 | Key management | Agent KMS + SecretRefs | local_vault ok on last deploy |
 | Autonomous feedback loop | feedback_agent, learning_loop, Metatron | no silent self-mod |
-| Infra management | Resource Plane + ProviderOps | kernel 200; elastic/goldeneye 500 |
-| UI simplification v1 | Mission Control areas | needs cut list |
+| Infra management | Resource Plane + ProviderOps | kernel 200; elastic/goldeneye 500 → **CODE** `ensure_tables` + honest empty; real provision fail-closed without `BOSS_INFRA_REAL_PROVISION_ALLOWED`; ChangeSet/ResourceReceipt on blocked write. Live 2xx unproven this slice (not E2E). |
+| UI simplification v1 | Mission Control areas | **CODE** cut list `docs/product/UI_V1_CUT.md`; Community primary nav = activity/jobs/decisions/reliability/factory+QA/budget/SSO; Cloud/elastic/goldeneye gated or `not_configured` |
 
 ## Isolated swarm
 
@@ -60,3 +60,14 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 - Plane SoR: goldeneye / BOSS `cc97d5cc-e8c6-4893-ac14-7f646c37f3d7`.
 - FEATURES Cloud/Enterprise stay Partial. No public GA stamp.
 - `BOSS_MICROVM_CLAIMS_FROZEN` stays true.
+
+## 2026-08-15 — infra + UI v1 (`ai/grok/v1-verify-infra-ui`)
+
+- Plane **BOSS-391** (parent BOSS-388). Not public GA. Do not merge `main`.
+- Elastic / Goldeneye / provider-usage: `ensure_tables` + `status=not_configured`
+  + `host.connected=false` unless a live heartbeat exists. Never invent connected.
+- `InfrastructureService.create_droplet` fail-closes before the adapter when
+  `BOSS_INFRA_REAL_PROVISION_ALLOWED` is false; writes Receipt + ResourceReceipt.
+- Community home nav cut documented in `UI_V1_CUT.md`. Areas not deleted.
+- Tests: `apps/api/tests/test_infra_v1_honesty.py`, edition-visibility v1 cut,
+  infra-fabric 500→not_configured. Firecracker stays frozen.
