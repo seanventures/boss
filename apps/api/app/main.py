@@ -6379,10 +6379,21 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     actor = str((payload or {}).get("actor") or "executive_console").strip()
     simulated = bool((payload or {}).get("simulated"))
     official = bool((payload or {}).get("official"))
-    engine_name = str((payload or {}).get("engine") or "").strip()
-    model_config = (
-        {"default": {"engine": engine_name.lower()}} if engine_name else None
-    )
+    # official=true is a labeled budgeted code.task (route=direct by default,
+    # qa_benchmark stamped). It does not invent a certified score.
+    engine_override = str((payload or {}).get("engine") or "").strip().lower()
+    model_config = None
+    if engine_override:
+        from boss_engine.services.spend_cap_failover import OFFICIAL_ENGINES, pin_engine_model_config
+
+        if engine_override not in OFFICIAL_ENGINES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"unknown engine: {engine_override!r} (expected openai|native|claude_code)",
+            )
+        # simulated never spends — do not persist a live model route on a fixture.
+        if not simulated:
+            model_config = pin_engine_model_config(engine_override)
     # simulated=true is a no-spend fixture and must never convene the panel.
     # official=true is a reportable code-task launch (engine failover lives here).
     # Default the route to direct for those; do not change the meeting path
@@ -6452,8 +6463,8 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 }
                 if official:
                     meeting_constraints["official"] = True
-                if engine_name:
-                    meeting_constraints["engine"] = engine_name.lower()
+                if engine_override:
+                    meeting_constraints["engine"] = engine_override
                 meeting = convene_prd_meeting_core(
                     c, settings=settings, budget=budget, intake=intake, jobs=jobs,
                     project_id=project_id,
@@ -6476,8 +6487,8 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
         finalize_ctx["official"] = True
         bench = dict(finalize_ctx.get("qa_benchmark") or {})
         bench["official"] = True
-        if engine_name:
-            bench["engine"] = engine_name.lower()
+        if engine_override:
+            bench["engine"] = engine_override
         finalize_ctx["qa_benchmark"] = bench
     try:
         with begin(engine) as c:
@@ -6499,13 +6510,13 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 base_branch=(payload or {}).get("base_branch") or "main",
                 finalize_ctx=finalize_ctx,
                 jobs=jobs,
-                model_config=None if simulated else model_config,
                 # Benchmarks asked for `strict` — the most expensive setting BOSS has, and
                 # currently withdrawn while it is being fixed. They ask for `balanced` now:
                 # full review, findings captured, still always ships a PR. A caller may still
                 # pass an explicit profile, and `usable_profile` has the final say either way.
                 profile=(payload or {}).get("profile") or "balanced",
                 risk_tier=int((payload or {}).get("risk_tier") or 1),
+                model_config=None if simulated else model_config,
                 repair_retries=(
                     int((payload or {}).get("repair_retries"))
                     if isinstance((payload or {}).get("repair_retries"), int)
@@ -6537,8 +6548,8 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     }
     if official:
         queued["official"] = True
-    if engine_name:
-        queued["engine"] = engine_name.lower()
+    if engine_override:
+        queued["engine"] = engine_override
     return queued
 
 

@@ -1,5 +1,11 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Union closeout branches onto main
+
+- Unioned `ai/grok/closeout-v1-lock-image` (`24a8a20`), `ai/grok/closeout-half-baked` (`2a9e237`), and `ai/grok/closeout-engine-failover` (`971f149`) onto `ai/grok/closeout-union` from `d806916`.
+- `main.py` overlap: official=true still defaults to `route=direct` and stamps `qa_benchmark`; `engine=` is validated (`openai|native|claude_code`) via `pin_engine_model_config`.
+- Not GA. Did not deploy. Did not POST official. Did not merge PR #174.
+
 ## 2026-08-15 — Grok — v1-lock image packaging (BOSS-396)
 
 - Branch `ai/grok/closeout-v1-lock-image` from `d806916`. Worktree `/tmp/boss-closeout-packaging`.
