@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.14.0 - 2026-08-15
+
+Operator + AI SRE cut after v0.13.0. `v0.2.1` already exists in history;
+this release is the next semver after `v0.13.0`.
+
+### Added
+
+- AI SRE kernel: `GET /v1/ai-sre/capabilities` maps awesome-ai-sre categories.
+  Observe-only overwatch tick, Decision-held runbooks, noise report, NL query
+  **plan**, evidence-only postmortems, deterministic bench, MCP tools, Mission
+  Control island. Never remediates or invents RCA.
+- Community v1 feature lock (`docs/product/V1_FEATURE_LOCK.md`) and
+  `GET /v1/v1-lock` counts. Release board will not mark Cloud/Enterprise rows
+  Community shipped.
+- Isolated HTTP E2E for tokens/workers/jobs, identity/KMS/feedback, infra/UI
+  honesty, Goldeneye/CI/OS-scan, KG/on-call, and the AI SRE stack.
+- `make test-v1-lock` unit-layer gate.
+
+### Fixed
+
+- Token-efficiency and worker-autoscaling GETs no longer 500 when policy
+  tables are missing (`ensure_tables` + honest empty/defaults).
+- Elastic / Goldeneye / usage empty status is `not_configured` with
+  `host.connected=false` and `metrics=null`.
+- Security-scan latest empty is 200 `not_configured`. Snyk stay fail-closed.
+- Job HTTP create now passes `dedupe_key`. Expired running leases reclaim as
+  `job.lease_reclaimed`.
+- Official factory verify runs in the app directory, not the sandbox monorepo
+  root. Official repair_retries=2.
+
+### Release notes
+
+- Versions aligned on `v0.14.0`.
+- **Does not stamp public Community GA.** Cloud/Enterprise remain Partial.
+  Official canaries are not 5/5. Sealed PR #174 is not merged. Firecracker
+  claims stay frozen. Claude org spend cap can still block live diagnose.
+
 ## v0.13.0 - 2026-08-15
 
 This feature release is the operator system-of-record cut after v0.12.0:
