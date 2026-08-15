@@ -47,6 +47,7 @@ nav:
       - Design-partner onboarding: operations/DESIGN_PARTNER_ONBOARDING.md
       - Infrastructure runbook: operations/INFRA_RUNBOOK.md
       - Webhooks: operations/WEBHOOKS.md
+      - Tenant gateway (S2, not live): operations/TENANT_GATEWAY.md
 
 plugins:
   - search
