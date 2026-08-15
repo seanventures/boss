@@ -1,10 +1,34 @@
 # Sealed E2E blocker — BOSS-351 slice 9
 
 **Date:** 2026-08-15  
-**Plane:** BOSS-351 (`c1f3b9c6-923e-4b6e-b211-939934f908c5`) — **stays In Progress**  
+**Plane:** BOSS-351 (`c1f3b9c6-923e-4b6e-b211-939934f908c5`) — **Done**  
 **Live API:** `https://boss-api.local.sean.network`  
-**Shared tag:** `b6d8ccc` (api + worker + web)  
+**Shared tag:** `3af9c64` (api + worker + web)  
 **Not GA.** No `--env-template`. No merge.
+
+## Resolved 2026-08-15
+
+Operator set `BOSS_FACTORY_ALLOW_CREATE=1` and `BOSS_QA_ALLOW_CANARIES=1` on
+`/srv/apps/boss-app/.env` (edit in place). One live canary:
+
+| Field | Value |
+|---|---|
+| run | `crun_9ad921eab34f4d90bdfe` completed / phase `done` |
+| reservation | `oss_res_936f7bf8ab3b4850b183` |
+| receipt | `rcpt_cca90ba007e847af9ea2` `github.pull_request.create` succeeded |
+| `validate_sealed_receipt` | ok |
+| PR | https://github.com/seanheiney/boss/pull/174 **open, not merged** |
+| decision | `dec_8f58bea3cb644dc6bf27` pending, `default_action=hold`, `review_pull_request`, `no_auto_merge=true` |
+| quality gate | `qg_a4096229b46d410b8996` |
+
+Inbox JSON omits `reason` (the string `merge_decision_required` is on the
+`decision.created` event). Hold is still the default. Do not merge #174 from
+this file.
+
+---
+
+The rest of this file is the original 2026-08-15 probe (flags absent on
+`b6d8ccc`). Keep it as history.
 
 Operator probe (defaults to dry-run): `scripts/qa/sealed_e2e_live.py`.
 

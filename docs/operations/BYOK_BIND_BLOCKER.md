@@ -1,5 +1,24 @@
 # BYOK bind blocker
 
+**Resolved 2026-08-15** on shared tag `3af9c64`. Durable
+`BOSS_KMS_MASTER_KEY_FILE=/var/lib/boss/artifacts/.kms-master` (chmod 600, not
+ephemeral). `GET /v1/kms/health` `local_vault.ok=true` writable.
+
+Live bind (no raw secret in this file):
+
+| Field | Value |
+|---|---|
+| SecretRef | `sref_6b00a2d6a9424abba8a0` `storage_backend=local_vault` active |
+| Provider | `prov_b8144adf9de042218b30` `openai_compatible` active |
+| Pointer | `local_vault:BOSS_BOSS_DOGFOOD_OPENAI_COMPATIBLE_DOGFOOD_MODEL_BYOK_API_KEY` |
+| last4 | not a field on this SecretRef schema (honest absence) |
+
+Plane BOSS-369 is Done. **Not GA.**
+
+---
+
+Original probe (vault master missing on `b6d8ccc`):
+
 Live bind of an existing env model key into `local_vault` SecretRef did not
 complete. This file lists **flag and schema names only**. It does not contain
 secret material.

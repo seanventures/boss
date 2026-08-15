@@ -105,7 +105,7 @@ Optional / later SKUs (not community DoD): Account Connect, live IdP/SCIM, manag
 | ID | Work | Plane | Depends | Exit | Status |
 |---|---|---|---|---|---|
 | W3.1 | Orchestration `next_move` worker-capable | BOSS-345 | W2.1 | Claimable jobs | **Done** (code; stale “not capable” notes retired) |
-| W3.2 | Sealed E2E command → code evidence → PR decision | BOSS-351 | W2, W3.1, W3.3 | Gate + factory green | **Gate Done**; factory reliability **Open** |
+| W3.2 | Sealed E2E command → code evidence → PR decision | BOSS-351 | W2, W3.1, W3.3 | Gate + factory green | **Live sealed 2026-08-15** — receipt `rcpt_cca90ba007e847af9ea2` + hold `dec_8f58bea3cb644dc6bf27` + PR #174 not merged. Ticket Done. Not public GA. |
 | W3.3 | GitHub MC connection+binding dogfood | BOSS-343 | — | Real link or honest empty | **Done** live (+ easy-connect #158) |
 | W3.4 | OpenAPI parity lifecycle surfaces | BOSS-349 | — | 0.11.0 + parity gate | **Done** (#161); deploy lag to live |
 

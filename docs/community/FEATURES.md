@@ -35,8 +35,8 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Feature | Status |
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
-| SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: bound usable ref wins; env is last-resort only when no ref is bound. Unresolvable bound refs do not fall back. Live BYOK paste/bind is still BOSS-369. **Not GA.** |
-| Official QA /reports v1.1 | ◐ Honesty helper + inspect gate. Missing UI/UX stays `not_scored`. Official live POST is blocked unless `BOSS_QA_ALLOW_OFFICIAL=1`. Never invent scores. **Not GA.** |
+| SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: bound usable ref wins; env is last-resort only when no ref is bound. Unresolvable bound refs do not fall back. Live `local_vault` bind `sref_6b00a2d6a9424abba8a0` on tag `3af9c64` (BOSS-369 Done). **Not GA.** |
+| Official QA /reports v1.1 | ◐ Honesty helper + inspect gate. Missing UI/UX stays `not_scored`. Live official POST enabled; BugBox/HookWatch/ApproveIt reports in flight — never invent scores. **Not GA.** |
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |

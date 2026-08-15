@@ -1,5 +1,22 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Address named blockers
+
+- Live shared tag `3af9c64`. Flags set in place (no `--env-template`): factory allow-create, QA canaries, official QA, durable KMS master file.
+- BOSS-369 already Done: `local_vault.ok=true`, `sref_6b00a2d6a9424abba8a0`, provider `prov_b8144adf9de042218b30`.
+- BOSS-351 closed: canary `crun_9ad921eab34f4d90bdfe` completed; receipt `rcpt_cca90ba007e847af9ea2` `validate_sealed_receipt` ok; hold `dec_8f58bea3cb644dc6bf27`; [PR #174](https://github.com/seanheiney/boss/pull/174) open **not merged**.
+- BOSS-381 in flight: official BugBox/HookWatch/ApproveIt runs; honesty true; no invented scores. Do not close until `/report`s finish.
+- Human HOLD remains: 300 legal, 292 two partners, 293/314/337 umbrellas + 14-day qa-live Day 1/14.
+- Not public GA.
+
+## 2026-08-15 — Grok — Cert BOSS-376 / 377 / 378
+
+- Live simulated chain on tag `b6d8ccc`. No `code.task`. Not GA.
+- GET templates 200; POST simulated run `aprun_04fbab9cced742c1a40c` 201 completed 11 handoffs (`certified_planned`, no spend).
+- GET process-manager 200 already-on; POST tick `pmtick_d25820b73b0441708a5a` 200 verified observe-only.
+- POST compile 200 (11 step ids). Unit noconftest: 50 passed.
+- Wrote `.ai/cert-process-376-378.md`. **CLOSE: yes.** Plane comments posted; issues left In Progress for operator close.
+
 ## 2026-08-15 — Grok — Cert 347 / 372 / 380
 
 - Live GETs only. No seed POST (catalog 13/3 not empty). No remediations POST. No BYOK. No spend. Not GA.

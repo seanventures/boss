@@ -1,10 +1,17 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Named blockers addressed on `3af9c64`
+
+- Closed: 369 (local_vault bind), 351 (sealed receipt + hold PR #174, not merged).
+- In flight: 381 official BugBox/HookWatch/ApproveIt `/report`s (honesty on; no invented scores).
+- Still human/time: 300, 292, 293, 314, 337. qa-live calendar Day 1/14.
+- Not public GA.
+
 ## 2026-08-15 Shared-tag dogfood `3af9c64`
 
 - Built api/worker/web natively on goldeneye; IMAGE lines only; no `--env-template`.
 - `/health` 200. Closed with live evidence: 341, 347, 370, 372, 375–380.
-- Held: 351 (allow-create), 369 (KMS master), 381 (official flag), 300 legal, 337/314/293 GA umbrellas, 292 partners.
+- Later same day: 351/369 closed; 381 in flight. Human HOLD: 300, 337/314/293, 292.
 - Not public GA.
 
 ## 2026-08-15 Five-slice finish (341 / 370 / 375 / 379 / 378)

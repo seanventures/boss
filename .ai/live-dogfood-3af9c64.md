@@ -20,12 +20,14 @@
 
 ## Held (named blockers)
 
-| Ticket | Blocker |
+Later same day the factory/KMS/official flags were enabled (edit in place).
+
+| Ticket | Status after blocker sweep |
 |---|---|
-| BOSS-351 | `BOSS_FACTORY_ALLOW_CREATE` absent |
-| BOSS-369 | durable KMS master missing |
-| BOSS-381 | `BOSS_QA_ALLOW_OFFICIAL` unset; no invented scores |
-| BOSS-300 | human legal |
+| BOSS-351 | **Done** — PR #174 + receipt + hold decision (not merged) |
+| BOSS-369 | **Done** — `local_vault` SecretRef bind |
+| BOSS-381 | In Progress — official runs in flight; no invented scores |
+| BOSS-300 | human legal UNDECIDED |
 | BOSS-337 / 314 / 293 | public-GA umbrellas |
 | BOSS-292 | two-partner self-serve not proven |
 
