@@ -143,6 +143,13 @@
 - Receipt `ai_sre:overwatch:{project}:{window}`. No sources → honest empty.
 - Never remediates / auto-applies Decisions / merges PRs. FEATURES stays ◐.
 - Tests: `engine/tests/test_ai_sre_overwatch.py` + kernel + worker. Not GA.
+## 2026-08-15 — Grok — e2e-goldeneye-sec isolated finish
+
+- Source `7be1ec2` (`ai/grok/v1-verify-goldeneye-sec`). Branch `ai/grok/e2e-goldeneye-sec`.
+- Added `apps/api/tests/test_e2e_goldeneye_sec.py` locking the five musts.
+- Strengthened `test_e2e_goldeneye_paas.py` empty status honesty.
+- Isolated green: new E2E contract 7/7 + prior must-haves 13/13 + engine honesty/CI gate.
+- Not GA. Did not merge main. Snyk stays fail-closed / never invoked.
 
 ## 2026-08-15 — Grok — official app-scoped verify
 

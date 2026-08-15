@@ -41,7 +41,11 @@ def test_goldeneye_list_and_status_gets_do_not_500(client):
         assert response.status_code == 200, f"{path}: {response.text}"
         payload = response.json()
         assert payload.get("project_id") == PROJECT_ID
-        if path != "/v1/goldeneye/status":
+        if path == "/v1/goldeneye/status":
+            assert payload["status"] == "not_configured"
+            assert payload["metrics"] is None
+            assert payload["host"]["connected"] is False
+        else:
             assert "items" in payload
             assert payload.get("count") == len(payload["items"])
 

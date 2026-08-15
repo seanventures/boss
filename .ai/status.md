@@ -130,6 +130,14 @@
 - Branch `ai/grok/e2e-kg-oncall` from `32bd3f5`. Isolated DB `boss_e2e_kg_oncall`.
 - HTTP E2E: nodes/edges/subgraph/known-causes/seed-from-infra (honest empty ok); page→ack→resolve; reliability PagerDuty simulated `posted=false`; `force_live` 422; KG `correlates_with` write-back.
 - 23 passed. Not live PagerDuty. **Not public GA.** Did not merge main.
+## 2026-08-15 Isolated Goldeneye / signals / CI / OS-scan E2E
+
+- Branch `ai/grok/e2e-goldeneye-sec` (from `7be1ec2`). Isolated tests green.
+- `GET /v1/goldeneye/status` empty-200 `not_configured`, `metrics=null`, `host.connected=false`.
+- telemetry_mining + anomalies.scan honesty: no invented scores.
+- CI generate embeds Semgrep/Trivy/OSV gate for all 5 vendors; live Actions `requires_credentials`.
+- Security-scan: simulated five-scanner run + receipt; Snyk 400; `GET /latest` empty is 200 `not_configured` not 404.
+- **Not public GA.** Do not merge main. Do not invent Snyk.
 
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
