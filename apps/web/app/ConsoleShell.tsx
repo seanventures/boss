@@ -58,6 +58,7 @@ type AreaId =
   | "overview"
   | "decisions"
   | "work"
+  | "activity"
   | "portfolio"
   | "discovery"
   | "meetings"
