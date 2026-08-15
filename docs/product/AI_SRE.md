@@ -23,11 +23,16 @@ telemetry / alert
 Always-on: Metatron overwatch + worker tick must run the **observe** half
 (scan / diagnose / page). Apply/remediate stays validate-then-Decision.
 
+`POST /v1/ai-sre/overwatch` and the worker 60s tick are **observe-only**.
+No registered sources → honest empty (no invented incidents). Critical
+pages are receipted and dry-run without credentials. Remediation stays a
+governed PR. FEATURES stays ◐ until live dogfood.
+
 ## Category map
 
 | awesome-ai-sre category | BOSS surface | Status |
 |---|---|---|
-| AI SRE agents | Metatron overwatch, focused-agents, `/v1/ai-sre/*` | ◐ always-on scan/diagnose missing |
+| AI SRE agents | Metatron overwatch, focused-agents, `/v1/ai-sre/overwatch` | ◐ observe-only tick in code; not live-dogfooded |
 | Production debugging | reliability diagnose + factory remediations | ◐ no live log-injection |
 | Incident management | `/v1/reliability/incidents`, `/v1/oncall-sre` | ◐ no postmortem artifact |
 | Observability | observability-suite, telemetry connectors, stack | ◐ NL query is plan-only |
