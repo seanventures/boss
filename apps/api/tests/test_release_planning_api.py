@@ -300,6 +300,89 @@ def test_sync_from_features_populates_board(client):
     assert board_get.json()["counts"]["built"] >= 1
 
 
+def test_oss_vs_commercial_rows_are_not_community_shipped(client):
+    """Cloud/Enterprise lock rows must never land as Community shipped.
+
+    Catalog may say Implemented; the v1 lock still keeps ✦ rows off `built`
+    with community_shipped=false. Community ✅ rows may be built.
+    """
+    community_title = "Durable tasks, plans, jobs (Postgres)"
+    cloud_title = "Managed multi-tenant model gateway"
+    enterprise_title = "Self-improvement automation routes"
+
+    for label, title in (
+        ("V1-IN-001", community_title),
+        ("V1-CE-001", cloud_title),
+        ("V1-CE-005", enterprise_title),
+    ):
+        seeded = client.post(
+            "/v1/features",
+            json={
+                "project_id": PROJECT_ID,
+                "label": label,
+                "title": title,
+                "status": "Implemented",
+                "actor": ACTOR,
+            },
+        )
+        assert seeded.status_code in {200, 201}, seeded.text
+
+    synced = client.post(
+        "/v1/release-planning/sync-from-features",
+        json={"project_id": PROJECT_ID, "actor": ACTOR},
+    )
+    assert synced.status_code == 200, synced.text
+    board = synced.json()["board"]
+
+    def _by_title(title: str) -> dict:
+        matches = [
+            item
+            for col in board["columns"].values()
+            for item in col
+            if item["title"] == title
+        ]
+        assert matches, f"missing board row for {title!r}"
+        return matches[0]
+
+    community = _by_title(community_title)
+    cloud = _by_title(cloud_title)
+    enterprise = _by_title(enterprise_title)
+
+    assert community["column"] == "built"
+    assert community["metadata"].get("community_shipped") is True
+    assert community["metadata"].get("v1_lock") == "in"
+
+    assert cloud["column"] != "built"
+    assert cloud["metadata"].get("community_shipped") is False
+    assert cloud["metadata"].get("v1_lock") == "cloud_enterprise"
+    assert cloud["metadata"].get("v1_features_mark") == "✦"
+
+    assert enterprise["column"] != "built"
+    assert enterprise["metadata"].get("community_shipped") is False
+    assert enterprise["metadata"].get("v1_lock") == "cloud_enterprise"
+
+    status = client.get(
+        "/v1/release-planning/status",
+        params={"project_id": PROJECT_ID},
+    )
+    assert status.status_code == 200, status.text
+    listed = client.get(
+        "/v1/release-planning/releases",
+        params={"project_id": PROJECT_ID},
+    )
+    assert listed.status_code == 200, listed.text
+    board_get = client.get(
+        "/v1/release-planning/board",
+        params={"project_id": PROJECT_ID},
+    )
+    assert board_get.status_code == 200, board_get.text
+    durable_titles_built = {
+        item["title"] for item in board_get.json()["columns"]["built"]
+    }
+    assert cloud_title not in durable_titles_built
+    assert enterprise_title not in durable_titles_built
+
+
 def test_sync_from_trackers_fail_soft(client):
     """Tracker sync always returns ok=True even with empty bindings."""
     res = client.post(

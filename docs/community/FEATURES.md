@@ -2,6 +2,8 @@
 
 Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md). This page is the public-facing checklist.
 
+**v1 lock:** [V1_FEATURE_LOCK.md](../product/V1_FEATURE_LOCK.md) — Community v1 in / out / Cloud-Enterprise only. ✦ rows stay Cloud/Enterprise (never Community shipped). **Not public GA.**
+
 **Legend:** ✅ shipped in Community · ◐ partial · ○ planned · ✦ Cloud / Enterprise only
 
 ## Control plane

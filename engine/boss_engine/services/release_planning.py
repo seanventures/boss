@@ -23,6 +23,12 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from .core import emit_event, make_id
 from .feature_catalog import FeatureCatalog
+from .v1_feature_lock import (
+    apply_v1_lock,
+    default_v1_feature_lock_path,
+    load_v1_feature_lock,
+    match_v1_lock_row,
+)
 from .work_orchestration import WorkOrchestrationService
 
 
@@ -208,6 +214,7 @@ class ReleasePlanningService:
         self.features = FeatureCatalog(settings)
         self.work = WorkOrchestrationService(settings)
         self._schema_ready = False
+        self._v1_lock_rows: Optional[list[dict[str, Any]]] = None
 
     def ensure_tables(self, connection: Connection) -> None:
         """Idempotent CREATE TABLE IF NOT EXISTS for release planning store."""
@@ -475,12 +482,17 @@ class ReleasePlanningService:
         *,
         actor: str = "system",
     ) -> dict[str, Any]:
-        """Pull feature catalog entries into the durable board."""
+        """Pull feature catalog entries into the durable board.
+
+        Applies the v1 feature lock as metadata + column honesty. Does not
+        rewrite the feature catalog. Cloud/Enterprise rows never become
+        Community shipped.
+        """
         self.ensure_tables(connection)
         entries = self.features.list_entries(connection, project_id)
         upserted = 0
         for entry in entries:
-            column = _feature_column(entry.get("status"))
+            column, lock_meta = self._lock_feature_item(entry)
             self._upsert_board_item(
                 connection,
                 project_id=project_id,
@@ -494,6 +506,7 @@ class ReleasePlanningService:
                     "slug": entry.get("slug"),
                     "doc_path": entry.get("doc_path"),
                     "needs_label": entry.get("needs_label"),
+                    **lock_meta,
                 },
             )
             upserted += 1
@@ -684,11 +697,12 @@ class ReleasePlanningService:
         items: list[dict[str, Any]] = []
         try:
             for entry in self.features.list_entries(connection, project_id):
+                column, lock_meta = self._lock_feature_item(entry)
                 items.append(
                     {
                         "id": f"live_feature_{entry['id']}",
                         "project_id": project_id,
-                        "column": _feature_column(entry.get("status")),
+                        "column": column,
                         "source_type": "feature",
                         "source_id": entry["id"],
                         "title": entry.get("title")
@@ -702,6 +716,7 @@ class ReleasePlanningService:
                             "label": entry.get("label"),
                             "slug": entry.get("slug"),
                             "live": True,
+                            **lock_meta,
                         },
                         "sort_order": 0,
                         "created_at": entry.get("created_at"),
@@ -955,6 +970,27 @@ class ReleasePlanningService:
                 {"project_id": project_id},
             ).scalar()
             or 0
+        )
+
+    def _v1_lock_index(self) -> list[dict[str, Any]]:
+        if self._v1_lock_rows is None:
+            self._v1_lock_rows = load_v1_feature_lock(
+                default_v1_feature_lock_path(self.settings.repo_root)
+            )
+        return self._v1_lock_rows
+
+    def _lock_feature_item(self, entry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Apply v1 lock honesty. Catalog row is left unchanged."""
+        column = _feature_column(entry.get("status"))
+        lock_row = match_v1_lock_row(
+            title=entry.get("title"),
+            label=entry.get("label"),
+            rows=self._v1_lock_index(),
+        )
+        return apply_v1_lock(
+            column=column,
+            catalog_status=entry.get("status"),
+            lock_row=lock_row,
         )
 
     def _default_issue_url(self, tracker: str, issue_key: str) -> Optional[str]:

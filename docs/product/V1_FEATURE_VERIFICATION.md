@@ -26,10 +26,10 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 | Auto-scaling workers | `/v1/worker-autoscaling/*` | 2026-08-13: 500 (`worker_autoscaling_policies`). 2026-08-15: CODE — `ensure_tables` + empty-200; live still 500 until redeploy | E2E or honest empty |
 | Distributed job/worker | jobs leases + worker poll | 2026-08-15: CODE — lease/heartbeat/reclaim/dedupe tests green. Live worker exists; this pass did not re-probe dogfood | E2E |
 | Test system | official QA + `npm run verify` + pytest + `make test-v1-lock` | pyramid locked; official BugBox/HookWatch/ApproveIt **not** 5/5 | PARTIAL |
-| MVP feature lock | Community spec + FEATURES | needs explicit lock file | CODE |
-| v1 feature spec final | PRD/TECHNICAL_SPEC + this ledger | living | CODE |
-| OSS vs commercial | FEATURES.md editions | Cloud/Ent stay ✦ | CODE |
-| Built / to-build / release | `/v1/release-planning/*` | 200 | E2E |
+| MVP feature lock | `docs/product/V1_FEATURE_LOCK.md` + `sync-from-features` hook | lock file on `ai/grok/v1-verify-spec-release`; Cloud/Ent stay ✦; **not GA** | CODE |
+| v1 feature spec final | V1_FEATURE_LOCK + PRD/TECHNICAL_SPEC + this ledger | Community v1 in / out / CE locked; evidence-only | CODE |
+| OSS vs commercial | FEATURES.md ✦ + lock CE rows + release-planning test | CE rows cannot be Community shipped | CODE |
+| Built / to-build / release | `/v1/release-planning/{status,board,releases}` | tests in `test_release_planning_api.py`; prior live 200; not re-dogfooded here | CODE |
 | Knowledge graph | `/v1/knowledge/graph/*` | 200 prior dogfood; this session pytest only | **CODE** — node/edge/subgraph/known-causes HTTP green; live shared-tag not re-probed; not GA |
 | On-call automation | `/v1/oncall-sre/*` | 200 status/pages; notify is dry-run | **CODE** (dry-run ◐) — page/ack/resolve + simulated receipt; force_live 422 without creds; **not** live PagerDuty; not GA |
 

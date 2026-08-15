@@ -22,7 +22,7 @@ to be built, and release milestones with tracker issue links.
 | GET | `/releases?project_id=` | List release plans |
 | GET | `/releases/{id}?project_id=` | Release detail (+ hydrated items) |
 | POST | `/releases/{id}/link-issue` | `{tracker, issue_key, url?, actor}` |
-| POST | `/sync-from-features` | Pull FeatureCatalog into durable board |
+| POST | `/sync-from-features` | Pull FeatureCatalog into durable board; apply [v1 feature lock](./V1_FEATURE_LOCK.md) metadata (does not rewrite the catalog; Cloud/Ent never Community shipped) |
 | POST | `/sync-from-trackers` | Best-effort work tracker bindings (fail soft) |
 
 All mutations require an **actor** with `command_submit` permission.
@@ -97,6 +97,10 @@ See `db/schema.sql`.
 ## Service layout
 
 * Engine: `engine/boss_engine/services/release_planning.py`
+* V1 lock hook: `engine/boss_engine/services/v1_feature_lock.py` reads
+  `docs/product/V1_FEATURE_LOCK.md` during `sync-from-features` (and the live
+  board). Catalog rows are unchanged. `cloud_enterprise` rows never get
+  `community_shipped=true` or column `built`.
 * Router: `apps/api/app/routers/release_planning.py` (mounted from
   `mount_platform_routers`)
 * Reuses: `FeatureCatalog`, `WorkOrchestrationService` (work items + tracker
