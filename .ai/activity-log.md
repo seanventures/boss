@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — E2E infra + UI v1 cut (BOSS-391)
+
+- Branch `ai/grok/e2e-infra-ui` from `02c86dd`. Not GA. No Firecracker thaw. No main merge.
+- Isolated HTTP E2E: empty/missing-schema GETs stay 200 `not_configured` + `host.connected=false`.
+- Isolated HTTP E2E: `POST /v1/infra/droplets` blocked without provision flag; failed Receipt + ResourceReceipt.
+- Web: Cloud Easy Connect stays gated; AreaId still includes hidden areas.
+
 ## 2026-08-15 — Grok — V1 infra + UI cut (BOSS-391)
 
 - Branch `ai/grok/v1-verify-infra-ui`. Not GA. No Firecracker thaw. No main merge.
