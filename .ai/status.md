@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 v1 feature lock + release-planning honesty (◐)
+
+- `docs/product/V1_FEATURE_LOCK.md` locks Community v1 in / out / Cloud-Enterprise.
+- `sync-from-features` applies lock metadata; catalog unchanged. CE rows not Community shipped.
+- Branch `ai/grok/v1-verify-spec-release`. Not public GA. Do not merge main.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto

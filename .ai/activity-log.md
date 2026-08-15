@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — v1 feature lock + release-planning honesty
+
+- Branch `ai/grok/v1-verify-spec-release` from `ai/grok/v1-feature-verify` (`a5c8951`).
+- Added `docs/product/V1_FEATURE_LOCK.md` (in / out / Cloud-Enterprise only).
+- `sync-from-features` applies lock metadata; catalog unchanged. CE rows not Community shipped.
+- Tests: `engine/tests/test_v1_feature_lock.py` + `test_oss_vs_commercial_rows_are_not_community_shipped`.
+- Verification ledger updated. **Not GA.** Do not merge main.
+
 ## 2026-08-15 — Grok — official app-scoped verify
 
 - HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote
