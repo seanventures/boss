@@ -71,9 +71,9 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
     {
         "id": "runbooks",
         "awesome": "Runbook Automation",
-        "status": "missing",
+        "status": "partial",
         "surfaces": ["/v1/ai-sre/runbooks"],
-        "gap": "Incident-attached, approval-gated runbooks are not first-class.",
+        "gap": "Built-in restart_preview + page_oncall only. Live effects stay held. Not GA.",
     },
     {
         "id": "cost",

@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 First-class SRE runbooks (◐)
+
+- `/v1/ai-sre/runbooks`: named runbooks attached to a reliability incident.
+- Seeded `restart_preview` (safe, no mutation) and `page_oncall` (dry-run notify).
+- External/spendy steps create a hold-default Decision. Never auto-applied.
+- Receipts use `sre_runbook:{run_id}:{step}`. Not public GA.
+- Branch `ai/grok/ai-sre-runbooks`. Plane BOSS-389.
+
 ## 2026-08-15 AI SRE observe-only overwatch
 
 - `tick(engine, settings, project_id=…)` + `POST /v1/ai-sre/overwatch` + worker

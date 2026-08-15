@@ -42,6 +42,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # First-class incident runbooks (validate + Decision; not GA)
+    try:
+        from .sre_runbooks import router as sre_runbooks_router
+
+        app.include_router(sre_runbooks_router)
+    except ImportError:
+        pass
+
     # Security vulnerability scanning (Semgrep/Trivy/OSV)
     try:
         from .security_scan import router as security_router
