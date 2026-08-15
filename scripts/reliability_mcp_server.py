@@ -43,6 +43,30 @@ TOOLS = [
                     "hypotheses ranked by confidence).",
      "inputSchema": {"type": "object", "properties": {
          "incident_id": {"type": "string"}}, "required": ["incident_id"]}},
+    {"name": "list_capabilities",
+     "description": "Honest AI SRE capability ledger (awesome-ai-sre categories mapped onto "
+                    "BOSS surfaces). Missing stays missing. Never invents coverage.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "verify_incident",
+     "description": "Re-watch an incident's signals: recurrence reopens it, a clear stability "
+                    "window can resolve it. Posts to BOSS only — no live vendor calls.",
+     "inputSchema": {"type": "object", "properties": {
+         "incident_id": {"type": "string"},
+         "source": {"type": "object"},
+         "window": {"type": "object"},
+         "stability_minutes": {"type": "number", "default": 30},
+         "query": {"type": "string"}},
+         "required": ["incident_id"]}},
+    {"name": "page_incident",
+     "description": "Open a receipted on-call page for a reliability incident. Adapters "
+                    "dry-run unless credentials are configured (never calls vendors from MCP).",
+     "inputSchema": {"type": "object", "properties": {
+         "incident_id": {"type": "string"},
+         "title": {"type": "string"},
+         "severity": {"type": "string"},
+         "service": {"type": "string"},
+         "adapter": {"type": "string", "default": "slack_webhook"}},
+         "required": ["incident_id"]}},
 ]
 
 
@@ -68,6 +92,26 @@ def _call_tool(name: str, args: dict):
     if name == "diagnose_incident":
         return _api("POST", f"/v1/reliability/incidents/{args['incident_id']}/diagnose",
                     {"project_id": PROJECT, "actor": "ceo"})
+    if name == "list_capabilities":
+        return _api("GET", "/v1/ai-sre/capabilities")
+    if name == "verify_incident":
+        return _api("POST", f"/v1/reliability/incidents/{args['incident_id']}/verify", {
+            "project_id": PROJECT,
+            "actor": args.get("actor", "ceo"),
+            "source": args.get("source") or {"kind": "memory"},
+            "window": args.get("window") or {"start": 0, "end": 9e9},
+            "query": args.get("query", ""),
+            "stability_minutes": args.get("stability_minutes", 30.0),
+        })
+    if name == "page_incident":
+        return _api("POST", f"/v1/oncall-sre/incidents/{args['incident_id']}/page", {
+            "project_id": PROJECT,
+            "actor": args.get("actor", "ceo"),
+            "title": args.get("title", ""),
+            "severity": args.get("severity", "warning"),
+            "service": args.get("service", ""),
+            "adapter": args.get("adapter", "slack_webhook"),
+        })
     raise ValueError(f"unknown tool {name}")
 
 

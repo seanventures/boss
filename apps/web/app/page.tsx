@@ -161,6 +161,8 @@ import { MonitoringArea } from "./monitoring-ui";
 import { getShepherdOverviewAction, getDeliveryPipelineAction, getDeploymentHealthAction, listSecretsAction, getObservabilityAction,
          listDeploymentsAction } from "./actions";
 import { fetchReliabilityFeed } from "../lib/reliability";
+import { fetchAiSreCapabilities } from "../lib/ai-sre";
+import { AiSreHome } from "./ai-sre-ui";
 import { fetchCostInsights, fetchLlmSpend } from "../lib/budget-status";
 import { CostInsightsCard, LlmSpendCard, BudgetThresholdsCard } from "./cost-governance-ui";
 import { FoundationsScreen, ComponentsScreen } from "./design-system-showcase";
@@ -677,6 +679,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchWorkOrchestrationFeed(activeProjectId),
     ]);
   const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
+  const aiSreFeed = await fetchAiSreCapabilities(activeProjectId);
   const [costInsights, llmSpend] = await Promise.all([
     fetchCostInsights(activeProjectId),
     fetchLlmSpend(activeProjectId),
@@ -7019,6 +7022,19 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ReliabilityHome feed={reliabilityFeed} />
+        </section>
+
+        <section className="panel-stack" data-area="ai-sre" aria-label="AI SRE">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">AI SRE</span>
+              <h2>Capability ledger — category, status, and the remaining gap. Missing stays missing.</h2>
+            </div>
+            <p className="status-meta">
+              Source: GET /v1/ai-sre/capabilities. Not public GA.
+            </p>
+          </div>
+          <AiSreHome feed={aiSreFeed} />
         </section>
 
         <section className="panel-stack" data-area="reliability" aria-label="Knowledge graph">
