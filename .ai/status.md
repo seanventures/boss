@@ -1,5 +1,13 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 AI SRE swarm (awesome-ai-sre)
+
+- Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto
+  existing reliability / on-call / observability / chaos. Honest ◐. Not GA.
+- Swarm building: always-on overwatch tick, incident postmortems, runbooks,
+  noise+NL plan, MCP/UI/SRE-bench. Remediation stays governed PRs.
+- Branch `ai/grok/ai-sre-kernel`. Do not stamp public GA.
+
 ## 2026-08-15 Official app-scoped verify (HookWatch / ApproveIt)
 
 - Root cause: official canaries build inside `paramg/boss-sandbox` (a monorepo) but
