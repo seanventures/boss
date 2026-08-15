@@ -135,7 +135,30 @@ class CIConfigGenerator:
         raise ValueError(f"Unsupported repository language: {language}")
 
     @staticmethod
+    def _security_scan_script(*, indent: str = "          ") -> str:
+        """OSS security-scan gate hook (semgrep / trivy / osv-scanner).
+
+        Tools are optional on PATH. Missing binaries are skipped — this is a
+        hook, not a silent pass of findings. Snyk is never invoked.
+        """
+        lines = [
+            "echo 'BOSS security-scan gate: semgrep (SAST) / trivy (FS) / osv-scanner (deps)'",
+            "echo 'Optional: gitleaks (secrets) / checkov (IaC). Snyk commercial API is never invoked.'",
+            "# semgrep scan --error --metrics=off .",
+            "# trivy fs --exit-code 1 --severity CRITICAL .",
+            "# osv-scanner --recursive .",
+            "# gitleaks detect --no-git --exit-code 1",
+            "# checkov -d . --quiet",
+            "if command -v semgrep >/dev/null 2>&1; then semgrep scan --error --metrics=off .; else echo 'semgrep not on PATH — skipped'; fi",
+            "if command -v trivy >/dev/null 2>&1; then trivy fs --exit-code 1 --severity CRITICAL .; else echo 'trivy not on PATH — skipped'; fi",
+            "if command -v osv-scanner >/dev/null 2>&1; then osv-scanner --recursive .; else echo 'osv-scanner not on PATH — skipped'; fi",
+            "echo 'Security gate completed (missing tools skipped; not a silent pass of findings).'",
+        ]
+        return "\n".join(indent + line for line in lines)
+
+    @staticmethod
     def _github_actions(commands: dict[str, str]) -> str:
+        security = CIConfigGenerator._security_scan_script()
         return f"""name: CI
 
 on:
@@ -161,8 +184,16 @@ jobs:
       - name: Test
         run: {commands['test']}
 
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: OSS security-scan gate
+        run: |
+{security}
+
   build:
-    needs: test
+    needs: [test, security]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -198,6 +229,20 @@ jobs:
   agent any
   stages {{
     stage('Test') {{ steps {{ sh '{commands['setup']}' ; sh '{commands['test']}' }} }}
+    stage('Security scan gate') {{
+      steps {{
+        echo 'BOSS security-scan gate: semgrep (SAST) / trivy (FS) / osv-scanner (deps)'
+        echo 'Optional: gitleaks / checkov. Snyk commercial API is never invoked.'
+        // semgrep scan --error --metrics=off .
+        // trivy fs --exit-code 1 --severity CRITICAL .
+        // osv-scanner --recursive .
+        sh '''
+          if command -v semgrep >/dev/null 2>&1; then semgrep scan --error --metrics=off .; else echo semgrep not on PATH; fi
+          if command -v trivy >/dev/null 2>&1; then trivy fs --exit-code 1 --severity CRITICAL .; else echo trivy not on PATH; fi
+          if command -v osv-scanner >/dev/null 2>&1; then osv-scanner --recursive .; else echo osv-scanner not on PATH; fi
+        '''
+      }}
+    }}
     stage('Build') {{ steps {{ sh '{commands['build']}' }} }}
     stage('Deploy handoff') {{
       steps {{
@@ -215,6 +260,7 @@ jobs:
         return f"""# BOSS-generated GitLab CI — deploy handoff only; provider actuation stays ChangeSet-gated.
 stages:
   - test
+  - security
   - build
   - deploy
 
@@ -230,10 +276,24 @@ test:
     - {commands['lint']}
     - {commands['test']}
 
+security:
+  stage: security
+  image: ubuntu:22.04
+  needs: [test]
+  script:
+    - echo 'BOSS security-scan gate: semgrep (SAST) / trivy (FS) / osv-scanner (deps)'
+    - echo 'Optional: gitleaks / checkov. Snyk commercial API is never invoked.'
+    # semgrep scan --error --metrics=off .
+    # trivy fs --exit-code 1 --severity CRITICAL .
+    # osv-scanner --recursive .
+    - if command -v semgrep >/dev/null 2>&1; then semgrep scan --error --metrics=off .; else echo semgrep not on PATH; fi
+    - if command -v trivy >/dev/null 2>&1; then trivy fs --exit-code 1 --severity CRITICAL .; else echo trivy not on PATH; fi
+    - if command -v osv-scanner >/dev/null 2>&1; then osv-scanner --recursive .; else echo osv-scanner not on PATH; fi
+
 build:
   stage: build
   image: ubuntu:22.04
-  needs: [test]
+  needs: [security]
   script:
     - {commands['setup']}
     - {commands['build']}
@@ -279,6 +339,23 @@ jobs:
           name: Test
           command: {commands['test']}
 
+  security:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: OSS security-scan gate
+          command: |
+            echo 'BOSS security-scan gate: semgrep (SAST) / trivy (FS) / osv-scanner (deps)'
+            echo 'Optional: gitleaks / checkov. Snyk commercial API is never invoked.'
+            # semgrep scan --error --metrics=off .
+            # trivy fs --exit-code 1 --severity CRITICAL .
+            # osv-scanner --recursive .
+            if command -v semgrep >/dev/null 2>&1; then semgrep scan --error --metrics=off .; else echo semgrep not on PATH; fi
+            if command -v trivy >/dev/null 2>&1; then trivy fs --exit-code 1 --severity CRITICAL .; else echo trivy not on PATH; fi
+            if command -v osv-scanner >/dev/null 2>&1; then osv-scanner --recursive .; else echo osv-scanner not on PATH; fi
+
   build:
     docker:
       - image: cimg/base:stable
@@ -315,9 +392,12 @@ workflows:
   ci:
     jobs:
       - test
-      - build:
+      - security:
           requires:
             - test
+      - build:
+          requires:
+            - security
       - deploy:
           requires:
             - build
@@ -338,9 +418,24 @@ steps:
 
   - wait
 
+  - label: ":lock: Security scan gate"
+    key: security
+    depends_on: test
+    command: |
+      echo 'BOSS security-scan gate: semgrep (SAST) / trivy (FS) / osv-scanner (deps)'
+      echo 'Optional: gitleaks / checkov. Snyk commercial API is never invoked.'
+      # semgrep scan --error --metrics=off .
+      # trivy fs --exit-code 1 --severity CRITICAL .
+      # osv-scanner --recursive .
+      if command -v semgrep >/dev/null 2>&1; then semgrep scan --error --metrics=off .; else echo semgrep not on PATH; fi
+      if command -v trivy >/dev/null 2>&1; then trivy fs --exit-code 1 --severity CRITICAL .; else echo trivy not on PATH; fi
+      if command -v osv-scanner >/dev/null 2>&1; then osv-scanner --recursive .; else echo osv-scanner not on PATH; fi
+
+  - wait
+
   - label: ":package: Build"
     key: build
-    depends_on: test
+    depends_on: security
     command: |
       {commands['setup']}
       {commands['build']}

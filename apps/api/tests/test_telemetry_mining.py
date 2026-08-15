@@ -79,6 +79,34 @@ def test_metric_zscore_spike():
     assert sigs and sigs[0].kind == "metric_spike" and sigs[0].key == "latency_p99"
 
 
+def test_mine_calm_logs_do_not_invent_anomaly_scores():
+    """Benign high-volume INFO lines are not anomalies and carry no invented score."""
+    events = [_log(f"cache miss for key {i}") for i in range(40)]
+    rep = tm.mine(events)
+    assert rep["events"] == 40
+    assert rep["signal_count"] == 0
+    assert rep["signals"] == []
+
+
+def test_mine_serializes_inf_as_none_not_a_fake_score():
+    """Cold-start novel ERROR templates use score=None (∞), never a made-up number."""
+    events = [_log(f"db connection refused {i}", "error") for i in range(5)]
+    rep = tm.mine(events)
+    new_templates = [s for s in rep["signals"] if s["kind"] == "new_template"]
+    assert new_templates
+    for sig in new_templates:
+        assert sig["score"] is None
+        assert sig["count"] == 5
+
+
+def test_error_surge_score_is_the_measured_rate():
+    events = [_log("boom", "error") for _ in range(8)] + [_log("ok") for _ in range(12)]
+    sig = tm.error_surge_signal(events, baseline_error_rate=None)
+    assert sig is not None
+    assert sig.score == 0.4  # 8/20 — measured, not invented
+    assert sig.meta["error_rate"] == 0.4
+
+
 # --- mine() report -----------------------------------------------------------
 def test_mine_report_distills_batch():
     events = [_log(f"GET /users/{i} 200") for i in range(100)] + [_log("db connection refused", "error") for _ in range(20)]
