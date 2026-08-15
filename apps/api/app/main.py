@@ -6323,7 +6323,7 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
     """
     from boss_engine.services.benchmark_apps import benchmark_task_input, list_benchmark_apps
     from boss_engine.services.meeting_service import (
-        completed_benchmark_build, meeting_fingerprint,
+        completed_benchmark_build, is_reportable, meeting_fingerprint,
     )
 
     apps = list_benchmark_apps()
@@ -6344,10 +6344,7 @@ def list_qa_benchmark_apps_endpoint(project_id: str = ""):
                 # artifact (reportable). Name/subject matches are related work,
                 # not certified canaries — listing them as built made Launch
                 # reuse a run whose /report 404s.
-                reportable = done.get("matched_on") in {
-                    "benchmark_id",
-                    "launched_as_benchmark",
-                }
+                reportable = is_reportable(done)
                 payload = {
                     "run_id": done["run_id"],
                     "run_status": done["run_status"],
@@ -6406,7 +6403,8 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
     # comparing the two paths.
     if route == "meeting":
         from boss_engine.services.meeting_service import (
-            completed_benchmark_build, convene_prd_meeting_core, meeting_fingerprint,
+            completed_benchmark_build, convene_prd_meeting_core, is_reportable,
+            meeting_fingerprint,
         )
 
         # Refuse to silently rebuild something that already exists.
@@ -6424,7 +6422,10 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                     c, project_id, benchmark_id,
                     meeting_fingerprint(project_id, task["instructions"], ""),
                     name=task["benchmark"].get("name"))
-            if done:
+            # Only a REPORTABLE build blocks a rebuild. Related work that merely shares a name
+            # is not this benchmark's artifact -- its /report 404s -- so refusing to build over
+            # it left the operator with a card that said Launch and a press that would not.
+            if is_reportable(done):
                 return {
                     "status": "already_built",
                     **done,

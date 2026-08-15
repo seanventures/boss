@@ -430,6 +430,22 @@ def active_duplicate_meeting(connection, project_id: str, fingerprint: str):
     return (row["id"], row["task_id"]) if row else (None, None)
 
 
+#: Match kinds that make a run THIS benchmark's certified artifact.
+#:
+#: A name or subject match means "related work exists", not "the canary was run here": its
+#: /report 404s, because nothing recorded it as a benchmark. Both the catalog badge and the
+#: rebuild guard have to agree on that, and they did not -- the catalog treated a name match as
+#: related while the guard treated it as already-built, so a card offered "Launch ApproveIt"
+#: and then refused the press. A guard an operator can only discover by pressing is the defect
+#: this whole area exists to remove.
+REPORTABLE_MATCHES = frozenset({"benchmark_id", "launched_as_benchmark"})
+
+
+def is_reportable(build: Optional[dict]) -> bool:
+    """Is this build the benchmark's own artifact, rather than merely related work?"""
+    return bool(build) and build.get("matched_on") in REPORTABLE_MATCHES
+
+
 def completed_benchmark_build(connection, project_id: str, benchmark_id: str,
                               fingerprint: Optional[str] = None,
                               name: Optional[str] = None):

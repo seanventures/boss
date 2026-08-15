@@ -139,3 +139,28 @@ def test_view_opens_the_newest_build_not_the_best_labelled_one():
     assert "ORDER BY (p.id IS NOT NULL) DESC, r.created_at DESC" in source
     # The old ranking must be gone, not merely reordered around.
     assert "WHEN r.finalize_ctx->'qa_benchmark'->>'id' = :b THEN 0" not in source
+
+
+def test_the_badge_and_the_guard_read_one_rule():
+    """They disagreed, and the disagreement was visible to an operator.
+
+    Sean's `reportable` split is right: a name or subject match means related work exists, not
+    that this benchmark's canary was run here -- its /report 404s. But only the CATALOG applied
+    it. The rebuild guard still treated a name match as already-built, so the card offered
+    "Launch ApproveIt" and the press was then refused. A guard you can only discover by
+    pressing is the defect this area exists to remove.
+    """
+    from boss_engine.services.meeting_service import REPORTABLE_MATCHES, is_reportable
+
+    assert REPORTABLE_MATCHES == {"benchmark_id", "launched_as_benchmark"}
+    assert is_reportable({"matched_on": "benchmark_id"})
+    assert not is_reportable({"matched_on": "name"})
+    assert not is_reportable(None)
+
+    catalog = inspect.getsource(api_main.list_qa_benchmark_apps_endpoint)
+    launch = inspect.getsource(api_main.start_qa_benchmark_app_endpoint)
+    assert "is_reportable(" in catalog
+    assert "is_reportable(" in launch
+    # Neither may carry its own copy of the set.
+    for source in (catalog, launch):
+        assert '"launched_as_benchmark",' not in source
