@@ -29,32 +29,12 @@ GO_SCALE_TRACK_DOC = "docs/operations/GO_SCALE_TRACK.md"
 
 
 def go_scale_track(*, settings: Optional[Settings] = None) -> dict[str, Any]:
-    """Honesty block for the Go scale track. Scaffold ≠ live Firecracker.
-
-    ``s1_go_sandbox_service`` stays false until a live probe of a real
-    Firecracker pool exists. The in-repo Go binary is a fail-closed scaffold.
-    """
-    frozen = True
-    if settings is not None:
-        frozen = bool(getattr(settings, "microvm_claims_frozen", True))
-    return {
-        "community_ga_required": False,
-        "go_runtime_shipped": False,
-        "s1_go_sandbox_service": False,
-        "s1_in_repo_scaffold": True,
-        "s2_go_tenant_gateway": False,
-        "s3_go_event_dispatcher": False,
-        "microvm_claims_frozen": frozen,
-        "doc": GO_SCALE_TRACK_DOC,
-    }
-
-
-# Documented defaults — mirrored in packages/specpack/policies/concurrency_governance_policy.yaml
-def go_scale_track(*, settings: Optional[Settings] = None) -> dict[str, Any]:
-    """Honesty block for the Go scale track. Parent seam — no Go runtime shipped."""
+    """Honesty block for the Go scale track. Scaffold ≠ live Firecracker."""
     from .go_scale import go_scale_track as _track
 
     body = _track()
+    body["s1_in_repo_scaffold"] = True
+    body["doc"] = GO_SCALE_TRACK_DOC
     if settings is not None:
         body["microvm_claims_frozen"] = bool(
             getattr(settings, "microvm_claims_frozen", True)

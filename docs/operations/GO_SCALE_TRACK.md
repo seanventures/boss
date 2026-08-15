@@ -15,8 +15,10 @@
 | Community GA needs a Go runtime | **No.** Community ships the Python API + Python worker + (optional) Python sandbox host. |
 | In-repo Go services exist | **S1 scaffold only.** `services/sandbox-service/` is a fail-closed HTTP contract + lease store. It does **not** boot Firecracker and is **not** a live/GA runtime. S2/S3 still do not exist. |
 | A live Go tenant gateway is mounted | **No.** Edge is Traefik (compose) or the FastAPI process itself. |
+| In-repo Go services exist | **S2 library/binary only.** `go/tenant-gateway/` (BOSS-101). No Helm/compose/goldeneye mount. S1 and S3 are not in-tree on this branch. |
+| A live Go tenant gateway is mounted | **No.** Edge is Traefik (compose) or the FastAPI process itself. See [`TENANT_GATEWAY.md`](TENANT_GATEWAY.md). |
 | A live Go webhook/event dispatcher is mounted | **No.** Fan-out is `event_dispatch.py` + leased `webhook.outbound.deliver`. |
-| S1 Firecracker exists somewhere | **Yes, as Python** on goldeneye (`sandbox-service.py` on `:8077`), plus in-repo `sandbox-host/` (Python). The HTTP contract is named “Python ⇄ Go”; the conforming host today is **not Go**. |
+| S1 Firecracker exists somewhere | **Yes, as Python** on goldeneye (`sandbox-service.py` on `:8077`), plus in-repo `sandbox-host/` (Python). The HTTP contract is named “Python ⇄ Go”; the conforming host today is **not Go**. **Do not unfreeze Firecracker from this slice.** |
 | `/v1/concurrency-load` measures a Go pool | **No.** In-process Python stub harness (zero model cost). Honesty fields: `runner=python_stub`, `go_scale_track.go_runtime_shipped=false`. |
 
 Community GA language must not say “Go gateway”, “Go dispatcher”, or “Go concurrency services are live.”
@@ -29,16 +31,16 @@ Community GA language must not say “Go gateway”, “Go dispatcher”, or “
 |---|---|---|---|
 | **BOSS-97** | Parent: Go concurrency services for 100s of concurrent tasks | Horizontal **Python workers** (`apps/worker/boss_worker/`), Postgres leases, **BOSS-100** `/v1/concurrency/*`, **BOSS-103** stub load harness, **elastic fabric** + **worker autoscaling** | **No** |
 | **BOSS-98** (S1, child of 97) | Go Firecracker sandbox pool (warm-pool, density) | `LocalSubprocessProvider` (OSS default); `MicroVMProvider` HTTP client; in-repo Go **scaffold** `services/sandbox-service/` (typed job API, lease/TTL/heartbeat, fail-closed when `BOSS_MICROVM_CLAIMS_FROZEN=true`); in-repo `sandbox-host/sandbox_agent.py`; goldeneye **Python** Firecracker host. Contract: `sandbox_contract.py` / [`PYTHON_GO_SANDBOX_CONTRACT.md`](../infra/PYTHON_GO_SANDBOX_CONTRACT.md) | **No** (sandbox claims stay frozen — [`SANDBOX_GA_STATUS.md`](../product/SANDBOX_GA_STATUS.md)) |
-| **BOSS-101** (S2) | Go tenant gateway / proxy (TLS, tenant routing, auth passthrough, rate limit, backpressure vs sandbox pool) | Compose/Goldeneye **Traefik** host routers; FastAPI as the control-plane listener; **model gateway** (`/v1/model-gateway/*`) is MEB/BYOK — **not** S2 | **No** |
+| **BOSS-101** (S2) | Go tenant gateway / proxy (TLS, tenant routing, auth passthrough, rate limit, backpressure vs sandbox pool) | Compose/Goldeneye **Traefik** host routers; FastAPI as the control-plane listener; **model gateway** (`/v1/model-gateway/*`) is MEB/BYOK — **not** S2. In-repo optional binary: `go/tenant-gateway/` (routing + auth pass-through + fail-closed + `/health` only). **Not mounted.** | **No** |
 | **BOSS-102** (S3) | Go high-fanout event + webhook dispatcher | `event_dispatch.py` (same-txn allowlisted enqueue), `event_subscription_service.py`, `webhooks.py` (HMAC outbound + signed inbound), worker kind `webhook.outbound.deliver` with Receipt + retry/deadletter. Runbook: [`WEBHOOKS.md`](WEBHOOKS.md) | **No** |
 
-Parent **BOSS-97** stays open until a *measured* Enterprise scale program actually starts. Children stay Backlog. Shipping this mapping is not shipping Go.
+Parent **BOSS-97** stays open until a *measured* Enterprise scale program actually starts. Shipping the S2 **library** is not a live cutover and is not a Community GA claim. Do not flip `s2_go_tenant_gateway` without a mounted probe.
 
 ---
 
 ## Inventory (this repo)
 
-Searched the tree for Go sources, Go modules, and Go deployables. Result: **none**.
+Searched the tree for Go sources, Go modules, and Go deployables. Result: **S2 library only** (`go/tenant-gateway/`). Not in compose/Helm. Not live.
 
 ### What exists (Python / ops)
 
@@ -62,6 +64,7 @@ Searched the tree for Go sources, Go modules, and Go deployables. Result: **none
 | Webhooks | `engine/boss_engine/services/webhooks.py` | Signed inbound + Receipt-backed outbound |
 | Edge | `docker-compose.yaml`, `deploy/goldeneye.compose.yaml` | **Traefik** labels for API/web hosts |
 | Helm | `deploy/helm/boss/templates/{api,web,worker}.yaml` | API + web + worker only — no Go chart |
+| S2 library (optional) | `go/tenant-gateway/` | Tenant/project routing, auth pass-through, fail-closed unknown tenant, `/health`. **Not mounted.** Cutover notes: [`TENANT_GATEWAY.md`](TENANT_GATEWAY.md) |
 
 ### What does **not** exist
 
@@ -70,14 +73,13 @@ Searched the tree for Go sources, Go modules, and Go deployables. Result: **none
 - No Go event/webhook process (S3)
 - No API field that may report `go_runtime_shipped: true` or `s1_go_sandbox_service: true` today
 - Helm/compose still do **not** mount a Go workload
-
 ### What exists (Go scaffold, fail-closed)
-
-| Area | Path | Role |
-|---|---|---|
 | S1 scaffold | `services/sandbox-service/` | Compilable HTTP service conforming to the v1.0 contract. Default `BOSS_MICROVM_CLAIMS_FROZEN=true`. Health reports `ok=false`, `firecracker_live=false`. Coding submit → 422 named reason. Echo+test_mode is a stub, not a VM. |
-
 `s1_in_repo_scaffold=true` means the sources compile. It is **not** a live probe and does **not** unfreeze claims.
+- No Go Dockerfile, Helm chart, or compose service for the gateway
+- No live Envoy (and no Traefik replacement on goldeneye)
+- No Go Firecracker pool (S1) — do not unfreeze from S2
+- No API field that may report `go_runtime_shipped: true` or `s2_go_tenant_gateway: true` today (library ≠ live mount)
 
 ### Do not confuse these with S2
 
@@ -116,7 +118,7 @@ Do **not** start a Go rewrite. Prove a bottleneck first.
 1. **Measure the Python path.** Use `POST /v1/concurrency-load` (stub) plus a real soak against worker leases and, if needed, webhook deliveries. Record saturation (throughput stops rising) and the failing layer (queue, workers, sandbox host, outbound HTTP).
 2. **If sandbox density is the limiter:** harden the **existing Python Firecracker host** and the versioned HTTP contract (BOSS-98 / BOSS-340 residual). Adopt/extend Sean’s service. Do not fork a new Go S1 in this repo.
 3. **If outbound webhook fan-out is the limiter (BOSS-102):** add a *delivery sidecar* that consumes existing `webhook.outbound.deliver` jobs and the spec-00 ledger. Python keeps event semantics, subscriptions, HMAC keys, Receipts, and deadletters. The sidecar must not become a second event model.
-4. **If TLS / tenant routing / edge RPS is the limiter (BOSS-101):** replace Traefik with a single static binary that preserves the same host rules, auth passthrough, and fail-closed missing-config behavior. No business logic, no budget/lease authority in the proxy.
+4. **If TLS / tenant routing / edge RPS is the limiter (BOSS-101):** the static binary now lives at `go/tenant-gateway/`. It is **not** a Traefik replacement until a measured soak + shadow + explicit cutover (see [`TENANT_GATEWAY.md`](TENANT_GATEWAY.md)). No business logic, no budget/lease authority in the proxy. Do not change live goldeneye routing.
 5. **Only then** consider Go, and only for the measured resource-bound layer. Engine stays Python.
 
 Exit criteria for *starting* S2/S3 code: a linked soak report showing the Python equivalent saturates below the required Enterprise SLO, plus an explicit owner approval that this is not a Community GA claim.
@@ -138,7 +140,7 @@ Exit criteria for *starting* S2/S3 code: a linked soak report showing the Python
 | `engine_requires_go` | `false` |
 | `doc` | `docs/operations/GO_SCALE_TRACK.md` |
 
-`POST /v1/concurrency-load` also returns `runner: python_stub`. Do not flip any `*_shipped` / `s2_*` / `s3_*` flag to true without a real in-repo Go binary *and* a live probe. Tests pin the fail-closed defaults.
+`POST /v1/concurrency-load` also returns `runner: python_stub`. Do not flip any `*_shipped` / `s2_*` / `s3_*` flag to true without a real in-repo Go binary *and* a live probe. An unmounted library is not a probe. Tests pin the fail-closed defaults.
 
 ---
 
@@ -150,3 +152,4 @@ Exit criteria for *starting* S2/S3 code: a linked soak report showing the Python
 - Worker autoscaling: [`../product/WORKER_AUTOSCALING.md`](../product/WORKER_AUTOSCALING.md)
 - Elastic fabric: [`../product/ELASTIC_FABRIC.md`](../product/ELASTIC_FABRIC.md)
 - Spec 00 (event model S3 must not duplicate): [`../planning/oss-readiness/00-event-and-webhook-foundation.md`](../planning/oss-readiness/00-event-and-webhook-foundation.md)
+- S2 gateway (library only): [`TENANT_GATEWAY.md`](TENANT_GATEWAY.md)

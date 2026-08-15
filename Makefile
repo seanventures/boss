@@ -8,6 +8,7 @@ BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
 .PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard go-test
+.PHONY: install install-node install-python clean wait-db dev test test-go lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard
 
 install: install-node install-python
 
@@ -69,6 +70,11 @@ go-test:
 test: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm test
+
+# Optional S2 tenant gateway. Not part of Community `make test`.
+# Engine does not require Go. Binary is not mounted on goldeneye.
+test-go:
+	cd go/tenant-gateway && go test ./...
 
 lint: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm lint

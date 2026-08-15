@@ -1,0 +1,13 @@
+{
+  "listen": "127.0.0.1:8787",
+  "tenants": {
+    "acme": {
+      "upstream": "http://127.0.0.1:8000",
+      "projects": {
+        "web": {
+          "upstream": "http://127.0.0.1:8000"
+        }
+      }
+    }
+  }
+}

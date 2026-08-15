@@ -76,6 +76,7 @@ If a required credential is missing, the API must fail closed and create visible
 - `docs/product/IMPLEMENTATION_STATUS.md`: shipped runtime status and current constraints
 - `docs/operations/INFRA_RUNBOOK.md`: scaling, environment, rollout, and rollback runbook
 - `docs/operations/GOLDENEYE_DEPLOYMENT.md`: goldeneye self-hosted production deployment package
+- `go/tenant-gateway/`: optional S2 tenant gateway library/binary (not mounted; production edge is Traefik)
 - `CHANGELOG.md`: release notes
 - `api/openapi.yaml`: active API contract
 - `db/schema.sql`: active starter schema

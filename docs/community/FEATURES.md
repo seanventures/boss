@@ -12,6 +12,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Job leases, heartbeat, fencing | ✅ |
 | Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
 | Event / audit feed | ✅ |
+| Go event + webhook dispatcher (S3) | ◐ Optional Enterprise sidecar in `services/webhook-dispatcher`. Python event SoR + leased `webhook.outbound.deliver` stay canonical. Unset URL → honest `not_configured`. Default dry-run, no live mount, **not GA.** |
 | Global activity log | ◐ Searchable/sortable Mission Control area (status, kind, actor, stuck banner). **Not GA.** |
 | Decision inbox (approve / reject / escalate) | ✅ Hold `reason` + `default_action` on the card; GET `/v1/decisions/{id}`. **Not GA.** |
 | Receipts with unique dedupe keys | ✅ |
@@ -97,6 +98,12 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Self-improvement automation routes | ✦ Enterprise mount |
 
 Metatron captain: one-shot `POST /v1/metatron/query` plus `/v1/metatron/session|goals|watch|drive|overwatch`. Worker overwatch is always on. Every action (chat, goal, drive, apply) runs `validate_action` / `validate_move` first. Decisions and deadletters never auto-apply. BOSS self-change opens a PR — never a silent write. **Not GA** until live dogfood of a validated apply on the shared tag.
+
+## Scale (optional, not Community GA)
+
+| Feature | Status |
+|---|---|
+| Go tenant gateway (S2) | ◐ Library + binary in `go/tenant-gateway/`. Tenant/project routing, auth header pass-through, fail-closed unknown tenant, `/health`. **Not mounted.** Production edge remains Traefik. Engine runs without it. Not a Community GA claim. **Not GA.** |
 
 ## Open-core boundary
 
