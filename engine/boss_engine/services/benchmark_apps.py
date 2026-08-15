@@ -249,6 +249,119 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
     }
 
 
+def _measured_int(value: Any) -> int | None:
+    """Accept a real integer count. Never coerce unknown/falsy to 0."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text in {"+", "-"}:
+            return None
+        digits = text[1:] if text[0] in {"+", "-"} else text
+        if not digits.isdigit():
+            return None
+        return int(text)
+    return None
+
+
+def _measured_bool(value: Any) -> bool | None:
+    """Accept an explicit bool only. Strings/ints stay unknown."""
+    return value if isinstance(value, bool) else None
+
+
+def _measured_rubric_score(value: Any) -> float | None:
+    """Rubric 1–5. Reject bools (True is an int in Python)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if 1.0 <= number <= 5.0:
+            return number
+    return None
+
+
+def honest_ui_evidence(blob: dict[str, Any] | None) -> dict[str, Any]:
+    """Copy measurable UI fields. Never mint a11y_violations or contrast_ok."""
+    src = blob if isinstance(blob, dict) else {}
+    out: dict[str, Any] = {}
+    states = src.get("states_covered") or src.get("browser_states")
+    if isinstance(states, list):
+        cleaned = [str(item).strip() for item in states if str(item).strip()]
+        if cleaned:
+            out["states_covered"] = cleaned
+    markers = _measured_int(src.get("a11y_markers"))
+    if markers is not None:
+        out["a11y_markers"] = markers
+    if isinstance(src.get("has_a11y_script"), bool):
+        out["has_a11y_script"] = src["has_a11y_script"]
+    violations = _measured_int(src.get("a11y_violations")) if "a11y_violations" in src else None
+    if violations is not None and violations >= 0:
+        out["a11y_violations"] = violations
+    contrast = _measured_bool(src.get("contrast_ok")) if "contrast_ok" in src else None
+    if contrast is not None:
+        out["contrast_ok"] = contrast
+    return out
+
+
+def honest_ux_evidence(blob: dict[str, Any] | None) -> dict[str, Any]:
+    """Copy JTBD ids. Unknown passed stays unknown. Never invent rubric scores."""
+    src = blob if isinstance(blob, dict) else {}
+    out: dict[str, Any] = {}
+    rows: list[dict[str, Any]] = []
+    for item in src.get("jtbd") or src.get("walkthroughs") or []:
+        if not isinstance(item, dict):
+            continue
+        row: dict[str, Any] = {}
+        identity = item.get("id") or item.get("name")
+        if identity:
+            row["id"] = str(identity)[:80]
+        if item.get("source"):
+            row["source"] = str(item["source"])
+        if item.get("passed") in {True, False}:
+            row["passed"] = item["passed"]
+        elif "passed" in item:
+            row["passed"] = None
+        if row:
+            rows.append(row)
+    if rows:
+        out["jtbd"] = rows
+    if isinstance(src.get("has_e2e"), bool):
+        out["has_e2e"] = src["has_e2e"]
+    rubric_src = src.get("rubric") if isinstance(src.get("rubric"), dict) else {}
+    rubric = {
+        key: score
+        for key in ("task_success", "clarity", "trust", "delight", "accessibility")
+        if (score := _measured_rubric_score(rubric_src.get(key))) is not None
+    }
+    out["rubric"] = rubric
+    return out
+
+
+def attach_report_evidence(run: dict[str, Any], evidence: dict[str, Any] | None) -> dict[str, Any]:
+    """Attach UI/UX blobs for official /report. Missing fields stay missing."""
+    src = evidence if isinstance(evidence, dict) else {}
+    state = dict(run.get("state") or {})
+    ui = honest_ui_evidence(src.get("ui_evidence") if isinstance(src.get("ui_evidence"), dict) else src)
+    ux = honest_ux_evidence(src.get("ux_evidence") if isinstance(src.get("ux_evidence"), dict) else src)
+    if ui:
+        state["ui_evidence"] = ui
+    if ux:
+        state["ux_evidence"] = ux
+    capability = src.get("capability_evidence")
+    if isinstance(capability, dict) and capability:
+        state["capability_evidence"] = capability
+    interface = src.get("interface_evidence")
+    if isinstance(interface, dict) and interface:
+        state["interface_evidence"] = interface
+    out = dict(run)
+    out["state"] = state
+    return out
+
+
 def _evidence_blob(run: dict[str, Any], *names: str) -> dict[str, Any]:
     """First attached evidence dict from run state or finalize_ctx. Never invents."""
     state = run.get("state") or {}
@@ -257,11 +370,16 @@ def _evidence_blob(run: dict[str, Any], *names: str) -> dict[str, Any]:
         for source in (state, context):
             value = source.get(name)
             if isinstance(value, dict) and value:
+                if name == "ui_evidence":
+                    return honest_ui_evidence(value)
+                if name == "ux_evidence":
+                    return honest_ux_evidence(value)
                 return value
     return {}
 
 
 def _score_ui(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
+    evidence = honest_ui_evidence(evidence)
     parts: list[int] = []
     notes: list[str] = []
     if evidence.get("a11y_violations") is not None:
@@ -283,6 +401,7 @@ def _score_ui(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
 
 
 def _score_ux(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
+    evidence = honest_ux_evidence(evidence)
     parts: list[int] = []
     notes: list[str] = []
     jtbd = evidence.get("jtbd") or evidence.get("walkthroughs") or []
@@ -301,7 +420,7 @@ def _score_ux(evidence: dict[str, Any]) -> tuple[int, list[str]] | None:
         values = [
             float(rubric[key])
             for key in keys
-            if isinstance(rubric.get(key), (int, float))
+            if isinstance(rubric.get(key), (int, float)) and not isinstance(rubric.get(key), bool)
         ]
         if values:
             parts.append(round(100 * (sum(values) / len(values)) / 5))

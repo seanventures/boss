@@ -38,6 +38,17 @@ def test_missing_ui_ux_stays_not_scored_and_honest():
     assert dims["ux"]["score"] is None
 
 
+def test_falsy_a11y_does_not_become_a_perfect_score():
+    from boss_engine.services.benchmark_apps import honest_ui_evidence, _score_ui
+
+    sanitized = honest_ui_evidence({"a11y_violations": False, "contrast_ok": ""})
+    assert "a11y_violations" not in sanitized
+    assert "contrast_ok" not in sanitized
+    assert _score_ui({"a11y_violations": False}) is None
+    measured_zero = honest_ui_evidence({"a11y_violations": 0})
+    assert measured_zero["a11y_violations"] == 0
+
+
 def test_invented_null_score_is_flagged_dishonest():
     honesty = report_honesty(
         {

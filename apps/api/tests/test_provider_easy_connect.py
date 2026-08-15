@@ -45,6 +45,17 @@ def _assert_no_raw_secret(payload, *secrets: str) -> None:
         assert secret not in dumped
 
 
+def _assert_no_secret_value_field(payload) -> None:
+    """422/201 bodies may mention the field name in a message, never as a key."""
+    if isinstance(payload, dict):
+        assert "secret_value" not in payload
+        for value in payload.values():
+            _assert_no_secret_value_field(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            _assert_no_secret_value_field(item)
+
+
 def test_catalog_lists_openai_and_anthropic(client):
     response = client.get("/v1/provider-definitions")
     assert response.status_code == 200, response.text
@@ -93,6 +104,48 @@ def test_paste_key_creates_pointer_only_account(client):
     match = next(item for item in items if item["id"] == account["id"])
     assert match["credential_refs"] == account["credential_refs"]
     assert PASTE_VALUE not in json.dumps(listed.json())
+
+
+def test_422_never_echoes_secret_value(client):
+    """Custom and validation 422s must not echo the pasted secret_value field."""
+    cases = [
+        client.post(
+            "/v1/providers/easy-connect",
+            json={
+                "project_id": PROJECT_ID,
+                "provider": "openai",
+                "account_label": "openai-echo-field",
+                "secret_value": PASTE_VALUE,
+            },
+        ),
+        _paste(client, secret_value="", account_label="openai-empty-echo"),
+        _paste(client, secret_value=SHORT_VALUE, account_label="openai-short-echo"),
+        _paste(
+            client,
+            provider="cloudflare",
+            slot="not-a-slot",
+            account_label="cloudflare-bad-slot",
+        ),
+        _paste(client, backend="aws_kms", account_label="openai-kms-echo"),
+        client.post(
+            "/v1/providers/easy-connect",
+            json={
+                "project_id": PROJECT_ID,
+                "actor": "ceo",
+                "provider": "openai",
+                "account_label": "openai-type-echo",
+                "secret_value": PASTE_VALUE,
+                "read_only": "not-a-bool",
+            },
+        ),
+    ]
+    for response in cases:
+        assert response.status_code == 422, response.text
+        assert PASTE_VALUE not in response.text
+        assert SHORT_VALUE not in response.text
+        payload = response.json()
+        _assert_no_secret_value_field(payload)
+        _assert_no_raw_secret(payload, PASTE_VALUE, SHORT_VALUE, REPLACEMENT_VALUE)
 
 
 def test_empty_secret_is_rejected(client):
@@ -286,6 +339,36 @@ def test_infra_and_model_providers_accept_paste(client):
     listed = client.get("/v1/secret-refs", params={"project_id": PROJECT_ID})
     assert listed.status_code == 200
     assert PASTE_VALUE not in listed.content.decode("utf-8")
+
+
+def test_infra_slot_binds_named_token_ref(client):
+    cloudflare = _paste(
+        client,
+        provider="cloudflare",
+        account_label="cloudflare-token-slot",
+        slot="token",
+    )
+    assert cloudflare.status_code == 201, cloudflare.text
+    cf_body = cloudflare.json()
+    _assert_no_raw_secret(cf_body, PASTE_VALUE)
+    _assert_no_secret_value_field(cf_body)
+    cf_refs = cf_body["provider_account"]["credential_refs"]
+    assert set(cf_refs) == {"token"}
+    assert cf_refs["token"].startswith("local_vault:")
+
+    supabase = _paste(
+        client,
+        provider="supabase",
+        account_label="supabase-token-slot",
+        slot="token",
+    )
+    assert supabase.status_code == 201, supabase.text
+    sb_body = supabase.json()
+    _assert_no_raw_secret(sb_body, PASTE_VALUE)
+    _assert_no_secret_value_field(sb_body)
+    sb_refs = sb_body["provider_account"]["credential_refs"]
+    assert set(sb_refs) == {"token"}
+    assert sb_refs["token"].startswith("local_vault:")
 
 
 def test_hosted_kms_backend_is_rejected(client):
