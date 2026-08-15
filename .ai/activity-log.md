@@ -1,5 +1,14 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — AI SRE MCP + Mission Control + bench
+
+- Branch `ai/grok/ai-sre-mcp-ui` from `ai/grok/ai-sre-kernel` (`e35e711`).
+- MCP: `list_capabilities`, `verify_incident`, `page_incident` on stdio JSON-RPC.
+  No live vendor calls.
+- Mission Control area `ai-sre` next to Reliability renders GET /v1/ai-sre/capabilities.
+- Deterministic `GET /v1/ai-sre/bench` via InvestigationEngine fixtures.
+  Missing signals stay unknown; never invent 0.99 confidence. Not public GA.
+
 ## 2026-08-15 — Grok — official app-scoped verify
 
 - HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote

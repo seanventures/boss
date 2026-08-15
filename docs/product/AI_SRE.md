@@ -36,8 +36,8 @@ Always-on: Metatron overwatch + worker tick must run the **observe** half
 | Chaos engineering | `/v1/chaos` | ◐ named scenarios only |
 | Runbook automation | processes + (new) SRE runbooks | ◐ missing incident runbooks |
 | Cloud cost | budget, cost_insights, FinOps | ◐ |
-| LLM DevOps | factory, MCP `scripts/reliability_mcp_server.py` | ◐ MCP too thin |
-| Agent benchmarks | official QA + (new) SRE bench | ◐ no SRE-bench slice |
+| LLM DevOps | factory, MCP `scripts/reliability_mcp_server.py` | ◐ list/diagnose/capabilities/verify/page; no live vendor notify |
+| Agent benchmarks | official QA + `GET /v1/ai-sre/bench` | ◐ deterministic InvestigationEngine fixtures only |
 
 ## Hard rules
 

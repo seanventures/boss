@@ -13,6 +13,7 @@ import { TokenEfficiencyPanel } from "../app/token-efficiency-ui";
 import { ObservabilitySuitePanel } from "../app/observability-suite-ui";
 import { KnowledgeGraphPanel } from "../app/knowledge-graph-ui";
 import { CICDPipelinesPanel } from "../app/cicd-pipelines-ui";
+import { AiSreHome } from "../app/ai-sre-ui";
 
 /** Area nesting map — platform panels ride existing ConsoleShell AreaIds. */
 export const PLATFORM_OPS_AREA_NESTING = {
@@ -44,6 +45,7 @@ const EXISTING_AREA_IDS = new Set([
   "delivery",
   "monitoring",
   "reliability",
+  "ai-sre",
   "reports",
   "budget",
   "pipeline",
@@ -95,5 +97,6 @@ describe("platform-ops UI smoke imports", () => {
     expect(typeof ObservabilitySuitePanel).toBe("function");
     expect(typeof KnowledgeGraphPanel).toBe("function");
     expect(typeof CICDPipelinesPanel).toBe("function");
+    expect(typeof AiSreHome).toBe("function");
   });
 });
