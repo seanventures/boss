@@ -20,7 +20,10 @@ def test_ledger_covers_awesome_categories_without_inventing_shipped():
         "runbooks",
         "sre_bench",
     }
-    assert ledger["counts"]["missing"] >= 1
+    # Stack union: runbooks + bench are now partial. Still nothing shipped / GA.
+    assert ledger["counts"]["shipped"] == 0
+    assert ledger["counts"]["partial"] >= 1
     assert all(item["status"] in {"shipped", "partial", "missing"} for item in ledger["capabilities"])
     assert capability_by_id("runbooks")["status"] == "partial"
+    assert capability_by_id("sre_bench")["status"] == "partial"
     assert capability_by_id("nope") is None
