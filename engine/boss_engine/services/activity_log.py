@@ -561,6 +561,15 @@ _SOURCE_LOADERS = (
 class ActivityLogService:
     """Project-scoped, read-only union of ops activity rows."""
 
+    def __init__(self, settings: Any = None):
+        self.settings = settings
+
+    def list_activity(self, connection: Connection, project_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self.query(connection, project_id, **kwargs)
+
+    def list(self, connection: Connection, project_id: str, **kwargs: Any) -> dict[str, Any]:
+        return self.query(connection, project_id, **kwargs)
+
     @staticmethod
     def query(
         connection: Connection,
