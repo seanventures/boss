@@ -1490,6 +1490,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     guest_vm_ids: list[str] = []          # for release-on-success / retain-on-failure
     accumulated: dict[str, str] = {}      # path -> content committed so far (the PR diff)
     guest_base = base_branch              # advances to work_branch once commits exist
+    _app_id = verification_target.official_app_id(spec, fctx)
 
     def _guest_stage(step: str, stage_name: str, prompt: str, *, test_cmds: list[str],
                      stage_title: str, engine_override: str = ""):
@@ -1511,6 +1512,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "token": token, "timeout": settings.code_agent_timeout_seconds,
             "max_turns": int(getattr(settings, "code_agent_guest_max_turns", 120) or 120),
         }
+        if _app_id:
+            guest_spec["app_root"] = _app_id
         with _transaction(engine) as c:
             guest_spec.update(
                 _guest_engine_fields(
@@ -1779,7 +1782,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         sandbox.provision(owner, repo, base_branch=base_branch,
                           work_branch=work_branch, token=token)
         root = sandbox.path
-        _app_id = verification_target.official_app_id(spec, fctx)
         _web_verify = (
             verification_target.detect_kind(spec, title) == "web"
             or str(test_cmd or "").startswith("npm ")

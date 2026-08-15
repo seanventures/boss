@@ -6378,10 +6378,18 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
         raise HTTPException(status_code=404, detail=str(error)) from error
     actor = str((payload or {}).get("actor") or "executive_console").strip()
     simulated = bool((payload or {}).get("simulated"))
+    official = bool((payload or {}).get("official"))
+    engine_name = str((payload or {}).get("engine") or "").strip()
+    model_config = (
+        {"default": {"engine": engine_name.lower()}} if engine_name else None
+    )
     # simulated=true is a no-spend fixture and must never convene the panel.
-    # Default the route to direct when simulated; do not change the meeting path
+    # official=true is a reportable code-task launch (engine failover lives here).
+    # Default the route to direct for those; do not change the meeting path
     # for ordinary launches.
     if simulated:
+        route = "direct"
+    elif official and (payload or {}).get("route") in (None, ""):
         route = "direct"
     else:
         route = str((payload or {}).get("route") or "meeting").lower()
@@ -6438,11 +6446,19 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
         try:
             with begin(engine) as c:
                 require_project_actor(c, project_id, actor, "task_create")
+                meeting_constraints = {
+                    "source": "qa_benchmark",
+                    "benchmark_id": benchmark_id,
+                }
+                if official:
+                    meeting_constraints["official"] = True
+                if engine_name:
+                    meeting_constraints["engine"] = engine_name.lower()
                 meeting = convene_prd_meeting_core(
                     c, settings=settings, budget=budget, intake=intake, jobs=jobs,
                     project_id=project_id,
                     directive=task["instructions"],
-                    constraints={"source": "qa_benchmark", "benchmark_id": benchmark_id},
+                    constraints=meeting_constraints,
                 )
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
@@ -6455,6 +6471,14 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
             "duplicate_of": meeting.get("duplicate_of"),
             "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
         }
+    finalize_ctx = dict(task.get("finalize_ctx") or {})
+    if official:
+        finalize_ctx["official"] = True
+        bench = dict(finalize_ctx.get("qa_benchmark") or {})
+        bench["official"] = True
+        if engine_name:
+            bench["engine"] = engine_name.lower()
+        finalize_ctx["qa_benchmark"] = bench
     try:
         with begin(engine) as c:
             require_project_actor(c, project_id, actor, "task_create")
@@ -6473,8 +6497,9 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                     "_fixture" if simulated else settings.target_github_repo
                 ),
                 base_branch=(payload or {}).get("base_branch") or "main",
-                finalize_ctx=task["finalize_ctx"],
+                finalize_ctx=finalize_ctx,
                 jobs=jobs,
+                model_config=None if simulated else model_config,
                 # Benchmarks asked for `strict` — the most expensive setting BOSS has, and
                 # currently withdrawn while it is being fixed. They ask for `balanced` now:
                 # full review, findings captured, still always ships a PR. A caller may still
@@ -6505,11 +6530,16 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 "This is not a certified benchmark pass."
             ),
         }
-    return {
+    queued = {
         "status": "queued",
         "run_id": run_id,
         "benchmark": {"id": task["benchmark"]["id"], "name": task["benchmark"]["name"]},
     }
+    if official:
+        queued["official"] = True
+    if engine_name:
+        queued["engine"] = engine_name.lower()
+    return queued
 
 
 @app.post("/v1/code-tasks/{run_id}/follow-up", status_code=201)

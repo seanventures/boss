@@ -26,6 +26,7 @@ _SCRIPTS = {
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
     "test:e2e": "playwright test",
+    "verify": "npm run typecheck && npm run build && npm run lint && npm run test:e2e",
     "preview": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",
 }
 

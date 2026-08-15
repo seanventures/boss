@@ -235,13 +235,23 @@ def _run_agent(spec) -> str:
     raise RuntimeError(f"unknown engine: {engine}")
 
 
+def _verify_cwd(spec, work=None):
+    """Official canaries live under {app_id}/. Never run npm verify at repo root."""
+    root = Path(work) if work is not None else WORK
+    app_id = str((spec or {}).get("app_root") or (spec or {}).get("app_id") or "").strip().strip("/")
+    if app_id and (root / app_id / "package.json").is_file():
+        return root / app_id
+    return root
+
+
 def _run_tests(spec):
     results, passed = [], True
+    cwd = _verify_cwd(spec)
     for cmd in spec.get("test_commands", []):
         t = time.monotonic()
         out = ""
         try:
-            rc, o, e = _run(cmd, cwd=WORK, timeout=spec.get("timeout", 900))
+            rc, o, e = _run(cmd, cwd=cwd, timeout=spec.get("timeout", 900))
             out = ((o or "") + "\n" + (e or "")).strip()
         except subprocess.TimeoutExpired:
             rc, out = None, "timed out"

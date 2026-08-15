@@ -10,6 +10,7 @@ Environment
   BOSS_API_KEY                   required for live (never printed)
   BOSS_PROJECT_ID                default boss-dogfood
   BOSS_QA_ALLOW_OFFICIAL         must be 1 to POST official (spendy) runs
+  BOSS_QA_ENGINE                 optional model-engine failover (openai, claude_code, …)
 
 Exit
   0 honesty checks passed (or official runs posted when allowed)
@@ -185,13 +186,23 @@ def request_official_runs(client: BossClient, *, timeout: float = 30.0) -> list[
             )
         ]
     checks: list[CheckResult] = []
+    engine = (os.environ.get("BOSS_QA_ENGINE") or "").strip()
     for canary_id in CANARY_IDS:
+        payload: dict[str, Any] = {
+            "official": True,
+            "project_id": client.project_id,
+        }
+        if engine:
+            payload["engine"] = engine
         status, body, ms = client.request(
             "POST",
             f"/v1/qa/benchmark-apps/{canary_id}/runs",
-            body={"official": True, "project_id": client.project_id},
+            body=payload,
             timeout=timeout,
         )
+        run_id = None
+        if isinstance(body, dict):
+            run_id = body.get("run_id") or body.get("id")
         checks.append(
             _result(
                 f"official.{canary_id}.post",
@@ -200,7 +211,7 @@ def request_official_runs(client: BossClient, *, timeout: float = 30.0) -> list[
                 detail=f"POST official {canary_id} → {status}",
                 status_code=status,
                 duration_ms=ms,
-                evidence={"run_id": (body or {}).get("id") if isinstance(body, dict) else None},
+                evidence={"run_id": run_id},
             )
         )
     return checks
