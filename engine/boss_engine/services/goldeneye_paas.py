@@ -221,6 +221,8 @@ def load_package_catalog() -> dict[str, Any]:
     }
 
 
+# Idempotent DDL so live dogfood (and ad-hoc test DBs) recover from
+# UndefinedTable on goldeneye_nodes instead of 500ing /v1/goldeneye/status.
 _GOLDENEYE_DDL = """
 CREATE TABLE IF NOT EXISTS goldeneye_nodes (
   id TEXT PRIMARY KEY,
@@ -246,6 +248,7 @@ CREATE TABLE IF NOT EXISTS goldeneye_nodes (
 );
 CREATE INDEX IF NOT EXISTS idx_goldeneye_nodes_project
   ON goldeneye_nodes(project_id, status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS goldeneye_package_installs (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -264,6 +267,7 @@ CREATE TABLE IF NOT EXISTS goldeneye_package_installs (
 );
 CREATE INDEX IF NOT EXISTS idx_goldeneye_pkg_installs_node
   ON goldeneye_package_installs(project_id, node_id, package_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS goldeneye_apps (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -289,6 +293,7 @@ CREATE INDEX IF NOT EXISTS idx_goldeneye_apps_project
   ON goldeneye_apps(project_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_goldeneye_apps_node
   ON goldeneye_apps(project_id, node_id, status);
+
 CREATE TABLE IF NOT EXISTS goldeneye_deploys (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -310,6 +315,25 @@ CREATE INDEX IF NOT EXISTS idx_goldeneye_deploys_app
   ON goldeneye_deploys(project_id, app_id, created_at DESC);
 """
 
+# Community kit + optional BOSS control plane vs platform-only hosted fleet.
+_COMMUNITY_EDITION = {
+    "kit": True,
+    "control_plane": True,
+    "self_hosted_metal": True,
+}
+_PLATFORM_ONLY = [
+    "managed multi-tenant Goldeneye fleet (BOSS Cloud)",
+    "hosted metal as a service",
+    "Cloud Easy Connect as the node source",
+]
+
+
+def _is_undefined_table(exc: BaseException) -> bool:
+    orig = getattr(exc, "orig", None)
+    name = type(orig).__name__ if orig is not None else type(exc).__name__
+    blob = str(orig or exc).lower()
+    return name == "UndefinedTable" or "does not exist" in blob
+
 
 class GoldeneyePaasService:
     """Project-scoped Goldeneye node/package/app control plane."""
@@ -324,13 +348,17 @@ class GoldeneyePaasService:
         self.receipts = ReceiptService()
         # Injected by tests; production falls back to SSHHostAdapter.
         self.ssh_runner = ssh_runner
+        self._tables_ready = False
 
     def ensure_tables(self, connection: Connection) -> None:
-        """Idempotent DDL so drifted live DBs return honest empty instead of 500."""
+        """Idempotent DDL so missing goldeneye_* relations become empty-200."""
+        if self._tables_ready:
+            return
         for stmt in _GOLDENEYE_DDL.split(";"):
             s = stmt.strip()
             if s:
                 connection.execute(text(s))
+        self._tables_ready = True
 
     # ------------------------------------------------------------------
     # Catalog
@@ -492,10 +520,10 @@ class GoldeneyePaasService:
         display_name: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        self.ensure_tables(connection)
         name = (name or "").strip().lower().replace(" ", "-")
         if not name or not name.replace("-", "").replace("_", "").isalnum():
             raise ValueError("name must be a short alphanumeric node name")
+        self.ensure_tables(connection)
         scope = self._project_scope(connection, project_id)
         roles = roles or ["apps"]
         existing = connection.execute(
@@ -631,6 +659,7 @@ class GoldeneyePaasService:
     def get_node(
         self, connection: Connection, project_id: str, node_id: str
     ) -> dict[str, Any]:
+        self.ensure_tables(connection)
         row = connection.execute(
             text(
                 "SELECT * FROM goldeneye_nodes "
@@ -727,6 +756,7 @@ class GoldeneyePaasService:
         metadata: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         pkg = self._package_by_id(package_id)
+        self.ensure_tables(connection)
         node = self._resolve_node(
             connection, project_id, node_id=node_id, node_name=node_name
         )
@@ -1007,6 +1037,7 @@ class GoldeneyePaasService:
             raise ValueError("name is required")
         if not image_ref and not compose_ref:
             raise ValueError("image_ref or compose_ref is required")
+        self.ensure_tables(connection)
         node = self._resolve_node(
             connection, project_id, node_id=node_id, node_name=node_name
         )
@@ -1257,30 +1288,70 @@ class GoldeneyePaasService:
             raise ValueError(f"Unknown app_id: {app_id}")
         return self._row_app(row)
 
-    def fleet_status(
-        self, connection: Connection, project_id: str
+    def _honest_empty_status(
+        self, project_id: str, *, reason: str = "no_nodes_registered"
     ) -> dict[str, Any]:
-        self.ensure_tables(connection)
-        nodes = self.list_nodes(connection, project_id)
-        apps = self.list_apps(connection, project_id)
-        installs = self.list_package_installs(connection, project_id)
         catalog = self.package_catalog()
-        live = [
-            node
-            for node in nodes
-            if node.get("last_heartbeat_at")
-            and node.get("status") in {"ready", "bootstrapping"}
-        ]
         return {
             "project_id": project_id,
             "product": "goldeneye",
-            "status": "ok" if nodes else "not_configured",
-            "host": {
-                "connected": bool(live),
-                "reason": (
-                    "heartbeat_ready_node" if live else "no_live_heartbeat"
-                ),
+            "status": "not_configured",
+            "configured": False,
+            "kit": {
+                "version": catalog.get("kit_version") or "0.2.0",
+                "modular": bool(catalog.get("modular", True)),
+                "module_api": catalog.get("api_version") or 1,
+                "catalog_source": catalog.get("source"),
+                "package_count": len(catalog.get("items") or []),
+                "default_bootstrap": catalog.get("default_bootstrap"),
             },
+            "real_host_effects": self._real_host_allowed(),
+            "nodes": [],
+            "node_count": 0,
+            "apps": [],
+            "app_count": 0,
+            "package_installs": [],
+            "package_install_count": 0,
+            "ready_nodes": 0,
+            "host": {"connected": False, "reason": reason},
+            "metrics": None,
+            "edition": {
+                "community": dict(_COMMUNITY_EDITION),
+                "platform_only": list(_PLATFORM_ONLY),
+            },
+        }
+
+    def fleet_status(
+        self, connection: Connection, project_id: str
+    ) -> dict[str, Any]:
+        try:
+            self.ensure_tables(connection)
+            nodes = self.list_nodes(connection, project_id)
+            apps = self.list_apps(connection, project_id)
+            installs = self.list_package_installs(connection, project_id)
+        except Exception as exc:  # noqa: BLE001 — missing schema must be empty-200
+            if _is_undefined_table(exc):
+                return self._honest_empty_status(
+                    project_id, reason="schema_missing"
+                )
+            raise
+        catalog = self.package_catalog()
+        connected = any(
+            n.get("last_heartbeat_at")
+            and n.get("status") in ("ready", "bootstrapping")
+            for n in nodes
+        )
+        if not nodes:
+            status = "not_configured"
+        elif connected:
+            status = "ready"
+        else:
+            status = "registered"
+        return {
+            "project_id": project_id,
+            "product": "goldeneye",
+            "status": status,
+            "configured": bool(nodes),
             "kit": {
                 "version": catalog.get("kit_version") or "0.2.0",
                 "modular": bool(catalog.get("modular", True)),
@@ -1296,7 +1367,22 @@ class GoldeneyePaasService:
             "app_count": len(apps),
             "package_installs": installs[:50],
             "package_install_count": len(installs),
-            "ready_nodes": sum(1 for n in nodes if n["status"] in ("ready", "bootstrapping")),
+            "ready_nodes": sum(
+                1 for n in nodes if n["status"] in ("ready", "bootstrapping")
+            ),
+            "host": {
+                "connected": bool(connected),
+                "reason": (
+                    "no_nodes_registered"
+                    if not nodes
+                    else ("heartbeat_seen" if connected else "no_heartbeat")
+                ),
+            },
+            "metrics": None,
+            "edition": {
+                "community": dict(_COMMUNITY_EDITION),
+                "platform_only": list(_PLATFORM_ONLY),
+            },
         }
 
     # ------------------------------------------------------------------

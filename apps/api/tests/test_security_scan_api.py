@@ -239,3 +239,63 @@ def test_engine_simulated_finding_schema():
     assert d["path"]
     assert d["message"]
     assert d["scanner"] == "semgrep"
+
+
+def test_latest_empty_is_honest_200(client):
+    """No scan yet → 200 not_configured, never a 404 that looks like a missing route."""
+    r = client.get(
+        "/v1/security-scan/latest",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "not_configured"
+    assert body["run"] is None
+    assert body["summary"] is None
+    assert body["project_id"] == "boss-dogfood"
+
+
+def test_latest_returns_simulated_run(client):
+    created = client.post(
+        "/v1/security-scan/run",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "test_operator",
+            "scanners": ["gitleaks"],
+            "simulated": True,
+        },
+    )
+    assert created.status_code == 200, created.text
+    run_id = created.json()["id"]
+    latest = client.get(
+        "/v1/security-scan/latest",
+        params={"project_id": "boss-dogfood"},
+    )
+    assert latest.status_code == 200, latest.text
+    body = latest.json()
+    assert body["status"] != "not_configured"
+    assert body["run"]["id"] == run_id
+    assert body["run"]["simulated"] is True
+
+
+def test_os_code_scan_covers_fs_deps_and_secrets(client):
+    """OS/code means filesystem + dependency + secrets — not a commercial Snyk claim."""
+    r = client.post(
+        "/v1/security-scan/run",
+        json={
+            "project_id": "boss-dogfood",
+            "actor": "test_operator",
+            "scanners": ["semgrep", "trivy", "osv-scanner", "gitleaks", "checkov"],
+            "simulated": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["simulated"] is True
+    assert body["receipt_id"]
+    assert body["dedupe_key"].startswith("security_scan:boss-dogfood:")
+    kinds = {item["scanner"]: item for item in body["scanner_results"]}
+    assert set(kinds) == {"semgrep", "trivy", "osv-scanner", "gitleaks", "checkov"}
+    assert all(item["status"] == "simulated" for item in body["scanner_results"])
+    scanners_seen = {f["scanner"] for f in body["findings"]}
+    assert {"semgrep", "trivy", "osv-scanner", "gitleaks", "checkov"} <= scanners_seen

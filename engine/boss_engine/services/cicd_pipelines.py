@@ -140,6 +140,7 @@ def catalog() -> dict[str, Any]:
             "Pipeline run records are a BOSS-side provenance ledger.",
             "Live poll/verdict requires pipeline_adapter + configured credentials.",
             "Provider deployment remains ChangeSet-gated in the Resource Plane.",
+            "Generated templates include an OSS security-scan gate (semgrep/trivy/osv).",
         ],
     }
 
