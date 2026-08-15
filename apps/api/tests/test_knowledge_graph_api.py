@@ -209,6 +209,32 @@ def test_knowledge_graph_seed_from_infra(client, engine):
     assert items[0]["layer"] == "deterministic"
 
 
+def test_knowledge_graph_seed_from_infra_and_known_causes_honest_empty(client):
+    """No infra_resources / no RCA history → 200 with empty counts, not 5xx."""
+    seed = client.post(
+        "/v1/knowledge/graph/seed-from-infra",
+        json={"project_id": PROJECT_ID, "actor": ACTOR},
+    )
+    assert seed.status_code == 200, seed.text
+    assert seed.json()["resources"] == 0
+
+    causes = client.get(
+        "/v1/knowledge/graph/known-causes",
+        params={"project_id": PROJECT_ID, "service": "no-such-service-e2e"},
+    )
+    assert causes.status_code == 200, causes.text
+    body = causes.json()
+    assert body["service"] == "no-such-service-e2e"
+    assert body["items"] == []
+
+    listed = client.get(
+        "/v1/knowledge/graph/nodes",
+        params={"project_id": PROJECT_ID, "kind": "resource"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"] == []
+
+
 def test_knowledge_graph_mutations_require_actor(client):
     bad = client.post(
         "/v1/knowledge/graph/nodes",

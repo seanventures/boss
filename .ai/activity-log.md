@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — HTTP E2E KG + on-call
+
+- Branch `ai/grok/e2e-kg-oncall` from `origin/ai/grok/v1-verify-kg-oncall` `@32bd3f5`.
+- Isolated DB `boss_e2e_kg_oncall` (not live PagerDuty, not GA, did not merge main).
+- Filled remaining HTTP holes: seed-from-infra/known-causes honest empty; reliability→PagerDuty `force_live` 422; `correlates_with` asserted via neighbors + subgraph.
+- Focused suite **23 passed**: `test_knowledge_graph.py` + `test_knowledge_graph_api.py` + `test_oncall_sre_api.py`.
+- Ledger stays **CODE** (dry-run ◐). Plane: `OPS_BASE_URL` unset this session — track on branch (parent BOSS-390 / BOSS-388).
+
 ## 2026-08-15 — Grok — v1 verify KG + on-call
 
 - Branch `ai/grok/v1-verify-kg-oncall` from `ai/grok/v1-feature-verify` `a5c8951`.

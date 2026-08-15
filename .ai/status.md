@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 KG + on-call HTTP E2E (◐)
+
+- Branch `ai/grok/e2e-kg-oncall` from `32bd3f5`. Isolated DB `boss_e2e_kg_oncall`.
+- HTTP E2E: nodes/edges/subgraph/known-causes/seed-from-infra (honest empty ok); page→ack→resolve; reliability PagerDuty simulated `posted=false`; `force_live` 422; KG `correlates_with` write-back.
+- 23 passed. Not live PagerDuty. **Not public GA.** Did not merge main.
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto
