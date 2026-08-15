@@ -4321,6 +4321,18 @@ CREATE TABLE IF NOT EXISTS remediations (
 );
 CREATE INDEX IF NOT EXISTS idx_remediations_incident ON remediations(incident_id, created_at DESC);
 
+-- Evidence-only AI SRE postmortems (not break-glass). One artifact per incident.
+CREATE TABLE IF NOT EXISTS sre_postmortems (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  incident_id TEXT NOT NULL REFERENCES incidents(id) ON DELETE CASCADE,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (incident_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sre_postmortems_project
+  ON sre_postmortems(project_id, created_at DESC);
+
 -- ── Reliability autonomy policy (RB-19) ───────────────────────────────────────
 -- Governed autonomy spectrum per project: how far the SRE agent may go on its own.
 -- Tier-0 auto_remediate: auto-launch the (still fail-closed, gated) remediation PR when
