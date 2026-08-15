@@ -159,7 +159,8 @@ Community shipped (`built` + `community_shipped=true`).
 
 ## What's built / to be built (v1 planning)
 
-Use `/v1/release-planning/{status,board,releases}` plus this lock:
+Use `/v1/release-planning/{status,board,releases}` plus this lock.
+`GET /v1/v1-lock` (and `status.v1_lock`) expose **in / out / cloud counts only**.
 
 | Board column | Meaning under this lock |
 |---|---|
@@ -181,3 +182,4 @@ Mission Control must not present a Cloud/Enterprise row as a Community ship.
 | `docs/product/V1_FEATURE_VERIFICATION.md` | Evidence-only verification ledger |
 | `docs/product/PRD-v2.0.md` + `TECHNICAL_SPEC-v2.0.md` | Governing intent |
 | `POST /v1/release-planning/sync-from-features` | Applies lock metadata; does not rewrite catalog |
+| `GET /v1/v1-lock` + `GET /v1/release-planning/status` | in / out / cloud counts only |

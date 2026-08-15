@@ -40,6 +40,14 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 | v1 feature spec final | PRD/TECHNICAL_SPEC + this ledger | living | CODE |
 | OSS vs commercial | FEATURES.md editions | Cloud/Ent stay ✦ | CODE |
 | Built / to-build / release | `/v1/release-planning/*` | 200 | E2E |
+| Token efficacy / consumption | `/v1/token-efficiency/*` | scorecard 200; policies/consumption 500 (`token_budget_policies`) | E2E or honest empty |
+| Auto-scaling workers | `/v1/worker-autoscaling/*` | 500 (`worker_autoscaling_policies`) | E2E or honest empty |
+| Distributed job/worker | jobs leases + worker poll | worker live on goldeneye | E2E |
+| Test system | official QA + `npm run verify` + pytest | factory verify scoped `6370178` | PARTIAL until official green |
+| MVP feature lock | `docs/product/V1_FEATURE_LOCK.md` + `GET /v1/v1-lock` + `sync-from-features` hook | isolated HTTP tests; Cloud/Ent stay ✦; **not GA** | CODE |
+| v1 feature spec final | V1_FEATURE_LOCK + PRD/TECHNICAL_SPEC + this ledger | Community v1 in / out / CE locked; evidence-only | CODE |
+| OSS vs commercial | FEATURES.md ✦ + lock CE rows + release-planning test | CE rows cannot be Community shipped | CODE |
+| Built / to-build / release | `/v1/release-planning/{status,board,releases}` | isolated HTTP 200 + lock summary; not live-dogfooded here | CODE |
 | Knowledge graph | `/v1/knowledge/graph/*` | 200 | E2E |
 | On-call automation | `/v1/oncall-sre/*` | 200 | E2E |
 

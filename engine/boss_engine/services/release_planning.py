@@ -28,6 +28,7 @@ from .v1_feature_lock import (
     default_v1_feature_lock_path,
     load_v1_feature_lock,
     match_v1_lock_row,
+    summarize_v1_feature_lock,
 )
 from .work_orchestration import WorkOrchestrationService
 
@@ -250,6 +251,7 @@ class ReleasePlanningService:
                 "board_items": sum(len(columns[c]) for c in BOARD_COLUMNS),
                 "release_plans": self._count_releases(connection, project_id),
             },
+            "v1_lock": self.v1_lock_summary(),
         }
 
     def board(
@@ -978,6 +980,10 @@ class ReleasePlanningService:
                 default_v1_feature_lock_path(self.settings.repo_root)
             )
         return self._v1_lock_rows
+
+    def v1_lock_summary(self) -> dict[str, int]:
+        """Repo-wide v1 lock counts. Cloud/Ent stay ✦; not a GA claim."""
+        return summarize_v1_feature_lock(self._v1_lock_index())
 
     def _lock_feature_item(self, entry: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Apply v1 lock honesty. Catalog row is left unchanged."""

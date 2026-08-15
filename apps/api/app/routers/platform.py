@@ -90,6 +90,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Community v1 lock summary (in / out / cloud counts only)
+    try:
+        from .v1_lock import router as v1_lock_router
+
+        app.include_router(v1_lock_router)
+    except ImportError:
+        pass
+
     # Token efficiency / packing optimization
     try:
         from .token_efficiency import router as token_router

@@ -195,6 +195,7 @@ API_DOMAINS: dict[str, dict[str, Any]] = {
             "/v1/cicd",
             "/v1/ci-config",
             "/v1/release-planning",
+            "/v1/v1-lock",
             "/v1/features",
             "/v1/delivery",
             "/v1/pipeline-config",

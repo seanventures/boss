@@ -9,6 +9,7 @@ from boss_engine.services.v1_feature_lock import (
     lock_rows_are_honest,
     match_v1_lock_row,
     parse_v1_feature_lock,
+    summarize_v1_feature_lock,
 )
 
 
@@ -85,3 +86,18 @@ def test_partial_community_row_is_not_shipped():
     )
     assert col == "building"
     assert meta["community_shipped"] is False
+
+
+def test_summarize_lock_is_in_out_cloud_counts_only():
+    rows = load_v1_feature_lock(LOCK_PATH)
+    summary = summarize_v1_feature_lock(rows)
+    assert set(summary) == {"in", "out", "cloud"}
+    assert summary["in"] == sum(1 for row in rows if row["lock"] == "in")
+    assert summary["out"] == sum(1 for row in rows if row["lock"] == "out")
+    assert summary["cloud"] == sum(
+        1 for row in rows if row["lock"] == "cloud_enterprise"
+    )
+    assert summary["in"] >= 65
+    assert summary["out"] >= 14
+    assert summary["cloud"] == 12
+    assert all(isinstance(value, int) and value >= 0 for value in summary.values())

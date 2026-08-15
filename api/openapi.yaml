@@ -22084,6 +22084,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/v1-lock:
+    get:
+      tags:
+      - v1-lock
+      summary: Get V1 Lock
+      description: Community v1 lock counts (in / out / cloud). Not a shipment
+        claim. Cloud / Enterprise stay ✦. Not public GA.
+      operationId: get_v1_lock_v1_v1_lock_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get V1 Lock V1 V1 Lock Get
   /v1/release-planning/status:
     get:
       tags:
