@@ -29,7 +29,7 @@ Always-on: Metatron overwatch + worker tick must run the **observe** half
 |---|---|---|
 | AI SRE agents | Metatron overwatch, focused-agents, `/v1/ai-sre/*` | ◐ always-on scan/diagnose missing |
 | Production debugging | reliability diagnose + factory remediations | ◐ no live log-injection |
-| Incident management | `/v1/reliability/incidents`, `/v1/oncall-sre` | ◐ no postmortem artifact |
+| Incident management | `/v1/reliability/incidents`, `/v1/oncall-sre`, on-demand postmortem | ◐ evidence-only postmortem; never invents RCA |
 | Observability | observability-suite, telemetry connectors, stack | ◐ NL query is plan-only |
 | AIOps | reliability.scan clustering, anomaly_detector | ◐ no first-class noise API |
 | Log analysis | telemetry_mining, activity log | ◐ |

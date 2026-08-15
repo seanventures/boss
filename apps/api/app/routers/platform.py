@@ -34,6 +34,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # Evidence-only SRE incident postmortems (not break-glass, not GA)
+    try:
+        from .sre_postmortem import router as sre_postmortem_router
+
+        app.include_router(sre_postmortem_router)
+    except ImportError:
+        pass
+
     # Security vulnerability scanning (Semgrep/Trivy/OSV)
     try:
         from .security_scan import router as security_router

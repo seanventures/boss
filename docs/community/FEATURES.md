@@ -90,7 +90,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
 | Focused always-on agents | ◐ Builder + duty loop in code (`/v1/focused-agents`). Worker ticks due always-on/hybrid agents every 60s; Wake now for on-demand. Same validate-then-apply gates as captain. **Not GA** until live dogfood. |
 | Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch on shared tag `3f1d2cf`. Worker every 60s: observe → measure → validate → apply-safe → verify. Live dogfood: first tick applied a preview restart (`app_preview.started` 17:32:16Z, verify ok). Decisions/DLQ stay human. **Not public GA.** |
-| AI SRE kernel (awesome-ai-sre map) | ◐ Capability ledger at `GET /v1/ai-sre/capabilities`. Reuses reliability + on-call + observability + chaos. Always-on scan/diagnose, postmortems, incident runbooks, and SRE-bench are in flight. Never invents RCA. **Not public GA.** |
+| AI SRE kernel (awesome-ai-sre map) | ◐ Capability ledger at `GET /v1/ai-sre/capabilities`. Evidence-only incident postmortem at `POST/GET /v1/reliability/incidents/{id}/postmortem` (existing evidence only; never invents RCA; does not auto-resolve). Always-on scan/diagnose, incident runbooks, and SRE-bench are in flight. **Not public GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Agent process handoffs | ◐ Authorable role sequences (NL compile, manual builder, Metatron/chat). Default: PRD → architect/CTO/VP-PM review → improve → captain build → QA → UI/UX → captain verify → panel certify → captain accept. Simulated completes without spend. **Not GA.** |

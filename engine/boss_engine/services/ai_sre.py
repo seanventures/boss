@@ -37,8 +37,12 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "id": "incident_management",
         "awesome": "Incident Management",
         "status": "partial",
-        "surfaces": ["/v1/reliability/incidents", "/v1/oncall-sre/pages"],
-        "gap": "Ack/resolve/page exist; evidence-only postmortem artifact is missing.",
+        "surfaces": [
+            "/v1/reliability/incidents",
+            "/v1/oncall-sre/pages",
+            "/v1/reliability/incidents/{id}/postmortem",
+        ],
+        "gap": "On-demand evidence-only postmortem exists; not auto-written on resolve and not GA.",
     },
     {
         "id": "observability",

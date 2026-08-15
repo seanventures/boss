@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 AI SRE evidence-only postmortems
+
+- On-demand `POST/GET /v1/reliability/incidents/{id}/postmortem` drafts a durable
+  artifact from existing incident evidence only. Missing RCA stays `draft`;
+  recorded winner hypothesis is `complete_enough`. Never invents root cause,
+  timeline, or impact. Does not auto-resolve. Not break-glass.
+- Branch `ai/grok/ai-sre-postmortem` from `ai/grok/ai-sre-kernel` (`e35e711`).
+  **Not public GA.**
+
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 
 - Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto
