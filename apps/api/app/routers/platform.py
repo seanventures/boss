@@ -50,6 +50,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # AIOps noise report + NL observability query plan (not live PromQL)
+    try:
+        from .sre_noise import router as sre_noise_router
+
+        app.include_router(sre_noise_router)
+    except ImportError:
+        pass
+
     # Security vulnerability scanning (Semgrep/Trivy/OSV)
     try:
         from .security_scan import router as security_router

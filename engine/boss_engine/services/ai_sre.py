@@ -44,15 +44,19 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "id": "observability",
         "awesome": "Observability Platforms",
         "status": "partial",
-        "surfaces": ["/v1/observability-suite", "/v1/telemetry/connectors/catalog"],
+        "surfaces": [
+            "/v1/observability-suite",
+            "/v1/telemetry/connectors/catalog",
+            "/v1/ai-sre/ask",
+        ],
         "gap": "NL query is a plan, not a live PromQL executor.",
     },
     {
         "id": "aiops",
         "awesome": "AIOps Platforms",
         "status": "partial",
-        "surfaces": ["/v1/reliability/scan", "/v1/anomalies/scan"],
-        "gap": "Clustering lives inside scan; no dedicated noise-reduction view.",
+        "surfaces": ["/v1/reliability/scan", "/v1/anomalies/scan", "/v1/ai-sre/noise"],
+        "gap": "Noise view is computed from persisted signals; no invented reduction.",
     },
     {
         "id": "log_anomaly",
