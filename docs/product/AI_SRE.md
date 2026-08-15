@@ -34,7 +34,7 @@ governed PR. FEATURES stays ◐ until live dogfood.
 |---|---|---|
 | AI SRE agents | Metatron overwatch, focused-agents, `/v1/ai-sre/overwatch` | ◐ observe-only tick in code; not live-dogfooded |
 | Production debugging | reliability diagnose + factory remediations | ◐ no live log-injection |
-| Incident management | `/v1/reliability/incidents`, `/v1/oncall-sre` | ◐ no postmortem artifact |
+| Incident management | `/v1/reliability/incidents`, `/v1/oncall-sre`, on-demand postmortem | ◐ evidence-only postmortem; never invents RCA |
 | Observability | observability-suite, telemetry connectors, `POST /v1/ai-sre/ask` | ◐ NL query is plan-only |
 | AIOps | reliability.scan clustering, `GET /v1/ai-sre/noise` | ◐ computed clustered vs raw; never invent % |
 | Log analysis | telemetry_mining, activity log | ◐ |

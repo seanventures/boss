@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — AI SRE evidence-only postmortems
+
+- Branch `ai/grok/ai-sre-postmortem` from kernel `e35e711`.
+- `draft_postmortem` persists `sre_postmortems` (IF NOT EXISTS). Unresolved
+  incidents still draft. Diagnose-never-ran has no invented `root_cause`.
+- HTTP 404 on missing incident. Not GA. Not break-glass `postmortem_task_id`.
+- Tests: `apps/api/tests/test_sre_postmortem.py` + kernel ledger (5 passed).
+
 ## 2026-08-15 — Grok — AIOps noise view + NL query plan
 
 - Branch `ai/grok/ai-sre-noise` from `e35e711`.
