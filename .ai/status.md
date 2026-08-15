@@ -22,6 +22,12 @@
 - `docs/product/V1_FEATURE_LOCK.md` locks Community v1 in / out / Cloud-Enterprise.
 - `sync-from-features` applies lock metadata; catalog unchanged. CE rows not Community shipped.
 - Branch `ai/grok/v1-verify-spec-release`. Not public GA. Do not merge main.
+## 2026-08-15 V1 e2e test gate (BOSS-393) (◐)
+
+- Branch `ai/grok/e2e-test-gate` from `dfb828f`.
+- `make test-v1-lock` is the single unit-layer gate (noconftest; skip-if-missing).
+- Ran: 39 python + 18 web = 57 passed. Official canaries **not** 5/5.
+- Test system row stays PARTIAL. **Not public GA.** Did not merge main.
 
 ## 2026-08-15 V1 test system lock (BOSS-393) (◐)
 

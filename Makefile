@@ -70,19 +70,48 @@ test: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py
 	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm test
 
-# V1 test-system lock (unit layer). Not official 5/5. Not qa-live. Not GA.
-# Pyramid: unit (this) → factory `npm run verify` → official inspect → /qa-live.
-# --noconftest: these files are contract tests; they do not need Postgres.
+# V1 test-system lock — single unit-layer gate. Not official 5/5. Not qa-live. Not GA.
+# Pyramid: unit (this) → factory `npm run verify` → official inspect → qa-live.
+# --noconftest / no-hours-long-suite: contract tests only; missing files are skipped.
 # Official BugBox/HookWatch/ApproveIt stay uncertified — this target never invents scores.
+V1_LOCK_PY_NAMES := \
+	test_ai_sre_kernel.py \
+	test_ai_sre_overwatch.py \
+	test_sre_runbooks.py \
+	test_sre_ask.py \
+	test_sre_bench.py \
+	test_reliability_mcp_tools.py \
+	test_token_worker_fail_closed.py \
+	test_v1_feature_lock.py \
+	test_verification_target.py \
+	test_report_honesty.py \
+	test_factory_quality_loop.py \
+	test_benchmark_apps.py \
+	test_official_reports.py
+
+V1_LOCK_PY := $(sort $(wildcard \
+	$(addprefix engine/tests/,$(V1_LOCK_PY_NAMES)) \
+	$(addprefix apps/worker/tests/,$(V1_LOCK_PY_NAMES)) \
+	$(addprefix scripts/tests/,$(V1_LOCK_PY_NAMES))))
+
+V1_LOCK_WEB := $(sort $(wildcard \
+	apps/web/tests/qa-scorecard.test.ts \
+	apps/web/tests/edition-visibility.test.ts))
+
 test-v1-lock: install-python install-node
-	PYTHONPATH=.:engine $(PYTHON) -m pytest --noconftest -q \
-		engine/tests/test_report_honesty.py \
-		engine/tests/test_verification_target.py \
-		engine/tests/test_factory_quality_loop.py \
-		engine/tests/test_benchmark_apps.py \
-		engine/tests/test_ai_sre_kernel.py \
-		scripts/tests/test_official_reports.py
-	pnpm --filter boss-web test -- tests/qa-scorecard.test.ts
+	@echo "v1-lock unit gate (noconftest). Not official 5/5. Not qa-live. Not GA."
+	@echo "python: $(or $(V1_LOCK_PY),none present — skip)"
+	@echo "web:    $(or $(patsubst apps/web/%,%,$(V1_LOCK_WEB)),none present — skip)"
+ifneq ($(strip $(V1_LOCK_PY)),)
+	PYTHONPATH=.:engine $(PYTHON) -m pytest --noconftest -q $(V1_LOCK_PY)
+else
+	@echo "skip python v1-lock (no candidate files on this branch)"
+endif
+ifneq ($(strip $(V1_LOCK_WEB)),)
+	pnpm --filter boss-web test -- $(patsubst apps/web/%,%,$(V1_LOCK_WEB))
+else
+	@echo "skip web v1-lock (no candidate files on this branch)"
+endif
 
 # Optional S2 tenant gateway. Not part of Community `make test`.
 # Engine does not require Go. Binary is not mounted on goldeneye.
