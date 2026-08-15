@@ -160,4 +160,5 @@ def test_get_policy_endpoint(policy_client):
     assert track["s2_go_tenant_gateway"] is False
     assert track["s3_go_event_dispatcher"] is False
     assert track["engine_requires_go"] is False
+    assert track["s1_in_repo_scaffold"] is True
     assert track["community_ga_required"] is False

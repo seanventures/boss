@@ -30,6 +30,10 @@ MICROVM_CLAIMS_FROZEN_MESSAGE = (
     "use BOSS_SANDBOX_PROVIDER=local for coding, or clear the freeze after a "
     "proven rootfs bake. See docs/product/SANDBOX_GA_STATUS.md."
 )
+FIRECRACKER_NOT_ENABLED_MESSAGE = (
+    "Firecracker backend is not enabled; the in-repo S1 sandbox-service "
+    "scaffold does not run live microVMs (firecracker_not_enabled)."
+)
 
 
 class SandboxPlaneError(RuntimeError):
@@ -57,6 +61,13 @@ class MicroVMClaimsFrozen(SandboxPlaneError):
 
     def __init__(self, message: str = MICROVM_CLAIMS_FROZEN_MESSAGE):
         super().__init__(message, status_code=422, code="microvm_claims_frozen")
+
+
+class FirecrackerNotEnabled(SandboxPlaneError):
+    """In-repo S1 scaffold / host without a live Firecracker backend."""
+
+    def __init__(self, message: str = FIRECRACKER_NOT_ENABLED_MESSAGE):
+        super().__init__(message, status_code=422, code="firecracker_not_enabled")
 
 
 class SandboxHostUnavailable(SandboxPlaneError):
@@ -100,6 +111,17 @@ def map_sandbox_http_error(
         return SandboxTaskMissing(
             f"sandbox host task missing (HTTP 404) for {sid} at {base}; "
             "task is gone or never created — fail closed, not retryable."
+        )
+    # Host-side fail-closed reasons must stay 422, never become a 503 retry.
+    if status == 422 or "microvm_claims_frozen" in blob or "firecracker_not_enabled" in blob:
+        if "microvm_claims_frozen" in blob or "not claimed for community ga" in blob:
+            return MicroVMClaimsFrozen()
+        if "firecracker_not_enabled" in blob or "does not run live microvm" in blob:
+            return FirecrackerNotEnabled()
+        return SandboxPlaneError(
+            body or f"sandbox-service rejected {action} at {base}",
+            status_code=422,
+            code="sandbox_rejected",
         )
     return SandboxHostUnavailable(
         f"cannot {action} sandbox-service at {base}: {type(exc).__name__}: {exc}"

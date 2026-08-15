@@ -159,7 +159,7 @@ Control-plane gates (`qa-live` 10/10, catalog 55/55, simulated fixtures) are **n
 | BOSS-295/304 | GTM reconciliation + AI SRE deck | **Done** (docs) | Apply brief to Google Slides source |
 | BOSS-300 | OSS licensing decision | **Todo BLOCKED** | Human legal/product |
 | BOSS-302/303 | Hosted Cloud / managed models | **Cancelled** (this cycle) | Phase-03 roadmap; reopen when Cloud tier starts |
-| BOSS-97/98/101/102 | Go S1–S3 scale track | **Backlog** | Community path covered by Python worker fabric + concurrency governance + elastic |
+| BOSS-97/98/101/102 | Go S1–S3 scale track | **S1 scaffold only** | In-repo `services/sandbox-service/` is fail-closed (frozen, no Firecracker). S2/S3 + live pool remain Backlog. Not Community GA. |
 
 ---
 

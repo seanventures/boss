@@ -7,7 +7,7 @@ PYTHON_REQUIREMENTS_STAMP := $(VENV)/.boss-requirements-installed
 BOSS_POSTGRES_PORT ?= 5432
 DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/boss
 
-.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard go-test
 
 install: install-node install-python
 
@@ -61,6 +61,10 @@ dev: install
 metatron:
 	@test -n "$$BOSS_API_KEY" || (echo "BOSS_API_KEY is required (never print the key)."; exit 2)
 	$(PYTHON_BOOTSTRAP) scripts/metatron_tui.py
+
+# In-repo S1 Go scaffold (fail-closed). Optional: the engine does not require Go.
+go-test:
+	cd services/sandbox-service && go test ./...
 
 test: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) $(PYTHON) scripts/wait_for_postgres.py

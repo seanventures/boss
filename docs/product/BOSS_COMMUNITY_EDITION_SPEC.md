@@ -108,7 +108,7 @@ Status legend: **shipped** · **partial** · **planned** · **Cloud/Enterprise**
 |---|---|---|
 | Outcome → code task | shipped | Governed worker path |
 | Spec / architecture / implement / test | shipped | Evidence-backed phases |
-| Sandbox execution | shipped | Isolated worker substrate |
+| Sandbox execution | partial | Local subprocess default. Firecracker/microVM **frozen**. In-repo Go S1 is a fail-closed scaffold, not live. |
 | PR / review packets | shipped | GitHub-backed when connected |
 | Browser / test evidence | shipped | Completion needs proof |
 | Deploy targets + runs | shipped | Community delivery path (not Cloud fleets) |
