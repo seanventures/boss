@@ -9,6 +9,7 @@ DATABASE_URL ?= postgresql+psycopg://boss:boss@localhost:$(BOSS_POSTGRES_PORT)/b
 
 .PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard go-test
 .PHONY: install install-node install-python clean wait-db dev test test-go lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard
+.PHONY: install install-node install-python clean wait-db dev test lint build docs docs-install docs-generate docs-check seed seed-demo smoke k8s-validate infra-validate release-blockers real-smoke-plan real-smoke-pr real-smoke-merge real-smoke-deploy worker-drain-once sandbox-template deps-audit deps-audit-strict full-validate qa-benchmark qa-benchmark-e2e qa-live qa-workflow-e2e qa-factory-e2e qa-harness qa-official-reports qa-system qa-working-software qa-metatron-captain public-flip-check openapi-live-qa-parity metatron onboard test-go-dispatcher
 
 install: install-node install-python
 
@@ -75,6 +76,9 @@ test: install-python install-node
 # Engine does not require Go. Binary is not mounted on goldeneye.
 test-go:
 	cd go/tenant-gateway && go test ./...
+# Optional BOSS-102 S3 sidecar. Stdlib-only; not required for Community/Python tests.
+test-go-dispatcher:
+	cd services/webhook-dispatcher && go test ./...
 
 lint: install-python install-node
 	DATABASE_URL=$(DATABASE_URL) PYTHON_BIN=$(PYTHON) pnpm lint
