@@ -1,5 +1,17 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Swarm 381 / 98 / 97 / 101 / 102
+
+- Integration branch `ai/grok/swarm-scale-qa`. Firecracker stays frozen.
+- 381: review-packet overflow fix; official reports honest; ApproveIt still running. Not close.
+- 98: Go sandbox-service scaffold fail-closed. `s1_go_sandbox_service=false`.
+- 97: Python⇄Go job contract + backpressure + dry-run harness. Umbrella stays open.
+- 101: optional Go tenant gateway library. Not mounted. Traefik still live.
+- 102: optional Go webhook dispatcher dry-run. Python SoR remains.
+- Tests: Go packages green; 72 Python noconftest passed. Not public GA.
+
+
+
 ## 2026-08-15 — Grok — BOSS-102 S3 Go webhook dispatcher
 
 - Branch `ai/grok/boss-102-go-dispatcher` from `origin/main`. Smallest Go fan-out sidecar at `services/webhook-dispatcher`.
