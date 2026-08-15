@@ -41,8 +41,23 @@ from scripts.qa.lib import (  # noqa: E402
 
 CANARY_IDS = ("bugbox", "hookwatch", "approveit")
 ALLOW_OFFICIAL_FLAG = "BOSS_QA_ALLOW_OFFICIAL"
+OFFICIAL_RUN_IDS_FLAG = "BOSS_OFFICIAL_RUN_IDS"
 GATE_NAME = "boss_official_reports"
 GATE_VERSION = "1.0.0"
+
+
+def parse_official_run_ids(raw: str | None) -> dict[str, str]:
+    """Parse ``bugbox=crun_…,hookwatch=crun_…`` overrides. Catalog built is stale."""
+    out: dict[str, str] = {}
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key, value = key.strip().lower(), value.strip()
+        if key in CANARY_IDS and value:
+            out[key] = value
+    return out
 
 
 def _result(name: str, ok: bool, **kwargs) -> CheckResult:
@@ -101,10 +116,11 @@ def inspect_reports(client: BossClient, *, timeout: float = 30.0) -> list[CheckR
         for app in items
         if isinstance(app, dict)
     }
+    overrides = parse_official_run_ids(os.environ.get(OFFICIAL_RUN_IDS_FLAG))
     for canary_id in CANARY_IDS:
         app = by_id.get(canary_id) or {}
         built = app.get("built") if isinstance(app.get("built"), dict) else None
-        run_id = str((built or {}).get("run_id") or "").strip()
+        run_id = overrides.get(canary_id) or str((built or {}).get("run_id") or "").strip()
         if not run_id:
             checks.append(
                 _result(

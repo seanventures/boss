@@ -39,6 +39,73 @@ from .sandbox_validation import (
 )
 from .specpack import SpecPackService
 
+# Review packet is optional commentary on the PR. Dumping every file body into
+# the LLM prompt overflowed gpt-4o/Groq on official BugBox/HookWatch runs
+# (60+ files) and then released the reservation so retries died as
+# "Missing active reservation". Keep the prompt bounded; fall back to a static
+# packet rather than sink the deliverable.
+REVIEW_PACKET_PREVIEW_CHARS = 240
+REVIEW_PACKET_MAX_FILES = 40
+REVIEW_PACKET_MAX_CHARS = 12_000
+
+
+def review_packet_file_summaries(files: list[FileChange]) -> list[dict[str, Any]]:
+    """Path + size + short preview. Never the full diff."""
+    summaries: list[dict[str, Any]] = []
+    for file in list(files)[:REVIEW_PACKET_MAX_FILES]:
+        content = file.content or ""
+        summaries.append(
+            {
+                "path": file.path,
+                "bytes": len(content.encode("utf-8")),
+                "preview": content[:REVIEW_PACKET_PREVIEW_CHARS],
+            }
+        )
+    omitted = len(files) - REVIEW_PACKET_MAX_FILES
+    if omitted > 0:
+        summaries.append({"omitted_files": omitted})
+    return summaries
+
+
+def review_packet_prompt(*, title: str, summary: str, files: list[FileChange]) -> str:
+    payload = json.dumps(review_packet_file_summaries(files), indent=2)
+    if len(payload) > REVIEW_PACKET_MAX_CHARS:
+        payload = payload[:REVIEW_PACKET_MAX_CHARS] + "\n…truncated…"
+    return (
+        "Create a review packet for a BOSS software-factory proposal.\n\n"
+        f"Title: {title}\n"
+        f"Summary: {summary}\n"
+        f"File summaries (not full contents):\n{payload}"
+    )
+
+
+def fallback_review_packet(
+    *,
+    title: str,
+    summary: str,
+    files: list[FileChange],
+    error: str | None = None,
+) -> str:
+    """Static packet when the review model cannot run. Does not invent scores."""
+    paths = [file.path for file in files]
+    shown = paths[:REVIEW_PACKET_MAX_FILES]
+    omitted = len(paths) - len(shown)
+    lines = [
+        f"# Review packet unavailable for {title}",
+        "",
+        "The review-packet model did not produce commentary. The pull request "
+        "still carries the governed diff. No UI/UX scores are inferred.",
+        "",
+        f"Summary: {summary}",
+        f"Files changed ({len(paths)}):",
+        *[f"- {path}" for path in shown],
+    ]
+    if omitted:
+        lines.append(f"- … {omitted} more files omitted from this list")
+    if error:
+        lines.extend(["", f"Model error (not a score): {error[:400]}"])
+    return "\n".join(lines)
+
 
 class SoftwareFactoryService:
     def __init__(
@@ -1518,6 +1585,52 @@ class SoftwareFactoryService:
         ).mappings().all()
         return [dict(row) for row in rows]
 
+    def _review_packet_markdown(
+        self,
+        connection: Any,
+        *,
+        project_id: str,
+        receipt_id: str,
+        title: str,
+        summary: str,
+        files: list[FileChange],
+        module_spec: Any,
+        model_id: Optional[str],
+    ) -> str:
+        """Build review-packet markdown. Model failure never sinks the PR."""
+        prompt = review_packet_prompt(title=title, summary=summary, files=files)
+        system = self._merge_system_prompts(
+            self._module_prompt(module_spec, "system"),
+            self._module_prompt(module_spec, "review_packet"),
+            (
+                "Return concise markdown with these sections: implementation summary, "
+                "tests added or still needed, risk hotspots, rollback plan, confidence, "
+                "and recommendation. Do not invent UI/UX scores."
+            ),
+        )
+        try:
+            _ref, text, _usage = self.openai.create_text_response(
+                prompt, system, model_id
+            )
+            if str(text or "").strip():
+                return str(text)
+        except Exception as error:  # noqa: BLE001 — packet is optional
+            self.events.emit(
+                connection,
+                project_id,
+                "software_factory.review_packet_skipped",
+                "coding_worker",
+                "receipt",
+                receipt_id,
+                {"message": str(error)[:400], "reason": "review_packet_optional"},
+            )
+            return fallback_review_packet(
+                title=title, summary=summary, files=files, error=str(error)
+            )
+        return fallback_review_packet(
+            title=title, summary=summary, files=files, error="empty review packet"
+        )
+
     def propose_pull_request(
         self,
         connection: Any,
@@ -1651,75 +1764,18 @@ class SoftwareFactoryService:
                 **plane_fields,
             }
 
-        try:
-            review_provider_ref, review_text, review_usage = self.openai.create_text_response(
-                (
-                    "Create a review packet for a BOSS software-factory proposal.\n\n"
-                    f"Title: {title}\n"
-                    f"Summary: {summary}\n"
-                    f"Files: {json.dumps([file.model_dump() for file in files], indent=2)}"
-                ),
-                self._merge_system_prompts(
-                    self._module_prompt(module_spec, "system"),
-                    self._module_prompt(module_spec, "review_packet"),
-                    (
-                        "Return concise markdown with these sections: implementation summary, "
-                        "tests added or still needed, risk hotspots, rollback plan, confidence, "
-                        "and recommendation."
-                    ),
-                ),
-                route["model_id"],
-            )
-        except IntegrationConfigurationError as error:
-            self.receipts.mark_failed(
-                connection, pr_receipt["id"], {"message": str(error)}
-            )
-            self.budget.release(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because OpenAI credentials are not configured.",
-            )
-            decision_id = self.decisions.create_blocking(
-                connection,
-                project_id,
-                task_id,
-                "OpenAI integration is required before PR proposals can run",
-                {"action": "provide_openai_api_key"},
-                {},
-                "missing_openai_credentials",
-            )
-            return {
-                "status": "blocked",
-                "decision_id": decision_id,
-                "message": str(error),
-                **plane_fields,
-            }
-        except Exception as error:
-            self.receipts.mark_failed(
-                connection, pr_receipt["id"], {"message": str(error)}
-            )
-            self.budget.release(
-                connection,
-                project_id,
-                reservation_id,
-                "Released reservation because the review-packet generation failed.",
-            )
-            self.events.emit(
-                connection,
-                project_id,
-                "software_factory.pull_request_failed",
-                "coding_worker",
-                "receipt",
-                pr_receipt["id"],
-                {"message": str(error)},
-            )
-            return {
-                "status": "failed",
-                "receipt_id": pr_receipt["id"],
-                "message": str(error),
-                **plane_fields,
-            }
+        review_text = self._review_packet_markdown(
+            connection,
+            project_id=project_id,
+            receipt_id=pr_receipt["id"],
+            title=title,
+            summary=summary,
+            files=files,
+            module_spec=module_spec,
+            model_id=route.get("model_id"),
+        )
+        # Packet is optional commentary. A skipped model call has no provider ref.
+        review_provider_ref = None
 
         try:
             self.github.ensure_branch(branch_name)
