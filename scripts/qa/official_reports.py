@@ -78,7 +78,10 @@ def inspect_reports(client: BossClient, *, timeout: float = 30.0) -> list[CheckR
     """GET catalog + existing /reports. Fail if any report invents a score."""
     checks: list[CheckResult] = []
     status, body, ms = client.request(
-        "GET", "/v1/qa/benchmark-apps", timeout=timeout
+        "GET",
+        "/v1/qa/benchmark-apps",
+        query={"project_id": client.project_id},
+        timeout=timeout,
     )
     catalog_ok = is_2xx(status) and isinstance(body, dict)
     checks.append(

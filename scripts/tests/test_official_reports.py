@@ -16,6 +16,8 @@ class FakeClient:
         self.posts = []
 
     def request(self, method, path, **kwargs):
+        self.queries = getattr(self, "queries", [])
+        self.queries.append((method, path, kwargs.get("query")))
         if method == "POST":
             self.posts.append((path, kwargs.get("body")))
         payload = self.routes.get((method, path))
@@ -75,6 +77,7 @@ def test_inspect_reports_fails_on_invented_score():
     honesty = next(c for c in checks if c.name == "official.bugbox.honesty")
     assert honesty.ok is False
     assert honesty.required is True
+    assert client.queries[0][2] == {"project_id": "boss-dogfood"}
 
 
 def test_official_posts_are_blocked_without_flag(monkeypatch):
