@@ -14,6 +14,7 @@ from .core import (
     create_blocking_decision,
     emit_event,
     expires_at,
+    json_hash,
     make_id,
     normalize_data_boundary,
     now_utc,
@@ -236,6 +237,62 @@ class InfrastructureService:
                 receipt["id"],
                 boundary,
             )
+
+        if not bool(getattr(self.settings, "infra_real_provision_allowed", False)):
+            message = (
+                "BOSS_INFRA_REAL_PROVISION_ALLOWED is false. "
+                "Real DigitalOcean writes stay fail-closed."
+            )
+            self.receipts.mark_failed(connection, receipt["id"], {"message": message})
+            self.budget.release(
+                connection,
+                project_id,
+                reservation_id,
+                "Released reservation because real infra provision is not allowed.",
+            )
+            resource_receipt_id = self._record_resource_receipt(
+                connection,
+                project_id=project_id,
+                receipt_id=receipt["id"],
+                dedupe_key=f"{dedupe_key}:resource",
+                provider="digitalocean",
+                action="create",
+                resource_type="droplet",
+                resource_ref=normalized_title,
+                status="failed",
+                error={"message": message, "reason": "infra_real_provision_not_allowed"},
+                created_by_job_id=created_by_job_id,
+            )
+            decision_id_block = create_blocking_decision(
+                connection,
+                project_id,
+                task_id,
+                "Real infrastructure provision is disabled",
+                {"action": "set_BOSS_INFRA_REAL_PROVISION_ALLOWED"},
+                {"decision_id": decision_id, "receipt_id": receipt["id"]},
+                "infra_real_provision_not_allowed",
+                risk_tier=3,
+            )
+            emit_event(
+                connection,
+                project_id,
+                "infra.provision_blocked",
+                "infra_worker",
+                "decision",
+                decision_id_block,
+                {
+                    "reason": "infra_real_provision_not_allowed",
+                    "receipt_id": receipt["id"],
+                    "resource_receipt_id": resource_receipt_id,
+                },
+            )
+            return {
+                "status": "blocked",
+                "decision_id": decision_id_block,
+                "receipt_id": receipt["id"],
+                "resource_receipt_id": resource_receipt_id,
+                "message": message,
+            }
 
         resource_name = self._resource_name(receipt["id"])
         provider_tags = [
@@ -1124,6 +1181,66 @@ class InfrastructureService:
 
     def _resource_name(self, receipt_id: str) -> str:
         return f"boss-{receipt_id[-10:]}".lower()
+
+    def _record_resource_receipt(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        receipt_id: str,
+        dedupe_key: str,
+        provider: str,
+        action: str,
+        resource_type: str,
+        resource_ref: Optional[str],
+        status: str,
+        error: Optional[dict[str, Any]] = None,
+        result: Optional[dict[str, Any]] = None,
+        provider_ref: Optional[str] = None,
+        created_by_job_id: Optional[str] = None,
+    ) -> str:
+        resource_receipt_id = make_id("rrcpt")
+        payload = {
+            "provider": provider,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_ref": resource_ref,
+        }
+        connection.execute(
+            text(
+                """
+                INSERT INTO resource_receipts (
+                    id, project_id, changeset_id, operation_id, provider_account_id,
+                    receipt_id, dedupe_key, provider, action, resource_type,
+                    resource_ref, status, provider_ref, request_hash, result, error,
+                    created_by_job_id
+                )
+                VALUES (
+                    :id, :project_id, NULL, NULL, NULL,
+                    :receipt_id, :dedupe_key, :provider, :action, :resource_type,
+                    :resource_ref, :status, :provider_ref, :request_hash,
+                    CAST(:result AS JSONB), CAST(:error AS JSONB), :created_by_job_id
+                )
+                """
+            ),
+            {
+                "id": resource_receipt_id,
+                "project_id": project_id,
+                "receipt_id": receipt_id,
+                "dedupe_key": dedupe_key,
+                "provider": provider,
+                "action": action,
+                "resource_type": resource_type,
+                "resource_ref": resource_ref,
+                "status": status,
+                "provider_ref": provider_ref,
+                "request_hash": json_hash(payload),
+                "result": json.dumps(result),
+                "error": json.dumps(error),
+                "created_by_job_id": created_by_job_id,
+            },
+        )
+        return resource_receipt_id
 
     def _assert_decision_ready(
         self, connection: Connection, project_id: str, decision_id: str

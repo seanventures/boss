@@ -104,6 +104,12 @@ def run_scan(payload: SecurityScanRunRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/latest")
+def latest_scan(project_id: str = Query(..., description="Project scope")) -> dict:
+    """Most recent scan for a project. Empty is honest 200 not_configured, not 404."""
+    return svc.latest_run(project_id)
+
+
 @router.get("/runs")
 def list_runs(
     project_id: str = Query(..., description="Project scope"),

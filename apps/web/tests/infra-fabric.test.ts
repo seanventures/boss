@@ -168,10 +168,23 @@ describe("Infra fabric fetch helpers", async () => {
       new BossApiError("elastic down", 503),
     );
     const feed = await fetchElasticStatus();
-    expect(feed.apiReachable).toBe(false);
-    expect(feed.blockedReason).toContain("HTTP 503");
-    expect(feed.poolCount).toBe(0);
+    expect(feed.configured).toBe(false);
+    expect(feed.status).toBe("not_configured");
+    expect(feed.hostConnected).toBe(false);
     expect(feed.realHostEffects).toBe(false);
+    expect(feed.poolCount).toBe(0);
+    expect(feed.blockedReason).not.toMatch(/API returned 500/i);
+  });
+
+  it("treats HTTP 500 elastic status as not_configured, never connected", async () => {
+    vi.mocked(client.getElasticStatus).mockRejectedValueOnce(
+      new BossApiError("UndefinedTable", 500),
+    );
+    const feed = await fetchElasticStatus();
+    expect(feed.status).toBe("not_configured");
+    expect(feed.hostConnected).toBe(false);
+    expect(feed.realHostEffects).toBe(false);
+    expect(feed.instanceCounts.total).toBe(0);
   });
 
   it("maps goldeneye fleet status including kit modular flag", async () => {
@@ -334,7 +347,7 @@ describe("Infra fabric fetch helpers", async () => {
         return {
           ok: false,
           status: 503,
-          json: async () => ({ detail: "down" }),
+          json: async () => ({ detail: "Required database relation is not applied on this runtime." }),
         };
       }
       return { ok: false, status: 404, json: async () => ({}) };
@@ -362,12 +375,12 @@ describe("Infra fabric fetch helpers", async () => {
     expect(feed.projectId).toBe("boss-dogfood");
     expect(feed.multiCloud.apiReachable).toBe(true);
     expect(feed.elastic.apiReachable).toBe(true);
-    expect(feed.goldeneye.apiReachable).toBe(false);
-    expect(feed.providerUsage.apiReachable).toBe(false);
-    expect(feed.partialFailures.some((f) => f.includes("Goldeneye"))).toBe(true);
-    expect(feed.partialFailures.some((f) => f.includes("Provider usage"))).toBe(
-      true,
-    );
+    expect(feed.elastic.status).toBe("not_configured");
+    expect(feed.elastic.hostConnected).toBe(false);
+    expect(feed.goldeneye.status).toBe("not_configured");
+    expect(feed.goldeneye.hostConnected).toBe(false);
+    expect(feed.providerUsage.status).toBe("not_configured");
+    expect(feed.partialFailures).toEqual([]);
     expect(feed.refreshedAt).toBeTruthy();
   });
 
@@ -400,5 +413,7 @@ describe("Infra fabric UI wiring", () => {
     expect(ui).toContain("aria-label=\"Multi-cloud providers\"");
     expect(ui).toContain("aria-label=\"Elastic fabric\"");
     expect(ui).toContain("aria-label=\"Goldeneye PaaS\"");
+    expect(ui).toContain('data-empty-state="elastic-not-configured"');
+    expect(ui).toContain('data-empty-state="goldeneye-not-configured"');
   });
 });

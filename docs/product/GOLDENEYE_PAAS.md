@@ -21,6 +21,21 @@ It is **not** a managed multi-tenant Cloud fleet. Community/self-hosted editions
 run the kit on **your** metal. Sean’s production host named `goldeneye` is the
 dogfood instance of the kit.
 
+### Community vs platform-only
+
+| Surface | Edition |
+|---|---|
+| Kit installer + `ge` CLI + modules (`packages/goldeneye/`) | **Community** — you run it on your metal |
+| BOSS control plane `/v1/goldeneye/*` (register, plan, receipts) | **Community** — optional; simulated by default |
+| Real SSH actuation (`BOSS_SSH_HOST_DEPLOY_ALLOWED`) | **Community** but gated; no host write unless you open the gate |
+| Managed multi-tenant Goldeneye fleet / hosted metal as a service | **Platform-only (Cloud)** |
+| Cloud Easy Connect as the node source | **Platform-only (Cloud)** |
+
+`GET /v1/goldeneye/status` is honest: no registered nodes → `status=not_configured`,
+`host.connected=false`, `metrics=null`. It never invents Sean's dogfood host as
+connected or fabricates fleet metrics. Missing `goldeneye_nodes` is repaired via
+`ensure_tables` (empty-200), not a 500.
+
 ### Modular units
 
 | Unit | Role |

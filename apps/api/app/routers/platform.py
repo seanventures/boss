@@ -26,6 +26,54 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # AI SRE capability ledger (awesome-ai-sre map)
+    try:
+        from .ai_sre import router as ai_sre_router
+
+        app.include_router(ai_sre_router)
+    except ImportError:
+        pass
+
+    # AI SRE observe-only overwatch tick (do not fold into ai_sre.py)
+    try:
+        from .ai_sre_overwatch import router as ai_sre_overwatch_router
+
+        app.include_router(ai_sre_overwatch_router)
+    except ImportError:
+        pass
+
+    # First-class incident runbooks (validate + Decision; not GA)
+    try:
+        from .sre_runbooks import router as sre_runbooks_router
+
+        app.include_router(sre_runbooks_router)
+    except ImportError:
+        pass
+
+    # AIOps noise report + NL observability query plan (not live PromQL)
+    try:
+        from .sre_noise import router as sre_noise_router
+
+        app.include_router(sre_noise_router)
+    except ImportError:
+        pass
+
+    # Evidence-only SRE incident postmortems (not break-glass, not GA)
+    try:
+        from .sre_postmortem import router as sre_postmortem_router
+
+        app.include_router(sre_postmortem_router)
+    except ImportError:
+        pass
+
+    # Deterministic SRE bench (no vendors)
+    try:
+        from .sre_bench import router as sre_bench_router
+
+        app.include_router(sre_bench_router)
+    except ImportError:
+        pass
+
     # Security vulnerability scanning (Semgrep/Trivy/OSV)
     try:
         from .security_scan import router as security_router

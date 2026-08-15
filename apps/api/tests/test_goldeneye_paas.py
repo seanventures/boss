@@ -382,3 +382,70 @@ def test_actuate_requires_ssh_host():
             node={"ssh_host": "", "ssh_user": "root", "ssh_port": 22},
             package_id="layer0-host",
         )
+
+
+def _assert_honest_empty_fleet(body: dict) -> None:
+    """Empty / unconfigured Goldeneye must never invent host.connected or metrics."""
+    assert body["product"] == "goldeneye"
+    assert body["status"] == "not_configured"
+    assert body["configured"] is False
+    assert body["node_count"] == 0
+    assert body["app_count"] == 0
+    assert body["nodes"] == []
+    assert body["apps"] == []
+    assert body["host"]["connected"] is False
+    assert body["metrics"] is None
+    edition = body["edition"]
+    assert edition["community"]["kit"] is True
+    assert edition["community"]["control_plane"] is True
+    assert edition["community"]["self_hosted_metal"] is True
+    assert edition["platform_only"]
+    assert any("multi-tenant" in item.lower() or "hosted" in item.lower()
+               for item in edition["platform_only"])
+
+
+def test_goldeneye_status_empty_is_honest_not_configured(client):
+    """No registered nodes → 200 not_configured, never a fake connected host."""
+    status = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
+    assert status.status_code == 200, status.text
+    _assert_honest_empty_fleet(status.json())
+
+
+def test_goldeneye_status_ensure_tables_after_drop(client, engine):
+    """Missing goldeneye_nodes must recreate via ensure_tables, not 500."""
+    from sqlalchemy import text
+
+    api_main.goldeneye_paas._tables_ready = False
+    with engine.begin() as connection:
+        for tbl in (
+            "goldeneye_deploys",
+            "goldeneye_apps",
+            "goldeneye_package_installs",
+            "goldeneye_nodes",
+        ):
+            connection.execute(text(f"DROP TABLE IF EXISTS {tbl} CASCADE"))
+
+    status = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
+    assert status.status_code == 200, status.text
+    _assert_honest_empty_fleet(status.json())
+
+    # Tables exist again — register must work after the drop.
+    api_main.goldeneye_paas._tables_ready = False
+    reg = client.post(
+        "/v1/goldeneye/nodes",
+        json={
+            "project_id": PROJECT_ID,
+            "actor": "ceo",
+            "name": "after-drop",
+            "roles": ["apps"],
+        },
+    )
+    assert reg.status_code == 201, reg.text
+    again = client.get("/v1/goldeneye/status", params={"project_id": PROJECT_ID})
+    assert again.status_code == 200, again.text
+    body = again.json()
+    assert body["node_count"] >= 1
+    assert body["status"] != "not_configured"
+    # Still no invented metrics; connected stays false without a heartbeat.
+    assert body["metrics"] is None
+    assert body["host"]["connected"] is False

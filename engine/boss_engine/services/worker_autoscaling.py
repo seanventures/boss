@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
@@ -39,6 +40,88 @@ def _iso(value: Any) -> Optional[str]:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value)
+
+
+# Recovery DDL without FKs — live schema apply can abort before these tables exist.
+_AUTOSCALING_POLICIES_DDL = """
+CREATE TABLE IF NOT EXISTS worker_autoscaling_policies (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  pool_key TEXT NOT NULL DEFAULT 'default',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  min_workers INTEGER NOT NULL DEFAULT 0,
+  max_workers INTEGER NOT NULL DEFAULT 8,
+  scale_up_threshold INTEGER NOT NULL DEFAULT 1,
+  cooldown_seconds INTEGER NOT NULL DEFAULT 30,
+  max_queue_depth_per_worker INTEGER NOT NULL DEFAULT 5,
+  kind TEXT NOT NULL DEFAULT 'local',
+  provider_account_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_applied_at TIMESTAMPTZ,
+  last_scale_direction TEXT,
+  created_by TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, pool_key)
+)
+"""
+_AUTOSCALING_POLICIES_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_worker_autoscaling_policies_project
+  ON worker_autoscaling_policies(project_id, enabled, pool_key)
+"""
+_AUTOSCALING_HISTORY_DDL = """
+CREATE TABLE IF NOT EXISTS worker_autoscaling_history (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  pool_key TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  queue_depth INTEGER NOT NULL DEFAULT 0,
+  leased_jobs INTEGER NOT NULL DEFAULT 0,
+  running_jobs INTEGER NOT NULL DEFAULT 0,
+  desired_workers INTEGER NOT NULL DEFAULT 0,
+  actual_workers INTEGER NOT NULL DEFAULT 0,
+  previous_desired INTEGER NOT NULL DEFAULT 0,
+  receipt_id TEXT,
+  elastic_result JSONB NOT NULL DEFAULT '{}'::jsonb,
+  reason TEXT,
+  actor TEXT NOT NULL DEFAULT 'system',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+_AUTOSCALING_HISTORY_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_worker_autoscaling_history_project
+  ON worker_autoscaling_history(project_id, pool_key, created_at DESC)
+"""
+
+
+def is_missing_relation(exc: BaseException) -> bool:
+    orig = getattr(exc, "orig", None)
+    name = type(orig).__name__ if orig is not None else type(exc).__name__
+    blob = str(orig or exc).lower()
+    return name == "UndefinedTable" or "does not exist" in blob
+
+
+@contextmanager
+def _savepoint(connection: Connection) -> Iterator[None]:
+    begin_nested = getattr(connection, "begin_nested", None)
+    nested = None
+    if callable(begin_nested):
+        try:
+            nested = begin_nested()
+        except Exception:
+            nested = None
+    try:
+        yield
+        if nested is not None:
+            nested.commit()
+    except Exception:
+        if nested is not None:
+            try:
+                nested.rollback()
+            except Exception:
+                pass
+        raise
 
 
 DEFAULT_POLICY = {
@@ -72,6 +155,21 @@ class WorkerAutoscalingService:
         )
         self.receipts = ReceiptService()
 
+    def ensure_tables(self, connection: Connection) -> bool:
+        """CREATE TABLE IF NOT EXISTS for policies + history. False if unusable."""
+        try:
+            with _savepoint(connection):
+                connection.execute(text(_AUTOSCALING_POLICIES_DDL))
+                connection.execute(text(_AUTOSCALING_POLICIES_INDEX))
+                connection.execute(text(_AUTOSCALING_HISTORY_DDL))
+                connection.execute(text(_AUTOSCALING_HISTORY_INDEX))
+            return True
+        except Exception as exc:
+            blob = str(exc).lower()
+            if is_missing_relation(exc) or "permission" in blob or "read-only" in blob:
+                return False
+            raise
+
     # ------------------------------------------------------------------
     # Policies
     # ------------------------------------------------------------------
@@ -79,22 +177,30 @@ class WorkerAutoscalingService:
     def list_policies(
         self, connection: Connection, project_id: str
     ) -> list[dict[str, Any]]:
-        rows = connection.execute(
-            text(
-                """
-                SELECT id, project_id, pool_key, enabled, min_workers, max_workers,
-                       scale_up_threshold, cooldown_seconds,
-                       max_queue_depth_per_worker, kind, provider_account_id,
-                       metadata, last_applied_at, last_scale_direction,
-                       created_by, created_at, updated_at
-                FROM worker_autoscaling_policies
-                WHERE project_id = :project_id
-                ORDER BY pool_key ASC
-                """
-            ),
-            {"project_id": project_id},
-        ).mappings().all()
-        return [self._serialize_policy(row) for row in rows]
+        if not self.ensure_tables(connection):
+            return []
+        try:
+            with _savepoint(connection):
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT id, project_id, pool_key, enabled, min_workers, max_workers,
+                               scale_up_threshold, cooldown_seconds,
+                               max_queue_depth_per_worker, kind, provider_account_id,
+                               metadata, last_applied_at, last_scale_direction,
+                               created_by, created_at, updated_at
+                        FROM worker_autoscaling_policies
+                        WHERE project_id = :project_id
+                        ORDER BY pool_key ASC
+                        """
+                    ),
+                    {"project_id": project_id},
+                ).mappings().all()
+            return [self._serialize_policy(row) for row in rows]
+        except Exception as exc:
+            if is_missing_relation(exc):
+                return []
+            raise
 
     def upsert_policy(
         self,
@@ -129,6 +235,10 @@ class WorkerAutoscalingService:
         kind_norm = (kind or "local").strip().lower()
         if kind_norm not in {"local", "container", "cloud", "vm"}:
             raise ValueError("kind must be local, container, cloud, or vm.")
+        if not self.ensure_tables(connection):
+            raise ValueError(
+                "worker_autoscaling_policies is not applied on this runtime."
+            )
 
         policy_id = make_id("wasp")
         connection.execute(
@@ -244,28 +354,41 @@ class WorkerAutoscalingService:
         self, connection: Connection, project_id: str
     ) -> dict[str, int]:
         """Project-wide job queue pressure (same definition as Budget-Aware Autoscaler)."""
-        row = connection.execute(
-            text(
-                """
-                SELECT
-                  COUNT(*) FILTER (
-                    WHERE status IN ('queued', 'failed_retryable') AND run_after <= now()
-                  ) AS queue_depth,
-                  COUNT(*) FILTER (WHERE status = 'running') AS running_jobs,
-                  COUNT(*) FILTER (WHERE status = 'leased') AS leased_jobs,
-                  COUNT(*) FILTER (WHERE status = 'failed_retryable') AS retryable_jobs
-                FROM jobs
-                WHERE project_id = :project_id
-                """
-            ),
-            {"project_id": project_id},
-        ).mappings().one()
-        return {
-            "queue_depth": int(row["queue_depth"] or 0),
-            "running_jobs": int(row["running_jobs"] or 0),
-            "leased_jobs": int(row["leased_jobs"] or 0),
-            "retryable_jobs": int(row["retryable_jobs"] or 0),
+        empty = {
+            "queue_depth": 0,
+            "running_jobs": 0,
+            "leased_jobs": 0,
+            "retryable_jobs": 0,
         }
+        try:
+            with _savepoint(connection):
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT
+                          COUNT(*) FILTER (
+                            WHERE status IN ('queued', 'failed_retryable')
+                              AND run_after <= now()
+                          ) AS queue_depth,
+                          COUNT(*) FILTER (WHERE status = 'running') AS running_jobs,
+                          COUNT(*) FILTER (WHERE status = 'leased') AS leased_jobs,
+                          COUNT(*) FILTER (WHERE status = 'failed_retryable') AS retryable_jobs
+                        FROM jobs
+                        WHERE project_id = :project_id
+                        """
+                    ),
+                    {"project_id": project_id},
+                ).mappings().one()
+            return {
+                "queue_depth": int(row["queue_depth"] or 0),
+                "running_jobs": int(row["running_jobs"] or 0),
+                "leased_jobs": int(row["leased_jobs"] or 0),
+                "retryable_jobs": int(row["retryable_jobs"] or 0),
+            }
+        except Exception as exc:
+            if is_missing_relation(exc):
+                return empty
+            raise
 
     @staticmethod
     def compute_desired_workers(
@@ -785,9 +908,15 @@ class WorkerAutoscalingService:
     def status(
         self, connection: Connection, project_id: str
     ) -> dict[str, Any]:
+        ready = self.ensure_tables(connection)
         queue = self.queue_snapshot(connection, project_id)
         policies = self.list_policies(connection, project_id)
-        fabric = self.elastic.fabric_status(connection, project_id)
+        try:
+            fabric = self.elastic.fabric_status(connection, project_id)
+        except Exception as exc:
+            if not is_missing_relation(exc):
+                raise
+            fabric = {"pools": [], "instance_counts": {}}
 
         pools_out: list[dict[str, Any]] = []
         for policy in policies or []:
@@ -880,6 +1009,8 @@ class WorkerAutoscalingService:
             "infra_real_provision_allowed": bool(
                 self.settings.infra_real_provision_allowed
             ),
+            "schema_ready": ready,
+            "configured": bool(policies),
             "message": (
                 "Worker autoscaling evaluates queue depth with deterministic policy "
                 "(min/max, scale_up_threshold, cooldown) and applies via elastic fabric. "
@@ -895,28 +1026,36 @@ class WorkerAutoscalingService:
         pool_key: Optional[str] = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
+        if not self.ensure_tables(connection):
+            return []
         limit = max(1, min(int(limit), 200))
         clauses = ["project_id = :project_id"]
         params: dict[str, Any] = {"project_id": project_id, "limit": limit}
         if pool_key:
             clauses.append("pool_key = :pool_key")
             params["pool_key"] = pool_key
-        rows = connection.execute(
-            text(
-                f"""
-                SELECT id, project_id, pool_key, action, status, queue_depth,
-                       leased_jobs, running_jobs, desired_workers, actual_workers,
-                       previous_desired, receipt_id, elastic_result, reason,
-                       actor, created_at
-                FROM worker_autoscaling_history
-                WHERE {' AND '.join(clauses)}
-                ORDER BY created_at DESC
-                LIMIT :limit
-                """
-            ),
-            params,
-        ).mappings().all()
-        return [self._serialize_history(row) for row in rows]
+        try:
+            with _savepoint(connection):
+                rows = connection.execute(
+                    text(
+                        f"""
+                        SELECT id, project_id, pool_key, action, status, queue_depth,
+                               leased_jobs, running_jobs, desired_workers, actual_workers,
+                               previous_desired, receipt_id, elastic_result, reason,
+                               actor, created_at
+                        FROM worker_autoscaling_history
+                        WHERE {' AND '.join(clauses)}
+                        ORDER BY created_at DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    params,
+                ).mappings().all()
+            return [self._serialize_history(row) for row in rows]
+        except Exception as exc:
+            if is_missing_relation(exc):
+                return []
+            raise
 
     # ------------------------------------------------------------------
     # Internals

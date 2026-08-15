@@ -1,5 +1,96 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — V1 infra + UI cut (BOSS-391)
+
+- Branch `ai/grok/v1-verify-infra-ui`. Not GA. No Firecracker thaw. No main merge.
+- ensure_tables on elastic fabric + Goldeneye; status 200 `not_configured` + `host.connected=false`.
+- `InfrastructureService.create_droplet` fail-closed without provision flag; ResourceReceipt recorded.
+- Community nav cut + Cloud Easy Connect `PaidSurfaceGate`. Ledger + `UI_V1_CUT.md`.
+
+## 2026-08-15 — Grok — v1 verify identity / KMS / feedback
+
+- Branch `ai/grok/v1-verify-identity-keys-feedback` (base `a5c8951`). Not GA. Not merged.
+- Identity: Community OIDC/SAML/SCIM catalog vs paid Account Connect 404. Missing IdP fail-closed.
+- KMS: ran `test_secretref_consumption` + `test_credential_resolve`; no new hole.
+- Feedback: preview propose→confirm; Metatron validate-then-apply; learning loop suggest-only; factory `open_pr=True`.
+- Ledger updated. Plane comment on BOSS-388.
+
+## 2026-08-15 — Grok — v1 feature lock + release-planning honesty
+
+- Branch `ai/grok/v1-verify-spec-release` from `ai/grok/v1-feature-verify` (`a5c8951`).
+- Added `docs/product/V1_FEATURE_LOCK.md` (in / out / Cloud-Enterprise only).
+- `sync-from-features` applies lock metadata; catalog unchanged. CE rows not Community shipped.
+- Tests: `engine/tests/test_v1_feature_lock.py` + `test_oss_vs_commercial_rows_are_not_community_shipped`.
+- Verification ledger updated. **Not GA.** Do not merge main.
+
+## 2026-08-15 — Grok — V1 verify tokens / workers / jobs
+
+- Branch `ai/grok/v1-verify-tokens-workers` from `ai/grok/v1-feature-verify` (`a5c8951`).
+- Token + worker-autoscaling: `ensure_tables` IF NOT EXISTS; GET fail-closed empty-200 when tables missing; never invent consumption/worker counts.
+- Jobs: lease/heartbeat/reclaim tests already existed; added enqueue `dedupe_key` HTTP + tests.
+- Ledger updated CODE, not E2E. Live 500 remains until redeploy. Not public GA.
+- Plane: BOSS-388 (no new issue).
+
+## 2026-08-15 — Grok — V1 verify test system (BOSS-393)
+
+- Branch `ai/grok/v1-verify-test-system` from `ai/grok/v1-feature-verify` (`a5c8951`).
+- Focused lock: engine 34 passed, `test_official_reports` 5, web `qa-scorecard` 2.
+- Added `make test-v1-lock` (unit layer). Documented pyramid in
+  `docs/product/V1_FEATURE_VERIFICATION.md`. Test system row stays **PARTIAL**.
+- Official BugBox/HookWatch/ApproveIt are **not** certified 5/5. No invented scores.
+- Not GA. Did not merge official PRs. Did not merge main.
+
+## 2026-08-15 — Grok — v1 verify KG + on-call
+
+- Branch `ai/grok/v1-verify-kg-oncall` from `ai/grok/v1-feature-verify` `a5c8951`.
+- Plane BOSS-390 (child of BOSS-388) In Progress → Done with pytest evidence.
+- Confirmed: KG node/edge/subgraph/known-causes; on-call page/ack/resolve; dry-run notify receipt simulated; force_live without creds 422.
+- Added one focused HTTP test: reliability incident → page writes simulated `oncall_sre.notify` receipt + KG incident/service/`correlates_with`.
+- Focused suite 21 passed. Ledger rows stay **CODE** (dry-run ◐). **Not** live PagerDuty. Not GA. Did not merge main.
+
+## 2026-08-15 — Grok — AI SRE MCP + Mission Control + bench
+
+- Branch `ai/grok/ai-sre-mcp-ui` from `ai/grok/ai-sre-kernel` (`e35e711`).
+- MCP: `list_capabilities`, `verify_incident`, `page_incident` on stdio JSON-RPC.
+  No live vendor calls.
+- Mission Control area `ai-sre` next to Reliability renders GET /v1/ai-sre/capabilities.
+- Deterministic `GET /v1/ai-sre/bench` via InvestigationEngine fixtures.
+  Missing signals stay unknown; never invent 0.99 confidence. Not public GA.
+
+## 2026-08-15 — Grok — AI SRE evidence-only postmortems
+
+- Branch `ai/grok/ai-sre-postmortem` from kernel `e35e711`.
+- `draft_postmortem` persists `sre_postmortems` (IF NOT EXISTS). Unresolved
+  incidents still draft. Diagnose-never-ran has no invented `root_cause`.
+- HTTP 404 on missing incident. Not GA. Not break-glass `postmortem_task_id`.
+- Tests: `apps/api/tests/test_sre_postmortem.py` + kernel ledger (5 passed).
+
+## 2026-08-15 — Grok — AIOps noise view + NL query plan
+
+- Branch `ai/grok/ai-sre-noise` from `e35e711`.
+- `sre_noise.noise_report` + `GET /v1/ai-sre/noise`: raw vs clustered, top
+  signatures, suppressed duplicates. Empty = zeros. No invented reduction.
+- `sre_ask.plan_query` + `POST /v1/ai-sre/ask`: keyword map only, `executed=false`.
+  Unknown questions stay unknown (no fake PromQL).
+- Tests: 5 engine + 4 API green. Not public GA. Do not merge main.
+
+## 2026-08-15 — Grok — first-class SRE runbooks
+
+- Branch `ai/grok/ai-sre-runbooks` off `e35e711` (AI SRE kernel).
+- Named runbooks attach to a reliability incident. External steps hold on a
+  Decision; `page_oncall` may dry-run notify with receipt
+  `sre_runbook:{run_id}:{step}`. Never auto-apply. Not GA.
+- Plane BOSS-389 In Progress (child of BOSS-387).
+
+## 2026-08-15 — Grok — AI SRE observe-only overwatch
+
+- Branch `ai/grok/ai-sre-overwatch` from kernel `e35e711`.
+- `tick()` + `POST /v1/ai-sre/overwatch` + worker 60s hook. Scan persist,
+  diagnose open/critical without investigation, optional dry-run page.
+- Receipt `ai_sre:overwatch:{project}:{window}`. No sources → honest empty.
+- Never remediates / auto-applies Decisions / merges PRs. FEATURES stays ◐.
+- Tests: `engine/tests/test_ai_sre_overwatch.py` + kernel + worker. Not GA.
+
 ## 2026-08-15 — Grok — official app-scoped verify
 
 - HookWatch/ApproveIt failed because BOSS verified the monorepo root and QA wrote

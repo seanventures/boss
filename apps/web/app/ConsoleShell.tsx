@@ -27,6 +27,7 @@ import {
   List,
   MagnifyingGlass,
   Heartbeat,
+  Siren,
   PaintBrush,
   SquaresFour,
   Pulse,
@@ -68,6 +69,7 @@ type AreaId =
   | "delivery"
   | "monitoring"
   | "reliability"
+  | "ai-sre"
   | "reports"
   | "budget"
   | "pipeline"
@@ -119,6 +121,7 @@ const ICONS = {
   delivery: Code,
   monitoring: Heartbeat,
   reliability: Heartbeat,
+  "ai-sre": Siren,
   discovery: MagnifyingGlass,
   sandboxes: TerminalWindow,
   studio: Graph,
@@ -145,6 +148,7 @@ const AREAS: AreaDef[] = [
   { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
+  { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
   { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
   { id: "budget", label: "Budget", sub: "Live spend, reservations, token efficiency, and cap pressure", group: "Govern", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Govern", icon: ICONS.pipeline },
@@ -328,7 +332,7 @@ export default function ConsoleShell({
     });
   }, [community]);
 
-  // Sidebar only: design-system lab is hide_nav on Community. Palette +
+  // Sidebar only: Community v1 home is a small cut (UI_V1_CUT.md). Palette +
   // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
   const navAreas = useMemo(
     () => areasForEdition.filter((a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition)),

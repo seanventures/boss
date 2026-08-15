@@ -2,6 +2,8 @@
 
 Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_COMMUNITY_EDITION_SPEC.md). This page is the public-facing checklist.
 
+**v1 lock:** [V1_FEATURE_LOCK.md](../product/V1_FEATURE_LOCK.md) — Community v1 in / out / Cloud-Enterprise only. ✦ rows stay Cloud/Enterprise (never Community shipped). **Not public GA.**
+
 **Legend:** ✅ shipped in Community · ◐ partial · ○ planned · ✦ Cloud / Enterprise only
 
 ## Control plane
@@ -90,6 +92,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Role-scoped agents (Metatron, COO, PM, …) | ✅ |
 | Focused always-on agents | ◐ Builder + duty loop in code (`/v1/focused-agents`). Worker ticks due always-on/hybrid agents every 60s; Wake now for on-demand. Same validate-then-apply gates as captain. **Not GA** until live dogfood. |
 | Metatron captain (persistent session / goals / watch) | ◐ Always-on overwatch on shared tag `3f1d2cf`. Worker every 60s: observe → measure → validate → apply-safe → verify. Live dogfood: first tick applied a preview restart (`app_preview.started` 17:32:16Z, verify ok). Decisions/DLQ stay human. **Not public GA.** |
+| AI SRE kernel (awesome-ai-sre map) | ◐ Capability ledger at `GET /v1/ai-sre/capabilities` + Mission Control island. MCP adds list/diagnose/capabilities/verify/page. Observe-only worker tick at `POST /v1/ai-sre/overwatch` (scan / diagnose / dry-run page). Runbooks at `/v1/ai-sre/runbooks` (validate + Decision hold; `page_oncall` dry-run only). Noise view `GET /v1/ai-sre/noise` (clustered vs raw, no invented %). Ask `POST /v1/ai-sre/ask` returns a query plan only. Evidence-only incident postmortem at `POST/GET /v1/reliability/incidents/{id}/postmortem` (existing evidence only; never invents RCA; does not auto-resolve). Deterministic `GET /v1/ai-sre/bench` (InvestigationEngine fixtures). Never remediates, never auto-applies Decisions, never merges PRs. **Not public GA.** |
 | Work orchestration / portfolio | ✅ |
 | Meetings / multi-agent panels | ✅ |
 | Agent process handoffs | ◐ Authorable role sequences (NL compile, manual builder, Metatron/chat). Default: PRD → architect/CTO/VP-PM review → improve → captain build → QA → UI/UX → captain verify → panel certify → captain accept. Simulated completes without spend. **Not GA.** |

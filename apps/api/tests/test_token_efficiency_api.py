@@ -304,3 +304,42 @@ def test_scorecard_empty_project(client):
     assert body["calls"] == 0
     assert body["cache_ratio"] is None
     assert body["grades"]["cache_ratio"] == "n/a"
+
+
+def test_ensure_tables_is_idempotent(engine):
+    from boss_engine.services.token_efficiency import ensure_tables
+
+    with begin(engine) as connection:
+        assert ensure_tables(connection) is True
+        assert ensure_tables(connection) is True
+        row = connection.execute(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'token_budget_policies'"
+            )
+        ).first()
+        assert row is not None
+
+
+def test_unconfigured_policies_http_are_defaults_not_invented(client):
+    """No stored rows → 200 defaults. Consumption zeros stay zeros."""
+    pid = f"proj_te_empty_{uuid4().hex[:8]}"
+    policies = client.get(
+        "/v1/token-efficiency/policies", params={"project_id": pid}
+    )
+    assert policies.status_code == 200, policies.text
+    body = policies.json()
+    assert body["configured"] is False
+    assert all(p["source"] == "default" for p in body["policies"])
+
+    cons = client.get(
+        "/v1/token-efficiency/consumption",
+        params={"project_id": pid, "window_hours": 24},
+    )
+    assert cons.status_code == 200, cons.text
+    cbody = cons.json()
+    assert cbody["calls"] == 0
+    assert cbody["total_tokens"] == 0
+    assert cbody["cost_usd_micros"] == 0
+    assert cbody["series"] == []
+    assert cbody["alerts"] == []

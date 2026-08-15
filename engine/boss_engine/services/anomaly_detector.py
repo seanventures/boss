@@ -16,6 +16,35 @@ SPEND_SPIKE_FACTOR = 3.0      # recent 5-min spend vs the trailing 60-min per-5-
 AUTO_LITE_INTENSITY = 25      # intensity to drop to when auto-lite-mode trips
 
 
+def classify_operational_anomalies(
+    *,
+    deadlettered: int,
+    recent_spend_micros: int,
+    hour_spend_micros: int,
+) -> list[dict]:
+    """Pure classifier: measured counts only. Never invents a score field."""
+    anomalies: list[dict] = []
+    deadlettered = int(deadlettered or 0)
+    recent = int(recent_spend_micros or 0)
+    hour = int(hour_spend_micros or 0)
+    if deadlettered >= RETRY_STORM_THRESHOLD:
+        anomalies.append(
+            {
+                "type": "retry_storm",
+                "detail": f"{deadlettered} deadlettered jobs in 15m",
+            }
+        )
+    baseline = hour / 12.0
+    if baseline > 0 and recent > baseline * SPEND_SPIKE_FACTOR:
+        anomalies.append(
+            {
+                "type": "spend_spike",
+                "detail": f"5m spend {recent} vs ~{int(baseline)}/5m baseline",
+            }
+        )
+    return anomalies
+
+
 def scan(engine, settings, project_id: str, *, auto_lite: bool = True) -> dict:
     anomalies: list[dict] = []
     with begin(engine) as c:
@@ -26,10 +55,6 @@ def scan(engine, settings, project_id: str, *, auto_lite: bool = True) -> dict:
             ),
             {"p": project_id},
         ).scalar() or 0
-        if int(deadlettered) >= RETRY_STORM_THRESHOLD:
-            anomalies.append({"type": "retry_storm",
-                              "detail": f"{int(deadlettered)} deadlettered jobs in 15m"})
-
         recent = c.execute(
             text(
                 "SELECT COALESCE(SUM(amount_usd_micros), 0) FROM budget_reservations "
@@ -44,10 +69,11 @@ def scan(engine, settings, project_id: str, *, auto_lite: bool = True) -> dict:
             ),
             {"p": project_id},
         ).scalar() or 0
-        baseline = int(hour) / 12.0  # per 5-min
-        if baseline > 0 and int(recent) > baseline * SPEND_SPIKE_FACTOR:
-            anomalies.append({"type": "spend_spike",
-                              "detail": f"5m spend {int(recent)} vs ~{int(baseline)}/5m baseline"})
+        anomalies = classify_operational_anomalies(
+            deadlettered=int(deadlettered),
+            recent_spend_micros=int(recent),
+            hour_spend_micros=int(hour),
+        )
 
         for a in anomalies:
             decision_id = create_blocking_decision(

@@ -114,12 +114,45 @@ describe("community nav honesty helpers", () => {
     expect(isCommunityPrimaryNavVisible("components", "community")).toBe(false);
     expect(isCommunityPrimaryNavVisible("enterprise", "community")).toBe(true);
     expect(isCommunityPrimaryNavVisible("overview", "community")).toBe(true);
-    expect(isCommunityPrimaryNavVisible("metatron", "community")).toBe(true);
-    expect(isCommunityPrimaryNavVisible("ops", "community")).toBe(true);
-    expect(isCommunityPrimaryNavVisible("org", "community")).toBe(true);
     expect(isCommunityPrimaryNavVisible("foundations", "enterprise")).toBe(true);
     expect(isCommunityPrimaryNavVisible("components", "cloud")).toBe(true);
     expect(isCommunityPrimaryNavVisible("enterprise", "enterprise")).toBe(true);
+  });
+
+  it("Community v1 primary nav is the small home cut, not the full console", () => {
+    const shown = [
+      "overview",
+      "activity",
+      "work",
+      "decisions",
+      "reliability",
+      "code_tasks",
+      "reports",
+      "budget",
+      "enterprise",
+    ];
+    const hidden = [
+      "infra",
+      "metatron",
+      "ops",
+      "org",
+      "studio",
+      "sandboxes",
+      "github",
+      "pipeline",
+      "comms",
+      "foundations",
+      "components",
+    ];
+    for (const id of shown) {
+      expect(isCommunityPrimaryNavVisible(id, "community")).toBe(true);
+    }
+    for (const id of hidden) {
+      expect(isCommunityPrimaryNavVisible(id, "community")).toBe(false);
+    }
+    // Paid editions keep the full nav.
+    expect(isCommunityPrimaryNavVisible("infra", "enterprise")).toBe(true);
+    expect(isCommunityPrimaryNavVisible("ops", "cloud")).toBe(true);
   });
 
   it("softens ops/org copy and marks paid nav badges only on community", () => {
@@ -229,6 +262,16 @@ describe("ConsoleShell edition-aware nav", () => {
     // SSO stays; leftover Enterprise product framing and design-system-as-product do not.
     expect(html).not.toContain('data-area-nav="foundations"');
     expect(html).not.toContain('data-area-nav="components"');
+    expect(html).not.toContain('data-area-nav="infra"');
+    expect(html).not.toContain('data-area-nav="ops"');
+    expect(html).not.toContain('data-area-nav="org"');
+    expect(html).toContain('data-area-nav="activity"');
+    expect(html).toContain('data-area-nav="work"');
+    expect(html).toContain('data-area-nav="decisions"');
+    expect(html).toContain('data-area-nav="reliability"');
+    expect(html).toContain('data-area-nav="code_tasks"');
+    expect(html).toContain('data-area-nav="reports"');
+    expect(html).toContain('data-area-nav="budget"');
     const enterpriseNav = html.match(
       /data-area-nav="enterprise"[\s\S]*?<\/button>/,
     )?.[0] ?? "";
@@ -241,9 +284,10 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(sidebar).not.toMatch(/>Enterprise</);
     expect(sidebar).not.toMatch(/>Foundations</);
     expect(sidebar).not.toMatch(/>Components</);
-    // Paid badges on ops/org (self-improvement + marketplace homes)
-    expect(html).toContain('data-testid="nav-paid-badge-ops"');
-    expect(html).toContain('data-testid="nav-paid-badge-org"');
+    expect(sidebar).not.toMatch(/>System Configuration</);
+    // Paid surfaces live off the v1 home cut; badges must not appear as required nav.
+    expect(html).not.toContain('data-testid="nav-paid-badge-ops"');
+    expect(html).not.toContain('data-testid="nav-paid-badge-org"');
   });
 
   it("Community GA mounts keep SSO visible and never sell Account Connect as Community", () => {
@@ -258,6 +302,10 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(page).toContain("<PackImportForm");
     expect(page).toContain("PaidSurfaceGate");
     expect(page).toContain('surface="account_connect"');
+    expect(page).toContain('data-testid="cloud-easy-connect"');
+    expect(page.indexOf('title="BOSS Cloud Easy Connect"')).toBeLessThan(
+      page.indexOf('data-testid="cloud-easy-connect"'),
+    );
     expect(page).toContain("IdentityProvidersCatalogView");
     expect(page).not.toMatch(/Account Connect is (included|available) in Community/i);
     expect(page).not.toMatch(/Community includes (hosted )?Account Connect/i);

@@ -52,6 +52,9 @@ Related (not replaced):
 - **Dry-run first.** Config is returned as text; proposing a PR is a separate, policy-gated skill.
 - Every spendy or external effect elsewhere still needs BudgetReservation + Receipt + dedupe_key.
 - Generated deploy stages are **manual / approval / block** steps that only package release evidence.
+Generated configs include an OSS **security-scan gate** hook (Semgrep / Trivy / OSV-Scanner
+as comments plus optional PATH steps). Snyk is never invoked. Live GitHub Actions poll
+stays credential-gated on `pipeline_adapter`.
 
 ## Provenance ledger
 

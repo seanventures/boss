@@ -1,5 +1,93 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 BOSS-391 infra + UI v1 (◐)
+
+- Branch `ai/grok/v1-verify-infra-ui` from `a5c8951`. Not public GA.
+- Elastic/Goldeneye/provider-usage: ensure_tables + honest empty; never fake host.connected.
+- Real droplet provision fail-closed without `BOSS_INFRA_REAL_PROVISION_ALLOWED` (Receipt + ResourceReceipt).
+- Community primary nav cut: activity, jobs, decisions, reliability, factory/QA, budget, SSO.
+- Cloud Easy Connect CTAs gated. Docs: `docs/product/UI_V1_CUT.md`.
+- Do not merge main. Do not unfreeze Firecracker.
+
+## 2026-08-15 V1 verify identity / keys / feedback (CODE, not GA)
+
+- Branch `ai/grok/v1-verify-identity-keys-feedback` from `a5c8951`. Plane BOSS-388.
+- Community SSO catalog live 200 (10 packs); Account Connect 404; edition community.
+- KMS `local_vault.ok=true`; bound-but-broken SecretRefs fail closed (existing tests).
+- Metatron drive/overwatch applied 0; factory launch is `open_pr=True` only.
+- **Not public GA.** Do not merge main.
+
+## 2026-08-15 v1 feature lock + release-planning honesty (◐)
+
+- `docs/product/V1_FEATURE_LOCK.md` locks Community v1 in / out / Cloud-Enterprise.
+- `sync-from-features` applies lock metadata; catalog unchanged. CE rows not Community shipped.
+- Branch `ai/grok/v1-verify-spec-release`. Not public GA. Do not merge main.
+
+## 2026-08-15 V1 test system lock (BOSS-393) (◐)
+
+- `make test-v1-lock` is the unit layer of the test pyramid.
+- Factory `npm run verify` stays app-scoped. Official inspect stays honesty-only.
+- Official BugBox/HookWatch/ApproveIt **not** 5/5. qa-live calendar is separate.
+- Ledger Test system row: PARTIAL. **Not public GA.**
+
+## 2026-08-15 V1 feature verification swarm (Plane)
+
+- Plane SoR umbrella **BOSS-388** In Progress: *V1 feature verification swarm
+  (token, workers, spec lock, KG, on-call, identity, CI/CD, KMS, Goldeneye/security)*.
+- Deduped; no prior umbrella named like “v1 feature verification” / token
+  efficiency / worker autoscaling. Related shipped tickets left untouched.
+- Ledger `docs/product/V1_FEATURE_VERIFICATION.md` (`a5c8951`). Item list
+  commented on the issue. **Nothing is GA.** Evidence-only; no invented closes.
+- This branch `ai/grok/v1-verify-plane` is docs-only tracking. Do not merge main.
+
+## 2026-08-15 AI SRE MCP + Mission Control + bench
+
+- MCP: `list_capabilities` / `verify_incident` / `page_incident` on stdio JSON-RPC.
+  No live vendor calls. Branch `ai/grok/ai-sre-mcp-ui`.
+- Mission Control island `ai-sre` next to Reliability renders GET /v1/ai-sre/capabilities.
+- Deterministic `GET /v1/ai-sre/bench` via InvestigationEngine fixtures. Not public GA.
+
+## 2026-08-15 AI SRE evidence-only postmortems
+
+- On-demand `POST/GET /v1/reliability/incidents/{id}/postmortem` drafts a durable
+  artifact from existing incident evidence only. Missing RCA stays `draft`;
+  recorded winner hypothesis is `complete_enough`. Never invents root cause,
+  timeline, or impact. Does not auto-resolve. Not break-glass.
+- Branch `ai/grok/ai-sre-postmortem` from `ai/grok/ai-sre-kernel` (`e35e711`).
+  **Not public GA.**
+
+## 2026-08-15 AI SRE noise + NL query plan
+
+- `GET /v1/ai-sre/noise?project_id=` reports clustered vs raw signal counts from
+  persisted incidents/signals. Empty project is honest zeros. Never invents 95%.
+- `POST /v1/ai-sre/ask` returns a keyword-map query plan (connector, query,
+  window). Does not execute PromQL/Datadog. Unmapped → `status=unknown`.
+- Branch `ai/grok/ai-sre-noise` off `ai/grok/ai-sre-kernel` (e35e711). Not GA.
+
+## 2026-08-15 First-class SRE runbooks (◐)
+
+- `/v1/ai-sre/runbooks`: named runbooks attached to a reliability incident.
+- Seeded `restart_preview` (safe, no mutation) and `page_oncall` (dry-run notify).
+- External/spendy steps create a hold-default Decision. Never auto-applied.
+- Receipts use `sre_runbook:{run_id}:{step}`. Not public GA.
+- Branch `ai/grok/ai-sre-runbooks`. Plane BOSS-389.
+
+## 2026-08-15 AI SRE observe-only overwatch
+
+- `tick(engine, settings, project_id=…)` + `POST /v1/ai-sre/overwatch` + worker
+  60s hook. Scan persist when sources exist; diagnose open/critical with no
+  investigation; optional dry-run page. Receipt `ai_sre:overwatch:{project}:{window}`.
+- No sources → honest empty. Never remediates / auto-applies Decisions / merges.
+- Branch `ai/grok/ai-sre-overwatch` on kernel `e35e711`. FEATURES stays ◐. Not GA.
+
+## 2026-08-15 AI SRE swarm (awesome-ai-sre)
+
+- Kernel: `GET /v1/ai-sre/capabilities` maps the 11 awesome-ai-sre categories onto
+  existing reliability / on-call / observability / chaos. Honest ◐. Not GA.
+- Swarm building: always-on overwatch tick, incident postmortems, runbooks,
+  noise+NL plan, MCP/UI/SRE-bench. Remediation stays governed PRs.
+- Branch `ai/grok/ai-sre-kernel`. Do not stamp public GA.
+
 ## 2026-08-15 Official app-scoped verify (HookWatch / ApproveIt)
 
 - Root cause: official canaries build inside `paramg/boss-sandbox` (a monorepo) but

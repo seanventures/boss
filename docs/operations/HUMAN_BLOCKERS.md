@@ -20,6 +20,20 @@ exists and honesty holds. Do not invent scores. ui/ux may stay `not_scored`.
 - HookWatch `crun_d15a1f5556e946ab865a`
 - ApproveIt `crun_95dacaa77a71484ab185`
 
+## BOSS-387 — AI SRE swarm (not a human legal gate)
+
+AI SRE is **not** a human legal gate. Do not park it next to BOSS-300 or wait
+on counsel. The kernel (`ai/grok/ai-sre-kernel` @ `e35e711`) is an honest
+capability ledger; FEATURES stays ◐ / not GA until live evidence.
+
+Agents may implement overwatch, postmortem, runbooks, noise/ask, and
+mcp/ui/bench. **Close only with live evidence.**
+
+A **Claude org spend cap** can still block live diagnose (runtime/cost hold,
+not a legal decision and not a FEATURES flip). When that happens, record the
+named failure and keep the slice In Progress — do not invent RCA or mark
+shipped.
+
 ## BOSS-300 — OSS licensing (human legal)
 
 Canonical gate: `docs/operations/OSS_LICENSING_DECISION.md` (still **UNDECIDED**).

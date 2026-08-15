@@ -1016,3 +1016,28 @@ def last_scan_summary(project_id: str) -> Optional[dict[str, Any]]:
         "created_at": r.get("created_at"),
         "simulated": r.get("simulated"),
     }
+
+
+def latest_run(project_id: str) -> dict[str, Any]:
+    """Honest latest-run view: empty is not_configured, never a fake score."""
+    project_id = (project_id or "").strip()
+    runs = list_runs(project_id, limit=1) if project_id else []
+    if not runs:
+        return {
+            "project_id": project_id,
+            "status": "not_configured",
+            "run": None,
+            "summary": None,
+            "note": (
+                "No scan has been recorded in this process. "
+                "POST /v1/security-scan/run with simulated=true for a fixture."
+            ),
+        }
+    rec = runs[0]
+    return {
+        "project_id": project_id,
+        "status": rec.get("status"),
+        "run": rec,
+        "summary": rec.get("summary"),
+        "gate": rec.get("gate"),
+    }

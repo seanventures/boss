@@ -116,3 +116,22 @@ def test_provenance_ledger_dedupe_and_status():
 def test_record_run_rejects_bad_status():
     with pytest.raises(ValueError):
         record_run(project_id="p1", vendor="jenkins", status="exploded")
+
+
+def test_generated_templates_include_security_scan_gate():
+    """Every vendor template carries a Semgrep/Trivy/OSV security-scan gate hook."""
+    for vendor in VENDORS:
+        result = generate(vendor=vendor, language="python")
+        blob = result["content"].lower()
+        assert "semgrep" in blob, vendor
+        assert "trivy" in blob, vendor
+        assert "osv" in blob, vendor
+        assert "snyk" not in blob or "never" in blob, vendor
+
+
+def test_catalog_notes_live_actions_are_credential_gated():
+    cat = catalog()
+    notes = " ".join(cat["notes"]).lower()
+    assert "credential" in notes
+    gha = next(v for v in cat["vendors"] if v["id"] == "github_actions")
+    assert gha["live_adapter"] is True

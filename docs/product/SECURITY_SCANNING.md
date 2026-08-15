@@ -42,6 +42,7 @@ Prefix: `/v1/security-scan`
 |---|---|---|
 | `GET` | `/scanners` | Catalog with `stars_note`, `website`, binary availability |
 | `POST` | `/run` | `{ project_id, actor, path?, scanners[], simulated?, fail_on_critical? }` |
+| `GET` | `/latest?project_id=` | Most recent run, or honest `not_configured` empty-200 |
 | `GET` | `/runs?project_id=` | Recent runs + `last_summary` |
 | `GET` | `/runs/{run_id}` | Full run with findings |
 | `POST` | `/runs/{run_id}/gate` | Evaluate go/no-go (`fail_on` severities) |

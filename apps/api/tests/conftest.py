@@ -76,6 +76,8 @@ def clean_tables(engine):
             "oncall_pages",
             "oncall_policies",
             "oncall_schedules",
+            "sre_runbook_runs",
+            "sre_runbooks",
             "release_board_items",
             "release_plans",
             "wp_dependencies",
@@ -112,6 +114,7 @@ def clean_tables(engine):
             "delivery_status_channels",
             "delivery_bot_identities",
             # AI SRE reliability pipeline + knowledge graph + learning loop (child → parent)
+            "sre_postmortems",
             "incident_evidence",
             "reliability_policies",
             "llm_calls",

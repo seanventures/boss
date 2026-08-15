@@ -938,6 +938,45 @@ def execute_job(job: LeasedJob, client: ControlPlaneClient) -> dict[str, Any]:
     raise ValueError(f"Unsupported job kind: {job.kind}")
 
 
+AI_SRE_OVERWATCH_INTERVAL_SECONDS = 60
+_last_ai_sre_overwatch_monotonic = 0.0
+
+
+def _tick_ai_sre_overwatch(settings: WorkerSettings) -> None:
+    """Observe-only AI SRE tick. Fail-closed. Never raise out of the worker loop."""
+    global _last_ai_sre_overwatch_monotonic
+    now = time.monotonic()
+    if now - _last_ai_sre_overwatch_monotonic < AI_SRE_OVERWATCH_INTERVAL_SECONDS:
+        return
+    try:
+        from boss_engine.config import get_settings
+        from boss_engine.db import get_engine
+        from boss_engine.services.ai_sre_overwatch import safe_tick
+
+        engine_settings = get_settings()
+        project_id = (
+            getattr(settings, "default_project_id", None)
+            or getattr(engine_settings, "default_project_id", None)
+            or getattr(settings, "project_id", None)
+            or "boss-dogfood"
+        )
+        result = safe_tick(
+            get_engine(engine_settings),
+            engine_settings,
+            project_id=str(project_id),
+            actor="metatron",
+        )
+        _last_ai_sre_overwatch_monotonic = now
+        if isinstance(result, dict) and result.get("status") not in {"empty", "observed", "in_progress"}:
+            LOGGER.info(
+                "ai_sre_overwatch status=%s reason=%s",
+                result.get("status"),
+                result.get("reason") or result.get("error"),
+            )
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("ai_sre_overwatch_failed", exc_info=True)
+
+
 def _sweep_deployment_health() -> None:
     """Sample the health of deployed apps while there is no job to run.
 
@@ -964,6 +1003,7 @@ def _sweep_deployment_health() -> None:
 
 
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
+    _tick_ai_sre_overwatch(settings)
     job = client.poll(
         settings.worker_id,
         capabilities(),

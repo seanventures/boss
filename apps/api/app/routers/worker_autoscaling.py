@@ -15,12 +15,16 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 
 from boss_engine.config import get_settings
 from boss_engine.db import begin, get_engine
 from boss_engine.services.elastic_fabric import ElasticFabricService
 from boss_engine.services.resource_plane import ResourcePlaneService
-from boss_engine.services.worker_autoscaling import WorkerAutoscalingService
+from boss_engine.services.worker_autoscaling import (
+    WorkerAutoscalingService,
+    is_missing_relation,
+)
 
 router = APIRouter(
     prefix="/v1/worker-autoscaling",
@@ -72,9 +76,27 @@ class ApplyRequest(BaseModel):
 @router.get("/policies")
 def list_policies(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
-    with begin(get_engine()) as connection:
-        items = svc.list_policies(connection, project_id)
-        return {"project_id": project_id, "items": items, "count": len(items)}
+    try:
+        with begin(get_engine()) as connection:
+            ready = svc.ensure_tables(connection)
+            items = svc.list_policies(connection, project_id)
+            return {
+                "project_id": project_id,
+                "items": items,
+                "count": len(items),
+                "schema_ready": ready,
+                "configured": bool(items),
+            }
+    except ProgrammingError as error:
+        if is_missing_relation(error):
+            return {
+                "project_id": project_id,
+                "items": [],
+                "count": 0,
+                "schema_ready": False,
+                "configured": False,
+            }
+        raise
 
 
 @router.put("/policies")
@@ -141,8 +163,33 @@ def apply(payload: ApplyRequest) -> dict[str, Any]:
 @router.get("/status")
 def status(project_id: str = Query(...)) -> dict[str, Any]:
     svc = _service()
-    with begin(get_engine()) as connection:
-        return svc.status(connection, project_id)
+    try:
+        with begin(get_engine()) as connection:
+            svc.ensure_tables(connection)
+            return svc.status(connection, project_id)
+    except ProgrammingError as error:
+        if is_missing_relation(error):
+            return {
+                "project_id": project_id,
+                "queue": {
+                    "queue_depth": 0,
+                    "running_jobs": 0,
+                    "leased_jobs": 0,
+                    "retryable_jobs": 0,
+                },
+                "leased_jobs": 0,
+                "queue_depth": 0,
+                "running_jobs": 0,
+                "pools": [],
+                "instance_counts": {},
+                "schema_ready": False,
+                "configured": False,
+                "infra_real_provision_allowed": bool(
+                    get_settings().infra_real_provision_allowed
+                ),
+                "message": "Worker autoscaling tables are not applied on this runtime.",
+            }
+        raise
 
 
 @router.get("/history")
@@ -152,13 +199,25 @@ def history(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     svc = _service()
-    with begin(get_engine()) as connection:
-        items = svc.history(
-            connection, project_id, pool_key=pool_key, limit=limit
-        )
-        return {
-            "project_id": project_id,
-            "pool_key": pool_key,
-            "items": items,
-            "count": len(items),
-        }
+    try:
+        with begin(get_engine()) as connection:
+            svc.ensure_tables(connection)
+            items = svc.history(
+                connection, project_id, pool_key=pool_key, limit=limit
+            )
+            return {
+                "project_id": project_id,
+                "pool_key": pool_key,
+                "items": items,
+                "count": len(items),
+            }
+    except ProgrammingError as error:
+        if is_missing_relation(error):
+            return {
+                "project_id": project_id,
+                "pool_key": pool_key,
+                "items": [],
+                "count": 0,
+                "schema_ready": False,
+            }
+        raise

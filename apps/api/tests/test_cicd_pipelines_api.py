@@ -252,3 +252,46 @@ def test_legacy_ci_config_generate_still_works(client):
     )
     assert r.status_code == 200, r.text
     assert r.json()["path"] == ".github/workflows/ci.yml"
+
+
+def test_generate_embeds_security_scan_gate_all_vendors(client):
+    """catalog → generate → validate E2E includes a Semgrep/Trivy/OSV gate hook."""
+    cat = client.get("/v1/cicd/catalog")
+    assert cat.status_code == 200
+    notes = " ".join(cat.json()["notes"]).lower()
+    assert "credential" in notes
+
+    for vendor in VENDORS:
+        gen = client.post(
+            "/v1/cicd/generate",
+            json={"vendor": vendor, "language": "python"},
+        )
+        assert gen.status_code == 200, gen.text
+        content = gen.json()["content"]
+        lower = content.lower()
+        assert "semgrep" in lower, vendor
+        assert "trivy" in lower, vendor
+        assert "osv" in lower, vendor
+        valid = client.post(
+            "/v1/cicd/validate",
+            json={"yaml": content, "vendor": vendor},
+        )
+        assert valid.status_code == 200, valid.text
+        assert valid.json()["valid"] is True, (vendor, valid.text)
+
+
+def test_status_does_not_claim_live_github_actions(client):
+    """Live GitHub Actions poll stays credential-gated — status is a ledger, not cloud."""
+    r = client.get("/v1/cicd/status", params={"project_id": PROJECT_ID})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    notes = " ".join(body.get("notes") or []).lower()
+    assert "credential" in notes
+    adapters = client.get("/v1/pipeline-adapters/catalog")
+    assert adapters.status_code == 200, adapters.text
+    gha = next(
+        item
+        for item in adapters.json()["items"]
+        if item["kind"] == "github_actions"
+    )
+    assert gha["requires_credentials"] is True
