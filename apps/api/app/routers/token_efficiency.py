@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import ProgrammingError
 
 from boss_engine.db import begin, get_engine
 from boss_engine.services import token_efficiency as te
@@ -56,11 +57,16 @@ def get_scorecard(
     """Efficiency scorecard from llm_calls (cache ratio, failed burn, avgs)."""
     try:
         with begin(get_engine()) as connection:
+            te.ensure_tables(connection)
             return te.build_scorecard(
                 connection, project_id, window_hours=window_hours
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except ProgrammingError as error:
+        if te.is_missing_relation(error):
+            return te.empty_scorecard(project_id, window_hours, schema_ready=False)
+        raise
 
 
 @router.get("/policies")
@@ -68,9 +74,14 @@ def get_policies(project_id: str = Query(...)) -> dict[str, Any]:
     """Token budget policies per project/stage (defaults + stored overrides)."""
     try:
         with begin(get_engine()) as connection:
+            te.ensure_tables(connection)
             return te.list_policies(connection, project_id)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except ProgrammingError as error:
+        if te.is_missing_relation(error):
+            return te.unconfigured_policies(project_id)
+        raise
 
 
 @router.put("/policies")
@@ -78,6 +89,7 @@ def put_policies(payload: PoliciesPutRequest) -> dict[str, Any]:
     """Upsert token budget policies for a project."""
     try:
         with begin(get_engine()) as connection:
+            te.ensure_tables(connection)
             return te.upsert_policies(
                 connection,
                 project_id=payload.project_id,
@@ -104,6 +116,7 @@ def post_recommendations(payload: RecommendationsRequest) -> dict[str, Any]:
     """Deterministic recommendations extending cost_insights with token rules."""
     try:
         with begin(get_engine()) as connection:
+            te.ensure_tables(connection)
             return te.build_recommendations(
                 connection,
                 payload.project_id,
@@ -111,6 +124,23 @@ def post_recommendations(payload: RecommendationsRequest) -> dict[str, Any]:
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except ProgrammingError as error:
+        if te.is_missing_relation(error):
+            return {
+                "project_id": payload.project_id,
+                "total_spend_usd_micros": 0,
+                "scorecard_grades": {
+                    "cache_ratio": "n/a",
+                    "failed_burn": "n/a",
+                    "avg_tokens": "n/a",
+                },
+                "profile": payload.profile_name or "balanced",
+                "model_routing": [],
+                "recommendations": [],
+                "count": 0,
+                "schema_ready": False,
+            }
+        raise
 
 
 @router.get("/consumption")
@@ -121,11 +151,40 @@ def get_consumption(
     """Rolling-window token/cost consumption + policy pressure alerts."""
     try:
         with begin(get_engine()) as connection:
+            te.ensure_tables(connection)
             return te.build_consumption(
                 connection, project_id, window_hours=window_hours
             )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except ProgrammingError as error:
+        if te.is_missing_relation(error):
+            empty = te.empty_scorecard(project_id, window_hours, schema_ready=False)
+            return {
+                "project_id": project_id,
+                "window_hours": window_hours,
+                "calls": 0,
+                "total_tokens": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "cache_read_tokens": 0,
+                "cost_usd_micros": 0,
+                "failed_burn_usd_micros": 0,
+                "cache_ratio": None,
+                "policy": {
+                    "stage": te.PROJECT_DEFAULT_STAGE,
+                    "token_utilization": None,
+                    "cost_utilization": None,
+                    "enabled": True,
+                },
+                "alerts": [],
+                "by_stage": [],
+                "series": [],
+                "schema_ready": False,
+                "configured": False,
+                "grades": empty["grades"],
+            }
+        raise
 
 
 @router.get("/routing")

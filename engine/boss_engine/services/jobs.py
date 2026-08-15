@@ -312,6 +312,7 @@ class JobLeaseService:
         priority_score: Optional[float] = None,
         workload_class: str = "general",
         resource_units: int = 1,
+        dedupe_key: Optional[str] = None,
     ) -> dict[str, Any]:
         job = enqueue_job(
             connection,
@@ -323,6 +324,7 @@ class JobLeaseService:
             max_attempts=max_attempts,
             run_after_seconds=run_after_seconds,
             data_boundary=data_boundary,
+            dedupe_key=dedupe_key,
             work_item_id=work_item_id,
             tracker_binding_id=tracker_binding_id,
             allocation_id=allocation_id,

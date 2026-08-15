@@ -2137,6 +2137,7 @@ class JobCreateRequest(BaseModel):
     resource_units: int = Field(default=1, ge=1, le=1000)
     max_attempts: int = Field(default=3, ge=1, le=20)
     run_after_seconds: int = Field(default=0, ge=0, le=86_400)
+    dedupe_key: Optional[str] = None
 
 
 class DocsUpdateRequest(BaseModel):

@@ -16487,6 +16487,7 @@ def create_job(payload: JobCreateRequest) -> JobSummary:
                 priority_score=payload.priority_score,
                 workload_class=payload.workload_class,
                 resource_units=payload.resource_units,
+                dedupe_key=payload.dedupe_key,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
