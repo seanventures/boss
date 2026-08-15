@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — BOSS-102 S3 Go webhook dispatcher
+
+- Branch `ai/grok/boss-102-go-dispatcher` from `origin/main`. Smallest Go fan-out sidecar at `services/webhook-dispatcher`.
+- Python event SoR unchanged. Adapter `go_webhook_dispatcher.py` is enqueue-only; unset URL → `not_configured`.
+- Default dry-run, HMAC, retry then deadletter, per-destination Receipt + `dedupe_key`. No secrets in logs.
+- `s3_go_event_dispatcher` stays false. Not GA. Did not unfreeze Firecracker.
+
 ## 2026-08-15 — Grok — Cut v0.13.0
 
 - Fast-forwarded `main` to include `cf433e4`. Did not merge PR #174 (hold).

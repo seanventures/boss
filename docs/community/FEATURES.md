@@ -12,6 +12,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Job leases, heartbeat, fencing | ✅ |
 | Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
 | Event / audit feed | ✅ |
+| Go event + webhook dispatcher (S3) | ◐ Optional Enterprise sidecar in `services/webhook-dispatcher`. Python event SoR + leased `webhook.outbound.deliver` stay canonical. Unset URL → honest `not_configured`. Default dry-run, no live mount, **not GA.** |
 | Global activity log | ◐ Searchable/sortable Mission Control area (status, kind, actor, stuck banner). **Not GA.** |
 | Decision inbox (approve / reject / escalate) | ✅ Hold `reason` + `default_action` on the card; GET `/v1/decisions/{id}`. **Not GA.** |
 | Receipts with unique dedupe keys | ✅ |

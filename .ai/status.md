@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 BOSS-102 S3 Go dispatcher (◐)
+
+- In-repo `services/webhook-dispatcher` + enqueue-only Python client.
+- Unset URL is honest `not_configured`. Python webhook path remains SoR.
+- Not mounted, not live-probed, `s3_go_event_dispatcher=false`. **Not public GA.**
+
 ## 2026-08-15 Release v0.13.0
 
 - Cut from `main` after FF of `cf433e4`. PR #174 sealed canary **not** merged.

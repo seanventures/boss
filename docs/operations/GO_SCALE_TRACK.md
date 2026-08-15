@@ -1,6 +1,6 @@
 # Go scale track (BOSS-97 / BOSS-101 / BOSS-102)
 
-**Status:** Backlog — optional Enterprise scale, **not** a Community GA blocker  
+**Status:** Backlog / ◐ S3 source only — optional Enterprise scale, **not** a Community GA blocker  
 **Plane:** [BOSS-97](https://plane.local.sean.network) (parent), children **BOSS-98** (S1), **BOSS-101** (S2), **BOSS-102** (S3); adjacent **BOSS-99** contract + **BOSS-100** / **BOSS-103** Python prep  
 **Spec:** [`docs/planning/oss-readiness/10-go-concurrency-services.md`](../planning/oss-readiness/10-go-concurrency-services.md)  
 **Community path:** Python worker fabric + concurrency governance + elastic fabric + Python event/webhook delivery  
@@ -13,9 +13,9 @@
 | Claim | Truth |
 |---|---|
 | Community GA needs a Go runtime | **No.** Community ships the Python API + Python worker + (optional) Python sandbox host. |
-| In-repo Go services exist | **No.** Zero `*.go` files, no `go.mod`, no Helm/compose Go workload. |
+| In-repo Go services exist | **S3 source only.** `services/webhook-dispatcher` (`go.mod` + unit tests). No Helm/compose Go workload. S1/S2 still absent on this branch. |
 | A live Go tenant gateway is mounted | **No.** Edge is Traefik (compose) or the FastAPI process itself. |
-| A live Go webhook/event dispatcher is mounted | **No.** Fan-out is `event_dispatch.py` + leased `webhook.outbound.deliver`. |
+| A live Go webhook/event dispatcher is mounted | **No.** Community fan-out is still `event_dispatch.py` + leased `webhook.outbound.deliver`. The Go sidecar is opt-in, dry-run by default, and unmounted. |
 | S1 Firecracker exists somewhere | **Yes, as Python** on goldeneye (`sandbox-service.py` on `:8077`), plus in-repo `sandbox-host/` (Python). The HTTP contract is named “Python ⇄ Go”; the conforming host today is **not Go**. |
 | `/v1/concurrency-load` measures a Go pool | **No.** In-process Python stub harness (zero model cost). Honesty fields: `runner=python_stub`, `go_scale_track.go_runtime_shipped=false`. |
 
@@ -30,7 +30,7 @@ Community GA language must not say “Go gateway”, “Go dispatcher”, or “
 | **BOSS-97** | Parent: Go concurrency services for 100s of concurrent tasks | Horizontal **Python workers** (`apps/worker/boss_worker/`), Postgres leases, **BOSS-100** `/v1/concurrency/*`, **BOSS-103** stub load harness, **elastic fabric** + **worker autoscaling** | **No** |
 | **BOSS-98** (S1, child of 97; not this slice) | Go Firecracker sandbox pool (warm-pool, density) | `LocalSubprocessProvider` (OSS default); `MicroVMProvider` HTTP client; in-repo `sandbox-host/sandbox_agent.py`; goldeneye **Python** Firecracker host. Contract: `sandbox_contract.py` / [`PYTHON_GO_SANDBOX_CONTRACT.md`](../infra/PYTHON_GO_SANDBOX_CONTRACT.md) | **No** (sandbox claims are a separate freeze — [`SANDBOX_GA_STATUS.md`](../product/SANDBOX_GA_STATUS.md)) |
 | **BOSS-101** (S2) | Go tenant gateway / proxy (TLS, tenant routing, auth passthrough, rate limit, backpressure vs sandbox pool) | Compose/Goldeneye **Traefik** host routers; FastAPI as the control-plane listener; **model gateway** (`/v1/model-gateway/*`) is MEB/BYOK — **not** S2 | **No** |
-| **BOSS-102** (S3) | Go high-fanout event + webhook dispatcher | `event_dispatch.py` (same-txn allowlisted enqueue), `event_subscription_service.py`, `webhooks.py` (HMAC outbound + signed inbound), worker kind `webhook.outbound.deliver` with Receipt + retry/deadletter. Runbook: [`WEBHOOKS.md`](WEBHOOKS.md) | **No** |
+| **BOSS-102** (S3) | Go high-fanout event + webhook dispatcher | Community: `event_dispatch.py` + `webhooks.py` + leased `webhook.outbound.deliver`. Optional sidecar: `services/webhook-dispatcher` (HMAC, retry, per-destination `dedupe_key` + Receipt). Python client `go_webhook_dispatcher.py` is enqueue-only; unset URL → `not_configured`. Runbook: [`WEBHOOKS.md`](WEBHOOKS.md) | **No** |
 
 Parent **BOSS-97** stays open until a *measured* Enterprise scale program actually starts. Children stay Backlog. Shipping this mapping is not shipping Go.
 
@@ -38,7 +38,10 @@ Parent **BOSS-97** stays open until a *measured* Enterprise scale program actual
 
 ## Inventory (this repo)
 
-Searched the tree for Go sources, Go modules, and Go deployables. Result: **none**.
+Searched the tree for Go sources, Go modules, and Go deployables.
+
+- **S3 source (this slice):** `services/webhook-dispatcher` — stdlib Go module, unit-tested, default dry-run. Not composed, not probed, not GA.
+- **S1 / S2 / live S3 process:** **none** on this branch.
 
 ### What exists (Python / ops)
 
@@ -57,15 +60,17 @@ Searched the tree for Go sources, Go modules, and Go deployables. Result: **none
 | Goldeneye host (out of tree) | `/srv/sandbox/bin/sandbox-service.py` on `:8077` | Python Firecracker service; see [`BOSS-340_SANDBOX_HOST_DIAGNOSIS.md`](BOSS-340_SANDBOX_HOST_DIAGNOSIS.md) |
 | Event dispatcher | `engine/boss_engine/services/event_dispatch.py` | Allowlisted same-transaction fan-out to jobs |
 | Webhooks | `engine/boss_engine/services/webhooks.py` | Signed inbound + Receipt-backed outbound |
+| Go S3 adapter | `engine/boss_engine/services/go_webhook_dispatcher.py` | Enqueue-only; unset URL → `not_configured` |
+| Go S3 sidecar | `services/webhook-dispatcher/` | HMAC + retry + per-destination Receipt; default dry-run |
 | Edge | `docker-compose.yaml`, `deploy/goldeneye.compose.yaml` | **Traefik** labels for API/web hosts |
 | Helm | `deploy/helm/boss/templates/{api,web,worker}.yaml` | API + web + worker only — no Go chart |
 
 ### What does **not** exist
 
-- No `*.go`, `go.mod`, `go.sum`, or Go Dockerfile
-- No Envoy / Go proxy binary or chart
-- No Go event/webhook process
-- No API field that may report `go_runtime_shipped: true` today
+- No Go Dockerfile, Helm chart, or compose service (the S3 binary is not mounted)
+- No Envoy / Go proxy binary or chart (S2)
+- No live Go event/webhook process on goldeneye
+- No API field that may report `go_runtime_shipped: true` or `s3_go_event_dispatcher: true` today — in-repo source is not a live probe
 
 ### Do not confuse these with S2
 
@@ -124,7 +129,7 @@ Exit criteria for *starting* S2/S3 code: a linked soak report showing the Python
 | `s3_go_event_dispatcher` | `false` |
 | `doc` | `docs/operations/GO_SCALE_TRACK.md` |
 
-`POST /v1/concurrency-load` also returns `runner: python_stub`. Do not flip any `*_shipped` / `s2_*` / `s3_*` flag to true without a real in-repo Go binary *and* a live probe. Tests pin the fail-closed defaults.
+`POST /v1/concurrency-load` also returns `runner: python_stub`. The optional Python adapter (`go_webhook_dispatcher.py`) reports the same fail-closed flags (`s3_go_event_dispatcher=false`, `go_runtime_shipped=false`) and `not_configured` when the sidecar URL is unset. Do not flip any `*_shipped` / `s2_*` / `s3_*` flag to true without a real in-repo Go binary *and* a live probe. In-repo source is not a probe.
 
 ---
 

@@ -139,3 +139,21 @@ normal queued→leased→succeeded protocol. Results persist in `canary_runs` an
 are available from `GET /v1/canaries?project_id=...`.
 
 HTTP 2xx marks a delivery complete. Non-2xx responses and timeouts use bounded exponential job backoff and transition to a deadletter after `max_attempts`; BOSS does not run a hidden retry loop.
+
+## Optional Go fan-out sidecar (BOSS-102 / S3) — ◐ not GA
+
+Community delivery is the Python path above. A smallest Go dispatcher exists
+in-repo at `services/webhook-dispatcher` for high-fanout *I/O only*. It does
+not own events, subscriptions, or the ledger.
+
+- Unset `BOSS_GO_WEBHOOK_DISPATCHER_URL` → the Python adapter returns
+  `not_configured` and the engine keeps working. This is the default.
+- When set, the adapter is **enqueue-only**: it POSTs the already-built event
+  envelope to `POST /v1/dispatch`. It never calls destination webhook URLs.
+- The sidecar HMAC-signs each destination (`X-Hub-Signature-256`), retries,
+  then deadletters. Every destination gets a Receipt + unique `dedupe_key`.
+- `BOSS_GO_WEBHOOK_DISPATCHER_DRY_RUN` defaults to `true` and never opens
+  outbound sockets. Do not send real Slack/email through this sidecar.
+- `s3_go_event_dispatcher` stays **false** until a live probe exists.
+  In-repo source is not a live mount. Not Community GA.
+  See [`GO_SCALE_TRACK.md`](GO_SCALE_TRACK.md).

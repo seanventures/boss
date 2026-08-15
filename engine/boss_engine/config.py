@@ -411,6 +411,20 @@ class Settings(BaseSettings):
     webhook_project_map_json: str = Field(
         default="", alias="BOSS_WEBHOOK_PROJECT_MAP_JSON"
     )
+    # Optional BOSS-102 S3 sidecar. Unset = engine keeps the Python webhook path
+    # and reports honest not_configured. Never required for Community.
+    go_webhook_dispatcher_url: Optional[str] = Field(
+        default=None, alias="BOSS_GO_WEBHOOK_DISPATCHER_URL"
+    )
+    go_webhook_dispatcher_token: Optional[str] = Field(
+        default=None, alias="BOSS_GO_WEBHOOK_DISPATCHER_TOKEN"
+    )
+    go_webhook_dispatcher_timeout_seconds: float = Field(
+        default=5.0, alias="BOSS_GO_WEBHOOK_DISPATCHER_TIMEOUT_SECONDS", gt=0
+    )
+    go_webhook_dispatcher_dry_run: bool = Field(
+        default=True, alias="BOSS_GO_WEBHOOK_DISPATCHER_DRY_RUN"
+    )
     default_org_id: str = Field(default="org_boss", alias="BOSS_DEFAULT_ORG_ID")
     default_workspace_id: str = Field(
         default="ws_boss", alias="BOSS_DEFAULT_WORKSPACE_ID"
