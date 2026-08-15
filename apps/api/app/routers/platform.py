@@ -26,6 +26,14 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    # AI SRE capability ledger (awesome-ai-sre map)
+    try:
+        from .ai_sre import router as ai_sre_router
+
+        app.include_router(ai_sre_router)
+    except ImportError:
+        pass
+
     # Security vulnerability scanning (Semgrep/Trivy/OSV)
     try:
         from .security_scan import router as security_router
