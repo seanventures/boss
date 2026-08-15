@@ -76,6 +76,7 @@ def collect_workspace_evidence(files: dict[str, str]) -> dict[str, Any]:
         "ux_evidence": ux_evidence,
         "capability_evidence": capability_evidence,
         "interface_evidence": {"states_covered": states + (["keyboard"] if a11y_hits else [])},
+        "script_contract": _script_contract(files),
         "test_paths": test_paths,
         "e2e_paths": e2e_paths,
         "api_test_paths": api_test_paths,
@@ -261,6 +262,8 @@ def quality_improve_prompt(evidence: dict[str, Any], *, title: str, gaps: Iterab
         f"a11y markers seen: {ui.get('a11y_markers', 0)}. e2e present: "
         f"{bool((evidence.get('ux_evidence') or {}).get('has_e2e'))}.\n"
         f"Gaps: {', '.join(gap_ids) or 'thin UI/UX evidence'}.\n"
+        f"Script contract stubs: {(evidence.get('script_contract') or {}).get('stubs') or 'none'}. "
+        f"Missing runners: {(evidence.get('script_contract') or {}).get('missing_runners') or 'none'}.\n"
         "Make the smallest change that:\n"
         "1) Adds honest loading, empty, and error UI where those flows exist.\n"
         "2) Uses real labels / aria attributes on primary controls.\n"
@@ -293,6 +296,44 @@ def _package_scripts(files: dict[str, str]) -> list[str]:
     if not isinstance(scripts, dict):
         return []
     return [str(name) for name in scripts]
+
+
+_STUB_SCRIPT = re.compile(
+    r"""(?:^|[;&|])\s*(?:echo\s+|process\.exit\(0\))|skipping""",
+    re.I,
+)
+_REQUIRED_RUNNERS = ("vite", "@playwright/test")
+
+
+def _script_contract(files: dict[str, str]) -> dict[str, Any]:
+    """Deterministic package.json contract. Never invents a pass."""
+    raw = files.get("package.json") or files.get("apps/web/package.json") or ""
+    empty = {"stubs": [], "missing_runners": [], "has_verify": False}
+    if not raw:
+        return empty
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return empty
+    if not isinstance(payload, dict):
+        return empty
+    scripts = payload.get("scripts") if isinstance(payload.get("scripts"), dict) else {}
+    deps = {}
+    if isinstance(payload.get("dependencies"), dict):
+        deps.update(payload["dependencies"])
+    if isinstance(payload.get("devDependencies"), dict):
+        deps.update(payload["devDependencies"])
+    stubs = [
+        name
+        for name, cmd in scripts.items()
+        if _STUB_SCRIPT.search(str(cmd or ""))
+    ]
+    missing = [name for name in _REQUIRED_RUNNERS if name not in deps]
+    return {
+        "stubs": stubs,
+        "missing_runners": missing,
+        "has_verify": bool(str(scripts.get("verify") or "").strip()),
+    }
 
 
 def _is_real_test_path(path: str) -> bool:

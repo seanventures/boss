@@ -433,7 +433,8 @@ def start_followup_task(
     connection, *, parent_run_id: str, instructions: str, jobs,
     title: Optional[str] = None, acceptance_criteria: Optional[list] = None,
     test_commands: Optional[list] = None, profile: Optional[str] = None,
-    actor: str = "operator",
+    actor: str = "operator", engine: Optional[str] = None,
+    review_panel_size: Optional[int] = None,
 ) -> dict:
     """Continue work on an app that already exists, from the run that built it.
 
@@ -464,6 +465,31 @@ def start_followup_task(
     fctx = run.get("finalize_ctx") or {}
     parent_title = run.get("title") or "this app"
     root = fctx.get("root_run_id") or run["id"]
+    child_fctx = {
+        "root_run_id": root,
+        "parent_run_id": parent_run_id,
+        "is_followup": True,
+        "requested_by": actor,
+    }
+    # Official canaries must stay official across follow-up. Dropping
+    # qa_benchmark made /report 404 and broke the 5/5 lineage.
+    if fctx.get("official"):
+        child_fctx["official"] = True
+    bench = fctx.get("qa_benchmark")
+    if isinstance(bench, dict) and bench:
+        child_fctx["qa_benchmark"] = dict(bench)
+    model_config = spec.get("model_config")
+    engine_name = str(engine or "").strip().lower()
+    if engine_name:
+        from .spend_cap_failover import OFFICIAL_ENGINES, pin_engine_model_config
+
+        if engine_name not in OFFICIAL_ENGINES:
+            raise ValueError(
+                f"unknown engine: {engine_name!r} (expected openai|native|claude_code)"
+            )
+        model_config = pin_engine_model_config(engine_name, model_config)
+        if isinstance(child_fctx.get("qa_benchmark"), dict):
+            child_fctx["qa_benchmark"]["engine"] = engine_name
 
     run_id = start_code_task(
         connection,
@@ -485,10 +511,13 @@ def start_followup_task(
         owner=spec.get("owner"), repo=spec.get("repo"),
         # THE point of this function: start from the app's own branch, not from base.
         base_branch=work_branch_for(run),
-        finalize_ctx={"root_run_id": root, "parent_run_id": parent_run_id,
-                      "is_followup": True, "requested_by": actor},
+        finalize_ctx=child_fctx,
         jobs=jobs, profile=profile or spec.get("profile"),
         risk_tier=int(spec.get("risk_tier") or 1),
+        model_config=model_config,
+        repair_retries=spec.get("repair_retries"),
+        review_panel_size=review_panel_size if isinstance(review_panel_size, int)
+        else spec.get("review_panel_size"),
     )
     return {"run_id": run_id, "root_run_id": root,
             "base_branch": work_branch_for(run),
@@ -663,6 +692,10 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or "main",
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           "feedback_history": history,
+                          **({"official": True} if fctx_prev.get("official") else {}),
+                          **({"qa_benchmark": dict(fctx_prev["qa_benchmark"])}
+                             if isinstance(fctx_prev.get("qa_benchmark"), dict)
+                             and fctx_prev.get("qa_benchmark") else {}),
                           # Carry the web-app treatment across retries — else the retry loses
                           # web_app_build, infer_risk_tier re-derives tier 2, and it runs the full
                           # design+write_tests+blocking-review pipeline (wrong for a scaffolded app,

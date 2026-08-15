@@ -35,8 +35,14 @@ PARENT = {
         "risk_tier": 1,
         "test_commands": ["npm run verify"],
         "base_branch": "main",
+        "model_config": {"default": {"engine": "openai"}},
+        "repair_retries": 2,
     },
-    "finalize_ctx": {"root_run_id": "crun_root"},
+    "finalize_ctx": {
+        "root_run_id": "crun_root",
+        "official": True,
+        "qa_benchmark": {"id": "approveit", "app_root": "approveit", "official": True},
+    },
 }
 
 
@@ -72,6 +78,8 @@ def test_it_keeps_the_lineage_so_the_preview_knows_which_app_this_is(started):
     assert fctx["root_run_id"] == "crun_root"
     assert fctx["parent_run_id"] == "crun_child"
     assert fctx["is_followup"] is True
+    assert fctx["official"] is True
+    assert fctx["qa_benchmark"]["id"] == "approveit"
 
 
 def test_it_inherits_where_the_app_lives_and_how_it_is_verified(started):
@@ -82,6 +90,8 @@ def test_it_inherits_where_the_app_lives_and_how_it_is_verified(started):
     assert (started["owner"], started["repo"]) == ("paramg", "boss-sandbox")
     assert started["test_commands"] == ["npm run verify"]
     assert started["profile"] == "balanced"
+    assert started["model_config"]["default"]["engine"] == "openai"
+    assert started["repair_retries"] == 2
 
 
 def test_the_agent_is_told_to_build_on_what_is_there(started):
@@ -111,6 +121,31 @@ def test_naming_a_run_that_does_not_exist_says_so(monkeypatch):
     monkeypatch.setattr(cts, "load_code_task_run", lambda _c, _r: None)
     with pytest.raises(ValueError, match="not found"):
         cts.start_followup_task(None, parent_run_id="nope", instructions="x", jobs=None)
+
+
+def test_followup_engine_override_pins_openai(started):
+    cts.start_followup_task(
+        None,
+        parent_run_id="crun_child",
+        instructions="fix verify",
+        jobs=None,
+        engine="openai",
+        review_panel_size=5,
+    )
+    assert started["model_config"]["default"]["engine"] == "openai"
+    assert started["finalize_ctx"]["qa_benchmark"]["engine"] == "openai"
+    assert started["review_panel_size"] == 5
+
+
+def test_followup_unknown_engine_is_rejected(started):
+    with pytest.raises(ValueError, match="unknown engine"):
+        cts.start_followup_task(
+            None,
+            parent_run_id="crun_child",
+            instructions="x",
+            jobs=None,
+            engine="not-a-lane",
+        )
 
 
 def test_the_branch_rule_lives_in_one_place():

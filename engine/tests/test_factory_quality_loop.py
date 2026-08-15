@@ -22,6 +22,24 @@ def _files(**extra: str) -> dict[str, str]:
     return base
 
 
+def test_script_contract_flags_echo_stubs_and_missing_vite():
+    evidence = collect_workspace_evidence(
+        _files(
+            **{
+                "package.json": (
+                    '{"scripts":{"typecheck":"echo ok","verify":"npm test"},'
+                    '"devDependencies":{"eslint":"6.4.0"}}'
+                )
+            }
+        )
+    )
+    contract = evidence["script_contract"]
+    assert "typecheck" in contract["stubs"]
+    assert "vite" in contract["missing_runners"]
+    assert "@playwright/test" in contract["missing_runners"]
+    assert contract["has_verify"] is True
+
+
 def test_collects_thin_ui_evidence_from_a_minimal_app():
     evidence = collect_workspace_evidence(_files())
     assert "ok" in evidence["ui_evidence"]["states_covered"]

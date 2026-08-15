@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Factory enablement: official follow-up lineage
+
+- Follow-up/retry now keep `official` + `qa_benchmark` so `/report` stays on
+  the canary lineage. Follow-up accepts `engine` and inherits `model_config`.
+- Quality loop records script-contract stubs / missing vite+playwright.
+- Goal: systems that let BOSS improve software it already built. Not GA.
+
 ## 2026-08-15 — Grok — Official verify env (fundamental)
 
 - Official trio failed because `npm run verify` ran without `npm install`,

@@ -6581,6 +6581,12 @@ def follow_up_code_task_endpoint(run_id: str, payload: dict):
                 title=(payload or {}).get("title"),
                 profile=(payload or {}).get("profile"),
                 actor=actor,
+                engine=(payload or {}).get("engine"),
+                review_panel_size=(
+                    int((payload or {}).get("review_panel_size"))
+                    if isinstance((payload or {}).get("review_panel_size"), int)
+                    else None
+                ),
             )
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
