@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any, Callable, Optional
 from urllib.parse import urlparse
@@ -13,6 +12,7 @@ from ..config import Settings
 from .core import emit_event, make_id
 from .github_adapter import GitHubAdapter
 from .receipts import ReceiptService
+from .secret_backends import SecretUnavailable, backend_for, resolve_secret_ref
 from .secret_refs import SecretRefService
 
 
@@ -960,11 +960,10 @@ class GitHubConnectionService:
             project_id=project_id,
             credential_ref=credential_ref,
         )
-        self._active_connection = connection
-        try:
+        if self.secret_resolver is self._resolve_secret:
+            credential = self._resolve_secret(secret_ref, connection)
+        else:
             credential = self.secret_resolver(secret_ref)
-        finally:
-            self._active_connection = None
         if not credential:
             raise GitHubConnectionStateError(
                 "GitHub SecretRef could not be resolved by this execution node."
@@ -1134,26 +1133,46 @@ class GitHubConnectionService:
             raise GitHubConnectionNotFoundError("GitHub connection not found.")
         return str(value)
 
-    def _resolve_secret(self, secret_ref: dict[str, Any]) -> str:
-        """Resolve a GitHub credential. SecretRef backends first, env last-resort.
+    def _resolve_secret(
+        self,
+        secret_ref: dict[str, Any],
+        connection: Optional[Connection] = None,
+    ) -> str:
+        """Resolve a GitHub SecretRef at use time. Never logs secret material.
 
-        A bound SecretRef id is resolved through ``resolve_secret_ref`` when a
-        DB connection is active (set by ``_make_adapter``). Env pointers remain
-        the last resort when no id is present or no connection is bound, so
-        existing env-only tests and custom resolvers stay intact.
+        Dicts with an id go through ``resolve_secret_ref`` (every backend).
+        Env refs still resolve via ``backend_for("environment")``.
+        Unusable refs fail closed as ``GitHubConnectionStateError``.
         """
-        ref_id = str(secret_ref.get("id") or "").strip()
-        conn = self._active_connection
-        if ref_id and conn is not None:
-            from .secret_backends import resolve_secret_ref
-
-            return resolve_secret_ref(conn, ref_id, self.settings)
-        if secret_ref.get("ref_kind") == "env":
-            return os.environ.get(str(secret_ref.get("ref_key") or ""), "")
-        raise GitHubConnectionStateError(
-            "This execution node cannot resolve this SecretRef "
-            "(need a bound ref id + connection, or an env pointer)."
-        )
+        if not isinstance(secret_ref, dict):
+            raise GitHubConnectionStateError(
+                "GitHub SecretRef could not be resolved by this execution node."
+            )
+        conn = connection if connection is not None else self._active_connection
+        try:
+            ref_id = str(secret_ref.get("id") or "").strip()
+            if ref_id and conn is not None:
+                value = resolve_secret_ref(conn, ref_id, self.settings)
+            elif str(secret_ref.get("ref_kind") or "").strip().lower() in {
+                "env",
+                "environment",
+            } and secret_ref.get("ref_key"):
+                value = backend_for("environment", self.settings).get(
+                    str(secret_ref["ref_key"])
+                )
+            else:
+                raise GitHubConnectionStateError(
+                    "GitHub SecretRef could not be resolved by this execution node."
+                )
+        except SecretUnavailable as error:
+            raise GitHubConnectionStateError(
+                "GitHub SecretRef could not be resolved by this execution node."
+            ) from error
+        if not str(value or "").strip():
+            raise GitHubConnectionStateError(
+                "GitHub SecretRef could not be resolved by this execution node."
+            )
+        return value
 
     @staticmethod
     def _scope(connection: Connection, project_id: str) -> dict[str, str]:

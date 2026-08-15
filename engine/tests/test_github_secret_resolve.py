@@ -9,7 +9,6 @@ from boss_engine.services.github_connections import (
     GitHubConnectionService,
     GitHubConnectionStateError,
 )
-from boss_engine.services.secret_backends import SecretUnavailable
 
 
 class _Mappings:
@@ -54,7 +53,7 @@ def test_env_pointer_without_id_reads_environment(monkeypatch):
 def test_bound_ref_id_uses_backend(monkeypatch):
     monkeypatch.setenv("BOSS_TEST_GITHUB_TOKEN", "ghp-from-secret-ref-never-log")
     svc = _svc()
-    svc._active_connection = FakeConnection(
+    conn = FakeConnection(
         [
             {
                 "id": "sref_gh",
@@ -65,14 +64,17 @@ def test_bound_ref_id_uses_backend(monkeypatch):
             }
         ]
     )
-    got = svc._resolve_secret({"id": "sref_gh", "ref_kind": "local_vault", "ref_key": "ignored"})
+    got = svc._resolve_secret(
+        {"id": "sref_gh", "ref_kind": "local_vault", "ref_key": "ignored"},
+        conn,
+    )
     assert got == "ghp-from-secret-ref-never-log"
 
 
 def test_bound_unresolvable_ref_does_not_fall_back_to_env(monkeypatch):
     monkeypatch.setenv("BOSS_TEST_GITHUB_TOKEN", "ghp-from-env-never-log")
     svc = _svc()
-    svc._active_connection = FakeConnection(
+    conn = FakeConnection(
         [
             {
                 "id": "sref_gh",
@@ -83,13 +85,14 @@ def test_bound_unresolvable_ref_does_not_fall_back_to_env(monkeypatch):
             }
         ]
     )
-    with pytest.raises(SecretUnavailable):
+    with pytest.raises(GitHubConnectionStateError):
         svc._resolve_secret(
             {
                 "id": "sref_gh",
                 "ref_kind": "env",
                 "ref_key": "BOSS_TEST_GITHUB_TOKEN",
-            }
+            },
+            conn,
         )
 
 
