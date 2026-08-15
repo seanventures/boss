@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — v1 lock + release-planning E2E
+
+- Branch `ai/grok/e2e-spec-release` from `7acb064` (`ai/grok/v1-verify-spec-release`).
+- Added `GET /v1/v1-lock` and `status.v1_lock` (in / out / cloud counts only).
+- HTTP E2E: status/board/releases 200; OSS vs commercial board rule stays.
+- Isolated DB tests. Plane BOSS-395 (child of 388). **Not GA.** Cloud/Ent stay ✦. Do not merge main.
+
 ## 2026-08-15 — Grok — v1 feature lock + release-planning honesty
 
 - Branch `ai/grok/v1-verify-spec-release` from `ai/grok/v1-feature-verify` (`a5c8951`).

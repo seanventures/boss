@@ -32,6 +32,11 @@ def test_status_empty_board(client):
     assert body["blocked"] == 0
     assert body["last_release"] is None
     assert "totals" in body
+    lock = body["v1_lock"]
+    assert set(lock) == {"in", "out", "cloud"}
+    assert lock["in"] >= 65
+    assert lock["out"] >= 14
+    assert lock["cloud"] == 12
 
 
 def test_board_columns_shape(client):
@@ -298,6 +303,39 @@ def test_sync_from_features_populates_board(client):
     )
     assert board_get.status_code == 200
     assert board_get.json()["counts"]["built"] >= 1
+
+
+def test_release_planning_http_e2e_and_v1_lock_summary(client):
+    """HTTP E2E: status/board/releases 200 and GET /v1/v1-lock counts."""
+    lock = client.get("/v1/v1-lock")
+    assert lock.status_code == 200, lock.text
+    body = lock.json()
+    assert set(body) == {"in", "out", "cloud"}
+    assert body["in"] >= 65
+    assert body["out"] >= 14
+    assert body["cloud"] == 12
+
+    status = client.get(
+        "/v1/release-planning/status",
+        params={"project_id": PROJECT_ID},
+    )
+    assert status.status_code == 200, status.text
+    assert status.json()["v1_lock"] == body
+
+    board = client.get(
+        "/v1/release-planning/board",
+        params={"project_id": PROJECT_ID},
+    )
+    assert board.status_code == 200, board.text
+    assert set(board.json()["columns"]) >= {"built", "building", "planned", "blocked"}
+
+    releases = client.get(
+        "/v1/release-planning/releases",
+        params={"project_id": PROJECT_ID},
+    )
+    assert releases.status_code == 200, releases.text
+    assert "items" in releases.json()
+    assert releases.json()["count"] == len(releases.json()["items"])
 
 
 def test_oss_vs_commercial_rows_are_not_community_shipped(client):

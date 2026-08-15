@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 v1 lock + release-planning E2E (◐)
+
+- Isolated HTTP: `GET /v1/release-planning/{status,board,releases}` 200.
+- `GET /v1/v1-lock` and `status.v1_lock` expose in / out / cloud counts only.
+- `sync-from-features` then board: Community ✅ Implemented can be `built`;
+  Cloud ✦ Implemented is never `community_shipped` / `built`.
+- Branch `ai/grok/e2e-spec-release` from `ai/grok/v1-verify-spec-release` (`7acb064`).
+- Plane BOSS-395 (child of 388). Isolated tests green. Not public GA. Cloud/Ent stay ✦. Do not merge main.
+
 ## 2026-08-15 v1 feature lock + release-planning honesty (◐)
 
 - `docs/product/V1_FEATURE_LOCK.md` locks Community v1 in / out / Cloud-Enterprise.

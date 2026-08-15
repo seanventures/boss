@@ -139,6 +139,20 @@ def apply_v1_lock(
     return column, meta
 
 
+def summarize_v1_feature_lock(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Small lock summary: in / out / cloud counts only. Not a shipment claim."""
+    summary = {"in": 0, "out": 0, "cloud": 0}
+    for row in rows:
+        lock = row.get("lock")
+        if lock == "in":
+            summary["in"] += 1
+        elif lock == "out":
+            summary["out"] += 1
+        elif lock == "cloud_enterprise":
+            summary["cloud"] += 1
+    return summary
+
+
 def lock_rows_are_honest(rows: list[dict[str, Any]]) -> list[str]:
     """Return honesty violations (empty list means the lock file is clean)."""
     violations: list[str] = []

@@ -16,7 +16,7 @@ to be built, and release milestones with tracker issue links.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/status?project_id=` | `built_count`, `todo_count`, `in_progress`, `blocked`, `last_release` |
+| GET | `/status?project_id=` | `built_count`, `todo_count`, `in_progress`, `blocked`, `last_release`, small `v1_lock` `{in,out,cloud}` counts |
 | GET | `/board?project_id=` | Columns: `built`, `building`, `planned`, `blocked` |
 | POST | `/releases` | Create release plan `{name, target_date, item_ids[], actor}` |
 | GET | `/releases?project_id=` | List release plans |
@@ -24,6 +24,9 @@ to be built, and release milestones with tracker issue links.
 | POST | `/releases/{id}/link-issue` | `{tracker, issue_key, url?, actor}` |
 | POST | `/sync-from-features` | Pull FeatureCatalog into durable board; apply [v1 feature lock](./V1_FEATURE_LOCK.md) metadata (does not rewrite the catalog; Cloud/Ent never Community shipped) |
 | POST | `/sync-from-trackers` | Best-effort work tracker bindings (fail soft) |
+
+Sibling: `GET /v1/v1-lock` returns the same `{in, out, cloud}` counts only.
+Not a shipment claim. Cloud / Enterprise stay ✦. **Not public GA.**
 
 All mutations require an **actor** with `command_submit` permission.
 
@@ -38,7 +41,8 @@ All mutations require an **actor** with `command_submit` permission.
   "blocked": 1,
   "last_release": { "id": "rel_…", "name": "v1.2", "target_date": "2026-09-01", "…" : "…" },
   "last_deployment": { "id": "…", "status": "succeeded", "environment": "staging" },
-  "totals": { "board_items": 24, "release_plans": 2 }
+  "totals": { "board_items": 24, "release_plans": 2 },
+  "v1_lock": { "in": 67, "out": 14, "cloud": 12 }
 }
 ```
 
