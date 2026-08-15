@@ -1,5 +1,13 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — v1 verify KG + on-call
+
+- Branch `ai/grok/v1-verify-kg-oncall` from `ai/grok/v1-feature-verify` `a5c8951`.
+- Plane BOSS-390 (child of BOSS-388) In Progress → Done with pytest evidence.
+- Confirmed: KG node/edge/subgraph/known-causes; on-call page/ack/resolve; dry-run notify receipt simulated; force_live without creds 422.
+- Added one focused HTTP test: reliability incident → page writes simulated `oncall_sre.notify` receipt + KG incident/service/`correlates_with`.
+- Focused suite 21 passed. Ledger rows stay **CODE** (dry-run ◐). **Not** live PagerDuty. Not GA. Did not merge main.
+
 ## 2026-08-15 — Grok — AI SRE MCP + Mission Control + bench
 
 - Branch `ai/grok/ai-sre-mcp-ui` from `ai/grok/ai-sre-kernel` (`e35e711`).

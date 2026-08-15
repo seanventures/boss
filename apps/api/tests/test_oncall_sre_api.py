@@ -1,6 +1,7 @@
 """On-call / SRE control plane — schedules, policies, paging, KG link, receipts."""
 from __future__ import annotations
 
+import json
 import os
 
 from apps.api.app.db import begin
@@ -270,6 +271,98 @@ def test_http_page_reliability_and_from_reliability(client, engine):
     data = fr.json()
     assert data["incidents_considered"] >= 1
     assert data["pages"]
+
+
+def test_http_reliability_page_simulated_receipt_and_kg_writeback(client, engine):
+    """Cross-plane hole: reliability incident → page must persist a simulated
+    notify receipt and write the incident+service nodes onto the knowledge graph.
+
+    Does **not** claim live PagerDuty/Opsgenie delivery.
+    """
+    saved = {
+        k: os.environ.pop(k, None)
+        for k in (
+            "PAGERDUTY_TOKEN",
+            "OPSGENIE_API_KEY",
+            "GRAFANA_ONCALL_WEBHOOK",
+            "ONCALL_SLACK_WEBHOOK",
+            "ONCALL_MATTERMOST_WEBHOOK",
+            "RELIABILITY_ONCALL_WEBHOOK",
+        )
+    }
+    service = "billing-kg-e2e"
+    try:
+        with begin(engine) as c:
+            rep = REL.scan(
+                c, PID,
+                {"kind": "memory", "logs": _errors(service, 14, tag="poolwait")},
+                {"start": 0, "end": 10_000},
+                persist=True,
+            )
+            assert rep["incidents"]
+            inc_id = rep["incidents"][0]["id"]
+
+        paged = client.post(
+            f"/v1/oncall-sre/incidents/{inc_id}/page",
+            json={
+                "project_id": PID,
+                "actor": ACTOR,
+                "adapter": "pagerduty",
+                "service": service,
+            },
+        )
+        assert paged.status_code == 200, paged.text
+        body = paged.json()
+        assert body["simulated"] is True
+        notify = body["notify"]
+        assert notify["posted"] is False
+        assert notify["simulated"] is True
+        assert notify["adapter"] == "pagerduty"
+        receipt_id = notify["receipt_id"]
+        assert receipt_id
+        page_id = body["page"]["id"]
+        assert body["page"]["reliability_incident_id"] == inc_id
+        assert body["page"]["service"] == service
+
+        receipt = client.get(f"/v1/receipts/{receipt_id}")
+        assert receipt.status_code == 200, receipt.text
+        rec = receipt.json()
+        assert rec["id"] == receipt_id
+        assert rec["effect_kind"] == "oncall_sre.notify"
+        assert rec["status"] == "succeeded"
+        assert str(rec.get("provider_ref") or "").startswith("simulated:")
+        result = rec.get("result") or {}
+        if isinstance(result, str):
+            result = json.loads(result)
+        assert result.get("posted") is False
+        assert result.get("simulated") is True
+
+        inc_nodes = client.get(
+            "/v1/knowledge/graph/nodes",
+            params={"project_id": PID, "kind": "incident", "node_key": page_id},
+        )
+        assert inc_nodes.status_code == 200, inc_nodes.text
+        assert inc_nodes.json()["items"]
+        assert inc_nodes.json()["items"][0]["node_key"] == page_id
+
+        svc_nodes = client.get(
+            "/v1/knowledge/graph/nodes",
+            params={"project_id": PID, "kind": "service", "node_key": service},
+        )
+        assert svc_nodes.status_code == 200, svc_nodes.text
+        assert svc_nodes.json()["items"]
+        assert svc_nodes.json()["items"][0]["node_key"] == service
+
+        neighbors = client.get(
+            "/v1/knowledge/graph/neighbors",
+            params={"project_id": PID, "kind": "incident", "node_key": page_id},
+        )
+        assert neighbors.status_code == 200, neighbors.text
+        assert any(n["node_key"] == service for n in neighbors.json()["items"])
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_http_graph_link(client, engine):
