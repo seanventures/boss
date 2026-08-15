@@ -109,6 +109,11 @@
 
 - Branch `ai/grok/e2e-tokens-workers`. Isolated Postgres HTTP E2E for token-efficiency, worker-autoscaling evaluate-without-provision, job dedupe/lease/heartbeat/reclaim.
 - 34 focused tests green. Not live dogfood. FEATURES not stamped. Not public GA.
+## 2026-08-15 KG + on-call HTTP E2E (◐)
+
+- Branch `ai/grok/e2e-kg-oncall` from `32bd3f5`. Isolated DB `boss_e2e_kg_oncall`.
+- HTTP E2E: nodes/edges/subgraph/known-causes/seed-from-infra (honest empty ok); page→ack→resolve; reliability PagerDuty simulated `posted=false`; `force_live` 422; KG `correlates_with` write-back.
+- 23 passed. Not live PagerDuty. **Not public GA.** Did not merge main.
 
 ## 2026-08-15 AI SRE swarm (awesome-ai-sre)
 

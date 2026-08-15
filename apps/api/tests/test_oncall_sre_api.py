@@ -358,7 +358,73 @@ def test_http_reliability_page_simulated_receipt_and_kg_writeback(client, engine
             params={"project_id": PID, "kind": "incident", "node_key": page_id},
         )
         assert neighbors.status_code == 200, neighbors.text
-        assert any(n["node_key"] == service for n in neighbors.json()["items"])
+        assert any(
+            n["node_key"] == service and n.get("edge_kind") == "correlates_with"
+            for n in neighbors.json()["items"]
+        )
+
+        sub = client.get(
+            "/v1/knowledge/graph/subgraph",
+            params={
+                "project_id": PID,
+                "kind": "incident",
+                "node_key": page_id,
+                "depth": 1,
+            },
+        )
+        assert sub.status_code == 200, sub.text
+        sub_body = sub.json()
+        assert any(n["node_key"] == service for n in sub_body["nodes"])
+        assert any(e["kind"] == "correlates_with" for e in sub_body["edges"])
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+
+def test_http_reliability_pagerduty_force_live_422(client, engine):
+    """PagerDuty page from a reliability incident with no token + force_live → 422.
+
+    Separate incident from the simulated-200 path so dedupe cannot skip notify.
+    """
+    saved = {
+        k: os.environ.pop(k, None)
+        for k in (
+            "PAGERDUTY_TOKEN",
+            "OPSGENIE_API_KEY",
+            "GRAFANA_ONCALL_WEBHOOK",
+            "ONCALL_SLACK_WEBHOOK",
+            "ONCALL_MATTERMOST_WEBHOOK",
+            "RELIABILITY_ONCALL_WEBHOOK",
+        )
+    }
+    try:
+        with begin(engine) as c:
+            rep = REL.scan(
+                c, PID,
+                {"kind": "memory", "logs": _errors("billing-force-live", 14, tag="pd422")},
+                {"start": 0, "end": 10_000},
+                persist=True,
+            )
+            assert rep["incidents"]
+            inc_id = rep["incidents"][0]["id"]
+
+        r = client.post(
+            f"/v1/oncall-sre/incidents/{inc_id}/page",
+            json={
+                "project_id": PID,
+                "actor": ACTOR,
+                "adapter": "pagerduty",
+                "service": "billing-force-live",
+                "force_live": True,
+            },
+        )
+        assert r.status_code == 422, r.text
+        detail = r.json()["detail"]
+        if isinstance(detail, dict):
+            assert detail.get("posted") is False
+            assert "credentials" in str(detail).lower() or detail.get("reason") == "credentials_missing"
+            assert detail.get("adapter") == "pagerduty"
     finally:
         for k, v in saved.items():
             if v is not None:
@@ -395,6 +461,21 @@ def test_http_graph_link(client, engine):
     assert body["page_id"] == page_id
     assert body["edge_id"]
     assert body["kg_node_key"] == "service:payments"
+    assert body["edge_kind"] == "correlates_with"
+
+    sub = client.get(
+        "/v1/knowledge/graph/subgraph",
+        params={
+            "project_id": PID,
+            "kind": "incident",
+            "node_key": page_id,
+            "depth": 1,
+        },
+    )
+    assert sub.status_code == 200, sub.text
+    keys = {n["node_key"] for n in sub.json()["nodes"]}
+    assert "payments" in keys
+    assert any(e["kind"] == "correlates_with" for e in sub.json()["edges"])
 
     with begin(engine) as c:
         node = KG.get_node(c, PID, "service", "payments")

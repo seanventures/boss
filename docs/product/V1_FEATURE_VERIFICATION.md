@@ -50,6 +50,8 @@ isolated: Goldeneye metrics/signals, complete CI/CD, OS/code vuln scanning.
 | Built / to-build / release | `/v1/release-planning/{status,board,releases}` | isolated HTTP 200 + lock summary; not live-dogfooded here | CODE |
 | Knowledge graph | `/v1/knowledge/graph/*` | 200 | E2E |
 | On-call automation | `/v1/oncall-sre/*` | 200 | E2E |
+| Knowledge graph | `/v1/knowledge/graph/*` | 200 prior dogfood; isolated HTTP E2E | **CODE** — node/edge/subgraph/known-causes/seed-from-infra HTTP green (honest empty ok); live shared-tag not re-probed; not GA |
+| On-call automation | `/v1/oncall-sre/*` | 200 status/pages; notify is dry-run | **CODE** (dry-run ◐) — page/ack/resolve + reliability→PagerDuty simulated receipt `posted=false`; force_live 422; KG `correlates_with` write-back; **not** live PagerDuty; not GA |
 
 ## After v1
 
@@ -152,18 +154,19 @@ Plane: BOSS-388 (umbrella). **Not public GA. FEATURES not stamped.**
 
 Focused pytest (2026-08-15): 6 engine noconftest + 27 API (token/worker/job lease+dedupe) passed against isolated Postgres.
 
-## KG + on-call evidence (2026-08-15, `ai/grok/v1-verify-kg-oncall`)
+## KG + on-call evidence (2026-08-15, `ai/grok/e2e-kg-oncall`)
 
-Plane **BOSS-390** (child of BOSS-388). Base `a5c8951`. Not public GA. Did not merge `main`.
+Stacked on `origin/ai/grok/v1-verify-kg-oncall` `@32bd3f5`. Isolated DB `boss_e2e_kg_oncall`. Not public GA. Did not merge `main`. Not live PagerDuty.
 
 | Check | Result |
 |---|---|
-| KG node/edge/subgraph/known-causes | PASS — `test_knowledge_graph.py` + `test_knowledge_graph_api.py` |
-| On-call page / ack / resolve | PASS — `test_oncall_sre_api.py` |
-| Dry-run notify, no adapter creds | PASS — receipt `succeeded`, `simulated=true`, `posted=false`, `effect_kind=oncall_sre.notify` |
-| `force_live` without creds | PASS — HTTP 422 fail-closed |
-| Reliability incident → page | PASS — new `test_http_reliability_page_simulated_receipt_and_kg_writeback` (receipt + KG incident/service/`correlates_with`) |
-| Focused suite | **21 passed** (`boss_v1_kg_oncall`) |
+| HTTP nodes / edges / subgraph / known-causes | PASS — `test_knowledge_graph_e2e_upsert_subgraph_known_causes` |
+| HTTP seed-from-infra (populated + honest empty) | PASS — `test_knowledge_graph_seed_from_infra` + `test_knowledge_graph_seed_from_infra_and_known_causes_honest_empty` |
+| HTTP page → ack → resolve | PASS — `test_http_page_ack_resolve_status` |
+| Reliability incident → PagerDuty, no tokens | PASS — `200` + simulated `oncall_sre.notify` receipt `posted=false` |
+| `force_live` PagerDuty, no tokens | PASS — HTTP `422` (`test_http_reliability_pagerduty_force_live_422`) |
+| KG write-back `correlates_with` service | PASS — neighbors + subgraph HTTP (`edge_kind=correlates_with`) |
+| Focused suite | **23 passed** (`boss_e2e_kg_oncall`) |
 | Live PagerDuty / Opsgenie page | **Not claimed** — no tokens; dry-run only |
 | Live shared-tag 2xx this session | **Not re-probed** (local `/health` 404). Prior note 200 stays historical. |
 
@@ -213,3 +216,4 @@ Plane: BOSS-388. FEATURES not stamped. Goldeneye not deployed.
 | Jobs | POST same `dedupe_key` twice; two polls; heartbeat; expire+reclaim | one job; exclusive lease; heartbeat 200; reclaim `attempt=2` + `job.lease_reclaimed` even after heartbeat flipped status to `running` |
 
 34 focused tests passed (new E2E file + prior token/worker/lease tests). Live dogfood still unproven until this tag is deployed. **Not public GA.**
+| Live shared-tag 2xx this session | **Not re-probed**. Prior note 200 stays historical. |
