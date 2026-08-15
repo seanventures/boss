@@ -40,6 +40,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |
+| Agent Studio starter catalog | ◐ First-run seed installs 13 agents, 3 panels, and specpack workflows. A2A reports `not_configured` when Redis is unset (not a false-red degraded). **Not GA.** |
 | Pack YAML import / export in Mission Control | ✅ |
 | Managed multi-tenant model gateway | ✦ Cloud |
 | Hosted skill marketplace | ✦ Cloud |

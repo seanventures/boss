@@ -22,6 +22,7 @@ describe("Agent Studio creation wizard", () => {
     expect(studio).toContain("as-first-run");
     expect(studio).toContain("This project has no governed agents yet");
     expect(studio).toContain("POST /v1/agent-studio/catalog/seed");
+    expect(studio).toContain("shipped workflows");
     expect(actions).toContain('post("/v1/agent-studio/catalog/seed"');
     expect(actions).toContain("role_review authority");
   });

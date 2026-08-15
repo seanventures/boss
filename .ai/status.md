@@ -1,5 +1,11 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Agent Studio first-run includes workflows + honest A2A (BOSS-347)
+
+- Catalog seed now installs specpack workflows alongside 13 agents / 3 panels. Idempotent, no spend.
+- A2A health is `not_configured` when Redis is unset — not a false-red `degraded`.
+- FEATURES stays ◐. Not GA.
+
 ## 2026-08-15 DLQ remediations in Mission Control (BOSS-372)
 
 - Operator Retry / Escalate / Hold now create durable remediations instead of a silent requeue.

@@ -90,6 +90,9 @@ function tone(status: string): "ok" | "warn" | "bad" | "quiet" {
   if (["blocked", "failed", "deadlettered", "degraded", "unavailable"].includes(status)) {
     return "bad";
   }
+  if (["not_configured", "unknown"].includes(status)) {
+    return "quiet";
+  }
   if (["queued", "running", "leased", "dispatching", "delivering", "waiting_member"].includes(status)) {
     return "warn";
   }
@@ -359,9 +362,9 @@ export function AgentStudio({
           <div>
             <b>This project has no governed agents yet</b>
             <p>
-              Install the reviewed BOSS starter catalog (13 agents, 3 panels) to make Agent Studio
-              usable. The setup is project-scoped, idempotent, role-review gated, and never
-              dispatches work or spends budget.
+              Install the reviewed BOSS starter catalog (13 agents, 3 panels, shipped workflows)
+              to make Agent Studio usable. The setup is project-scoped, idempotent,
+              role-review gated, and never dispatches work or spends budget.
             </p>
             <p className="detail">
               Endpoint: <code>POST /v1/agent-studio/catalog/seed</code>

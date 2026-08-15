@@ -116,6 +116,22 @@ def _seed_catalog(payload: SeedCatalogRequest) -> dict[str, Any]:
                 payload.project_id,
                 actor=payload.actor,
             )
+            from boss_engine.services.workflows import seed_specpack_workflows
+
+            try:
+                workflows = seed_specpack_workflows(
+                    connection,
+                    project_id=payload.project_id,
+                    workflow_root=settings.specpack_root / "workflows",
+                    actor=payload.actor,
+                )
+            except ProgrammingError as error:
+                workflows = []
+                skipped = list(seeded.get("skipped") or [])
+                skipped.append(
+                    {"path": "workflows/*.yaml", "error": str(error)}
+                )
+                seeded["skipped"] = skipped
         except (AgentStudioSchemaMissingError, ProgrammingError) as error:
             receipts.mark_failed(
                 connection,
@@ -132,9 +148,11 @@ def _seed_catalog(payload: SeedCatalogRequest) -> dict[str, Any]:
             "status": "seeded",
             "agents": seeded["agents"],
             "panels": seeded["panels"],
+            "workflows": workflows,
             "skipped": seeded.get("skipped") or [],
             "agent_count": len(seeded["agents"]),
             "panel_count": len(seeded["panels"]),
+            "workflow_count": len(workflows),
             "skipped_count": len(seeded.get("skipped") or []),
             "external_effects": 0,
             "model_calls": 0,
@@ -151,6 +169,7 @@ def _seed_catalog(payload: SeedCatalogRequest) -> dict[str, Any]:
             {
                 "agent_count": result["agent_count"],
                 "panel_count": result["panel_count"],
+                "workflow_count": result["workflow_count"],
                 "status": "seeded",
                 "external_effects": 0,
                 "model_calls": 0,

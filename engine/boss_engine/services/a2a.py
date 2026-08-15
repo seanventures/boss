@@ -80,6 +80,12 @@ class RedisStreamsTransport:
 
     def health(self) -> dict[str, Any]:
         started = time.monotonic()
+        if not self.redis_url:
+            return {
+                "status": "not_configured",
+                "configured": False,
+                "latency_ms": 0,
+            }
         try:
             client = self._redis()
             client.ping()
@@ -91,7 +97,7 @@ class RedisStreamsTransport:
         except Exception as exc:  # noqa: BLE001 - health must report, never mask
             return {
                 "status": "degraded",
-                "configured": bool(self.redis_url),
+                "configured": True,
                 "latency_ms": int((time.monotonic() - started) * 1000),
                 "error": {"type": exc.__class__.__name__, "message": str(exc)},
             }
@@ -1621,12 +1627,16 @@ class A2AService:
             {"project_id": project_id},
         ).mappings().one()
         transport = self.transport.health()
+        if counts["deadlettered"]:
+            overall = "degraded"
+        elif transport.get("status") == "healthy":
+            overall = "healthy"
+        elif transport.get("status") == "not_configured" or not transport.get("configured"):
+            overall = "not_configured"
+        else:
+            overall = "degraded"
         return {
-            "status": (
-                "healthy"
-                if transport["status"] == "healthy" and not counts["deadlettered"]
-                else "degraded"
-            ),
+            "status": overall,
             "transport": transport,
             "ledger": {key: int(value or 0) for key, value in counts.items()},
             "deliveries": {

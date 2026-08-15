@@ -108,6 +108,34 @@ describe("Agent Studio empty library is a setup page, not a live workbench", () 
     expect(markup).not.toContain("Starter catalog not installed");
   });
 
+  it("treats unconfigured A2A as quiet honesty, not a red outage", () => {
+    const markup = html(
+      emptyLibrary({
+        agents: [
+          {
+            id: "agt_1",
+            agent_key: "ux_engineer",
+            name: "UX Engineer",
+            owner: "vp_agents",
+            status: "active",
+            active_run_count: 0,
+          },
+        ],
+        a2a: {
+          channels: [],
+          messages: [],
+          health: {
+            status: "not_configured",
+            transport: { configured: false, status: "not_configured" },
+          },
+        },
+      }),
+    );
+    expect(markup).toContain("not_configured");
+    expect(markup).toContain("as-beacon quiet");
+    expect(markup).not.toContain("as-beacon bad");
+  });
+
   it("shows an honest unavailable state instead of a seed CTA that cannot work", () => {
     const markup = html(
       emptyLibrary({

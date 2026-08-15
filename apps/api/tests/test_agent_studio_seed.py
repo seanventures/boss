@@ -40,6 +40,8 @@ def test_catalog_seed_is_idempotent_receipted_and_never_spends(client, engine):
     assert body["status"] == "seeded"
     assert body["agent_count"] == 13
     assert body["panel_count"] == 3
+    assert body["workflow_count"] >= 1
+    assert len(body["workflows"]) == body["workflow_count"]
     assert body["external_effects"] == 0
     assert body["model_calls"] == 0
     assert body["jobs_enqueued"] == 0
@@ -56,6 +58,8 @@ def test_catalog_seed_is_idempotent_receipted_and_never_spends(client, engine):
     assert alias.json()["receipt_id"] == body["receipt_id"]
     assert all(item["duplicate"] for item in alias.json()["agents"])
     assert all(item["duplicate"] for item in alias.json()["panels"])
+    assert alias.json()["workflow_count"] == body["workflow_count"]
+    assert all(item["duplicate"] for item in alias.json()["workflows"])
 
     second = client.post(
         "/v1/agent-studio/catalog/seed",
