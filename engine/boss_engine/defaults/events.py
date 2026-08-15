@@ -61,12 +61,17 @@ class InMemoryDecisionSink:
     ) -> str:
         del connection
         decision_id = f"oss_dec_{uuid4().hex[:20]}"
+        rec = dict(recommendation)
+        text = str(reason or "").strip()
+        if text:
+            rec.setdefault("reason_code", text)
+            rec.setdefault("reason", text)
         decision = {
             "id": decision_id,
             "project_id": project_id,
             "task_id": task_id,
             "question": question,
-            "recommendation": dict(recommendation),
+            "recommendation": rec,
             "cost_summary": dict(cost_summary),
             "reason": reason,
             "risk_tier": risk_tier,

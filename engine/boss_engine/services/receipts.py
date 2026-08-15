@@ -27,6 +27,39 @@ class ReceiptService:
         ).mappings().first()
         return dict(row) if row else None
 
+    def get_by_id(
+        self, connection: Connection, org_id: str, receipt_id: str
+    ) -> Optional[dict]:
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, dedupe_key, effect_kind, effect_scope, payload_hash,
+                       status, provider_ref, created_by_job_id, data_boundary, result, error,
+                       created_at, updated_at
+                FROM receipts
+                WHERE org_id = :org_id AND id = :receipt_id
+                """
+            ),
+            {"org_id": org_id, "receipt_id": receipt_id},
+        ).mappings().first()
+        return dict(row) if row else None
+
+    def get_by_id_or_dedupe_key(
+        self, connection: Connection, org_id: str, key: str
+    ) -> Optional[dict]:
+        """Look up a receipt by id (rcpt_…) first, then by dedupe_key."""
+        token = str(key or "").strip()
+        if not token:
+            return None
+        if token.startswith("rcpt_"):
+            found = self.get_by_id(connection, org_id, token)
+            if found:
+                return found
+        found = self.get_by_dedupe_key(connection, org_id, token)
+        if found:
+            return found
+        return self.get_by_id(connection, org_id, token)
+
     def list_by_project(
         self, connection: Connection, project_id: str, limit: int, offset: int = 0
     ) -> list[dict]:

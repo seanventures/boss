@@ -219,6 +219,7 @@ class JobLeaseService:
         kind: Optional[str] = None,
         task_id: Optional[str] = None,
         include_terminal: bool = True,
+        sort: str = "status_priority",
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -246,6 +247,27 @@ class JobLeaseService:
                 "j.status NOT IN ('succeeded', 'cancelled', 'deadlettered')"
             )
         where_clause = " AND ".join(filters)
+        order_key = (sort or "status_priority").strip().lower()
+        if order_key == "updated":
+            order_sql = "j.updated_at DESC NULLS LAST, j.created_at DESC"
+        elif order_key == "created":
+            order_sql = "j.created_at DESC"
+        else:
+            order_sql = """
+                  CASE j.status
+                    WHEN 'deadlettered' THEN 0
+                    WHEN 'failed_final' THEN 1
+                    WHEN 'failed_retryable' THEN 2
+                    WHEN 'leased' THEN 3
+                    WHEN 'running' THEN 4
+                    WHEN 'queued' THEN 5
+                    ELSE 6
+                  END,
+                  j.priority_score DESC NULLS LAST,
+                  j.priority ASC,
+                  j.run_after ASC,
+                  j.created_at DESC
+            """
         rows = connection.execute(
             text(
                 f"""
@@ -265,20 +287,7 @@ class JobLeaseService:
                 LEFT JOIN work_tracker_bindings b ON b.id = j.tracker_binding_id
                 LEFT JOIN work_tracker_providers p ON p.id = b.provider_id
                 WHERE {where_clause}
-                ORDER BY
-                  CASE j.status
-                    WHEN 'deadlettered' THEN 0
-                    WHEN 'failed_final' THEN 1
-                    WHEN 'failed_retryable' THEN 2
-                    WHEN 'leased' THEN 3
-                    WHEN 'running' THEN 4
-                    WHEN 'queued' THEN 5
-                    ELSE 6
-                  END,
-                  j.priority_score DESC NULLS LAST,
-                  j.priority ASC,
-                  j.run_after ASC,
-                  j.created_at DESC
+                ORDER BY {order_sql}
                 LIMIT :limit OFFSET :offset
                 """
             ),

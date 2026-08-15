@@ -126,6 +126,31 @@ describe("DecisionInbox (W1.6 actionable default)", () => {
     expect(page).not.toMatch(/decisions\.items\.map\(\(decision\)/);
   });
 
+  it("shows hold default_action and reason on pending cards", () => {
+    const markup = html(
+      <DecisionInbox
+        feed={feed([
+          item({
+            id: "dec_hold",
+            status: "pending",
+            question: "Approve sealed canary?",
+            defaultAction: "hold",
+            reason: "merge_decision_required",
+          }),
+        ])}
+        tasks={[]}
+        roles={[]}
+        projectId="boss-dogfood"
+        actorId="executive_console"
+        orgId="org_1"
+      />,
+    );
+    expect(markup).toContain('data-testid="decision-default-action"');
+    expect(markup).toContain("default hold");
+    expect(markup).toContain('data-testid="decision-reason"');
+    expect(markup).toContain("reason merge_decision_required");
+  });
+
   it("does not pretend the API is a clear queue when it is unreachable", () => {
     const markup = html(
       <DecisionInbox

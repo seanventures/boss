@@ -1103,6 +1103,7 @@ export type QaBenchmarkApp = {
   built?: {
     run_id: string;
     run_status?: string;
+    reportable?: boolean;
     pull_request_url?: string | null;
     /** A live preview of the built app, when one is running. "View" should go HERE: a run
      *  page shows a pipeline, and someone asking to see the app means the app. */
@@ -1130,6 +1131,14 @@ export type QaBenchmarkReport = {
     timed_out?: boolean | null;
   }>;
   passed: boolean;
+  honesty?: {
+    honest?: boolean;
+    scored?: string[];
+    missing_evidence?: Array<{ id?: string; reason?: string }>;
+    invented_scores?: unknown[];
+  };
+  ui?: { status?: string } | string;
+  ux?: { status?: string } | string;
   scorecard: {
     version: string;
     baselines: Record<string, number>;
@@ -2107,6 +2116,7 @@ export type DecisionCard = {
   status: string;
   risk_tier: number;
   default_action?: string;
+  reason?: string;
   recommendation: Record<string, unknown>;
   options: Array<Record<string, unknown>>;
   cost_summary: Record<string, unknown>;
@@ -6764,6 +6774,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         kind?: string;
         task_id?: string;
         include_terminal?: boolean;
+        sort?: "status_priority" | "updated" | "created";
         limit?: number;
         offset?: number;
       } = {},
@@ -6775,6 +6786,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
           kind: options.kind,
           task_id: options.task_id,
           include_terminal: options.include_terminal,
+          sort: options.sort,
           limit: options.limit,
           offset: options.offset,
         },
@@ -8360,6 +8372,13 @@ export function createBossApiClient(config: BossApiClientConfig) {
       return request<DecisionInboxResponse>("GET", "/v1/decisions/inbox", {
         query: { project_id: projectId },
       });
+    },
+    getDecision(decisionId: string, projectId?: string) {
+      return request<DecisionCard>(
+        "GET",
+        `/v1/decisions/${encodeURIComponent(decisionId)}`,
+        { query: { project_id: projectId } },
+      );
     },
     createDecisionDigest(payload: DecisionDigestRequest) {
       return request<DecisionDigestResponse>("POST", "/v1/decisions/digests", {

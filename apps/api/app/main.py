@@ -1756,6 +1756,9 @@ def job_summary_from_row(row) -> JobSummary:
 
 
 def decision_card_from_row(row) -> DecisionCard:
+    from boss_engine.services.core import decision_reason_from_payload
+
+    rec = row.get("recommendation") or {}
     return DecisionCard(
         id=row["id"],
         task_id=row.get("task_id"),
@@ -1763,7 +1766,8 @@ def decision_card_from_row(row) -> DecisionCard:
         status=row["status"],
         risk_tier=row["risk_tier"],
         default_action=row["default_action"],
-        recommendation=row["recommendation"] or {},
+        reason=decision_reason_from_payload(rec, row.get("reason")),
+        recommendation=rec,
         options=row["options"] or [],
         cost_summary=row["cost_summary"] or {},
         deadline_at=row["deadline_at"].isoformat() if row["deadline_at"] else None,
@@ -10076,6 +10080,7 @@ def list_jobs(
     kind: Optional[str] = None,
     task_id: Optional[str] = None,
     include_terminal: bool = True,
+    sort: str = "status_priority",
     limit: int = 50,
     offset: int = 0,
 ) -> JobListResponse:
@@ -10093,6 +10098,7 @@ def list_jobs(
                 kind=kind,
                 task_id=task_id,
                 include_terminal=include_terminal,
+                sort=sort,
                 limit=limit,
                 offset=offset,
             )
@@ -17042,6 +17048,35 @@ def decision_inbox(project_id: str) -> DecisionInboxResponse:
         )
 
 
+@app.get("/v1/decisions/{decision_id}", response_model=DecisionCard)
+def get_decision(decision_id: str, project_id: Optional[str] = None) -> DecisionCard:
+    with begin(engine) as connection:
+        params: dict[str, Any] = {"decision_id": decision_id}
+        project_filter = ""
+        if project_id:
+            params["project_id"] = project_id
+            project_filter = "AND project_id = :project_id"
+        row = connection.execute(
+            text(
+                f"""
+                SELECT id, task_id, question, status, risk_tier, default_action,
+                       recommendation, options, cost_summary, deadline_at,
+                       approved_by, approved_at, delegated_to, delegated_by,
+                       delegated_at, revision_requested_by, revision_requested_at,
+                       executed_by, executed_at, resolution_note, external_ref,
+                       created_at, updated_at
+                FROM decisions
+                WHERE id = :decision_id
+                {project_filter}
+                """
+            ),
+            params,
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Decision not found")
+        return decision_card_from_row(row)
+
+
 @app.post("/v1/decisions/digests", response_model=DecisionDigestResponse, status_code=201)
 def create_decision_digest(payload: DecisionDigestRequest) -> DecisionDigestResponse:
     with begin(engine) as connection:
@@ -17867,7 +17902,7 @@ def list_receipts(
 @app.get("/v1/receipts/{dedupe_key}", response_model=ReceiptResponse)
 def get_receipt(dedupe_key: str) -> ReceiptResponse:
     with begin(engine) as connection:
-        receipt = receipts.get_by_dedupe_key(
+        receipt = receipts.get_by_id_or_dedupe_key(
             connection, settings.default_org_id, dedupe_key
         )
         if not receipt:

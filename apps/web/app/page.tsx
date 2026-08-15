@@ -140,6 +140,10 @@ import { fetchMemberFeed, fetchOrgMemberFeed } from "../lib/members";
 import { fetchMeetingFeed } from "../lib/meetings";
 import { fetchMetatronQuery } from "../lib/metatron";
 import { fetchOpsQueueFeed } from "../lib/ops";
+import { fetchLiveJobsFeed } from "../lib/live-jobs";
+import { LiveJobsCard } from "./live-jobs-ui";
+import { fetchQaScorecardFeed } from "../lib/qa-scorecard";
+import { QaScorecardIsland } from "./qa-scorecard-ui";
 import { fetchWorkflowFeed } from "../lib/workflows";
 import { WorkflowRegistryView } from "./workflow-registry-ui";
 import { fetchReportSummary } from "../lib/reports";
@@ -696,6 +700,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     knowledgeGraphFeed,
     cicdCatalog,
     cicdStatus,
+    liveJobs,
+    qaScorecard,
   ] = await Promise.all([
     fetchIdentityProvidersFeed(activeProjectId),
     fetchOncallSreStatus(activeProjectId),
@@ -714,6 +720,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     fetchKnowledgeGraphFeed(activeProjectId),
     fetchCICDCatalog(),
     fetchCICDStatus(activeProjectId),
+    fetchLiveJobsFeed(activeProjectId),
+    fetchQaScorecardFeed(activeProjectId),
   ]);
 
   const deadletterCount = deadletters.items.length;
@@ -6821,6 +6829,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <p className="empty-state">No effect receipts have been recorded for this project yet.</p>
             );
           })()}
+          <QaScorecardIsland feed={qaScorecard} />
           <ReportsView report={report} />
         </section>
 
@@ -7084,6 +7093,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             jobs={opsQueue.jobs}
             receipts={receipts.items}
           />
+          <LiveJobsCard feed={liveJobs} />
           <PlansCard projectId={activeProjectId} plans={plansList} />
           <WorkBoard
             tasks={tasks.items}

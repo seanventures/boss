@@ -13,7 +13,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 | Deadletters and remediations | ✅ First-class remediations (`retry` / `requeue` / `escalate` / `hold`) on `/v1/deadletters/*` and Mission Control. Retry never silently drops. **Not public GA.** |
 | Event / audit feed | ✅ |
 | Global activity log | ◐ Searchable/sortable Mission Control area (status, kind, actor, stuck banner). **Not GA.** |
-| Decision inbox (approve / reject / escalate) | ✅ |
+| Decision inbox (approve / reject / escalate) | ✅ Hold `reason` + `default_action` on the card; GET `/v1/decisions/{id}`. **Not GA.** |
 | Receipts with unique dedupe keys | ✅ |
 | Budget quote → reserve → consume / release | ✅ |
 | Artifacts and evidence packets | ✅ |
@@ -36,7 +36,7 @@ Authoritative status lives in [BOSS_COMMUNITY_EDITION_SPEC.md](../product/BOSS_C
 |---|---|
 | Bring-your-own API keys (SecretRefs) | ✅ |
 | SecretRef consumption (factory / OpenAI / GitHub / Plane) | ◐ Fail-closed: bound usable ref wins; env is last-resort only when no ref is bound. Unresolvable bound refs do not fall back. Live `local_vault` bind `sref_6b00a2d6a9424abba8a0` on tag `3af9c64` (BOSS-369 Done). **Not GA.** |
-| Official QA /reports v1.1 | ◐ Honesty helper + inspect gate. Missing UI/UX stays `not_scored`. Live official POST enabled; BugBox/HookWatch/ApproveIt reports in flight — never invent scores. **Not GA.** |
+| Official QA /reports v1.1 | ◐ Honesty helper + inspect gate + Mission Control scorecard island. Missing UI/UX stays `not_scored`. Never invent scores. Live official POSTs may still be in flight. **Not GA.** |
 | Local / OpenAI-compatible base URLs | ✅ |
 | Local model entitlement broker | ✅ |
 | Role packs and skill packs (specpack) | ✅ |

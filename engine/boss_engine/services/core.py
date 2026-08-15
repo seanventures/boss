@@ -208,6 +208,31 @@ def record_policy_eval(
     return eval_id
 
 
+def attach_decision_reason(recommendation: dict | None, reason: str | None) -> dict:
+    """Copy the blocking reason onto the recommendation so inbox JSON can expose it.
+
+    The decisions table has no reason column; create_blocking used to emit the
+    string only on the decision.created event. Sealed validation and the CEO
+    inbox need it on the card.
+    """
+    rec = dict(recommendation or {})
+    text = str(reason or "").strip()
+    if text:
+        rec.setdefault("reason_code", text)
+        rec.setdefault("reason", text)
+    return rec
+
+
+def decision_reason_from_payload(recommendation: dict | None, fallback: str | None = None) -> str | None:
+    rec = recommendation if isinstance(recommendation, dict) else {}
+    for key in ("reason_code", "reason"):
+        value = rec.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    text = str(fallback or "").strip()
+    return text or None
+
+
 def create_blocking_decision(
     connection: Any,
     project_id: str,
@@ -264,6 +289,7 @@ def _create_blocking_decision_postgres(
 ) -> str:
     decision_id = make_id("dec")
     deadline_at = now_utc() + timedelta(hours=24)
+    rec = attach_decision_reason(recommendation, reason)
     connection.execute(
         sql(
             """
@@ -283,7 +309,7 @@ def _create_blocking_decision_postgres(
             "project_id": project_id,
             "task_id": task_id,
             "question": question,
-            "recommendation": json.dumps(recommendation),
+            "recommendation": json.dumps(rec),
             "options": json.dumps(
                 [
                     {"action": "approve", "label": "Approve and retry"},

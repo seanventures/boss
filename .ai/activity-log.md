@@ -1,5 +1,15 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Next five operator slices (382–386)
+
+- Branch `ai/grok/next-five-operator-slices`. Not GA. No official scores invented.
+- 382: GET `/v1/decisions/{id}` + `reason` on DecisionCard (reason_code on recommendation).
+- 383: GET `/v1/receipts/{id}` accepts `rcpt_` id or dedupe_key.
+- 384: Official QA scorecard island on Reports (honesty only).
+- 385: Jobs `sort=updated|created` + live jobs card (`include_terminal=false`).
+- 386: Inbox shows default_action + reason.
+- Tests: 22 engine noconftest + 28 focused web.
+
 ## 2026-08-15 — Grok — Address named blockers
 
 - Live shared tag `3af9c64`. Flags set in place (no `--env-template`): factory allow-create, QA canaries, official QA, durable KMS master file.

@@ -538,7 +538,14 @@ function DecisionInboxRow({
               </span>
             ) : null}
             <span className="dq-ev">risk tier {decision.riskTier}</span>
-            <span className="dq-ev">default {decision.defaultAction ?? "hold"}</span>
+            <span className="dq-ev" data-testid="decision-default-action">
+              default {decision.defaultAction ?? "hold"}
+            </span>
+            {decision.reason ? (
+              <span className="dq-ev" data-testid="decision-reason">
+                reason {decision.reason}
+              </span>
+            ) : null}
             {estimatedCost != null ? (
               <span className="dq-ev">{formatMicros(estimatedCost)}</span>
             ) : null}

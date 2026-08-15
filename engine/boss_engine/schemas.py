@@ -2915,6 +2915,7 @@ class DecisionCard(BaseModel):
     status: str
     risk_tier: int
     default_action: Optional[str] = None
+    reason: Optional[str] = None
     recommendation: dict[str, Any]
     options: list[dict[str, Any]]
     cost_summary: dict[str, Any]

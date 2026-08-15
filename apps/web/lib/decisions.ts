@@ -11,6 +11,7 @@ export type DecisionFeedItem = {
   status: string;
   riskTier: number;
   defaultAction?: string;
+  reason?: string;
   recommendation: Record<string, unknown>;
   options: Array<Record<string, unknown>>;
   costSummary: Record<string, unknown>;
@@ -112,6 +113,7 @@ function mapDecision(payload: ApiDecisionCard): DecisionFeedItem {
     status: payload.status,
     riskTier: payload.risk_tier,
     defaultAction: payload.default_action,
+    reason: payload.reason,
     recommendation: payload.recommendation,
     options: payload.options,
     costSummary: payload.cost_summary,

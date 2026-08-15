@@ -1,5 +1,10 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-15 Next five operator slices (382–386)
+
+- Decision GET + reason, receipt GET by id, official QA scorecard island, live jobs sort, inbox hold reason.
+- Branch `ai/grok/next-five-operator-slices`. Not public GA. 381 official runs still in flight.
+
 ## 2026-08-15 Named blockers addressed on `3af9c64`
 
 - Closed: 369 (local_vault bind), 351 (sealed receipt + hold PR #174, not merged).
