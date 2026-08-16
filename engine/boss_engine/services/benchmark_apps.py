@@ -255,6 +255,7 @@ def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
                 "app_root": benchmark["id"],
                 "project_kind": "web",
                 "verification_commands": verification,
+                "acceptance_scenarios": list(benchmark.get("acceptance_scenarios") or []),
                 "completion_contract": list(COMPLETION_CONTRACT),
                 "scoring_dimensions": [
                     deepcopy(dimension) for dimension in SCORING_DIMENSIONS
@@ -937,31 +938,22 @@ def observed_verify(run: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def apply_observed_test_outcomes(run: dict[str, Any], *, verify_status: str) -> dict[str, Any]:
-    """When verify passed, JTBD rows extracted from those tests are observed-pass.
+    """Bind JTBD pass/fail from the verify log. Unknown rows stay unknown.
 
-    Does not invent outcomes when verify is missing or failed. Does not mint
-    rubric scores.
+    Does not flip every JTBD to True just because verify exited 0. Does not
+    mint rubric scores.
     """
-    if verify_status != "pass":
-        return run
+    from .factory_quality_loop import bind_verify_log_to_jtbd
+
     state = dict(run.get("state") or {})
-    ux = dict(state.get("ux_evidence") or {})
-    rows = ux.get("jtbd") or ux.get("walkthroughs") or []
-    if not isinstance(rows, list) or not rows:
+    output = str(state.get("last_verify_output") or "")
+    if not output:
         return run
-    updated: list[dict[str, Any]] = []
-    changed = False
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        row = dict(item)
-        if row.get("passed") is None:
-            row["passed"] = True
-            changed = True
-        updated.append(row)
-    if not changed:
+    evidence = {"ux_evidence": state.get("ux_evidence") or {}}
+    bound = bind_verify_log_to_jtbd(evidence, output)
+    ux = bound.get("ux_evidence") or {}
+    if ux == (state.get("ux_evidence") or {}):
         return run
-    ux["jtbd"] = updated
     state["ux_evidence"] = ux
     out = dict(run)
     out["state"] = state

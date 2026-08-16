@@ -97,6 +97,33 @@ def test_harden_web_package_pins_bare_vite_build(tmp_path: Path):
     assert scripts["build"] == "tsc --noEmit && npx --package=vite vite build"
 
 
+def test_web_package_contract_fails_closed_on_echo_stubs(tmp_path: Path):
+    from boss_engine.services.verification_target import (
+        evaluate_web_package_contract,
+        harden_web_package,
+    )
+
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "scripts": {"typecheck": 'echo "ok"', "verify": "npm test"},
+                "devDependencies": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = evaluate_web_package_contract(tmp_path)
+    assert before["ok"] is False
+    assert "typecheck" in before["stubs"]
+    assert "vite" in before["missing_runners"]
+    harden_web_package(tmp_path)
+    after = evaluate_web_package_contract(tmp_path)
+    assert after["ok"] is True
+    assert after["stubs"] == []
+    assert after["missing_runners"] == []
+
+
 def test_prepare_web_verify_env_names_npm_install(tmp_path: Path):
     from boss_engine.services.verification_target import (
         NPM_INSTALL_CMD,

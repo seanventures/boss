@@ -50,7 +50,9 @@ from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
 from .pipeline_profile_service import resolve_for_run
 from .factory_quality_loop import (
     bind_test_outcomes,
+    bind_verify_log_to_jtbd,
     collect_workspace_evidence_from_root,
+    merge_official_jtbd,
     quality_improve_prompt,
     quality_pass_record,
     should_run_quality_pass,
@@ -2431,6 +2433,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         _app_id = str((fctx.get("qa_benchmark") or {}).get("id") or "").strip() or None
         try:
             workspace_evidence = collect_workspace_evidence_from_root(root, app_id=_app_id)
+            workspace_evidence = merge_official_jtbd(
+                workspace_evidence,
+                (fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
+            )
+            workspace_evidence = bind_verify_log_to_jtbd(
+                workspace_evidence, last_verify_output
+            )
         except Exception:  # noqa: BLE001
             workspace_evidence = {}
         if should_run_quality_pass(
@@ -2818,8 +2827,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # for UNdeclared removals — an agent quietly deleting an inconvenient test is the
             # thing this guard exists to catch, and that is unchanged.
             "existing_tests_intact": (not _weakened) or _retirement_allowed,
+            # Web/official: echo stubs and missing vite/playwright cannot ship.
+            "web_package_honest": True,
             # recorded below whether allowed or not, so the PR always states what went
         }
+        if _web_verify:
+            try:
+                _contract = verification_target.evaluate_web_package_contract(
+                    verification_target.resolve_verify_cwd(root, app_id=_app_id)
+                )
+            except Exception:  # noqa: BLE001
+                _contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
+            gates["web_package_honest"] = bool(_contract.get("ok"))
+            evidence["web_package_contract"] = _contract
 
         if _weakened and _retirement_allowed:
             with _transaction(engine) as c:
@@ -3013,7 +3033,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # and fell through to a FULL cold re-run — discarding the warm session and re-paying for
             # spec/plan — which is why repeated attempts never converged on test failures.
             _convergeable = {"code_review_passed", "consistent",
-                             "written_tests_pass", "nothing_broke"}
+                             "written_tests_pass", "nothing_broke",
+                             "web_package_honest"}
             if (failing and not use_microvm and impl_session_id
                     and set(failing) <= _convergeable):
               try:  # a convergence failure must DEGRADE to the legacy paths, never kill the run

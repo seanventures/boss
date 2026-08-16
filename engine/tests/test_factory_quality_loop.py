@@ -110,13 +110,19 @@ def test_scorecard_receives_workspace_evidence_without_inventing_rubric():
             }
         )
     )
+    from boss_engine.services.factory_quality_loop import bind_verify_log_to_jtbd
+
     attached = attach_evidence_to_run(run, evidence)
     assert attached["state"]["ui_evidence"]["states_covered"]
     assert attached["state"]["ux_evidence"]["rubric"] == {}
+    # Unknown JTBD stays not_scored until the verify log names the test.
     card = score_run_with_workspace(run, evidence)
     dims = {item["id"]: item for item in card["dimensions"]}
     assert dims["ui"]["status"] == "scored"
-    # Verify passed and JTBD came from those tests — observed, not a minted rubric.
+    assert dims["ux"]["status"] == "not_scored"
+    observed = bind_verify_log_to_jtbd(evidence, "  ✓ create issue (8ms)\n")
+    card = score_run_with_workspace(run, observed)
+    dims = {item["id"]: item for item in card["dimensions"]}
     assert dims["ux"]["status"] == "scored"
     assert attached["state"]["ux_evidence"]["rubric"] == {}
     gaps = measured_quality_gaps(card)
@@ -141,6 +147,41 @@ def test_junk_paths_are_not_capability_or_jtbd_evidence():
     assert _is_real_test_path("hookwatch/tests/api/hookwatch.test.ts")
     assert not _is_real_test_path(".pytest_cache/v/cache/lastfailed")
     assert not _is_real_test_path("hookwatch/tests/playwright.config.mts")
+
+
+def test_bind_verify_log_sets_only_named_jtbd_rows():
+    from boss_engine.services.factory_quality_loop import bind_verify_log_to_jtbd
+
+    evidence = {
+        "ux_evidence": {
+            "jtbd": [
+                {"id": "create an issue", "passed": None},
+                {"id": "delete it", "passed": None},
+            ]
+        }
+    }
+    bound = bind_verify_log_to_jtbd(
+        evidence,
+        "  ✓ create an issue (20ms)\n  ✘ search and delete (15ms)\n",
+    )
+    rows = {row["id"]: row["passed"] for row in bound["ux_evidence"]["jtbd"]}
+    assert rows["create an issue"] is True
+    assert rows["delete it"] is None
+
+
+def test_seed_jtbd_from_official_scenarios():
+    from boss_engine.services.factory_quality_loop import (
+        merge_official_jtbd,
+        seed_jtbd_from_scenarios,
+    )
+
+    seeded = seed_jtbd_from_scenarios(
+        ["Start the app and create an issue.", "Delete it."]
+    )
+    assert seeded[0]["source"] == "acceptance_scenario"
+    assert seeded[0]["passed"] is None
+    merged = merge_official_jtbd({"ux_evidence": {"jtbd": []}}, ["Create an issue."])
+    assert merged["ux_evidence"]["jtbd"][0]["id"] == "Create an issue."
 
 
 def test_bind_test_outcomes_marks_jtbd_only_when_verify_passed():

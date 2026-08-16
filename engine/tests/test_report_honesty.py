@@ -147,6 +147,7 @@ def test_factory_recorded_verify_is_not_treated_as_missing():
                 "ui_evidence": {
                     "states_covered": ["empty", "error", "loading", "ok"],
                 },
+                "last_verify_output": "  ✓ creates and round-trips an issue (12ms)\n",
                 "ux_evidence": {
                     "jtbd": [
                         {

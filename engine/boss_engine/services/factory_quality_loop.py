@@ -298,17 +298,12 @@ def _package_scripts(files: dict[str, str]) -> list[str]:
     return [str(name) for name in scripts]
 
 
-_STUB_SCRIPT = re.compile(
-    r"""(?:^|[;&|])\s*(?:echo\s+|process\.exit\(0\))|skipping""",
-    re.I,
-)
-_REQUIRED_RUNNERS = ("vite", "@playwright/test")
-
-
 def _script_contract(files: dict[str, str]) -> dict[str, Any]:
     """Deterministic package.json contract. Never invents a pass."""
+    from .verification_target import evaluate_web_package_payload
+
     raw = files.get("package.json") or files.get("apps/web/package.json") or ""
-    empty = {"stubs": [], "missing_runners": [], "has_verify": False}
+    empty = {"ok": False, "stubs": [], "missing_runners": ["vite", "@playwright/test"], "has_verify": False}
     if not raw:
         return empty
     try:
@@ -317,23 +312,7 @@ def _script_contract(files: dict[str, str]) -> dict[str, Any]:
         return empty
     if not isinstance(payload, dict):
         return empty
-    scripts = payload.get("scripts") if isinstance(payload.get("scripts"), dict) else {}
-    deps = {}
-    if isinstance(payload.get("dependencies"), dict):
-        deps.update(payload["dependencies"])
-    if isinstance(payload.get("devDependencies"), dict):
-        deps.update(payload["devDependencies"])
-    stubs = [
-        name
-        for name, cmd in scripts.items()
-        if _STUB_SCRIPT.search(str(cmd or ""))
-    ]
-    missing = [name for name in _REQUIRED_RUNNERS if name not in deps]
-    return {
-        "stubs": stubs,
-        "missing_runners": missing,
-        "has_verify": bool(str(scripts.get("verify") or "").strip()),
-    }
+    return evaluate_web_package_payload(payload)
 
 
 def _is_real_test_path(path: str) -> bool:
@@ -358,6 +337,70 @@ def _is_real_test_path(path: str) -> bool:
         _TEST_HINT.search(text)
         and text.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"))
     )
+
+
+_PW_PASS = re.compile(r"^\s*[✓✔]\s+(.+?)(?:\s+\(\d|\s*$)", re.M)
+_PW_FAIL = re.compile(r"^\s*[✘✕×x]\s+(.+?)(?:\s+\(\d|\s*$)", re.M)
+
+
+def seed_jtbd_from_scenarios(scenarios: list[str] | None) -> list[dict[str, Any]]:
+    """Official acceptance scenarios become JTBD rows. passed stays unknown."""
+    rows: list[dict[str, Any]] = []
+    for raw in scenarios or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        rows.append({"id": text[:80], "source": "acceptance_scenario", "passed": None})
+    return rows
+
+
+def bind_verify_log_to_jtbd(evidence: dict[str, Any], verify_output: str | None) -> dict[str, Any]:
+    """Bind JTBD passed/fail from Playwright/Jest lines. Unmatched stay unknown."""
+    text = verify_output or ""
+    passed_names = [m.group(1).strip() for m in _PW_PASS.finditer(text)]
+    failed_names = [m.group(1).strip() for m in _PW_FAIL.finditer(text)]
+    if not passed_names and not failed_names:
+        return evidence
+    ux = dict(evidence.get("ux_evidence") or {})
+    rows = []
+    for item in ux.get("jtbd") or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        identity = str(row.get("id") or "").lower()
+        if not identity:
+            rows.append(row)
+            continue
+        if any(identity in n.lower() or n.lower() in identity for n in failed_names):
+            row["passed"] = False
+        elif any(identity in n.lower() or n.lower() in identity for n in passed_names):
+            row["passed"] = True
+        rows.append(row)
+    ux["jtbd"] = rows
+    out = dict(evidence)
+    out["ux_evidence"] = ux
+    return out
+
+
+def merge_official_jtbd(evidence: dict[str, Any], scenarios: list[str] | None) -> dict[str, Any]:
+    """Add acceptance-scenario JTBD ids that tests did not already name."""
+    seeded = seed_jtbd_from_scenarios(scenarios)
+    if not seeded:
+        return evidence
+    ux = dict(evidence.get("ux_evidence") or {})
+    existing = [
+        dict(item) for item in (ux.get("jtbd") or []) if isinstance(item, dict)
+    ]
+    seen = {str(item.get("id") or "").lower() for item in existing}
+    for row in seeded:
+        key = str(row.get("id") or "").lower()
+        if key and key not in seen:
+            existing.append(row)
+            seen.add(key)
+    ux["jtbd"] = existing
+    out = dict(evidence)
+    out["ux_evidence"] = ux
+    return out
 
 
 def _jtbd_from_tests(files: dict[str, str], test_paths: list[str]) -> list[dict[str, Any]]:

@@ -1,5 +1,12 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-15 — Grok — Stub gate + honest JTBD
+
+- `web_package_honest` is a fail-closed quality gate after harden.
+- Official acceptance scenarios seed JTBD. Verify-log lines bind pass/fail.
+- Green verify no longer marks every unknown JTBD True. Missing stays
+  not_scored. Not GA.
+
 ## 2026-08-15 — Grok — Factory enablement: official follow-up lineage
 
 - Follow-up/retry now keep `official` + `qa_benchmark` so `/report` stays on

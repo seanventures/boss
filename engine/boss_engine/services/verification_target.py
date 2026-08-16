@@ -242,3 +242,62 @@ def prepare_web_verify_env(app_dir: Path | str) -> dict[str, Any]:
     hardened = harden_web_package(app_dir)
     hardened["install_command"] = NPM_INSTALL_CMD
     return hardened
+
+
+def evaluate_web_package_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Contract over a package.json object. Never invents a pass."""
+    scripts = payload.get("scripts") if isinstance(payload, dict) and isinstance(payload.get("scripts"), dict) else {}
+    deps: dict[str, Any] = {}
+    if isinstance(payload, dict):
+        if isinstance(payload.get("dependencies"), dict):
+            deps.update(payload["dependencies"])
+        if isinstance(payload.get("devDependencies"), dict):
+            deps.update(payload["devDependencies"])
+    stubs = [
+        name
+        for name, cmd in scripts.items()
+        if _STUB_SCRIPT.search(str(cmd or ""))
+    ]
+    missing = [name for name in REQUIRED_WEB_DEV_DEPS if name not in deps]
+    # Fail-closed on the runners that killed official canaries, not every helper.
+    required_runners = ["vite", "@playwright/test"]
+    missing_runners = [name for name in required_runners if name not in deps]
+    ok = not stubs and not missing_runners
+    return {
+        "ok": ok,
+        "stubs": stubs,
+        "missing_runners": missing_runners,
+        "missing_recommended": missing,
+        "has_verify": bool(str(scripts.get("verify") or "").strip()),
+    }
+
+
+def evaluate_web_package_contract(app_dir: Path | str) -> dict[str, Any]:
+    pkg_path = Path(app_dir) / "package.json"
+    if not pkg_path.is_file():
+        return {
+            "ok": False,
+            "stubs": [],
+            "missing_runners": ["vite", "@playwright/test"],
+            "has_verify": False,
+            "reason": "package.json missing",
+        }
+    try:
+        payload = json.loads(pkg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "stubs": [],
+            "missing_runners": ["vite", "@playwright/test"],
+            "has_verify": False,
+            "reason": "package.json unreadable",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "stubs": [],
+            "missing_runners": ["vite", "@playwright/test"],
+            "has_verify": False,
+            "reason": "package.json not an object",
+        }
+    return evaluate_web_package_payload(payload)
