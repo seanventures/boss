@@ -1575,9 +1575,23 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               // parts. Reusing "N tasks" for both would call three attempts a three-part build.
               const total = benchGroupTotal(members, fc);
               const doneN = members.filter((m) => m.status === "completed").length;
-              const groupStatus = members.some((m) => m.status === "blocked" || m.status === "failed")
-                ? "blocked" : members.some((m) => m.status === "running" || m.status === "queued")
-                ? "running" : doneN >= total ? "completed" : "running";
+              // The app's BEST state, not its worst.
+              //
+              // Any failed attempt turned the whole card red, so an app that shipped a working
+              // pull request on attempt two still read BLOCKED because attempt three failed.
+              // That is how "View ApproveIt" came to point at a failure: the card described the
+              // most recent mishap rather than what the operator actually has.
+              //
+              // Shipped beats running beats failed. A failure is still visible — it is on the
+              // attempt inside, and named in the summary line.
+              const anyShipped = members.some(
+                (m) => m.status === "completed" || m.pull_request_url);
+              const anyRunning = members.some(
+                (m) => m.status === "running" || m.status === "queued");
+              const anyBroken = members.some(
+                (m) => m.status === "blocked" || m.status === "failed" || m.status === "cancelled");
+              const groupStatus = anyShipped
+                ? "completed" : anyRunning ? "running" : anyBroken ? "blocked" : "running";
               const prRun = members.find((m) => m.pull_request_url);
               const benchGroup = (fc(members[0]).qa_benchmark as { name?: string } | undefined);
               const name = benchGroup?.name
@@ -1601,12 +1615,14 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                     style={{ cursor: "pointer" }}
                   >
                     <span className={`cap-badge tone-${statusTone(groupStatus)}`}>
-                      {benchGroup ? groupStatus : `${doneN}/${total} done`}
+                      {anyShipped ? "shipped" : anyRunning ? "building" : groupStatus}
                     </span>
+                    {/* What the operator has, in words: how many attempts, and whether the
+                        most recent one went wrong. Both facts at once, so a working app is not
+                        hidden behind its latest failure. */}
                     <span className="mr-meeting-date">
-                      {gi + 1} · {benchGroup
-                        ? `${total} ${total === 1 ? "attempt" : "attempts"}`
-                        : `${total} tasks`}
+                      {total} {total === 1 ? "attempt" : "attempts"}
+                      {anyShipped && anyBroken ? " · last one failed" : ""}
                     </span>
                   </div>
                   <span className="mr-meeting-title" role="button"
