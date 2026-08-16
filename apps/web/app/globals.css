@@ -4888,27 +4888,38 @@ select.input:focus {
   padding: 10px 2px 4px; user-select: none;
 }
 .sp-node { display: grid; justify-items: center; gap: 5px; min-width: 62px; }
+/* A badge that CONTAINS its icon.
+   This was an 11px dot and the icon was rendered at 15px inside it, so every glyph was clipped
+   into an unrecognisable fragment -- the icons were there and could not be seen. Sized to hold
+   the icon, coloured by state, with the icon itself carrying the contrast. */
 .sp-dot {
-  width: 11px; height: 11px; border-radius: 50%;
+  width: 24px; height: 24px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 1.5px solid var(--border); background: var(--surface-2);
+  color: var(--muted);
   transition: transform 160ms cubic-bezier(.22,1,.36,1), box-shadow 160ms ease;
 }
+.sp-dot svg { display: block; }
 .sp-node.done .sp-dot {
   background: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe);
+  color: #0b1220;                 /* the glyph reads against the fill, not into it */
 }
 /* The phase happening NOW — the one thing on the card that moves. */
 .sp-node.now .sp-dot {
   background: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe);
+  color: #0b1220;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #6ea8fe) 22%, transparent);
   animation: sp-breathe 2.4s ease-in-out infinite;
 }
 .sp-node.blocked .sp-dot {
-  background: #f87171; border-color: #f87171;
+  background: #f87171; border-color: #f87171; color: #2b0b0b;
   box-shadow: 0 0 0 4px rgba(248,113,113,.18);
 }
+/* Not reached yet: present, legible, clearly not done. */
+.sp-node.todo .sp-dot { color: var(--muted); opacity: .85; }
 @keyframes sp-breathe {
   0%,100% { transform: scale(1); }
-  50%     { transform: scale(1.22); }
+  50%     { transform: scale(1.06); }
 }
 @media (prefers-reduced-motion: reduce) { .sp-node.now .sp-dot { animation: none; } }
 
@@ -5028,3 +5039,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ct-change-btn { white-space: nowrap; }
 /* Once open, the form owns the row: a three-line textarea has no business sharing it. */
 .ct-change-form { flex: 1 1 100%; display: grid; gap: 8px; }
+
+/* CI/CD form labels: the console's font, legible, consistent with every other label.
+   They were 11px hardcoded `monospace` at 55% opacity — a terminal dump wedged into the UI. */
+.dm-field-label {
+  font-size: 0.72rem; color: var(--muted); letter-spacing: .01em;
+  font-weight: 500; line-height: 1.2;
+}
+.dm-field-label + input, .dm-field-label + select { margin-top: 1px; }

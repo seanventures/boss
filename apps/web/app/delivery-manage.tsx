@@ -45,9 +45,17 @@ const btn: React.CSSProperties = {
   fontSize: 12, padding: "4px 11px", borderRadius: 6, cursor: "pointer",
   border: "1px solid rgba(255,255,255,.18)", background: "transparent", color: "inherit",
 };
+// One control style for this area, in the console's own font.
+//
+// Every field was 12px in a hardcoded `monospace` with its label at 11px and 55% opacity, so
+// the CI/CD forms read like a terminal dump wedged into the console: labels barely legible,
+// mono digits next to proportional prose, and controls smaller than the buttons beside them.
+// Mono is kept for the things that ARE literal -- fingerprints, hosts, refs -- and nowhere
+// else.
 const input: React.CSSProperties = {
-  fontSize: 12, padding: "5px 8px", borderRadius: 6, background: "rgba(255,255,255,.04)",
-  border: "1px solid rgba(255,255,255,.14)", color: "inherit", minWidth: 150,
+  fontSize: 13, padding: "7px 10px", borderRadius: 7,
+  background: "var(--surface-2, rgba(255,255,255,.04))",
+  border: "1px solid var(--border, rgba(255,255,255,.14))", color: "inherit", minWidth: 150,
 };
 
 /**
@@ -166,7 +174,7 @@ function ActionButton({ busy, label, busyLabel, danger, onClick, title, style }:
 function Field({ label, ...rest }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <label style={{ display: "grid", gap: 3 }}>
-      <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>{label}</span>
+      <span className="dm-field-label">{label}</span>
       <input style={input} {...rest} />
     </label>
   );
@@ -223,7 +231,7 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
         <Field label="name" placeholder="ssh_key" value={name}
                onChange={(e) => setName(e.target.value)} />
         <label style={{ display: "grid", gap: 3 }}>
-          <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>kind</span>
+          <span className="dm-field-label">kind</span>
           <select style={input} value={kind} onChange={(e) => setKind(e.target.value)}>
             <option value="api_token">api_token</option>
             <option value="ssh_private_key">ssh_private_key</option>
@@ -232,7 +240,7 @@ export function SecretsPanel({ initial }: { initial?: SecretsView | null }) {
           </select>
         </label>
         <label style={{ display: "grid", gap: 3 }}>
-          <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>backend</span>
+          <span className="dm-field-label">backend</span>
           <select style={input} value={backend} onChange={(e) => setBackend(e.target.value)}>
             <option value="platform_secret_store">platform_secret_store</option>
             <option value="file">file</option>
@@ -617,7 +625,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             <Field label="app name" value={form.app_name}
                    onChange={(e) => set("app_name", e.target.value)} placeholder="stock-app" />
             <label style={{ display: "grid", gap: 3 }}>
-              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>repo</span>
+              <span className="dm-field-label">repo</span>
               <input style={input} list="boss-known-repos" value={form.repo}
                      placeholder="owner/name"
                      onChange={(e) => set("repo", e.target.value)} />
@@ -628,7 +636,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
               </datalist>
             </label>
             <label style={{ display: "grid", gap: 3 }}>
-              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>environment</span>
+              <span className="dm-field-label">environment</span>
               <select style={input} value={form.environment}
                       onChange={(e) => set("environment", e.target.value)}>
                 <option value="staging">staging (deploys automatically)</option>
@@ -640,7 +648,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
           </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <label style={{ display: "grid", gap: 3 }}>
-              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>destination</span>
+              <span className="dm-field-label">destination</span>
               <select style={input} value={form.target_kind}
                       onChange={(e) => set("target_kind", e.target.value)}>
                 <option value="ssh">ssh — a Linux host running docker</option>
@@ -654,7 +662,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
                    onChange={(e) => set("domain", e.target.value)}
                    placeholder="203.0.113.10:3010" />
             <label style={{ display: "grid", gap: 3 }}>
-              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>health scheme</span>
+              <span className="dm-field-label">health scheme</span>
               <select style={input} value={form.scheme}
                       onChange={(e) => set("scheme", e.target.value)}>
                 <option value="http">http</option>
@@ -672,7 +680,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
                    onChange={(e) => set("publishable_ports", e.target.value)}
                    placeholder="3003,4000,10000-10001" />
             <label style={{ display: "grid", gap: 3 }}>
-              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
+              <span className="dm-field-label">
                 app entry {appsAmbiguous ? "(required — this repo has several)" : "(optional)"}
               </span>
               <select style={input} value={form.app_entry}
@@ -695,7 +703,7 @@ export function OnboardWizard({ secrets }: { secrets: Secret[] }) {
             </label>
           </div>
           <label style={{ display: "grid", gap: 3 }}>
-            <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
+            <span className="dm-field-label">
               credential (ssh_key)
             </span>
             <select style={input} value={form.secret_ref_id}

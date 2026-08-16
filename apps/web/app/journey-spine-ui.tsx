@@ -4,6 +4,10 @@
 // so React must be in scope. Without it the spine renders in the app and throws in tests --
 // which is how a delivery test started failing on a change to a card in Factory.
 import React from "react";
+import {
+  FileText, GitMerge, GitPullRequest, Heartbeat, type Icon, MagnifyingGlass,
+  RocketLaunch, UploadSimple, Wrench,
+} from "@phosphor-icons/react";
 
 import { useSearchParams } from "next/navigation";
 
@@ -147,35 +151,27 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
                 label="Progress through research, spec, build and ship" />;
 }
 
-// Inline paths, NOT icon components.
+// Real icons from the set the nav already uses.
 //
-// Four nodes on every card times sixty cards is 240 component instances to hydrate, on a page
-// that already renders every area at once and ships 6.5MB of HTML. The icons were worth having
-// and the library was not: these are the same glyphs as plain markup, with no component,
-// no props and nothing to hydrate.
-const ICON_PATHS: Record<string, string> = {
-  // Delivery reuses the same glyph vocabulary: a change, a merge, a deploy, a live check.
-  change: "M6 3h7l5 5v13H6zM13 3v5h5",
-  merge: "M7 4v9a4 4 0 004 4h6M7 4a2 2 0 100 4 2 2 0 000-4zm10 11a2 2 0 100 4 2 2 0 000-4z",
-  deploy: "M12 3c3 2.5 4.5 6 4.5 9L12 17l-4.5-5c0-3 1.5-6.5 4.5-9zM9 18l-2 3 3-1zm6 0l2 3-3-1z",
-  live: "M3 12h4l2-5 3 10 2.5-6 1.5 3h5",
-  research: "M4 7h5l1.5 3L12 7h4a3 3 0 013 3v4a3 3 0 01-3 3H8a3 3 0 01-3-3v-4z",
-  spec: "M6 3h7l5 5v13H6zM13 3v5h5",
-  build: "M14 6a4 4 0 00-5.3 5.3L4 16l4 4 4.7-4.7A4 4 0 0018 10l-2.5 2.5L13 10l2.5-2.5z",
-  ship: "M12 3c3 2.5 4.5 6 4.5 9L12 17l-4.5-5c0-3 1.5-6.5 4.5-9zM9 18l-2 3 3-1zm6 0l2 3-3-1z",
+// These were hand-written SVG paths, justified as saving hydration on 240 components. The
+// measurement did not support it (6.51MB -> 6.49MB, i.e. nothing) and the paths rendered as
+// unreadable fragments at 13px -- an icon nobody can identify is worse than no icon. Phosphor
+// draws them correctly at any size and is already a dependency.
+const ICONS: Record<string, Icon> = {
+  research: MagnifyingGlass,
+  spec: FileText,
+  build: Wrench,
+  ship: RocketLaunch,
+  // Delivery's phases, in the same vocabulary.
+  change: GitPullRequest,
+  merge: GitMerge,
+  deploy: UploadSimple,
+  live: Heartbeat,
 };
 
-/** Built at RENDER time, not at module load: constructing JSX while the module is being
- *  imported requires React to already be in scope, which broke every test that imported this
- *  file transitively the moment delivery started using the spine. */
 function PhaseIcon({ phase }: { phase: string }) {
-  const d = ICON_PATHS[phase];
-  if (!d) return null;
-  return (
-    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="currentColor">
-      <path d={d} />
-    </svg>
-  );
+  const Glyph = ICONS[phase];
+  return Glyph ? <Glyph size={15} weight="fill" aria-hidden /> : null;
 }
 
 function NodeAndLink({
