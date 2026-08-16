@@ -855,9 +855,22 @@ class DecisionService:
 
         # The beginning of this outcome, recorded so the build can be drawn as the continuation
         # of the panel that specced it rather than as an unrelated run.
+        # The console addresses a panel by its RUN id (?meeting=mrun_...), not by the task the
+        # panel was about. Recording only task_id meant Spec resolved to the meetings list --
+        # a link that works, lands somewhere real, and is still the wrong page.
+        meeting_run_id = None
+        try:
+            from sqlalchemy import text as _text
+            meeting_run_id = connection.execute(_text(
+                "SELECT id FROM meeting_runs WHERE task_id = :t ORDER BY created_at DESC LIMIT 1"
+            ), {"t": task_id}).scalar()
+        except Exception:  # noqa: BLE001 — a missing back-link must not stop the build
+            meeting_run_id = None
+
         origin = {
             "kind": "meeting",
             "task_id": task_id,
+            "meeting_run_id": meeting_run_id,
             "decision_id": row["id"],
             "title": title,
         }

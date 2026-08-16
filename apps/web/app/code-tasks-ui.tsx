@@ -1542,9 +1542,12 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     {((c.finalize_ctx as Record<string, unknown> | undefined)?.origin as
                         { kind?: string; task_id?: string } | undefined)?.kind === "meeting" ? (
                       <a className="mr-meeting-pill accent"
+                         // ?meeting= addresses the panel; ?task= only reached the meetings
+                         // list, so this pill looked slow when it was simply wrong.
                          href={consoleHref({
                            area: "meetings",
-                           task: ((c.finalize_ctx as Record<string, unknown>).origin as { task_id?: string }).task_id,
+                           meeting: ((c.finalize_ctx as Record<string, unknown>).origin as
+                             { meeting_run_id?: string }).meeting_run_id,
                          }, search)}
                          onClick={(e) => e.stopPropagation()}
                          title="Open the panel that specced this app">

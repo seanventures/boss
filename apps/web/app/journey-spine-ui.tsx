@@ -31,7 +31,7 @@ type Run = {
   phase?: string;
   pull_request_url?: string | null;
   finalize_ctx?: {
-    origin?: { kind?: string; task_id?: string; title?: string } | null;
+    origin?: { kind?: string; task_id?: string; meeting_run_id?: string; title?: string } | null;
     root_run_id?: string;
     is_followup?: boolean;
   } | null;
@@ -62,8 +62,10 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   const fromDiscovery = origin?.kind === "discovery";
   // A meeting's own id, so Spec lands on THAT panel rather than the meetings list. Falls back
   // to the area when only the origin kind is known.
-  const meetingHref = origin?.task_id
-    ? consoleHref({ area: "meetings", task: origin.task_id }, search)
+  // ?meeting= is what the meetings area reads. Passing the task id sent every Spec click to
+  // the meetings HOME page, which looks like a slow link rather than a wrong one.
+  const meetingHref = origin?.meeting_run_id
+    ? consoleHref({ area: "meetings", meeting: origin.meeting_run_id }, search)
     : consoleHref({ area: "meetings" }, search);
 
   const nodes: {
