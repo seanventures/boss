@@ -108,15 +108,56 @@ export function ApprovalRulesView({
           ))}
         </div>
       </details>
-      <div style={{ display: "none" }}>
+
+      {/* REFERENCE, BELOW THE DECISIONS.
+          Service gates and budget gates are worth keeping -- they say what BOSS will stop for
+          -- but nothing here can be acted on, and above the queue they pushed the one thing
+          that needs a person off the screen. Kept, moved, and labelled for what they are. */}
+      <div className="ar-reference">
+        <div className="cap-section-head">
+          <h3>For reference — nothing here needs an action</h3>
+          <span className="cap-section-sub">
+            The gates BOSS already applies. Budgets are set in the Budget area.
+          </span>
+        </div>
+      {/* Service gates */}
+      <div className="cap-section-head">
+        <h3>Service gates</h3>
+        <span className="cap-section-sub">Named actions that always route through approval, by domain</span>
+      </div>
+      <div className="ar-gates">
+        {[...byDomain.entries()].map(([domain, gates]) => (
+          <div key={domain} className="ar-gate-domain">
+            <div className="ar-gate-domain-name">{domain}</div>
+            {gates.map((g) => (
+              <div key={g.gate} className="ar-gate">
+                <span className="ar-gate-name">{g.gate}</span>
+                <span className="ar-gate-trigger">{g.trigger}</span>
+                <code className="ar-gate-reason">{g.reason}</code>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
 
-      {/* Capability rules, Service gates and Budget gates lived here and are gone.
-          All three were read-only restatements of configuration: a list of every tool by risk
-          tier, the same gate settings shown elsewhere, and budget thresholds that the Budget
-          area already owns. None of them could be acted on from this page, and together they
-          pushed the one thing that DOES need a person -- the decision queue -- below the fold.
-          The counts that mattered ("N auto, N need approval") are kept above. */}
+      {/* Budget gates */}
+      <div className="cap-section-head">
+        <h3>Budget gates</h3>
+        <span className="cap-section-sub">Spend thresholds that throttle or freeze actions for this org</span>
+      </div>
+      <div className="ar-budget">
+        <div className="ar-budget-item"><span className="ar-budget-n">{fmtUsd(bg.daily_cap_usd_micros)}</span><span>daily cap</span></div>
+        <div className="ar-budget-item"><span className="ar-budget-n">{fmtUsd(bg.monthly_cap_usd_micros)}</span><span>monthly cap</span></div>
+        <div className="ar-budget-item"><span className="ar-budget-n">{fmtPct(bg.soft_cap_pct)}</span><span>soft cap → warn</span></div>
+        <div className="ar-budget-item"><span className="ar-budget-n">{fmtPct(bg.auto_lite_mode_pct)}</span><span>→ lite mode</span></div>
+        <div className="ar-budget-item"><span className="ar-budget-n">{fmtPct(bg.freeze_provisioning_pct)}</span><span>→ freeze provisioning</span></div>
+        <div className="ar-budget-item"><span className="ar-budget-n">{fmtPct(bg.freeze_tier2_pct)}</span><span>→ freeze tier-2</span></div>
+      </div>
+
+      {/* Policy records */}
+
+      </div>
+
       <div className="cap-section-head">
         <h3>Policy records</h3>
         <span className="cap-section-sub">Explicit governance policies stored for this org</span>

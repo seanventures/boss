@@ -5078,3 +5078,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dq-filter-btn.active .dq-filter-count {
   color: var(--ink); background: color-mix(in srgb, var(--accent, #6ea8fe) 26%, transparent);
 }
+
+/* Reference block at the foot of the decisions page: present, clearly secondary.
+   These panels are worth keeping and cannot be acted on, so they read quieter than the queue
+   above them rather than competing with it. */
+.ar-reference { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); opacity: .82; }
+.ar-reference:hover { opacity: 1; }
+.ar-reference h3 { font-size: 0.9rem; }
