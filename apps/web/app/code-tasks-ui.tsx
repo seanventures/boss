@@ -1723,6 +1723,21 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                   </div>
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
+                    {/* What this app COST, summed across every run of it.
+                        The Apps area existed largely to answer this and was otherwise a second
+                        view of the same feeds; deleting it would have quietly taken the one
+                        number it alone carried. Now the card that groups the runs also totals
+                        them. */}
+                    {(() => {
+                      const spend = members.reduce(
+                        (n, m) => n + (m.usage?.cost_usd_micros ?? 0), 0);
+                      return spend > 0 ? (
+                        <span className="detail"
+                              title="Total model spend across every run of this app">
+                          {fmtUsd(spend)} spent
+                        </span>
+                      ) : null;
+                    })()}
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
                       : <span className="detail">one approval when the build finishes</span>}
                   </div>

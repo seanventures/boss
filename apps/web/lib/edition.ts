@@ -156,7 +156,6 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // deep link.
   "discovery",
   "meetings",
-  "apps",
   "delivery",   // labelled "CI/CD" in the nav — the id and the label differ
   "monitoring",
 ]);

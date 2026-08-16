@@ -52,7 +52,6 @@ const HIDDEN_FROM_COMMUNITY_NAV = [
 const RESTORED_TO_COMMUNITY_NAV = [
   "discovery",
   "meetings",
-  "apps",
   "delivery",   // the "CI/CD" nav entry — id and label differ, and cutting it by id would
                 // have removed exactly the area it was meant to keep
   "monitoring",

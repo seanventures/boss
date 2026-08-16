@@ -68,7 +68,6 @@ type AreaId =
   | "meetings"
   | "processes"
   | "code_tasks"
-  | "apps"
   | "shepherd"
   | "delivery"
   | "monitoring"
@@ -149,7 +148,6 @@ const AREAS: AreaDef[] = [
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
-  { id: "apps", label: "Apps", sub: "Everything built here — spec, code, preview, deployment, spend", group: "Run", icon: ICONS.apps },
   { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
