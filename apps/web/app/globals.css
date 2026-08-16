@@ -4986,3 +4986,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* Actions sit at the card's foot, compact, never full-width. */
 .mr-meeting-card .oc-actions { gap: 6px; }
 .mr-meeting-card .oc-actions .cap-btn { font-size: 0.76rem; padding: 6px 12px; }
+
+/* Expanding one tile must not stretch its neighbours.
+   CSS grid defaults to align-items: stretch, so every tile in a row grows to match the tallest
+   one — open a group with six attempts inside and the two cards beside it become mostly empty
+   space with their button stranded at the bottom. Each tile takes its own height instead.
+   Scoped to the task list: the meeting tiles are uniform and look better stretched. */
+.mr-grid.ct-tiles { align-items: start; }

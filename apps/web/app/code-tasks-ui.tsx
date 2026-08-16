@@ -1391,7 +1391,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
         // stacked one per row, which is why the same CSS class still read as a full-width row
         // and the spine stretched across two thousand pixels. The class was right; the
         // container was not.
-        <div className="mr-grid">
+        <div className="mr-grid ct-tiles">
           {(() => {
             // Render one run as a card. `label` is the row prefix (a number, or "n/N" for a slice).
             const renderCard = (c: CodeTaskRun, label: string) => {
