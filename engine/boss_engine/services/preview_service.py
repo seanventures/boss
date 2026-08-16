@@ -286,6 +286,61 @@ class AmbiguousAppError(RuntimeError):
         )
 
 
+# The branch a run was built ON is the app it changes.
+_WORK_BRANCH = re.compile(r"^boss/code/(crun_[a-z0-9]+)$", re.IGNORECASE)
+
+
+def app_root_run_id(engine, run: dict) -> Optional[str]:
+    """The run that ESTABLISHED this app, following every link BOSS records.
+
+    Lineage was read from root_run_id and deferred_from_run only. Work started as its own task
+    on an existing app's branch -- which is what "change this app" and every follow-up build
+    does -- records neither: it records `spec.base_branch = boss/code/<run>`. So its file list
+    was just the files that attempt happened to touch.
+
+    For "Official bugbox - honest verify + JTBD e2e" that was the verification and e2e files.
+    No index.html among them, so resolve_app_entry fell through to repo conventions and picked
+    the repo ROOT, whose package.json has a `preview` script and no app to preview: rollup had
+    no entry module to load and the preview timed out. The app it should have served --
+    bugbox/, with its own index.html and server -- was never considered.
+
+    The branch is the link. Walking it makes every attempt at an app resolve to the same app,
+    for every stack, which is the property the three earlier fixes to this file were each
+    reaching for one case at a time.
+    """
+    seen: set[str] = set()
+    current = run
+    for _ in range(10):                       # a cycle here would hang the preview
+        fctx = current.get("finalize_ctx") or {}
+        run_id = current.get("id")
+        if run_id in seen:
+            break
+        if run_id:
+            seen.add(run_id)
+        root = fctx.get("root_run_id")
+        if root and root != run_id:
+            nxt = root
+        else:
+            spec = current.get("spec") or {}
+            base = spec.get("base_branch") or ""
+            matched = _WORK_BRANCH.match(str(base))
+            nxt = matched.group(1) if matched else None
+            if nxt == run_id:
+                nxt = None
+        if not nxt:
+            return run_id
+        with begin(engine) as c:
+            row = c.execute(
+                text("SELECT id, spec, finalize_ctx FROM code_task_runs WHERE id=:i"),
+                {"i": nxt},
+            ).mappings().first()
+        if not row:
+            # The branch names a run that no longer exists; this run is as far back as we go.
+            return run_id
+        current = dict(row)
+    return current.get("id")
+
+
 def lineage_impl_files(engine, run: dict) -> list[str]:
     """Every implementation file THIS TASK'S LINEAGE has written, newest attempt first.
 
@@ -315,7 +370,9 @@ def lineage_impl_files(engine, run: dict) -> list[str]:
             ).mappings().first()
         if parent:
             root = parent["r"]
-    root = root or run.get("id")
+    # Follow base_branch as well, so work started as its own task on an existing app's branch
+    # inherits that app's files instead of only what this attempt touched.
+    root = root or app_root_run_id(engine, run) or run.get("id")
     if not root:
         return list((run.get("state") or {}).get("impl_files") or [])
     with begin(engine) as c:
@@ -468,6 +525,30 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     # confusing preview; in a repo holding several it is showing someone another tenant's
     # application. Serving the wrong app is strictly worse than serving nothing, so when the
     # repo offers more than one candidate and the task gives no signal, we refuse and say why.
+    # A CANDIDATE MUST BE ABLE TO RUN.
+    #
+    # boss-sandbox's ROOT package.json carries `"preview": "vite preview"` and the root holds
+    # no index.html and no src/ -- it is a monorepo root, not an app. Anything that selected it
+    # produced `rollup ... loadEntryModule` and a preview that never served, reported to the
+    # operator as "app did not serve HTTP within timeout": a timeout for a build that could
+    # never have succeeded. A directory whose node scripts have nothing to build is not a
+    # candidate, whatever else the conventions say about it.
+    def _node_dir_can_build(rel: str) -> bool:
+        base = workdir / rel if rel != "." else workdir
+        manifest = base / "package.json"
+        if not manifest.is_file():
+            return False
+        try:
+            scripts = (json.loads(manifest.read_text()) or {}).get("scripts") or {}
+        except (ValueError, OSError):
+            return False
+        # A server entry can serve without an index.html; a bundler cannot.
+        if scripts.get("start"):
+            return True
+        if not any(k in scripts for k in ("dev", "build", "preview")):
+            return False
+        return (base / "index.html").is_file()
+
     candidates: list[tuple[str, str]] = []
     for entry in _PY_ENTRYPOINTS:
         if (workdir / entry).exists():
@@ -479,7 +560,7 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
     # A runnable server outranks its own static assets: serving an app's index.html without
     # its API is a page that loads and does nothing.
     server_dir = _node_server_dir(workdir, changed)
-    if server_dir is not None:
+    if server_dir is not None and _node_dir_can_build(server_dir):
         return ("node", server_dir)
     for rel in _STATIC_DIRS:
         if (workdir / rel / "index.html").is_file():
@@ -493,7 +574,10 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
         rel = cand.parent.name
         if ("static", rel) not in candidates:
             candidates.append(("static", rel))
-    if not candidates and (workdir / "package.json").exists():
+    # Last-resort root node app -- but only if the root can actually build. A monorepo root
+    # whose package.json exists purely to hold a `preview` script is not an app, and choosing
+    # it produced a preview that could never serve.
+    if not candidates and (workdir / "package.json").exists() and _node_dir_can_build("."):
         candidates.append(("node", "."))
     if len(candidates) == 1:
         return candidates[0]
