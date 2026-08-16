@@ -5085,3 +5085,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ar-reference { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); opacity: .82; }
 .ar-reference:hover { opacity: 1; }
 .ar-reference h3 { font-size: 0.9rem; }
+
+/* Decisions view: the queue first, the reference material after — stated, not inherited.
+   Source order put the inbox first and it still rendered below the rules; rather than keep
+   guessing which wrapper reorders it, the view declares the order it needs. `.frame` is a
+   grid, so `order` applies to these sections directly. */
+.bx-content[data-active="decisions"] .frame > section[aria-label="Decision inbox"] { order: -2; }
+.bx-content[data-active="decisions"] .frame > section.approval-rules-section { order: 0; }
