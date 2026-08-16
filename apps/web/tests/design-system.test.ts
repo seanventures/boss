@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { groupRunsIntoApps } from "../app/app-grouping";
+
 describe("BOSS mission-control design system", () => {
   const css = readFileSync(resolve(__dirname, "../app/design-system.css"), "utf8");
   const shell = readFileSync(resolve(__dirname, "../app/ConsoleShell.tsx"), "utf8");
@@ -190,10 +192,29 @@ describe("BOSS mission-control design system", () => {
     // scored against the same rubric. Scattered as loose rows among unrelated tasks, the
     // comparison the benchmark exists to make is lost. Lineage still wins where it applies,
     // so a decomposed build stays one bucket rather than being regrouped by benchmark.
-    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
-    expect(codeTasks).toContain("qa:${bench}");
-    expect(codeTasks).toContain("(fc(c).root_run_id as string)");   // lineage first
+    // Asserted on BEHAVIOUR, not on source text. This used to grep code-tasks-ui.tsx for
+    // "qa:${bench}" and "(fc(c).root_run_id as string)" -- the two clauses of a first-match
+    // chain. That chain was the reason ApproveIt showed three times (each run carried a
+    // different one of those fields, and the chain stops at the first), so the test was
+    // pinning the defect in place: replacing it with a rule that actually groups the runs
+    // broke the test while fixing the behaviour it was meant to protect.
+    const attempts = [
+      { id: "crun_1", spec: { base_branch: "main" },
+        finalize_ctx: { qa_benchmark: { id: "approveit" } } },
+      { id: "crun_2", spec: { base_branch: "main" },
+        finalize_ctx: { qa_benchmark: { id: "approveit" } } },
+      { id: "crun_3", spec: { base_branch: "boss/code/crun_1" }, finalize_ctx: {} },
+    ];
+    expect(groupRunsIntoApps(attempts)).toHaveLength(1);
+
+    // A decomposed build stays its own bucket rather than being regrouped by benchmark.
+    expect(groupRunsIntoApps([
+      { id: "crun_a", spec: { base_branch: "main" }, finalize_ctx: { root_run_id: "crun_a" } },
+      { id: "crun_b", spec: { base_branch: "main" }, finalize_ctx: { root_run_id: "crun_a" } },
+    ])).toHaveLength(1);
+
     // "N tasks" would describe three attempts as a three-part build.
+    const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
     expect(codeTasks).toMatch(/attempt/);
   });
 
@@ -331,7 +352,9 @@ describe("the task list is about the operator's work", () => {
     // place and left in the one people look at.
     const src = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
     expect(src).toContain("function isInternalRun");
-    expect(src).toContain("if (isInternalRun(c)) continue;");
+    // The filter moved into the grouping call when the identity chain was replaced; what
+    // matters is that housekeeping runs never reach the grid, not the line that removes them.
+    expect(src).toMatch(/isInternalRun\(c\)/);
     for (const marker of ["captain:", "quality improve pass", "goldeneye profile check"]) {
       expect(src.toLowerCase()).toContain(marker);
     }

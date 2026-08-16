@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 
 import { consoleHref } from "./console-href";
 import { appIdentity } from "./app-identity";
+import { groupRunsIntoApps } from "./app-grouping";
 
 import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -746,9 +747,11 @@ function ContractDetails({ criteria, verification, label = "Acceptance criteria 
   );
 }
 
-function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaultRepo,
+function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<string>(), projectId, actor, defaultOwner, defaultRepo,
                              launched, onLaunched, onOpen }: {
   benchmarks: QaBenchmarkApp[];
+  /** Benchmarks that appear among the project's runs — the grid's answer, reused here. */
+  builtBenchmarkIds?: Set<string>;
   projectId: string;
   actor: string;
   defaultOwner?: string;
@@ -770,8 +773,13 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
   // cards in identical styling -- indistinguishable at a glance, and the catalogue one was the
   // less useful of the pair. The catalogue now offers what is not built yet; the built ones are
   // named in a line pointing at the app that replaced them.
-  const builtAlready = benchmarks.filter((b) => b.built?.run_id || launched?.[b.id]?.run_id);
-  const notBuiltYet = benchmarks.filter((b) => !(b.built?.run_id || launched?.[b.id]?.run_id));
+  // Read from the runs themselves, not only from the catalogue's own `built` field: ApproveIt
+  // had been built twice and still offered a Launch card because that field was empty. One
+  // question -- "has this been built?" -- must have one answer wherever it is asked.
+  const isBuilt = (b: QaBenchmarkApp) =>
+    Boolean(b.built?.run_id) || Boolean(launched?.[b.id]?.run_id) || builtBenchmarkIds.has(b.id);
+  const builtAlready = benchmarks.filter(isBuilt);
+  const notBuiltYet = benchmarks.filter((b) => !isBuilt(b));
   return (
     <div className="ct-block" style={{ marginTop: 12 }}>
       <div className="ct-block-title">End-to-end QA benchmarks</div>
@@ -1430,6 +1438,13 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
       <QaBenchmarkCatalog
         benchmarks={benchmarks}
+        builtBenchmarkIds={new Set(
+          codeTasks
+            .map((c) => ((c.finalize_ctx ?? {}) as Record<string, unknown>).qa_benchmark as
+              { id?: string } | undefined)
+            .map((b) => b?.id)
+            .filter((id): id is string => Boolean(id)),
+        )}
         projectId={projectId}
         actor={actor}
         launched={launched}
@@ -1598,52 +1613,21 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
             const benchGroupTotal = (members: CodeTaskRun[],
                                      f: (c: CodeTaskRun) => Record<string, unknown>) =>
               (f(members[0]).decomposition_total as number) || members.length;
-            const order: string[] = [];
-            const groups = new Map<string, CodeTaskRun[]>();
-            for (const c of tasks) {
-              // BOSS's own housekeeping is not somebody's work.
-              //
-              // Forty-odd "Captain: QUALITY IMPROVE PASS. Measured scorecard gaps…" runs sat in
-              // this list, drowning the tasks an operator actually started. The identical rule
-              // was already written for the Apps page and never applied here — the same defect
-              // fixed in one place and left in the one people look at.
-              //
-              // Hidden from the default list, not deleted: they are real runs, they still open
-              // by id, and they still count in Reports.
-              if (isInternalRun(c)) continue;
-              // Every run of one benchmark belongs together. Pressing Launch ApproveIt three
-              // times over a week is three attempts at ONE thing — scored against the same
-              // rubric, compared with each other — and scattering them as loose rows among
-              // unrelated tasks loses exactly the comparison the benchmark exists to make.
-              // Lineage still wins where it applies: a decomposed build stays one bucket.
-              const bench = (fc(c).qa_benchmark as { id?: string } | undefined)?.id;
-              // Group by the APP, not by lineage.
-              //
-              // Lineage was the key, and follow-ups and retries are frequently spawned as
-              // their own root — so "Expand N-Queens app to support 1–10 queens" appeared as
-              // FOUR cards: the original, a retry, and two deferred-findings follow-ups. They
-              // are one app and one story. The normalised title is what a person means by "the
-              // same app"; lineage and id remain the fallback for work with no usable title.
-              // app_id is the identity: assigned once and inherited by every retry and
-              // follow-up, so all attempts at one app group together while a deliberate
-              // rebuild from scratch starts a new id and correctly stands apart.
-              //
-              // An earlier version keyed on the normalised TITLE. It collapsed the four
-              // N-Queens cards, and it was wrong: a name is not an identity, so a from-scratch
-              // rebuild of the same app would have folded into the old one.
-              const key = (fc(c).app_id as string)
-                || (bench ? `qa:${bench}` : null)
-                || (fc(c).root_run_id as string)
-                // Real lineage that historical runs already carry. A deferred-findings
-                // follow-up records the run it was spawned from, and a retry records its
-                // parent — both are identity, not resemblance, so they can be used for the
-                // history that predates app_id without guessing from titles.
-                || (fc(c).deferred_from_run as string)
-                || (fc(c).parent_run_id as string)
-                || c.id;
-              if (!groups.has(key)) { groups.set(key, []); order.push(key); }
-              groups.get(key)!.push(c);
-            }
+            // ONE RULE FOR "SAME APP", not a chain of fallbacks.
+            //
+            // This was a first-match chain (app_id || qa:bench || root_run_id || …) that got a
+            // new clause each time a duplicate was reported. It fixed the case in front of me
+            // every time and left the siblings split: ApproveIt still showed three times,
+            // because each of its runs carried a DIFFERENT one of those fields and the chain
+            // stops at the first. Identity is a relation, not a priority order -- see
+            // app-grouping.ts, where any shared token joins two runs and a base_branch of
+            // boss/code/<run> finally links a change to the app it changes.
+            const appGroups = groupRunsIntoApps(tasks.filter((c) => !isInternalRun(c)));
+            const order: string[] = appGroups.map((members) => members[0].id);
+            const groups = new Map<string, CodeTaskRun[]>(
+              appGroups.map((members) => [members[0].id, members]));
+            const fcOf = fc;
+            void fcOf;
             return order.map((key, gi) => {
               const members = groups.get(key)!;
               // Singletons used to render as a bare run card, so an app looked like one thing
