@@ -1234,6 +1234,21 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   );
 }
 
+/** Runs BOSS starts on itself: quality passes, scorecard sweeps, profile checks.
+ *
+ *  They are legitimate work and they are nobody's TASK. Left in the list they outnumber the
+ *  real ones and the screen stops being about what the operator is building.
+ */
+//  Deliberately narrow. An earlier version also matched "follow-up: deferred review", which
+//  cut the card count from 48 to 2 — those are REAL work (the run that gave ApproveIt its
+//  backend was one of them). Hiding the operator's own follow-ups to reduce clutter defeats
+//  the point of the list.
+const INTERNAL_RUN = /^(captain:|quality improve pass|goldeneye profile check)/i;
+
+function isInternalRun(run: { title?: string }): boolean {
+  return INTERNAL_RUN.test((run.title ?? "").trim());
+}
+
 export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
   projectId: string;
   orgId?: string;
@@ -1428,7 +1443,15 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       A list of tasks with no times gives no sense of what is recent, so
                       everything looks equally current and nothing looks stale. */}
                   <div className="oc-meta">
-                    <ClientRelativeTime iso={c.updated_at ?? c.created_at} className="oc-when" />
+                    {/* Rendered only when the field is actually there. The list endpoint does
+                        NOT return created_at/updated_at — I added this fed by a field that does
+                        not exist, which put `undefined` into a client component, crashed
+                        hydration, and dropped every card in the browser while the server HTML
+                        still contained them. */}
+                    {(c.updated_at ?? c.created_at) ? (
+                      <ClientRelativeTime iso={(c.updated_at ?? c.created_at) as string}
+                                          className="oc-when" />
+                    ) : null}
                     <span className="oc-pill">{c.spec?.owner}/{c.spec?.repo}</span>
                     {st.profile ? (
                       <span className="oc-pill accent">
@@ -1457,6 +1480,16 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
             const order: string[] = [];
             const groups = new Map<string, CodeTaskRun[]>();
             for (const c of tasks) {
+              // BOSS's own housekeeping is not somebody's work.
+              //
+              // Forty-odd "Captain: QUALITY IMPROVE PASS. Measured scorecard gaps…" runs sat in
+              // this list, drowning the tasks an operator actually started. The identical rule
+              // was already written for the Apps page and never applied here — the same defect
+              // fixed in one place and left in the one people look at.
+              //
+              // Hidden from the default list, not deleted: they are real runs, they still open
+              // by id, and they still count in Reports.
+              if (isInternalRun(c)) continue;
               // Every run of one benchmark belongs together. Pressing Launch ApproveIt three
               // times over a week is three attempts at ONE thing — scored against the same
               // rubric, compared with each other — and scattering them as loose rows among

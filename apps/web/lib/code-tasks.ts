@@ -104,7 +104,11 @@ export function emptyCodeTaskFeed(reason?: string, projectId = PROJECT_ID): Code
 export async function fetchCodeTasksFeed(projectId = PROJECT_ID): Promise<CodeTaskFeed> {
   const resolved = resolveProjectId(projectId);
   try {
-    const res = await client.getCodeTasks(resolved);
+    // 50 was the default, and BOSS's own housekeeping runs filled it: 46 of the most recent
+    // 50 were "Captain: QUALITY IMPROVE PASS", so an operator's real work — sudoku, n-queens,
+    // the calculator, every app they had actually built — never reached the page at all. The
+    // list looked nearly empty while 103 real runs sat behind the limit.
+    const res = await client.getCodeTasks(resolved, 200);
     return { projectId: resolved, apiReachable: true, items: res.code_tasks ?? [] };
   } catch (error) {
     if (error instanceof BossApiError) {

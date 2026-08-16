@@ -319,3 +319,28 @@ describe("BOSS mission-control design system", () => {
     expect(css).toContain("width: 100vw;");
   });
 });
+
+describe("the task list is about the operator's work", () => {
+  it("hides BOSS's own housekeeping runs", () => {
+    // Forty-odd "Captain: QUALITY IMPROVE PASS. Measured scorecard gaps…" runs sat in the
+    // Factory list, drowning the tasks somebody actually started. The identical rule was
+    // already written for the Apps page and never applied here: the same defect fixed in one
+    // place and left in the one people look at.
+    const src = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(src).toContain("function isInternalRun");
+    expect(src).toContain("if (isInternalRun(c)) continue;");
+    for (const marker of ["captain:", "quality improve pass", "goldeneye profile check"]) {
+      expect(src.toLowerCase()).toContain(marker);
+    }
+    // A follow-up is the operator's OWN work — an earlier filter caught it and took the list
+    // from 48 cards to 2.
+    expect(src).not.toMatch(/INTERNAL_RUN =.*follow-up/i);
+  });
+
+  it("hides them rather than deleting them", () => {
+    // They are real runs. They still open by id and still count in Reports; they simply do not
+    // lead the list an operator uses to see their own work.
+    const src = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(src).not.toMatch(/DELETE FROM code_task_runs/i);
+  });
+});
