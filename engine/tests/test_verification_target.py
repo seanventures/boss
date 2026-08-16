@@ -136,6 +136,69 @@ def test_prepare_web_verify_env_names_npm_install(tmp_path: Path):
     assert "add:vite" in prep["changed"]
 
 
+def test_harden_unstubs_exit_zero_and_swallowed_playwright(tmp_path: Path):
+    from boss_engine.services.verification_target import (
+        evaluate_web_package_contract,
+        harden_web_package,
+    )
+
+    pkg = tmp_path / "package.json"
+    pkg.write_text(
+        json.dumps(
+            {
+                "scripts": {
+                    "verify": "exit 0",
+                    "test:e2e": "npx --package=@playwright/test playwright test || true",
+                },
+                "devDependencies": {"vite": "^5.3.1", "@playwright/test": "^1.45.0"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    before = evaluate_web_package_contract(tmp_path)
+    assert before["ok"] is False
+    assert "verify" in before["stubs"]
+    assert "test:e2e" in before["stubs"]
+    result = harden_web_package(tmp_path)
+    assert "unstub:verify" in result["changed"]
+    assert "unstub:test:e2e" in result["changed"]
+    after = evaluate_web_package_contract(tmp_path)
+    assert after["ok"] is True
+    scripts = json.loads(pkg.read_text(encoding="utf-8"))["scripts"]
+    assert "|| true" not in scripts["test:e2e"]
+    assert "exit 0" not in scripts["verify"]
+    assert "npm run" in scripts["verify"]
+
+
+def test_seed_acceptance_e2e_writes_named_specs_once(tmp_path: Path):
+    from boss_engine.services.verification_target import seed_acceptance_e2e
+
+    first = seed_acceptance_e2e(
+        tmp_path,
+        ["Create an issue and see it on the dashboard.", "Delete it."],
+    )
+    assert first["seeded_specs"] == 2
+    spec = (tmp_path / "e2e" / "acceptance.spec.ts").read_text(encoding="utf-8")
+    assert "Create an issue and see it on the dashboard." in spec
+    assert (tmp_path / "playwright.config.ts").is_file()
+    second = seed_acceptance_e2e(tmp_path, ["Create an issue and see it on the dashboard."])
+    assert second["seeded_specs"] == 0
+    assert second.get("reason") == "specs_exist"
+
+
+def test_honest_verify_status_rejects_swallowed_webserver_failure():
+    from boss_engine.services.verification_target import (
+        honest_verify_status,
+        verify_output_disproves_pass,
+    )
+
+    output = "Error: Process from config.webServer was not able to start. Exit code: 1"
+    assert verify_output_disproves_pass(output) is True
+    assert honest_verify_status({"command": "npm run verify", "exit_code": 0}, output) == "fail"
+    assert honest_verify_status({"command": "npm run verify", "exit_code": 0}, "  ✓ create") == "pass"
+    assert honest_verify_status(None, "") == "not_recorded"
+
+
 def test_official_app_id_reads_benchmark_context():
     assert official_app_id(
         {}, {"qa_benchmark": {"id": "approveit", "app_root": "approveit"}}

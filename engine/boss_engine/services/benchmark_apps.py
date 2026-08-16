@@ -966,12 +966,11 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
     context = run.get("finalize_ctx") or {}
     benchmark = context.get("qa_benchmark") or spec.get("qa_benchmark") or {}
     verify = observed_verify(run)
-    verify_status = (
-        "pass"
-        if verify and verify.get("exit_code") == 0 and not verify.get("timed_out")
-        else "fail"
-        if verify
-        else "not_recorded"
+    from .verification_target import honest_verify_status
+
+    verify_status = honest_verify_status(
+        verify,
+        (run.get("state") or {}).get("last_verify_output"),
     )
     run = apply_observed_test_outcomes(run, verify_status=verify_status)
     plan = (run.get("state") or {}).get("design")

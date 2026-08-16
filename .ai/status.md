@@ -1,5 +1,15 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-16 factory honest-verify + JTBD e2e seed (◐)
+
+- Live `976021c` api/worker/web healthy. v1-lock `{in:67,out:14,cloud:12}`.
+- Official follow-ups: BugBox `crun_608018b71ee84f10a519` PR #88 completed
+  but verify was `playwright || true` (webServer failed). HookWatch
+  `crun_f36ae20965f549c6bec6` PR #89 `verify: exit 0`. ApproveIt
+  `crun_3c7a352c6a17434497d5` still running check_tests.
+- Next SHA: fail-closed on `exit 0` / `|| true`, honest verify-from-log,
+  seed acceptance e2e from official scenarios. Not public GA. 0/3 passed.
+
 ## 2026-08-15 BOSS-391 infra + UI v1 E2E (◐)
 
 - Branch `ai/grok/e2e-infra-ui` from `02c86dd`. Isolated HTTP + web E2E.

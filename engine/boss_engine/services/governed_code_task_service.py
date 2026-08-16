@@ -1819,9 +1819,16 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
                 pass
             try:
-                prep = verification_target.prepare_web_verify_env(cwd)
+                prep = verification_target.prepare_web_verify_env(
+                    cwd,
+                    scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
+                )
             except Exception:  # noqa: BLE001
-                prep = {"install_command": verification_target.NPM_INSTALL_CMD, "changed": []}
+                prep = {
+                    "install_command": verification_target.NPM_INSTALL_CMD,
+                    "browser_install_command": verification_target.PLAYWRIGHT_INSTALL_CMD,
+                    "changed": [],
+                }
             if str(test_cmd or "").startswith("npm "):
                 install_timeout = max(
                     300,
@@ -1837,8 +1844,27 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         (install.stdout or "") + "\n" + (install.stderr or "")
                     )[-4000:]
                     return install
+                sandbox.run(
+                    str(
+                        prep.get("browser_install_command")
+                        or verification_target.PLAYWRIGHT_INSTALL_CMD
+                    ),
+                    cwd=str(cwd),
+                    timeout=install_timeout,
+                )
             result = sandbox.run(test_cmd, cwd=str(cwd))
             last_verify_output = ((result.stdout or "") + "\n" + (result.stderr or ""))[-4000:]
+            if result.ok and verification_target.verify_output_disproves_pass(
+                last_verify_output
+            ):
+                from dataclasses import replace as _dc_replace
+
+                result = _dc_replace(
+                    result,
+                    exit_code=1,
+                    stderr=(result.stderr or "")
+                    + "\n[boss] verify output disproves pass (swallowed failure)\n",
+                )
             return result
 
         if _app_id and not (root / _app_id / "package.json").is_file():

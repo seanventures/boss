@@ -61,15 +61,37 @@ REQUIRED_WEB_DEV_DEPS = {
     "@typescript-eslint/parser": "^7.13.1",
 }
 
+# Live official follow-ups used `exit 0`, `node -e 'process.exit(0)'`,
+# and `playwright test || true` to make verify green. Those are stubs.
 _STUB_SCRIPT = re.compile(
-    r"""(?:^|[;&|])\s*(?:echo\s+|process\.exit\(0\))|skipping""",
-    re.I,
+    r"""(?:^|[;&|])\s*(?:echo\s+|process\.exit\(0\)|exit\s+0\b)
+        |skipping
+        |\|\|\s*(?:true|exit\s+0)\b
+        |^\s*true\s*$""",
+    re.I | re.X,
 )
 _BARE_VITE = re.compile(r"(^|[;&|]\s*)vite\b")
 _PLAYWRIGHT_BARE = re.compile(
     r"^(?:npx\s+)?playwright(?:\s+test)?$",
     re.I,
 )
+_VERIFY_DISPROOF = re.compile(
+    r"webServer was not able to start"
+    r"|Executable doesn.?t exist"
+    r"|error: unknown command"
+    r"|vite: not found"
+    r"|ENOENT"
+    r"|command not found",
+    re.I,
+)
+PLAYWRIGHT_INSTALL_CMD = (
+    "npx --package=@playwright/test playwright install chromium"
+)
+_STOP_WORDS = {
+    "start", "with", "one", "command", "and", "confirm", "the", "it",
+    "appears", "on", "for", "after", "refresh", "from", "that", "this",
+    "with", "into", "then", "when", "from", "into", "must", "does",
+}
 
 _WEB_KINDS = {"web", "spa", "frontend", "site", "landing", "nextjs", "vite"}
 
@@ -225,6 +247,7 @@ def harden_web_package(app_dir: Path | str) -> dict[str, Any]:
         "lint": "eslint . --ext .ts,.tsx --max-warnings 0",
         "test:e2e": "npx --package=@playwright/test playwright test",
         "test:api": "node --test",
+        "preview": "npx --package=vite vite preview --host 127.0.0.1 --port 4173 --strictPort",
     }
     for key, replacement in stub_replacements.items():
         raw = str(scripts.get(key) or "")
@@ -232,15 +255,154 @@ def harden_web_package(app_dir: Path | str) -> dict[str, Any]:
             scripts[key] = replacement
             changed.append(f"unstub:{key}")
 
+    if not str(scripts.get("preview") or "").strip():
+        scripts["preview"] = stub_replacements["preview"]
+        changed.append("add:preview")
+
+    verify_raw = str(scripts.get("verify") or "")
+    if verify_raw and _STUB_SCRIPT.search(verify_raw):
+        chain = [
+            name
+            for name in VERIFY_SCRIPT_STEPS
+            if str(scripts.get(name) or "").strip()
+            and not _STUB_SCRIPT.search(str(scripts.get(name) or ""))
+        ]
+        if not chain:
+            for name in ("typecheck", "build", "test:e2e"):
+                if not str(scripts.get(name) or "").strip() or _STUB_SCRIPT.search(
+                    str(scripts.get(name) or "")
+                ):
+                    scripts[name] = stub_replacements[name]
+            chain = ["typecheck", "build", "test:e2e"]
+        scripts["verify"] = " && ".join(f"npm run {name}" for name in chain)
+        changed.append("unstub:verify")
+
     if changed:
         pkg_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return {"changed": changed, "path": str(pkg_path)}
 
 
-def prepare_web_verify_env(app_dir: Path | str) -> dict[str, Any]:
-    """Harden package.json and name the install command verify must run first."""
+def verify_output_disproves_pass(output: str | None) -> bool:
+    """True when exit 0 still printed a swallowed runner failure."""
+    text = str(output or "")
+    return bool(text and _VERIFY_DISPROOF.search(text))
+
+
+def honest_verify_status(
+    verify: dict[str, Any] | None,
+    output: str | None = None,
+) -> str:
+    """Exit 0 is not a pass if the log shows a swallowed failure."""
+    if not isinstance(verify, dict):
+        return "not_recorded"
+    if verify.get("timed_out"):
+        return "fail"
+    if verify.get("exit_code") != 0:
+        return "fail"
+    if verify_output_disproves_pass(output):
+        return "fail"
+    return "pass"
+
+
+def _existing_e2e_specs(app_dir: Path) -> list[Path]:
+    found: list[Path] = []
+    for folder in (app_dir / "e2e", app_dir / "tests" / "e2e"):
+        if folder.is_dir():
+            found.extend(sorted(folder.glob("*.ts")))
+            found.extend(sorted(folder.glob("*.js")))
+    found.extend(sorted(app_dir.glob("**/*.spec.ts")))
+    uniq: list[Path] = []
+    seen: set[str] = set()
+    for path in found:
+        key = str(path)
+        if key in seen or "node_modules" in path.parts:
+            continue
+        seen.add(key)
+        uniq.append(path)
+    return uniq
+
+
+def _scenario_pattern(scenario: str) -> str:
+    words = [
+        w.lower()
+        for w in re.findall(r"[A-Za-z]{4,}", scenario or "")
+        if w.lower() not in _STOP_WORDS
+    ]
+    return "|".join(words[:6]) or "app|dashboard|home"
+
+
+def seed_acceptance_e2e(
+    app_dir: Path | str,
+    scenarios: list[str] | None = None,
+) -> dict[str, Any]:
+    """Write missing Playwright config + named JTBD specs. Never overwrite."""
+    app = Path(app_dir)
+    changed: list[str] = []
+    names = [str(item).strip() for item in (scenarios or []) if str(item).strip()]
+    if not names:
+        return {"changed": changed, "seeded_specs": 0}
+
+    config_path = app / "playwright.config.ts"
+    if not config_path.is_file() and not (app / "playwright.config.js").is_file():
+        config_path.write_text(
+            'import { defineConfig } from "@playwright/test";\n'
+            "export default defineConfig({\n"
+            '  testDir: "./e2e",\n'
+            "  timeout: 30_000,\n"
+            '  use: { baseURL: "http://127.0.0.1:4173", headless: true },\n'
+            "  webServer: {\n"
+            '    command: "npm run preview",\n'
+            '    url: "http://127.0.0.1:4173",\n'
+            "    reuseExistingServer: true,\n"
+            "    timeout: 60_000,\n"
+            "  },\n"
+            "});\n",
+            encoding="utf-8",
+        )
+        changed.append("add:playwright.config.ts")
+
+    if _existing_e2e_specs(app):
+        return {"changed": changed, "seeded_specs": 0, "reason": "specs_exist"}
+
+    e2e_dir = app / "e2e"
+    e2e_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        'import { test, expect } from "@playwright/test";',
+        "",
+        "// Official acceptance scenarios. Fail closed if the UI cannot show them.",
+        "",
+    ]
+    for scenario in names[:8]:
+        pattern = _scenario_pattern(scenario)
+        lines.extend(
+            [
+                f"test({json.dumps(scenario)}, async ({{ page }}) => {{",
+                '  await page.goto("/");',
+                "  await expect(page.locator(\"body\")).toBeVisible();",
+                f"  await expect(page.getByText(/{pattern}/i).first()).toBeVisible();",
+                "});",
+                "",
+            ]
+        )
+    (e2e_dir / "acceptance.spec.ts").write_text("\n".join(lines), encoding="utf-8")
+    changed.append("add:e2e/acceptance.spec.ts")
+    return {"changed": changed, "seeded_specs": min(len(names), 8)}
+
+
+def prepare_web_verify_env(
+    app_dir: Path | str,
+    *,
+    scenarios: list[str] | None = None,
+) -> dict[str, Any]:
+    """Harden package.json, seed missing e2e, and name install commands."""
     hardened = harden_web_package(app_dir)
+    seeded = seed_acceptance_e2e(app_dir, scenarios)
+    hardened["seeded"] = seeded
+    hardened["changed"] = list(hardened.get("changed") or []) + list(
+        seeded.get("changed") or []
+    )
     hardened["install_command"] = NPM_INSTALL_CMD
+    hardened["browser_install_command"] = PLAYWRIGHT_INSTALL_CMD
     return hardened
 
 

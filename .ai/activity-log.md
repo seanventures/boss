@@ -1,5 +1,19 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-16 — Grok — Honest verify + acceptance e2e seed
+
+- Live official follow-ups on a3db79d/`976021c` showed two leftover stub
+  shapes: `verify: exit 0` (HookWatch) and `playwright test || true`
+  (BugBox). Both exited 0 while Playwright/webServer failed, so
+  functionality scored 100 dishonestly.
+- Stub regex now catches `exit 0`, `true`, and `|| true`. Harden rebuilds
+  `verify` from real steps. Scorecard treats swallowed webServer/ENOENT
+  logs as fail even if exit is 0.
+- `seed_acceptance_e2e` writes missing Playwright config + named JTBD
+  specs from official acceptance scenarios (never overwrites). Preview
+  script and Chromium install sit in the verify env.
+- `976021c` is live (api+worker+web healthy). Not GA. Do not invent 5/5.
+
 ## 2026-08-15 — Grok — Stub gate + honest JTBD
 
 - `web_package_honest` is a fail-closed quality gate after harden.

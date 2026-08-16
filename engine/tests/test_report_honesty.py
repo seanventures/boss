@@ -173,6 +173,40 @@ def test_factory_recorded_verify_is_not_treated_as_missing():
     assert report["honesty"]["invented_scores"] == []
 
 
+def test_swallowed_webserver_failure_is_not_a_verify_pass():
+    """Live BugBox follow-up used `playwright test || true` so exit 0 lied."""
+    report = completion_report(
+        {
+            "id": "crun_608018b71ee84f10a519",
+            "status": "completed",
+            "spec": {},
+            "finalize_ctx": {
+                "qa_benchmark": {
+                    "id": "bugbox",
+                    "name": "BugBox",
+                    "verification_commands": ["npm run verify"],
+                    "completion_contract": [],
+                }
+            },
+            "state": {
+                "design": {"plan": "fix verify"},
+                "test_command": "npm run verify",
+                "test_exit_code": 0,
+                "tests_passed": True,
+                "last_verify_output": (
+                    "Error: Process from config.webServer was not able to start. "
+                    "Exit code: 1\n"
+                ),
+            },
+        }
+    )
+    assert report["results"][1]["status"] == "fail"
+    assert report["passed"] is False
+    dims = {item["id"]: item for item in report["scorecard"]["dimensions"]}
+    assert dims["functionality"]["score"] == 0
+    assert dims["reliability"]["score"] == 0
+
+
 def test_factory_recorded_verify_fail_does_not_promote_jtbd():
     report = completion_report(
         {
