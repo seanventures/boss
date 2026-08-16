@@ -81,8 +81,10 @@ _VERIFY_DISPROOF = re.compile(
     r"|error: unknown command"
     r"|vite: not found"
     r"|ENOENT"
-    r"|command not found",
-    re.I,
+    r"|command not found"
+    r"|process\.exit\(0\)"
+    r"|^\s*>\s*exit\s+0\b",
+    re.I | re.M,
 )
 PLAYWRIGHT_INSTALL_CMD = (
     "npx --package=@playwright/test playwright install chromium"

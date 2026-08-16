@@ -197,6 +197,11 @@ def test_honest_verify_status_rejects_swallowed_webserver_failure():
     assert honest_verify_status({"command": "npm run verify", "exit_code": 0}, output) == "fail"
     assert honest_verify_status({"command": "npm run verify", "exit_code": 0}, "  ✓ create") == "pass"
     assert honest_verify_status(None, "") == "not_recorded"
+    stub_log = "> hookwatch@1.0.0 verify\n> exit 0\n"
+    assert verify_output_disproves_pass(stub_log) is True
+    assert honest_verify_status({"exit_code": 0}, stub_log) == "fail"
+    node_stub = "> approveit@1.0.0 verify\n> node -e 'process.exit(0)'\n"
+    assert verify_output_disproves_pass(node_stub) is True
 
 
 def test_official_app_id_reads_benchmark_context():

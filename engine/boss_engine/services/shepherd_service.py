@@ -763,10 +763,11 @@ def projects_with_running_work(engine) -> list:
 
 
 def watch_all(engine, settings: Settings, *, dry_run: bool = False,
-              actor: str = "shepherd", class_modes: Optional[dict] = None) -> dict[str, Any]:
+              actor: str = "shepherd", class_modes: Optional[dict] = None,
+              jobs=None) -> dict[str, Any]:
     """Watch in-flight work across every project that has any."""
     results = [watch(engine, settings, p, dry_run=dry_run, actor=actor,
-                     class_modes=class_modes)
+                     class_modes=class_modes, jobs=jobs)
                for p in projects_with_running_work(engine)]
     return {
         "projects": len(results),
@@ -861,7 +862,8 @@ def readiness(engine, project_id: Optional[str] = None, *, days: int = 30) -> di
 
 def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
           actor: str = "shepherd",
-          class_modes: Optional[dict] = None) -> dict[str, Any]:
+          class_modes: Optional[dict] = None,
+          jobs=None) -> dict[str, Any]:
     """Look at everything currently running, and deal with what is obviously wrong.
 
     This is the half of the shepherd that was missing. `sweep()` reasons about runs that have
@@ -945,7 +947,7 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                                {"class": verdict.name, "reason": verdict.reason,
                                 **verdict.evidence})
             if verdict.action == "retry":
-                changed = _retry_run(engine, self.settings, self.jobs, snap.run_id,
+                changed = _retry_run(engine, settings, jobs, snap.run_id,
                                      verdict.reason)
                 if changed:
                     with begin(engine) as c:

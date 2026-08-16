@@ -7792,9 +7792,9 @@ def shepherd_watch_endpoint(project_id: Optional[str] = None, dry_run: bool = Fa
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.shepherd_service import watch, watch_all
     if project_id:
-        return watch(engine, settings, project_id, dry_run=dry_run)
+        return watch(engine, settings, project_id, dry_run=dry_run, jobs=jobs)
     # No project named: watch everything with work in flight. Neglect is not project-scoped.
-    return watch_all(engine, settings, dry_run=dry_run)
+    return watch_all(engine, settings, dry_run=dry_run, jobs=jobs)
 
 
 @app.post("/v1/delivery/health/sweep")
