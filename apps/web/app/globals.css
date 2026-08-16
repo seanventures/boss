@@ -4973,3 +4973,16 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .oc-pill.accent { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-line); }
 .oc-when { font-size: 0.72rem; color: var(--muted); }
+
+/* The spine, inside a 320px card. At full row width the four labels drifted so far apart that
+   the sequence stopped reading as one thing; compact is the honest size for this component. */
+.mr-meeting-card .sp { padding: 2px 0 0; }
+.mr-meeting-card .sp .sp-node { min-width: 0; flex: 1; gap: 4px; }
+.mr-meeting-card .sp .sp-dot { width: 10px; height: 10px; border-width: 1.5px; }
+.mr-meeting-card .sp .sp-label { font-size: 0.66rem; font-weight: 600; }
+.mr-meeting-card .sp .sp-sub { font-size: 0.6rem; }
+.mr-meeting-card .sp .sp-link { min-width: 8px; margin-top: 4px; }
+.mr-meeting-card .sp.lg .sp-node.now .sp-dot { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #6ea8fe) 20%, transparent); }
+/* Actions sit at the card's foot, compact, never full-width. */
+.mr-meeting-card .oc-actions { gap: 6px; }
+.mr-meeting-card .oc-actions .cap-btn { font-size: 0.76rem; padding: 6px 12px; }

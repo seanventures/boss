@@ -55,7 +55,10 @@ describe("BOSS mission-control design system", () => {
     const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
     expect(codeTasks).toContain("function ContractDetails");
     // Still one renderer, still used by the benchmark catalogue and the task DETAIL view.
-    expect(codeTasks.split("<ContractDetails").length - 1).toBeGreaterThanOrEqual(2);
+    // One renderer, still used by the benchmark catalogue. The card faces no longer carry it:
+    // both the single and grouped cards are now compact grid tiles, and acceptance criteria on
+    // a 320px tile is exactly the overload that made the card unreadable.
+    expect(codeTasks.split("<ContractDetails").length - 1).toBeGreaterThanOrEqual(1);
 
     // It is no longer on the list card's face, and that is the point of the redesign rather
     // than a regression. The card carried a title, a status badge, an outcome line, a contract

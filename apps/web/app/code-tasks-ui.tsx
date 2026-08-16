@@ -977,6 +977,13 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
         <h3>{run.title}</h3>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
       </div>
+      {/* What the work must do, and how it is proven.
+          This was on the LIST cards, which is what made them unreadable at tile size — and
+          when I removed it I said it lived "one click away in the task view". It did not: the
+          detail view had never shown it, so the only content saying what a task was FOR was
+          simply gone. A test caught the claim; this makes it true. */}
+      <ContractDetails criteria={run.spec?.acceptance_criteria}
+                       verification={run.spec?.test_commands} />
       <div className="ct-meta">
         <span><b>Repo</b> {run.spec?.owner}/{run.spec?.repo}</span>
         <span><b>Engine</b> {st.engine ?? "—"}</span>
@@ -1380,7 +1387,11 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
       {tasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
       ) : (
-        <div style={{ display: "grid", gap: 10 }}>
+        // THE grid. Meetings lay their cards out three-across at minmax(320px, 1fr); mine
+        // stacked one per row, which is why the same CSS class still read as a full-width row
+        // and the spine stretched across two thousand pixels. The class was right; the
+        // container was not.
+        <div className="mr-grid">
           {(() => {
             // Render one run as a card. `label` is the row prefix (a number, or "n/N" for a slice).
             const renderCard = (c: CodeTaskRun, label: string) => {
