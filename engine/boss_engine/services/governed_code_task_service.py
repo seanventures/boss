@@ -1965,6 +1965,25 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # approve-plan gate is Wire-Phase 2b; for now review plan records a PLAN: OK/REVISE note.)
         design: dict = {}
         do_design = risk_tier >= 2 and not is_web_app
+        if not do_design:
+            # Official follow-ups are risk-tier 1 and skip the design chain.
+            # The frozen benchmark PRD / inherited parent plan is still the plan.
+            if isinstance(resume_design, dict) and str(resume_design.get("plan") or "").strip():
+                design = resume_design
+            else:
+                inherited = fctx.get("inherited_design")
+                if isinstance(inherited, dict) and str(inherited.get("plan") or "").strip():
+                    design = inherited
+                else:
+                    bench = fctx.get("qa_benchmark") if isinstance(fctx.get("qa_benchmark"), dict) else {}
+                    scenarios = bench.get("acceptance_scenarios") or []
+                    prompt = str(bench.get("prompt") or "").strip()
+                    if prompt or scenarios:
+                        design = {
+                            "plan": prompt or "\n".join(str(item) for item in scenarios),
+                            "plan_ok": True,
+                            "source": "qa_benchmark",
+                        }
         if do_design and resume_design:
             # Resuming after human plan approval — reuse the approved design, skip re-running it.
             design = resume_design

@@ -173,6 +173,38 @@ def test_factory_recorded_verify_is_not_treated_as_missing():
     assert report["honesty"]["invented_scores"] == []
 
 
+def test_official_benchmark_prd_counts_as_implementation_plan():
+    """Follow-ups are tier 1 and skip design. The frozen official PRD is the plan."""
+    report = completion_report(
+        {
+            "id": "crun_official_followup",
+            "status": "completed",
+            "spec": {},
+            "finalize_ctx": {
+                "official": True,
+                "qa_benchmark": {
+                    "id": "hookwatch",
+                    "name": "HookWatch",
+                    "acceptance_scenarios": [
+                        "Create an inbox and POST JSON to it.",
+                    ],
+                    "verification_commands": ["npm run verify"],
+                    "completion_contract": [],
+                },
+            },
+            "state": {
+                "test_command": "npm run verify",
+                "test_exit_code": 0,
+                "tests_passed": True,
+                "last_verify_output": "  ✓ Create an inbox and POST JSON to it. (12ms)\n",
+            },
+        }
+    )
+    assert report["results"][0]["status"] == "pass"
+    assert report["results"][1]["status"] == "pass"
+    assert report["passed"] is True
+
+
 def test_swallowed_webserver_failure_is_not_a_verify_pass():
     """Live BugBox follow-up used `playwright test || true` so exit 0 lied."""
     report = completion_report(

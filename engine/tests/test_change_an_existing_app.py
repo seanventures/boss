@@ -123,6 +123,17 @@ def test_naming_a_run_that_does_not_exist_says_so(monkeypatch):
         cts.start_followup_task(None, parent_run_id="nope", instructions="x", jobs=None)
 
 
+def test_followup_copies_parent_design_so_official_plan_is_not_lost(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(cts, "start_code_task",
+                        lambda connection, **kw: captured.update(kw) or "crun_new")
+    parent = dict(PARENT)
+    parent["state"] = {"design": {"plan": "Keep HookWatch. Make verify real.", "plan_ok": True}}
+    monkeypatch.setattr(cts, "load_code_task_run", lambda _c, _r: parent)
+    cts.start_followup_task(None, parent_run_id="crun_child", instructions="fix verify", jobs=None)
+    assert captured["finalize_ctx"]["inherited_design"]["plan"].startswith("Keep HookWatch")
+
+
 def test_followup_engine_override_pins_openai(started):
     cts.start_followup_task(
         None,

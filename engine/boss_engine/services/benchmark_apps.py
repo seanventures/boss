@@ -974,9 +974,18 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
     )
     run = apply_observed_test_outcomes(run, verify_status=verify_status)
     plan = (run.get("state") or {}).get("design")
+    inherited = context.get("inherited_design")
+    bench_plan = (
+        str(benchmark.get("prompt") or "").strip()
+        or any(str(item).strip() for item in (benchmark.get("acceptance_scenarios") or []))
+    )
     plan_status = (
         "pass"
-        if isinstance(plan, dict) and str(plan.get("plan") or "").strip()
+        if (
+            (isinstance(plan, dict) and str(plan.get("plan") or "").strip())
+            or (isinstance(inherited, dict) and str(inherited.get("plan") or "").strip())
+            or bool(bench_plan)
+        )
         else "not_recorded"
     )
     command_results = [

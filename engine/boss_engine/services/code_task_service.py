@@ -478,6 +478,9 @@ def start_followup_task(
     bench = fctx.get("qa_benchmark")
     if isinstance(bench, dict) and bench:
         child_fctx["qa_benchmark"] = dict(bench)
+    parent_design = (run.get("state") or {}).get("design")
+    if isinstance(parent_design, dict) and str(parent_design.get("plan") or "").strip():
+        child_fctx["inherited_design"] = dict(parent_design)
     model_config = spec.get("model_config")
     engine_name = str(engine or "").strip().lower()
     if engine_name:
