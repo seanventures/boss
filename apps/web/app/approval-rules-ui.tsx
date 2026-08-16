@@ -66,16 +66,42 @@ export function ApprovalRulesView({
         </div>
       </div>
 
+      {/* BOTH SIDES OF THE RULE.
+          Listing only what needs approval answers half the question: the useful thing to know
+          about an autonomous system is as much what it does WITHOUT asking as what it stops
+          for. Same disclosure, two groups, so the 80 capabilities reconcile against the two
+          numbers above instead of having to be taken on trust. */}
       <details className="ar-capability-list">
-        <summary>Which capabilities need approval ({needs.length})</summary>
+        <summary>
+          What BOSS may do — {needs.length} need approval, {auto.length} run automatically
+        </summary>
         <p className="detail" style={{ margin: "6px 0" }}>
-          Anything at tier {rules.autonomy_threshold + 1} or above. These are not pending
-          requests — they are the rules that decide what would become one.
+          Set by risk tier: anything at tier {rules.autonomy_threshold + 1} or above stops for a
+          human. These are the rules, not pending requests.
         </p>
+
+        <div className="cap-section-head" style={{ marginTop: 10 }}>
+          <h4 style={{ margin: 0, fontSize: "0.82rem" }}>Needs approval ({needs.length})</h4>
+          <span className="cap-section-sub">stops and becomes a Decision below</span>
+        </div>
         <div className="ar-grid">
           {needs.map((t: ApprovalToolRule) => (
             <div key={t.source + t.name} className="ar-rule">
               <span className="cap-badge tone-amber">tier {t.risk_tier}</span>
+              <code className="ar-rule-name">{t.name}</code>
+              <span className="ar-rule-meta">{t.source}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="cap-section-head" style={{ marginTop: 14 }}>
+          <h4 style={{ margin: 0, fontSize: "0.82rem" }}>Runs automatically ({auto.length})</h4>
+          <span className="cap-section-sub">no approval — BOSS does these on its own</span>
+        </div>
+        <div className="ar-grid">
+          {auto.map((t: ApprovalToolRule) => (
+            <div key={t.source + t.name} className="ar-rule">
+              <span className="cap-badge tone-green">tier {t.risk_tier}</span>
               <code className="ar-rule-name">{t.name}</code>
               <span className="ar-rule-meta">{t.source}</span>
             </div>
