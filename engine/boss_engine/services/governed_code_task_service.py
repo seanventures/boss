@@ -2857,15 +2857,15 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "web_package_honest": True,
             # recorded below whether allowed or not, so the PR always states what went
         }
+        _web_contract: dict | None = None
         if _web_verify:
             try:
-                _contract = verification_target.evaluate_web_package_contract(
+                _web_contract = verification_target.evaluate_web_package_contract(
                     verification_target.resolve_verify_cwd(root, app_id=_app_id)
                 )
             except Exception:  # noqa: BLE001
-                _contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
-            gates["web_package_honest"] = bool(_contract.get("ok"))
-            evidence["web_package_contract"] = _contract
+                _web_contract = {"ok": False, "stubs": ["unreadable"], "missing_runners": []}
+            gates["web_package_honest"] = bool(_web_contract.get("ok"))
 
         if _weakened and _retirement_allowed:
             with _transaction(engine) as c:
@@ -2932,6 +2932,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         evidence = {
             "risk_tier": risk_tier,
             "profile": profile["name"],
+            **({"web_package_contract": _web_contract} if _web_contract is not None else {}),
             # Named here (not written earlier) because `evidence` does not exist until this
             # point — writing to it above was a latent crash that would have fired precisely
             # when a run DID weaken an existing test, i.e. when the gate matters most.

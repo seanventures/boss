@@ -1,5 +1,7 @@
 """Factory quality loop — evidence collection, gap detection, one improve pass."""
 
+from pathlib import Path
+
 from boss_engine.services.factory_quality_loop import (
     MAX_QUALITY_PASSES,
     attach_evidence_to_run,
@@ -249,3 +251,15 @@ def test_governed_pipeline_writes_ui_ux_evidence_into_run_state():
     assert "def _run_verify(" in src
     assert "resolve_verify_cwd(" in src
     assert 'guest_spec["app_root"] = _app_id' in src
+
+
+def test_web_package_contract_is_not_written_before_evidence_exists():
+    """Official BugBox died here: UnboundLocalError on evidence after green tests."""
+    src = Path(__file__).resolve().parents[1].joinpath(
+        "boss_engine/services/governed_code_task_service.py"
+    ).read_text(encoding="utf-8")
+    assign = src.find("\n        evidence = {")
+    write = src.find('evidence["web_package_contract"]')
+    assert assign != -1
+    assert write == -1
+    assert '**({"web_package_contract": _web_contract}' in src
