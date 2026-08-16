@@ -201,7 +201,7 @@ export async function loadTaskContextAction(taskId: string, projectId: string): 
   const p = encodeURIComponent(projectId);
   const [task, codeTasks] = await Promise.all([
     getJsonReturn(`/v1/tasks/${encodeURIComponent(taskId)}?project_id=${p}`),
-    getJsonReturn(`/v1/code-tasks?project_id=${p}&limit=40`),
+    getJsonReturn(`/v1/code-tasks?project_id=${p}&limit=200`),
   ]);
   const ct = ((codeTasks.data as Record<string, unknown> | undefined)?.code_tasks ?? []) as Array<Record<string, unknown>>;
   return { ok: true, data: {
@@ -3011,10 +3011,18 @@ export async function relaunchCodeTaskAction(formData: FormData): Promise<{ run_
  * The panel is server-rendered, and `router.refresh()` re-renders on the server while the
  * client keeps the old rows — the same defect that left deleted deployment targets on screen.
  * A panel that owns its data can show a run it just started. */
+/** The panel re-reads the list through here after a launch.
+ *
+ *  This asked for 40 while the server render asked for 200. Roughly 36 of any recent 40 are
+ *  BOSS's own "Captain: QUALITY IMPROVE PASS" runs, so the page rendered 35 cards and then
+ *  replaced them with almost none the moment the panel refreshed — cards that "display and
+ *  then vanish". Both paths must ask for the same thing; a list that changes depending on
+ *  which fetch produced it is not a list.
+ */
 export async function listCodeTasksAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;
   try {
-    const res = await fetch(`${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(pid)}&limit=40`,
+    const res = await fetch(`${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(pid)}&limit=200`,
                             { headers: authHeaders(), cache: "no-store" });
     if (!res.ok) return { error: `code-tasks ${res.status}` };
     return await res.json();
@@ -3391,7 +3399,7 @@ export async function getShepherdOverviewAction(projectId?: string): Promise<any
   const pid = projectId || PROJECT_ID;
   try {
     const res = await fetch(
-      `${API_URL}/v1/shepherd/overview?project_id=${encodeURIComponent(pid)}&limit=40`,
+      `${API_URL}/v1/shepherd/overview?project_id=${encodeURIComponent(pid)}&limit=200`,
       { headers: authHeaders(), cache: "no-store" },
     );
     if (!res.ok) return { error: `overview ${res.status}` };
