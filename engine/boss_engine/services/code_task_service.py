@@ -522,9 +522,36 @@ def start_followup_task(
         review_panel_size=review_panel_size if isinstance(review_panel_size, int)
         else spec.get("review_panel_size"),
     )
+    official = bool(child_fctx.get("official") or child_fctx.get("qa_benchmark"))
+    swarm = None
+    try:
+        from .agent_process import bind_captain_swarm
+
+        settings = getattr(jobs, "settings", None)
+        if settings is not None:
+            swarm = bind_captain_swarm(
+                connection,
+                settings=settings,
+                project_id=run["project_id"],
+                actor=actor,
+                prd=instructions,
+                title=f"Captain swarm — {title or parent_title}",
+                attach_run_id=run_id,
+                official=official,
+                engine=engine_name or None,
+                review_panel_size=(
+                    review_panel_size if isinstance(review_panel_size, int)
+                    else (5 if official else None)
+                ),
+                qa_benchmark=child_fctx.get("qa_benchmark")
+                if isinstance(child_fctx.get("qa_benchmark"), dict) else None,
+            )
+    except Exception:  # noqa: BLE001 — swarm bind must not drop the factory job
+        swarm = None
     return {"run_id": run_id, "root_run_id": root,
             "base_branch": work_branch_for(run),
-            "owner": spec.get("owner"), "repo": spec.get("repo")}
+            "owner": spec.get("owner"), "repo": spec.get("repo"),
+            "process_run_id": (swarm or {}).get("id") if isinstance(swarm, dict) else None}
 
 
 def _is_system_failure(error) -> bool:

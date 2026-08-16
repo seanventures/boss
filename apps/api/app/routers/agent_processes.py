@@ -43,6 +43,13 @@ class ProcessStartRequest(BaseModel):
         default=False,
         description="If true, captain build enqueues a governed code.task.",
     )
+    attach_run_id: Optional[str] = Field(
+        default=None,
+        description="Bind captains to an existing official/factory run instead of starting another.",
+    )
+    official: bool = False
+    engine: Optional[str] = None
+    review_panel_size: Optional[int] = None
 
 
 class ProcessActorRequest(BaseModel):
@@ -252,6 +259,10 @@ def start_run(payload: ProcessStartRequest) -> dict[str, Any]:
                 process_key=process_key,
                 simulated=payload.simulated,
                 auto_build=payload.auto_build,
+                attach_run_id=payload.attach_run_id,
+                official=payload.official,
+                engine=payload.engine,
+                review_panel_size=payload.review_panel_size,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

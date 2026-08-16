@@ -246,6 +246,37 @@ def test_simulated_build_never_enqueues_code_task(monkeypatch):
     assert patches and patches[0]["build_status"] == "planned"
 
 
+def test_attached_build_binds_existing_run_instead_of_spawning_another(monkeypatch):
+    from boss_engine.config import Settings
+    from boss_engine.services import code_task_service
+    from boss_engine.services.agent_process import AgentProcessService
+
+    called = []
+    monkeypatch.setattr(
+        code_task_service, "start_code_task",
+        lambda *a, **k: called.append(k) or "crun_should_not_exist",
+    )
+    svc = AgentProcessService(Settings())
+    patches = []
+    svc._patch_context = lambda conn, run_id, patch: patches.append(patch)
+    svc._refresh_build = lambda *a, **k: {
+        "status": "waiting", "verdict": "running", "run_id": "crun_live",
+    }
+    result = svc._execute_build(
+        None,
+        project_id="p",
+        actor="a",
+        run={"id": "aprun_att", "title": "official"},
+        ctx={"prd": "Fix HookWatch verify."},
+        inp={"auto_build": True, "attach_run_id": "crun_live", "official": True},
+        process_run_id="aprun_att",
+    )
+    assert called == []
+    assert result["run_id"] == "crun_live"
+    assert result["status"] == "waiting"
+    assert patches and patches[0]["attached"] is True
+
+
 class _Mappings:
     def __init__(self, row):
         self._row = row

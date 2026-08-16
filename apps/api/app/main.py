@@ -6251,7 +6251,38 @@ def start_code_task_endpoint(payload: dict):
                 "This is not a sealed factory path."
             ),
         }
-    return {"status": "queued", "run_id": run_id}
+    swarm = None
+    fctx = payload.get("finalize_ctx") or {}
+    official = bool(payload.get("official") or fctx.get("official") or fctx.get("qa_benchmark"))
+    if official:
+        try:
+            from boss_engine.services.agent_process import bind_captain_swarm
+
+            with begin(engine) as c:
+                swarm = bind_captain_swarm(
+                    c,
+                    settings=settings,
+                    project_id=project_id,
+                    actor=str(payload.get("actor") or "executive_console"),
+                    prd=str(payload.get("instructions") or payload.get("title") or "Official factory run"),
+                    title=f"Captain swarm — {payload.get('title') or 'official'}",
+                    attach_run_id=run_id,
+                    official=True,
+                    engine=(
+                        ((payload.get("model_config") or {}).get("default") or {}).get("engine")
+                    ),
+                    review_panel_size=payload.get("review_panel_size")
+                    if isinstance(payload.get("review_panel_size"), int) else 5,
+                    qa_benchmark=fctx.get("qa_benchmark")
+                    if isinstance(fctx.get("qa_benchmark"), dict) else None,
+                )
+        except Exception:  # noqa: BLE001
+            swarm = None
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "process_run_id": (swarm or {}).get("id") if isinstance(swarm, dict) else None,
+    }
 
 
 @app.post("/v1/prd/decompose", status_code=201)

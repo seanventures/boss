@@ -392,6 +392,11 @@ class AgentProcessService:
         self, connection: Connection, *, project_id: str, actor: str,
         prd: str, title: str = "", process_key: str = "prd_to_accepted_work",
         simulated: bool = False, auto_build: bool = False,
+        attach_run_id: str | None = None,
+        official: bool = False,
+        engine: str | None = None,
+        review_panel_size: int | None = None,
+        qa_benchmark: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         template = self.get_template_by_key(connection, project_id, process_key)
         if template is None:
@@ -416,8 +421,24 @@ class AgentProcessService:
                 "t": template["id"],
                 "title": (title or "PRD delivery")[:200],
                 "actor": actor,
-                "inp": json.dumps({"prd": prd, "simulated": bool(simulated), "auto_build": bool(auto_build)}),
-                "ctx": json.dumps({"prd": prd, "reviews": [], "simulated": bool(simulated)}),
+                "inp": json.dumps({
+                    "prd": prd,
+                    "simulated": bool(simulated),
+                    "auto_build": bool(auto_build),
+                    "attach_run_id": attach_run_id,
+                    "official": bool(official),
+                    "engine": engine,
+                    "review_panel_size": review_panel_size,
+                    "qa_benchmark": qa_benchmark if isinstance(qa_benchmark, dict) else None,
+                }),
+                "ctx": json.dumps({
+                    "prd": prd,
+                    "reviews": [],
+                    "simulated": bool(simulated),
+                    "run_id": attach_run_id,
+                    "build_status": "queued" if attach_run_id else None,
+                    "official": bool(official),
+                }),
                 "cur": json.dumps([spec.get("entry")]),
             },
         ).mappings().one()
@@ -441,6 +462,41 @@ class AgentProcessService:
                 {"r": receipt["id"], "id": run["id"]},
             )
         return self.advance(connection, project_id=project_id, actor=actor, run_id=run["id"])
+
+
+def bind_captain_swarm(
+    connection: Connection,
+    *,
+    settings: Any,
+    project_id: str,
+    actor: str,
+    prd: str,
+    title: str,
+    attach_run_id: str,
+    official: bool = False,
+    engine: str | None = None,
+    review_panel_size: int | None = None,
+    qa_benchmark: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach the PRD→captain→QA→UX→panel swarm to an existing factory run.
+
+    Does not start a second code.task. Tick advances the captains against the
+    attached run. Simulated/auto_build=false stays planned-only.
+    """
+    service = AgentProcessService(settings)
+    return service.start_run(
+        connection,
+        project_id=project_id,
+        actor=actor,
+        prd=prd,
+        title=title[:200],
+        auto_build=True,
+        attach_run_id=attach_run_id,
+        official=official,
+        engine=engine,
+        review_panel_size=review_panel_size,
+        qa_benchmark=qa_benchmark,
+    )
 
     def get_run(self, connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
         self.ensure_schema(connection)
@@ -643,6 +699,18 @@ class AgentProcessService:
         process_run_id: str = "",
     ) -> dict[str, Any]:
         process_run_id = process_run_id or str(run.get("id") or "")
+        attach = str(inp.get("attach_run_id") or ctx.get("run_id") or "").strip()
+        if attach:
+            self._patch_context(connection, process_run_id, {
+                "run_id": attach,
+                "build_status": ctx.get("build_status") or "queued",
+                "attached": True,
+                "process_run_id": process_run_id,
+            })
+            ctx = {**ctx, "run_id": attach, "process_run_id": process_run_id}
+            return self._refresh_build(
+                connection, project_id, ctx, process_run_id=process_run_id,
+            )
         if ctx.get("run_id") and ctx.get("build_status") in {"queued", "running", "repairing"}:
             return self._refresh_build(
                 connection, project_id, ctx, process_run_id=process_run_id,
@@ -663,6 +731,24 @@ class AgentProcessService:
             from .jobs import JobLeaseService
 
             prd = str(ctx.get("prd") or inp.get("prd") or "")
+            official = bool(inp.get("official") or ctx.get("official"))
+            bench = inp.get("qa_benchmark") if isinstance(inp.get("qa_benchmark"), dict) else None
+            fctx: dict[str, Any] = {
+                "source": "agent_process",
+                "process_run_id": process_run_id,
+                "actor": actor,
+            }
+            if official:
+                fctx["official"] = True
+            if bench:
+                fctx["qa_benchmark"] = dict(bench)
+            engine_name = str(inp.get("engine") or "").strip().lower()
+            model_config = None
+            if engine_name:
+                from .spend_cap_failover import pin_engine_model_config
+
+                model_config = pin_engine_model_config(engine_name, None)
+            panel = inp.get("review_panel_size")
             run_id = start_code_task(
                 connection,
                 project_id=project_id,
@@ -674,10 +760,13 @@ class AgentProcessService:
                 owner=self.settings.target_github_owner,
                 repo=self.settings.target_github_repo,
                 base_branch="main",
-                finalize_ctx={"source": "agent_process", "process_run_id": process_run_id, "actor": actor},
+                finalize_ctx=fctx,
                 jobs=JobLeaseService(self.settings),
                 open_pr=True,
                 risk_tier=1,
+                model_config=model_config,
+                review_panel_size=int(panel) if isinstance(panel, int) else (5 if official else None),
+                repair_retries=2 if official else None,
             )
         except Exception as exc:  # noqa: BLE001
             return {"status": "failed", "verdict": "blocked", "reason": f"factory launch failed: {exc}"}
