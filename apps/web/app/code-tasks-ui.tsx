@@ -1,5 +1,9 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+
+import { consoleHref } from "./console-href";
+
 import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
@@ -394,6 +398,8 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
   onLaunched?: (key: string, runId?: string, error?: string,
                 kind?: "meeting" | "code" | "existing") => void | Promise<void>;
 }) {
+  // The request's query string, so the FIRST render already carries the org.
+  const search = useSearchParams()?.toString();
   const [sent, setSent] = useState(false);
   // What the CATALOG already knows: this benchmark has been built in this project. Read at
   // render, so the card never invites a press whose only effect would be a second copy. The
@@ -466,7 +472,7 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
         startedKind === "meeting" ? (
           // A meeting run id means nothing to the code-task viewer. Send people to the panel
           // that is actually running, rather than to a viewer that renders nothing.
-          <a className="cap-btn primary" href="?area=meetings"
+          <a className="cap-btn primary" href={consoleHref({ area: "meetings" }, search)}
              title="Open the panel this launched">
             View meeting →
           </a>
@@ -1286,6 +1292,8 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   githubPlaneLabel?: string | null;
   githubFullName?: string | null;
 }) {
+  // The request's query string, so the FIRST render already carries the org.
+  const search = useSearchParams()?.toString();
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -1492,10 +1500,10 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                     {((c.finalize_ctx as Record<string, unknown> | undefined)?.origin as
                         { kind?: string; task_id?: string } | undefined)?.kind === "meeting" ? (
                       <a className="mr-meeting-pill accent"
-                         href={`?area=meetings${
-                           ((c.finalize_ctx as Record<string, unknown>).origin as { task_id?: string }).task_id
-                             ? `&task=${((c.finalize_ctx as Record<string, unknown>).origin as { task_id?: string }).task_id}`
-                             : ""}`}
+                         href={consoleHref({
+                           area: "meetings",
+                           task: ((c.finalize_ctx as Record<string, unknown>).origin as { task_id?: string }).task_id,
+                         }, search)}
                          onClick={(e) => e.stopPropagation()}
                          title="Open the panel that specced this app">
                         ◇ from a panel ↗

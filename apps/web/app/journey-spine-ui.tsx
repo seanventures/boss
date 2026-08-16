@@ -1,5 +1,9 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+
+import { consoleHref } from "./console-href";
+
 /**
  * The journey spine: one outcome's life, on its own card.
  *
@@ -40,6 +44,8 @@ const BUILD_PHASES = new Set([
 ]);
 
 export function JourneySpine({ run, previewUrl, large = false }: { run: Run; previewUrl?: string | null; large?: boolean }) {
+  // The request's query string, so the FIRST render already carries the org.
+  const search = useSearchParams()?.toString();
   const fctx = run.finalize_ctx ?? {};
   const origin = fctx.origin ?? null;
   const status = run.status ?? "";
@@ -55,8 +61,8 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   // A meeting's own id, so Spec lands on THAT panel rather than the meetings list. Falls back
   // to the area when only the origin kind is known.
   const meetingHref = origin?.task_id
-    ? `?area=meetings&task=${encodeURIComponent(origin.task_id)}`
-    : "?area=meetings";
+    ? consoleHref({ area: "meetings", task: origin.task_id }, search)
+    : consoleHref({ area: "meetings" }, search);
 
   const nodes: {
     key: string; label: string; sub?: string; state: NodeState; href?: string; title: string;
@@ -66,7 +72,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
       label: "Research",
       sub: fromDiscovery ? "open dossier ↗" : "none",
       state: fromDiscovery ? "done" : "todo",
-      href: fromDiscovery ? "?area=discovery" : undefined,
+      href: fromDiscovery ? consoleHref({ area: "discovery" }, search) : undefined,
       title: fromDiscovery
         ? "Started from a research dossier — open Discovery"
         : "No research phase: this work did not start from a dossier",

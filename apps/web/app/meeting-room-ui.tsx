@@ -304,7 +304,18 @@ function MeetingDetail({
       <div className="mr-header">
         <div className="mr-header-main">
           <span className="eyebrow">Meeting room</span>
-          <h3 className="mr-title">{meeting.title.replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ")}</h3>
+          {/* A meeting launched from a benchmark is titled with the ENTIRE directive — every
+              acceptance rule, every required npm script, ~2k characters. Rendered as an <h3>
+              that became a wall of 28px bold text pushing the whole panel below the fold, so
+              the meeting looked broken rather than verbose. The heading takes the lead
+              sentence; the directive itself belongs in the body, at body size. */}
+          <h3 className="mr-title">{leadTitle(meeting.title)}</h3>
+          {fullDirective(meeting.title) ? (
+            <details className="mr-directive">
+              <summary>Full directive</summary>
+              <p className="detail">{fullDirective(meeting.title)}</p>
+            </details>
+          ) : null}
           {meeting.url ? (
             <a className="mr-source" href={meeting.url} target="_blank" rel="noreferrer">studied {meeting.url} ↗</a>
           ) : null}
@@ -477,6 +488,28 @@ function ManageRoles({ projectId, roles }: { projectId: string; roles: MeetingRo
 }
 
 /* ---- Meetings home (landing + routing) ------------------------------------- */
+
+/** The first sentence, capped — what a heading can carry without becoming the document. */
+function cleanTitle(raw: string): string {
+  return (raw || "").replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ").trim();
+}
+
+function leadTitle(raw: string): string {
+  const text = cleanTitle(raw);
+  if (text.length <= 96) return text;
+  // Prefer a real sentence break; fall back to a word break so a title never ends mid-word.
+  const stop = text.slice(0, 120).search(/[.:;]\s/);
+  if (stop > 24) return text.slice(0, stop);
+  const cut = text.lastIndexOf(" ", 93);
+  return `${text.slice(0, cut > 24 ? cut : 93)}…`;
+}
+
+/** Whatever the heading had to leave out — empty when the title already fits. */
+function fullDirective(raw: string): string {
+  const text = cleanTitle(raw);
+  return text.length > 96 ? text : "";
+}
+
 export function MeetingsHome({
   projectId,
   orgId,

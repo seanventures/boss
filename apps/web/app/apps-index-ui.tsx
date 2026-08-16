@@ -1,5 +1,9 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+
+import { consoleHref } from "./console-href";
+
 import { useMemo } from "react";
 
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -70,6 +74,8 @@ export function AppsIndex({
   meetings: any[];
   benchmarks: any[];
 }) {
+  // The request's query string, so the FIRST render already carries the org.
+  const search = useSearchParams()?.toString();
   const apps = useMemo(() => groupIntoApps(runs, previews), [runs, previews]);
 
   if (apps.length === 0) {
@@ -81,7 +87,7 @@ export function AppsIndex({
           are still deciding, Meetings if you know the outcome, or Code Tasks if you already
           know the change.
         </p>
-        <a className="cap-btn primary" href="?area=code_tasks">Start a build →</a>
+        <a className="cap-btn primary" href={consoleHref({ area: "code_tasks" }, search)}>Start a build →</a>
       </div>
     );
   }
@@ -106,6 +112,8 @@ export function AppsIndex({
 }
 
 function AppCard({ app }: { app: App }) {
+  // The request's query string, so the FIRST render already carries the org.
+  const search = useSearchParams()?.toString();
   const shipped = app.shipped;
   const live = app.preview && (app.preview.status === "running" || app.preview.status === "starting");
   const previewUrl = live
@@ -141,7 +149,7 @@ function AppCard({ app }: { app: App }) {
             Pull request ↗
           </a>
         ) : null}
-        <a className="cap-btn" href={`?area=code_tasks&run=${app.latest.id}`}>Change this app</a>
+        <a className="cap-btn" href={consoleHref({ area: "code_tasks", run: app.latest.id }, search)}>Change this app</a>
       </div>
 
       {app.attempts.length > 1 ? (
