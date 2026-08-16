@@ -1620,7 +1620,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     <LaunchTask run={c} projectId={projectId} onLaunched={noteLaunch}
                                      onOpen={(id) => void openRun(id)}
                                      startedId={launched[c.id]?.run_id}
-                                     failed={launched[c.id]?.error} />
+                                     failed={launched[c.id]?.error}
+                                     label="Re-run with the same spec" />
                     <ChangeThisApp run={c} onStarted={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[`chg:${c.id}`]?.run_id} />
@@ -1792,11 +1793,14 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     <ChangeThisApp run={members[0]} onStarted={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[`chg:${members[0].id}`]?.run_id} />
-                    <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
-                                     onOpen={(id) => void openRun(id)}
-                                     startedId={launched[members[0].id]?.run_id}
-                                     failed={launched[members[0].id]?.error}
-                                     label="Rebuild from scratch" />
+                    {/* Re-running the IDENTICAL brief is not a card-level action.
+                        The only honest uses for it are holding the spec constant on purpose --
+                        comparing two runs of a benchmark, or re-running after a platform
+                        failure where nothing about the product was learned. Both are things
+                        you do deliberately from a specific attempt, never because the app in
+                        front of you looks wrong. Offered from the card it reads as the obvious
+                        remedy for a bad result, which is the one thing it cannot fix: the same
+                        brief is what produced it. It stays on each attempt inside the card. */}
                   </div>
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>

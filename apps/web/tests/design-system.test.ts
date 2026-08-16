@@ -80,8 +80,13 @@ describe("BOSS mission-control design system", () => {
     // copying data BOSS already held.
     const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
     expect(codeTasks).toContain("function LaunchTask");
-    expect(codeTasks).toContain("<LaunchTask run={c}");            // every task card
-    expect(codeTasks).toContain("<LaunchTask run={members[0]}");   // and grouped builds
+    expect(codeTasks).toContain("<LaunchTask run={c}");            // every ATTEMPT, inside the app
+    // Deliberately NOT on the app card. Re-running the identical brief only makes sense when
+    // the spec is being held constant on purpose -- comparing benchmark runs, or re-running
+    // after a platform failure that taught nothing about the product. Offered from the card it
+    // reads as the remedy for a disappointing app, which is the one thing it cannot be: the
+    // same brief is what produced it.
+    expect(codeTasks).not.toContain("<LaunchTask run={members[0]}");
     expect(codeTasks).toContain("relaunchCodeTaskAction");
   });
 
