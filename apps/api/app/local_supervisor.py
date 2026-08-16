@@ -33,11 +33,20 @@ _WORKER_MODULE = "apps.worker.boss_worker.main"
 
 
 def enabled() -> bool:
+    """OPT-IN, deliberately.
+
+    This used to default to on whenever BOSS_ENV was unset — which reads as "a laptop" and is
+    equally true of a server whose compose file simply never set the variable. Getting that
+    wrong starts a SECOND worker inside the API container next to the real one, and two workers
+    leasing the same jobs is a worse failure than the missing worker this was written to fix.
+    A default that is safe on a laptop and dangerous in production is not a safe default.
+    """
     explicit = os.getenv("BOSS_LOCAL_SUPERVISOR")
     if explicit is not None:
         return explicit.strip().lower() in {"1", "true", "yes", "on"}
-    env = (os.getenv("BOSS_ENV") or os.getenv("ENVIRONMENT") or "local").strip().lower()
-    return env in {"local", "dev", "development", ""}
+    env = (os.getenv("BOSS_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    # Only an explicitly local environment. Unset means "unknown", which is not local.
+    return env in {"local", "dev", "development"}
 
 
 def worker_running() -> bool:
