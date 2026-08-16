@@ -336,6 +336,10 @@ class FactoryFlowService:
             "process_steps": (process or {}).get("steps") or [],
         }
         diagnosis = diagnose_flow(snap)
+        snap["diagnosis"] = diagnosis
+        from .captain_coordination import plan_staffing
+
+        plan = plan_staffing(snap)
         return {
             **{k: snap[k] for k in (
                 "id", "title", "status", "phase", "error", "official",
@@ -345,6 +349,15 @@ class FactoryFlowService:
             )},
             "steps": flow_steps(snap),
             "diagnosis": diagnosis,
+            "captain": {
+                "needs": plan.get("needs"),
+                "assignments": [
+                    item for item in (plan.get("assignments") or [])
+                    if item.get("timing") == "now"
+                ],
+                "panel": plan.get("panel"),
+                "finish": plan.get("finish"),
+            },
             "verify_tail": str(snap.get("last_verify_output") or "")[-240:],
         }
 
@@ -389,6 +402,15 @@ class FactoryFlowService:
             ):
                 if self._attach_missing_swarm(connection, project_id, item, actor=actor):
                     attached += 1
+        captain = {}
+        try:
+            from .captain_coordination import CaptainCoordinationService
+
+            captain = CaptainCoordinationService(self.settings).coordinate(
+                connection, project_id, actor=actor,
+            )
+        except Exception:  # noqa: BLE001 — flow tick must still return findings
+            captain = {"error": "captain_coordinate_failed"}
         emit_event(
             connection, project_id, "factory_flow.ticked", actor, "project", project_id,
             {"recorded": recorded, "attached": attached, "stalled": board.get("stalled")},
@@ -399,6 +421,10 @@ class FactoryFlowService:
             "attached": attached,
             "stalled": board.get("stalled"),
             "in_flight": board.get("in_flight"),
+            "captain": {
+                "assignments_written": (captain or {}).get("assignments_written"),
+                "plans": len((captain or {}).get("plans") or []),
+            },
         }
 
     def _record_finding(

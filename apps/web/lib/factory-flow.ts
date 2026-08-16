@@ -30,6 +30,12 @@ export type FactoryFlowItem = {
   steps: FactoryFlowStep[];
   verifyTail?: string;
   error?: string | null;
+  captain?: {
+    needs: string[];
+    assignments: Array<{ agent_id?: string; name?: string; task?: string; timing?: string }>;
+    panel?: { roles?: string[]; size?: number; reason?: string } | null;
+    finish?: { ready?: boolean; verdict?: string; blockers?: string[] };
+  };
 };
 
 export type FactoryFlowFinding = {
@@ -67,6 +73,38 @@ export function emptyFactoryFlowBoard(reason: string, projectId = ""): FactoryFl
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function mapCaptain(value: unknown): FactoryFlowItem["captain"] {
+  const captain = asRecord(value);
+  if (!Object.keys(captain).length) return undefined;
+  const panelRaw = captain.panel && typeof captain.panel === "object"
+    ? (captain.panel as Record<string, unknown>)
+    : null;
+  const finishRaw = asRecord(captain.finish);
+  return {
+    needs: Array.isArray(captain.needs) ? captain.needs.map(String) : [],
+    assignments: Array.isArray(captain.assignments)
+      ? (captain.assignments as Array<Record<string, unknown>>).map((row) => ({
+          agent_id: row.agent_id == null ? undefined : String(row.agent_id),
+          name: row.name == null ? undefined : String(row.name),
+          task: row.task == null ? undefined : String(row.task),
+          timing: row.timing == null ? undefined : String(row.timing),
+        }))
+      : [],
+    panel: panelRaw
+      ? {
+          roles: Array.isArray(panelRaw.roles) ? panelRaw.roles.map(String) : [],
+          size: typeof panelRaw.size === "number" ? panelRaw.size : undefined,
+          reason: panelRaw.reason == null ? undefined : String(panelRaw.reason),
+        }
+      : null,
+    finish: {
+      ready: finishRaw.ready === true,
+      verdict: finishRaw.verdict == null ? undefined : String(finishRaw.verdict),
+      blockers: Array.isArray(finishRaw.blockers) ? finishRaw.blockers.map(String) : [],
+    },
+  };
 }
 
 export function mapFactoryFlowBoard(payload: unknown, projectId: string): FactoryFlowBoard {
@@ -110,6 +148,7 @@ export function mapFactoryFlowBoard(payload: unknown, projectId: string): Factor
           : [],
         verifyTail: item.verify_tail == null ? "" : String(item.verify_tail),
         error: item.error == null ? null : String(item.error),
+        captain: mapCaptain(item.captain),
       };
     }),
     findings: findings.map((raw) => {

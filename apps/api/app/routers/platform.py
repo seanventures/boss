@@ -272,6 +272,13 @@ def mount_platform_routers(app: FastAPI) -> None:
     except ImportError:
         pass
 
+    try:
+        from .captain import router as captain_router
+
+        app.include_router(captain_router)
+    except ImportError:
+        pass
+
     # Focused always-on agents: builder + validated duty loop
     try:
         from .focused_agents import router as focused_agents_router

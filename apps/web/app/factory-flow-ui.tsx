@@ -54,6 +54,22 @@ export function FactoryFlowBoard({ projectId }: { projectId: string }) {
               {item.diagnosis.recommendedFix ? (
                 <div className="detail">{item.diagnosis.recommendedFix}</div>
               ) : null}
+              {item.captain?.assignments?.length ? (
+                <div className="detail">
+                  captain now:{" "}
+                  {item.captain.assignments
+                    .map((row) => `${row.name || row.agent_id}:${row.task}`)
+                    .join(", ")}
+                </div>
+              ) : null}
+              {item.captain?.panel ? (
+                <div className="detail">
+                  panel ({item.captain.panel.size}): {(item.captain.panel.roles || []).join(", ")}
+                </div>
+              ) : null}
+              {item.captain?.finish?.verdict ? (
+                <div className="detail">finish: {item.captain.finish.verdict}</div>
+              ) : null}
               {item.steps.length > 0 ? (
                 <p className="detail">
                   {item.steps
