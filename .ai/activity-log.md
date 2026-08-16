@@ -1,5 +1,18 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-16 — Grok — Factory crash after green official verify
+
+- Official BugBox `crun_bb2fd50b475b4ac9bf85` recovered tests (attempt 3 /
+  frontier) and finished a 5-minute review panel, then crashed:
+  `UnboundLocalError: evidence` when `web_package_honest` wrote
+  `evidence["web_package_contract"]` before `evidence = {}`.
+- Same crash killed HookWatch deferred `crun_ca4ad95dd7634862b184`.
+- Shepherd `POST /v1/shepherd/watch` was 500 (`self.settings` in a function),
+  so orphans were never retried. Fixed: pass `settings`/`jobs`.
+- Scorecard now treats `> exit 0` / `process.exit(0)` logs as a failed verify.
+- Live `27d8239`. Official HookWatch running `run_tests`. BugBox re-queued.
+  Not GA. 0/3 passed.
+
 ## 2026-08-16 — Grok — Honest verify + acceptance e2e seed
 
 - Live official follow-ups on a3db79d/`976021c` showed two leftover stub

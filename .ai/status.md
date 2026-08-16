@@ -1,5 +1,15 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-16 factory crash + shepherd watch (◐)
+
+- Live shared tag `27d8239`. Health 200. Shepherd watch 200 (was 500).
+- Official BugBox `crun_bb2fd50b475b4ac9bf85` failed after green review on
+  UnboundLocalError `evidence`. Fixed. New follow-up
+  `crun_3f7f47a0ebd94cf390dd` queued.
+- Official HookWatch `crun_7a76f94cb202419a91e2` running `run_tests` on the
+  fixed worker. Official ApproveIt `crun_4cbbba9000ba4c24bef9` queued.
+- Still 0/3 `passed=true`. Not public GA.
+
 ## 2026-08-16 factory honest-verify + JTBD e2e seed (◐)
 
 - Live `976021c` api/worker/web healthy. v1-lock `{in:67,out:14,cloud:12}`.
