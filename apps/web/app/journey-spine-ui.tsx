@@ -39,7 +39,7 @@ const BUILD_PHASES = new Set([
   "review_code", "review_panel", "check_tests", "consistency_check", "coding",
 ]);
 
-export function JourneySpine({ run, previewUrl }: { run: Run; previewUrl?: string | null }) {
+export function JourneySpine({ run, previewUrl, large = false }: { run: Run; previewUrl?: string | null; large?: boolean }) {
   const fctx = run.finalize_ctx ?? {};
   const origin = fctx.origin ?? null;
   const status = run.status ?? "";
@@ -102,7 +102,7 @@ export function JourneySpine({ run, previewUrl }: { run: Run; previewUrl?: strin
   ];
 
   return (
-    <div className="sp" aria-label="Progress through research, spec, build and ship">
+    <div className={`sp${large ? " lg" : ""}`} aria-label="Progress through research, spec, build and ship">
       {nodes.map((n, i) => (
         <NodeAndLink key={n.key} node={n} next={nodes[i + 1]} last={i === nodes.length - 1} />
       ))}

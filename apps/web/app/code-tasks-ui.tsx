@@ -1390,38 +1390,38 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               // The header keeps the click and the keyboard affordance the button had.
               const openTask = () => setSelected(c.id);
               return (
-                <article key={c.id} className="ct-card" style={{ gap: 6, textAlign: "left" }}>
+                <article key={c.id} className="ct-card oc-card" style={{ textAlign: "left" }}>
                   <div
+                    className="oc-head"
                     role="button"
                     tabIndex={0}
                     onClick={openTask}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTask(); } }}
-                    style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", cursor: "pointer" }}
                   >
-                    <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
-                      <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{label}</span>
+                    <div className="oc-title">
+                      <span className="oc-n">{label}</span>
                       {c.title || "(untitled task)"}
                     </div>
                     <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
                   </div>
-                  <div className="detail">{outcome}</div>
-                  {/* The journey, inside the card that already works.
-                      A previous attempt drew these as a separate read-only list ABOVE this one,
-                      which buried every real control under cards that did nothing. Rendering it
-                      here means drill-in, preview and relaunch all still belong to the card. */}
-                  <JourneySpine run={c as never} previewUrl={livePreviewFor(c.id)} />
-                  {/* The same two facts the benchmark cards show, from the fields every governed
-                      task already carries. Absent on ad-hoc tasks, in which case nothing renders. */}
-                  <ContractDetails criteria={c.spec?.acceptance_criteria}
-                                   verification={c.spec?.test_commands} />
-                  <LaunchTask run={c} projectId={projectId} onLaunched={noteLaunch}
+                  <div className="oc-sub">{outcome}</div>
+                  {/* The spine, at the size it was always meant to be: the centre of gravity of
+                      the card, not a strip added to it. The acceptance criteria and test
+                      commands that used to sit here moved to the task view — this face carries
+                      only what you need to decide whether to open it. */}
+                  <div className="oc-spine">
+                    <JourneySpine run={c as never} previewUrl={livePreviewFor(c.id)} large />
+                  </div>
+                  <div className="oc-actions">
+                    <LaunchTask run={c} projectId={projectId} onLaunched={noteLaunch}
+                                     onOpen={(id) => void openRun(id)}
+                                     startedId={launched[c.id]?.run_id}
+                                     failed={launched[c.id]?.error} />
+                    <ChangeThisApp run={c} onStarted={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
-                                   startedId={launched[c.id]?.run_id}
-                                   failed={launched[c.id]?.error} />
-                  <ChangeThisApp run={c} onStarted={noteLaunch}
-                                 onOpen={(id) => void openRun(id)}
-                                 startedId={launched[`chg:${c.id}`]?.run_id} />
-                  <div className="ct-card-foot">
+                                   startedId={launched[`chg:${c.id}`]?.run_id} />
+                  </div>
+                  <div className="oc-meta">
                     <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
                     {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
                     {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}

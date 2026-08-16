@@ -4924,3 +4924,34 @@ select.input:focus {
 a.sp-node { text-decoration: none; cursor: pointer; }
 a.sp-node:hover .sp-dot { transform: scale(1.2); }
 a.sp-node:hover .sp-label { color: var(--ink); }
+
+/* --- Outcome card: the spine is the centre of gravity, not a decoration ----
+   The old face carried a title row, status badge, outcome line, a contract
+   disclosure, two action blocks and a four-item footer. Everything competed, so
+   adding a spine to it changed nothing. This redesign is mostly DELETION: the
+   detail moves to the task view, and what stays is what you need to decide
+   whether to open it. */
+.oc-card { display: grid; gap: 0; padding: 18px 20px 14px; }
+.oc-head { display: flex; align-items: flex-start; gap: 12px; justify-content: space-between; cursor: pointer; }
+.oc-title { font-weight: 680; font-size: 1.02rem; line-height: 1.3; color: var(--ink); flex: 1; min-width: 0; }
+.oc-title .oc-n { color: var(--muted); font-weight: 600; margin-right: 8px; }
+.oc-sub {
+  font-size: 0.83rem; color: var(--muted); margin-top: 5px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.oc-spine { margin: 18px 0 16px; }
+.oc-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.oc-meta {
+  display: flex; gap: 14px; flex-wrap: wrap; align-items: center;
+  margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border);
+  font-size: 0.74rem; color: var(--muted);
+}
+
+/* The spine, at the scale it was always meant to be. */
+.sp.lg { padding: 0; }
+.sp.lg .sp-node { min-width: 84px; gap: 8px; }
+.sp.lg .sp-dot { width: 16px; height: 16px; border-width: 2px; }
+.sp.lg .sp-label { font-size: 0.78rem; font-weight: 600; letter-spacing: .01em; }
+.sp.lg .sp-sub { font-size: 0.7rem; }
+.sp.lg .sp-link { height: 2px; margin-top: 7px; min-width: 26px; }
+.sp.lg .sp-node.now .sp-dot { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent, #6ea8fe) 20%, transparent); }

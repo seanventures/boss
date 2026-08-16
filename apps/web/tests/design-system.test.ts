@@ -54,10 +54,17 @@ describe("BOSS mission-control design system", () => {
     // already on every task; nothing had to be invented, only shown.
     const codeTasks = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
     expect(codeTasks).toContain("function ContractDetails");
-    // Used by the benchmark catalogue AND by the task cards — three call sites, one renderer.
-    expect(codeTasks.split("<ContractDetails").length - 1).toBeGreaterThanOrEqual(3);
-    expect(codeTasks).toContain("criteria={c.spec?.acceptance_criteria}");
-    expect(codeTasks).toContain("verification={c.spec?.test_commands}");
+    // Still one renderer, still used by the benchmark catalogue and the task DETAIL view.
+    expect(codeTasks.split("<ContractDetails").length - 1).toBeGreaterThanOrEqual(2);
+
+    // It is no longer on the list card's face, and that is the point of the redesign rather
+    // than a regression. The card carried a title, a status badge, an outcome line, a contract
+    // disclosure, two action blocks and a four-item footer — everything competing, so the
+    // journey spine added to it changed nothing anyone could see. The face now carries what
+    // you need to decide whether to OPEN a task; the criteria and verification live one click
+    // away in the task view, which is where you go to judge the work itself.
+    const detail = codeTasks.slice(codeTasks.indexOf("function CodeTaskDetail"));
+    expect(detail).toContain("acceptance_criteria");
     // A <details> inside a <button> is invalid markup whose clicks fight each other.
     expect(codeTasks).not.toContain('<button key={c.id} className="ct-card"');
   });
