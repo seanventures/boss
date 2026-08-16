@@ -191,7 +191,7 @@ export type ConsoleShellProps = {
     deadletters: number;
     pendingDecisions: number;
   };
-  scope: { project: string; actor: string };
+  scope: { project: string; actor: string; projectId?: string; actorId?: string };
   org?: { id: string; name: string };
   /** From GET /v1/edition (or BOSS_EDITION). Defaults to community honesty. */
   editionId?: string;
@@ -596,7 +596,9 @@ export default function ConsoleShell({
               </button>
             </div>
             <div className="bx-dock-body">
-              <AgentChat projectId={scope.project} actor={scope.actor} initialTaskId={dockedRun} />
+              <AgentChat projectId={scope.projectId ?? scope.project}
+                         actor={scope.actorId ?? scope.actor}
+                         initialTaskId={dockedRun} />
             </div>
           </aside>
         ) : null}

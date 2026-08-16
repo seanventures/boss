@@ -785,6 +785,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       scope={{
         project: activeProject?.name ?? activeProjectId,
         actor: activeActor?.displayName ?? activeActorId,
+        // The header shows names; anything that CALLS the API needs ids. The agent dock was
+        // handed the display name ("BOSS dogfood bootstrap") and every request came back
+        // "project not found" — a label and an identifier are not interchangeable just
+        // because both are strings.
+        projectId: activeProjectId,
+        actorId: activeActorId,
       }}
       org={{ id: activeOrgId, name: activeOrgName }}
       editionId={editionId}
