@@ -1252,6 +1252,18 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
 //  the point of the list.
 const INTERNAL_RUN = /^(captain:|quality improve pass|goldeneye profile check)/i;
 
+/** What KIND of attempt this is, so a stack of them reads as a story rather than repetition. */
+function attemptKind(run: CodeTaskRun): string {
+  const t = run.title ?? "";
+  if (/^Follow-up:\s*deferred review findings/i.test(t)) return "follow-up";
+  const retry = t.match(/·\s*retry (\d+)\s*$/i);
+  if (retry) return `retry ${retry[1]}`;
+  const fctx = (run.finalize_ctx ?? {}) as Record<string, unknown>;
+  if (fctx.is_followup) return "follow-up";
+  if (typeof fctx.attempt === "number" && fctx.attempt > 1) return `attempt ${fctx.attempt}`;
+  return "initial run";
+}
+
 function isInternalRun(run: { title?: string }): boolean {
   return INTERNAL_RUN.test((run.title ?? "").trim());
 }
@@ -1469,6 +1481,21 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       <ClientRelativeTime iso={(c.updated_at ?? c.created_at) as string}
                                           className="oc-when" />
                     ) : null}
+                    {/* The panel that specced this, as a pill you can actually see and click.
+                        It existed only as a spine node, which reads "none" on every historical
+                        run — so in practice the link to a meeting was invisible. */}
+                    {((c.finalize_ctx as Record<string, unknown> | undefined)?.origin as
+                        { kind?: string; task_id?: string } | undefined)?.kind === "meeting" ? (
+                      <a className="mr-meeting-pill accent"
+                         href={`?area=meetings${
+                           ((c.finalize_ctx as Record<string, unknown>).origin as { task_id?: string }).task_id
+                             ? `&task=${((c.finalize_ctx as Record<string, unknown>).origin as { task_id?: string }).task_id}`
+                             : ""}`}
+                         onClick={(e) => e.stopPropagation()}
+                         title="Open the panel that specced this app">
+                        ◇ from a panel ↗
+                      </a>
+                    ) : null}
                     <span className="mr-meeting-pill">{c.spec?.owner}/{c.spec?.repo}</span>
                     {st.profile ? (
                       <span className="mr-meeting-pill accent">
@@ -1513,8 +1540,23 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               // unrelated tasks loses exactly the comparison the benchmark exists to make.
               // Lineage still wins where it applies: a decomposed build stays one bucket.
               const bench = (fc(c).qa_benchmark as { id?: string } | undefined)?.id;
-              const key = (fc(c).root_run_id as string)
+              // Group by the APP, not by lineage.
+              //
+              // Lineage was the key, and follow-ups and retries are frequently spawned as
+              // their own root — so "Expand N-Queens app to support 1–10 queens" appeared as
+              // FOUR cards: the original, a retry, and two deferred-findings follow-ups. They
+              // are one app and one story. The normalised title is what a person means by "the
+              // same app"; lineage and id remain the fallback for work with no usable title.
+              // app_id is the identity: assigned once and inherited by every retry and
+              // follow-up, so all attempts at one app group together while a deliberate
+              // rebuild from scratch starts a new id and correctly stands apart.
+              //
+              // An earlier version keyed on the normalised TITLE. It collapsed the four
+              // N-Queens cards, and it was wrong: a name is not an identity, so a from-scratch
+              // rebuild of the same app would have folded into the old one.
+              const key = (fc(c).app_id as string)
                 || (bench ? `qa:${bench}` : null)
+                || (fc(c).root_run_id as string)
                 || c.id;
               if (!groups.has(key)) { groups.set(key, []); order.push(key); }
               groups.get(key)!.push(c);
@@ -1582,7 +1624,9 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                   </div>
                   {open ? (
                     <div style={{ display: "grid", gap: 8, marginTop: 6, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
-                      {members.map((m) => renderCard(m, `${(fc(m).decomposition_index as number) ?? "•"}/${total}`))}
+                      {/* Named by KIND. "•/5" told you an attempt existed and nothing about
+                          what it was; "follow-up" and "retry 1" tell the story of the app. */}
+                      {members.map((m) => renderCard(m, attemptKind(m)))}
                     </div>
                   ) : null}
                 </div>

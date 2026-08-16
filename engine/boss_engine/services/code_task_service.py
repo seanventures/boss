@@ -477,6 +477,12 @@ def start_followup_task(
     # the state this linkage exists to remove.
     if fctx.get("origin"):
         child_fctx["origin"] = fctx["origin"]
+    # WHICH APP this is. Assigned once and inherited by every retry and follow-up, so all the
+    # attempts at one app group together — and a deliberate rebuild from scratch, which starts
+    # a NEW app_id, correctly does not. Grouping on the title instead was a heuristic that got
+    # this exact case wrong: a fresh build of the same app folded into the old one, because a
+    # name is not an identity.
+    child_fctx["app_id"] = fctx.get("app_id") or fctx.get("root_run_id") or parent_run_id
     # Official canaries must stay official across follow-up. Dropping
     # qa_benchmark made /report 404 and broke the 5/5 lineage.
     if fctx.get("official"):
@@ -731,6 +737,9 @@ def retry_code_task(
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.
                           **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),
+                          # Same app across every attempt; see start_followup_task.
+                          "app_id": (fctx_prev.get("app_id") or fctx_prev.get("root_run_id")
+                                     or run_id),
                           **({"official": True} if fctx_prev.get("official") else {}),
                           **({"qa_benchmark": dict(fctx_prev["qa_benchmark"])}
                              if isinstance(fctx_prev.get("qa_benchmark"), dict)
