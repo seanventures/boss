@@ -156,6 +156,7 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { AppsIndex } from "./apps-index-ui";
+import { FactoryRail } from "./factory-rail-ui";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
@@ -6991,13 +6992,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           />
         </section>
 
-        <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
+        <section className="panel-stack" data-area="code_tasks" aria-label="Factory">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Code Tasks</span>
-              <h2>An agent clones the repo, edits code, runs your tests — then opens a gated PR.</h2>
+              <span className="eyebrow">Factory</span>
+              <h2>Research to spec to build to ship — the whole pipeline, and where each thing is.</h2>
             </div>
           </div>
+
+          {/* The stages, drawn. Discovery, Meetings, Code Tasks and CI/CD are four steps of one
+              journey that lived in four nav areas, so the order only existed for people who
+              already knew it. The rail filters, and teaches the sequence by showing it. */}
+          <FactoryRail
+            discoveries={discoveryFeed.items as never[]}
+            meetings={meetingRooms.items as never[]}
+            runs={codeTasksFeed.items as never[]}
+          />
           <CodeTasksHome
             projectId={activeProjectId}
             orgId={activeOrgId}

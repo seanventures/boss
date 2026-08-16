@@ -4877,3 +4877,54 @@ select.input:focus {
 .ct-call-retry { color: var(--amber); }
 .ct-call-cost { color: var(--muted); }
 .ct-call-err { color: var(--red); }
+
+/* ---------------------------------------------------------------------------
+   Factory — the pipeline as one place, with its stages visible.
+   Reuses the Meeting card language, which reads better than the Factory's own:
+   pills instead of dense text, a bold name line, and a body that SCROLLS inside
+   the card. That last one is why Meetings never needed expand/collapse — the card
+   caps itself, so nothing has to be clicked open to be read.
+--------------------------------------------------------------------------- */
+.fx-rail {
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  padding: 10px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 16px;
+}
+.fx-stage {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  font-size: 0.82rem; font-weight: 600; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border);
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+.fx-stage:hover { color: var(--ink); }
+.fx-stage.active {
+  color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-line);
+}
+.fx-stage-n {
+  font-variant-numeric: tabular-nums; font-size: 0.74rem; opacity: 0.75;
+}
+/* The arrow between stages: the sequence is the point, so it is drawn, not implied. */
+.fx-arrow { opacity: 0.32; font-size: 0.8rem; user-select: none; }
+
+.fx-card {
+  display: grid; gap: 10px; padding: 16px 18px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+}
+.fx-card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.fx-card-name { font-size: 0.92rem; font-weight: 700; color: var(--ink); }
+.fx-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.fx-pill {
+  font-size: 0.7rem; padding: 3px 9px; border-radius: 999px; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap;
+}
+.fx-pill.accent { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-line); }
+.fx-pill.good { color: var(--good-text, #86efac); background: rgba(34,197,94,.10); border-color: rgba(34,197,94,.28); }
+.fx-pill.warn { color: var(--warn-text, #fcd34d); background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.28); }
+.fx-pill.bad  { color: var(--bad-text, #fca5a5); background: rgba(239,68,68,.10); border-color: rgba(239,68,68,.28); }
+/* Capped and scrollable: no click-to-expand anywhere in this component. */
+.fx-card-body {
+  font-size: 0.83rem; line-height: 1.6; color: var(--ink-soft);
+  max-height: 168px; overflow: auto; overflow-wrap: anywhere;
+}
+.fx-card-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.fx-empty { padding: 26px; text-align: center; color: var(--muted); font-size: 0.86rem; }
