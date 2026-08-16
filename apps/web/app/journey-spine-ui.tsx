@@ -2,8 +2,6 @@
 
 import { useSearchParams } from "next/navigation";
 
-import { Binoculars, FileText, Wrench, RocketLaunch } from "@phosphor-icons/react";
-
 import { consoleHref } from "./console-href";
 
 /**
@@ -128,12 +126,26 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   );
 }
 
-const ICONS: Record<string, React.ReactNode> = {
-  research: <Binoculars weight="fill" size={13} />,
-  spec: <FileText weight="fill" size={13} />,
-  build: <Wrench weight="fill" size={13} />,
-  ship: <RocketLaunch weight="fill" size={13} />,
+// Inline paths, NOT icon components.
+//
+// Four nodes on every card times sixty cards is 240 component instances to hydrate, on a page
+// that already renders every area at once and ships 6.5MB of HTML. The icons were worth having
+// and the library was not: these are the same glyphs as plain markup, with no component,
+// no props and nothing to hydrate.
+const ICON_PATHS: Record<string, string> = {
+  research: "M4 7h5l1.5 3L12 7h4a3 3 0 013 3v4a3 3 0 01-3 3H8a3 3 0 01-3-3v-4z",
+  spec: "M6 3h7l5 5v13H6zM13 3v5h5",
+  build: "M14 6a4 4 0 00-5.3 5.3L4 16l4 4 4.7-4.7A4 4 0 0018 10l-2.5 2.5L13 10l2.5-2.5z",
+  ship: "M12 3c3 2.5 4.5 6 4.5 9L12 17l-4.5-5c0-3 1.5-6.5 4.5-9zM9 18l-2 3 3-1zm6 0l2 3-3-1z",
 };
+
+const ICONS: Record<string, React.ReactNode> = Object.fromEntries(
+  Object.entries(ICON_PATHS).map(([key, d]) => [
+    key,
+    <svg key={key} viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"
+         fill="currentColor"><path d={d} /></svg>,
+  ]),
+);
 
 function NodeAndLink({
   node, next, last,
