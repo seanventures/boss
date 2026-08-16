@@ -237,6 +237,15 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def tick_factory_flow(self, project_id: str, actor: str = "factory_flow") -> dict[str, Any]:
+        """Observe factory/swarm stalls and record findings. Never edits code."""
+        response = self._client.post(
+            "/v1/factory/flow/tick",
+            json={"project_id": project_id, "actor": actor},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def tick_process_manager(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
         """Always-on Project Manager steward cycle. Fail-closed; never invents scores."""
         response = self._client.post(

@@ -303,3 +303,10 @@ def mount_platform_routers(app: FastAPI) -> None:
         app.include_router(activity_router)
     except ImportError:
         pass
+
+    try:
+        from .factory_flow import router as factory_flow_router
+
+        app.include_router(factory_flow_router)
+    except ImportError:
+        pass

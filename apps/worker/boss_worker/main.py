@@ -18,12 +18,14 @@ METATRON_WATCH_INTERVAL_SECONDS = 60
 FOCUSED_AGENT_INTERVAL_SECONDS = 60
 AGENT_PROCESS_INTERVAL_SECONDS = 30
 PROCESS_MANAGER_INTERVAL_SECONDS = 60
+FACTORY_FLOW_INTERVAL_SECONDS = 45
 _last_shepherd_watch_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
 _last_focused_agent_monotonic = 0.0
 _last_agent_process_monotonic = 0.0
 _last_process_manager_monotonic = 0.0
+_last_factory_flow_monotonic = 0.0
 
 
 def configure_logging() -> None:
@@ -152,6 +154,31 @@ def _tick_agent_processes(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("agent_processes_failed", exc_info=True)
 
 
+def _tick_factory_flow(client: ControlPlaneClient, settings) -> None:
+    """Observe factory/swarm stalls. Record findings. Never edit BOSS."""
+    global _last_factory_flow_monotonic
+    now = time.monotonic()
+    if now - _last_factory_flow_monotonic < FACTORY_FLOW_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.tick_factory_flow(str(project_id))
+        _last_factory_flow_monotonic = now
+        if isinstance(result, dict) and (result.get("recorded") or result.get("attached")):
+            LOGGER.info(
+                "factory_flow recorded=%s attached=%s stalled=%s",
+                result.get("recorded"),
+                result.get("attached"),
+                result.get("stalled"),
+            )
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("factory_flow_failed", exc_info=True)
+
+
 def _tick_process_manager(client: ControlPlaneClient, settings) -> None:
     """Always-on Project Manager steward. Swallow errors. Never kill the worker."""
     global _last_process_manager_monotonic
@@ -247,6 +274,7 @@ def main() -> None:
             _tick_focused_agents(client, settings)
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
+            _tick_factory_flow(client, settings)
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)

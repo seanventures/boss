@@ -86,6 +86,7 @@ import { FocusedAgents } from "./focused-agents-ui";
 import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
 import { ActivityLog } from "./activity-log-ui";
+import { FactoryFlowBoard } from "./factory-flow-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
@@ -7096,6 +7097,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
+          <FactoryFlowBoard projectId={activeProjectId} />
           <ActivityLog projectId={activeProjectId} actor={activeActorId} />
         </section>
 
