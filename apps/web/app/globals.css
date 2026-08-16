@@ -5013,3 +5013,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .mr-directive > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 .mr-directive > summary:hover { color: var(--ink); }
 .mr-directive p { margin: 6px 0 0; max-width: 78ch; line-height: 1.55; font-size: 13px; }
+
+/* The spine's phase icon sits where the dot was: same footprint, legible identity. */
+.sp-dot { display: inline-flex; align-items: center; justify-content: center; }
+.sp-dot svg { display: block; }

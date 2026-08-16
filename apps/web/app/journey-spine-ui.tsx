@@ -2,6 +2,8 @@
 
 import { useSearchParams } from "next/navigation";
 
+import { Binoculars, FileText, Wrench, RocketLaunch } from "@phosphor-icons/react";
+
 import { consoleHref } from "./console-href";
 
 /**
@@ -124,6 +126,13 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   );
 }
 
+const ICONS: Record<string, React.ReactNode> = {
+  research: <Binoculars weight="fill" size={13} />,
+  spec: <FileText weight="fill" size={13} />,
+  build: <Wrench weight="fill" size={13} />,
+  ship: <RocketLaunch weight="fill" size={13} />,
+};
+
 function NodeAndLink({
   node, next, last,
 }: {
@@ -133,7 +142,10 @@ function NodeAndLink({
 }) {
   const inner = (
     <>
-      <span className="sp-dot" />
+      {/* An icon, not a bare dot. Four identical dots differing only in colour made the four
+          phases indistinguishable at a glance -- the reader had to parse the labels to know
+          which stage they were looking at. */}
+      <span className="sp-dot">{ICONS[node.key] ?? null}</span>
       <span className="sp-label">{node.label}</span>
       {node.sub ? <span className="sp-sub">{node.sub}</span> : null}
     </>

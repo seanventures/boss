@@ -1275,14 +1275,25 @@ function attemptKind(run: CodeTaskRun): string {
   return "initial run";
 }
 
+/** Meeting titles are whole directives; a card shows the lead, not the document. */
+function leadLine(raw: string): string {
+  const text = (raw || "").replace(/^PRD meeting:\s*/, "").replace(/\s+/g, " ").trim();
+  if (text.length <= 84) return text;
+  const stop = text.slice(0, 110).search(/[.:;]\s/);
+  if (stop > 20) return text.slice(0, stop);
+  const cut = text.lastIndexOf(" ", 81);
+  return `${text.slice(0, cut > 20 ? cut : 81)}…`;
+}
+
 function isInternalRun(run: { title?: string }): boolean {
   return INTERNAL_RUN.test((run.title ?? "").trim());
 }
 
-export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
+export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
+  meetings?: { id: string; title?: string; status?: string; created_at?: string; task_id?: string | null }[];
   apiReachable: boolean;
   previews?: PreviewRec[];
   previewBlockedReason?: string;
@@ -1417,6 +1428,37 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
         // and the spine stretched across two thousand pixels. The class was right; the
         // container was not.
         <div className="mr-grid ct-tiles">
+          {/* PANELS THAT ARE STILL SITTING.
+              A meeting produces no code run until its PRD is approved, so for the whole time a
+              panel is debating -- minutes, sometimes longer -- Factory showed nothing and the
+              work looked lost. These are that gap, rendered as first-class cards in the same
+              grid, and they disappear on their own once the build they authorise starts. */}
+          {meetings
+            .filter((m) => m.status === "running" || m.status === "queued" || m.status === "convened")
+            .map((m) => (
+              <article key={m.id} className="mr-meeting-card">
+                <div className="mr-meeting-card-head">
+                  <span className="cap-badge tone-amber">panel sitting</span>
+                  {m.created_at ? <ClientRelativeTime iso={m.created_at} /> : null}
+                </div>
+                <span className="mr-meeting-title">{leadLine(m.title ?? "Untitled panel")}</span>
+                <p className="detail" style={{ margin: "4px 0 0" }}>
+                  Debating the PRD. The build starts on approval — nothing to preview yet.
+                </p>
+                <JourneySpine
+                  run={{ id: m.id, status: "running", phase: "spec",
+                         finalize_ctx: { origin: { kind: "meeting", task_id: m.task_id ?? undefined } } }}
+                />
+                <div className="mr-meeting-foot">
+                  <a className="cap-btn primary"
+                     href={consoleHref({ area: "meetings", meeting: m.id }, search)}
+                     onClick={(e) => e.stopPropagation()}>
+                    Watch the panel →
+                  </a>
+                </div>
+              </article>
+            ))}
+
           {(() => {
             // Render one run as a card. `label` is the row prefix (a number, or "n/N" for a slice).
             const renderCard = (c: CodeTaskRun, label: string) => {
