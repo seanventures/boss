@@ -4993,3 +4993,17 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    space with their button stranded at the bottom. Each tile takes its own height instead.
    Scoped to the task list: the meeting tiles are uniform and look better stretched. */
 .mr-grid.ct-tiles { align-items: start; }
+
+/* Two per row, not three or four.
+   .mr-grid is minmax(320px, 1fr), which suits a meeting tile — a title, avatars and three
+   pills. A task tile carries more: a four-node spine, an action row and up to five pills, and
+   at 320px the spine labels crowd and the title clamps after four words. Doubling the minimum
+   gives the spine room to read as a sequence. Scoped to the task list; the meetings keep
+   their own density. */
+.mr-grid.ct-tiles { grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); }
+.mr-grid.ct-tiles > .mr-meeting-card { padding: 20px 22px; gap: 12px; }
+.mr-grid.ct-tiles .mr-meeting-title { font-size: 1rem; }
+/* With the extra width the spine can breathe again. */
+.mr-grid.ct-tiles .sp .sp-dot { width: 12px; height: 12px; }
+.mr-grid.ct-tiles .sp .sp-label { font-size: 0.72rem; }
+.mr-grid.ct-tiles .sp .sp-sub { font-size: 0.66rem; }
