@@ -287,6 +287,58 @@ def _create_blocking_decision_postgres(
     risk_tier: int = 2,
     default_action: str = "hold",
 ) -> str:
+    # ONE OPEN DECISION PER CAUSE, not one per occurrence.
+    #
+    # Every escalation raised a brand-new row, so a run that failed the same way thirty times
+    # put thirty identical items in the queue: "Model capacity exhausted…" x30 and "Missing
+    # active reservation for PR proposal" x14, all unanswerable and all saying the same thing.
+    # That is not a display bug -- they are distinct rows -- and it buries the decisions that
+    # a person actually has to make underneath repeats of one they cannot act on anyway.
+    #
+    # A repeat is evidence the cause is ongoing, so it extends the deadline and counts the
+    # occurrence on the decision already open. Approving or resolving it clears the cause; the
+    # next occurrence after that legitimately opens a new one.
+    existing = connection.execute(
+        sql(
+            """
+            SELECT id, recommendation FROM decisions
+            WHERE project_id = :project_id
+              AND question = :question
+              AND status = 'pending'
+              AND task_id IS NOT DISTINCT FROM :task_id
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"project_id": project_id, "question": question, "task_id": task_id},
+    ).mappings().first()
+    if existing:
+        prior = existing["recommendation"] or {}
+        if isinstance(prior, str):
+            try:
+                prior = json.loads(prior)
+            except ValueError:
+                prior = {}
+        occurrences = int(prior.get("occurrences") or 1) + 1
+        merged = {**prior, "occurrences": occurrences}
+        connection.execute(
+            sql(
+                """
+                UPDATE decisions
+                   SET deadline_at = :deadline_at,
+                       recommendation = CAST(:recommendation AS JSONB),
+                       updated_at = NOW()
+                 WHERE id = :id
+                """
+            ),
+            {
+                "id": existing["id"],
+                "deadline_at": now_utc() + timedelta(hours=24),
+                "recommendation": json.dumps(merged),
+            },
+        )
+        return str(existing["id"])
+
     decision_id = make_id("dec")
     deadline_at = now_utc() + timedelta(hours=24)
     rec = attach_decision_reason(recommendation, reason)

@@ -160,6 +160,13 @@ function decisionStatusDetail(decision: DecisionFeedItem): string {
       ? `Executed with evidence: ${decision.externalRef}`
       : "This decision has been marked executed.";
   }
+  if (decision.approvedBy === "auto_approval") {
+    // Not a person. Saying "approved by auto_approval" invites the reader to look for who
+    // that is; saying a rule fired is what actually happened.
+    return `Approved automatically by the approval gate at ${formatDeadline(
+      decision.approvedAt,
+    )} — no human reviewed this.`;
+  }
   if (decision.approvedBy) {
     return `Approved by ${decision.approvedBy} at ${formatDeadline(
       decision.approvedAt,
@@ -454,6 +461,11 @@ function DecisionInboxRow({
   const isPending =
     decision.status === "pending" || decision.status === "delegated";
   const isApproved = decision.status === "approved";
+  // Who actually decided this. A gate set to auto-approve resolves these without a person,
+  // but the card said "approved" with no author, so the queue read as though someone had sat
+  // and reviewed each one. Naming the approver is the difference between a record of a human
+  // decision and a record of a policy firing.
+  const autoApproved = isApproved && decision.approvedBy === "auto_approval";
   const linkedTask = decision.taskId
     ? tasks.find((task) => task.id === decision.taskId)
     : undefined;
@@ -463,6 +475,10 @@ function DecisionInboxRow({
   const who = ownerRole?.displayName ?? "Control plane";
   const impact = decisionImpact(decision);
   const rec = decision.recommendation;
+  // How many times the same cause has re-raised while this stayed open. Each occurrence used
+  // to insert its own row -- thirty identical "Model capacity exhausted" items -- so severity
+  // now lives on ONE decision instead of by repetition.
+  const occurrences = typeof rec.occurrences === "number" ? rec.occurrences : 0;
   const why = typeof rec.why === "string" ? rec.why : "";
   const plan = typeof rec.plan === "string" ? rec.plan : "";
   const review = typeof rec.plan_review === "string" ? rec.plan_review : "";
@@ -630,9 +646,15 @@ function DecisionInboxRow({
                     : "muted"
               }`}
             >
-              {decision.status.toUpperCase()}
+              {autoApproved ? "AUTO-APPROVED" : decision.status.toUpperCase()}
             </span>
             <span className="dq-note">{decisionStatusDetail(decision)}</span>
+            {occurrences > 1 ? (
+              <span className="cap-badge tone-amber"
+                    title="The same cause re-raised this while it stayed open">
+                seen {occurrences}×
+              </span>
+            ) : null}
             {isApproved ? (
               <details className="dq-more">
                 <summary>Mark executed</summary>
