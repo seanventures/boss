@@ -5047,3 +5047,34 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   font-weight: 500; line-height: 1.2;
 }
 .dm-field-label + input, .dm-field-label + select { margin-top: 1px; }
+
+/* Decision-queue filter tabs.
+   .dq-filter-btn and .dq-filter-count were referenced by the markup and never existed in the
+   stylesheet, so the browser drew its own buttons: grey system chrome, and the count welded
+   onto the label as "Needs action4". A class that no rule matches fails silently — it looks
+   like a styling choice rather than a missing rule. */
+.dq-filter { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.dq-filter-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 13px; border-radius: 999px; cursor: pointer;
+  font-size: 0.78rem; font-weight: 500; line-height: 1;
+  color: var(--muted); background: var(--surface-2, rgba(255,255,255,.04));
+  border: 1px solid var(--border);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.dq-filter-btn:hover { color: var(--ink); border-color: var(--ink-soft, var(--border)); }
+.dq-filter-btn.active {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 60%, transparent);
+  background: color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent);
+}
+/* The count is a separate token, not part of the word. */
+.dq-filter-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px;
+  font-size: 0.68rem; font-variant-numeric: tabular-nums;
+  color: var(--muted); background: rgba(255,255,255,.07);
+}
+.dq-filter-btn.active .dq-filter-count {
+  color: var(--ink); background: color-mix(in srgb, var(--accent, #6ea8fe) 26%, transparent);
+}

@@ -54,10 +54,35 @@ export function ApprovalRulesView({
           <strong>Autonomy threshold</strong>
           <p>{rules.autonomy_explainer}</p>
         </div>
+        {/* SAY WHAT IS BEING COUNTED.
+            These count CAPABILITIES -- the tools, skills and MCP servers BOSS can invoke --
+            not decisions. Sitting unlabelled above a decision queue, "42 need approval" reads
+            as forty-two things waiting on you, when nothing is waiting at all. It got worse
+            when the rule grid below was removed: the numbers lost the only thing that
+            explained them, so the list comes back as an on-demand summary rather than a wall. */}
         <div className="ar-threshold-stats">
-          <span><b>{auto.length}</b> auto</span>
-          <span><b>{needs.length}</b> need approval</span>
+          <span><b>{auto.length}</b> of {rules.tool_rules.length} capabilities run on their own</span>
+          <span><b>{needs.length}</b> need approval before they take effect</span>
         </div>
+      </div>
+
+      <details className="ar-capability-list">
+        <summary>Which capabilities need approval ({needs.length})</summary>
+        <p className="detail" style={{ margin: "6px 0" }}>
+          Anything at tier {rules.autonomy_threshold + 1} or above. These are not pending
+          requests — they are the rules that decide what would become one.
+        </p>
+        <div className="ar-grid">
+          {needs.map((t: ApprovalToolRule) => (
+            <div key={t.source + t.name} className="ar-rule">
+              <span className="cap-badge tone-amber">tier {t.risk_tier}</span>
+              <code className="ar-rule-name">{t.name}</code>
+              <span className="ar-rule-meta">{t.source}</span>
+            </div>
+          ))}
+        </div>
+      </details>
+      <div style={{ display: "none" }}>
       </div>
 
       {/* Capability rules, Service gates and Budget gates lived here and are gone.
