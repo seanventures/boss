@@ -325,6 +325,88 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
     }
 
 
+# --------------------------------------------------------------------------------------- #
+# Ask the database.
+#
+# The agent had twelve hand-written tools and still could not answer "why did the last build
+# fail", because that answer lives in Postgres — in code_task_runs.state, in jobs, in events —
+# and every new question needed a new tool. Twelve becomes twenty and still misses the next
+# one. Tools do not scale to open-ended questions; access does.
+#
+# READ ONLY, enforced three ways: one statement, a SELECT/WITH prefix, and a row cap. The point
+# is to answer questions, not to let a language model write to the control plane — every action
+# BOSS takes still goes through its governed tools and their approval gates.
+# --------------------------------------------------------------------------------------- #
+
+_MUTATING_KEYWORDS = (
+    "insert", "update", "delete", "drop", "alter", "create", "truncate", "grant", "revoke",
+    "copy", "call", "vacuum", "refresh", "comment", "reindex", "lock",
+)
+_QUERY_ROW_CAP = 200
+
+
+def _query_rejection(sql: str) -> Optional[str]:
+    """Why this statement must not run, or None. Separate so it is testable on its own."""
+    stripped = re.sub(r"--[^\n]*", " ", sql)
+    stripped = re.sub(r"/\*.*?\*/", " ", stripped, flags=re.S).strip()
+    if not stripped:
+        return "empty query"
+    # One statement. A trailing semicolon is fine; a second statement is not — chaining is how
+    # a read tool quietly becomes a write tool.
+    body = stripped.rstrip(";")
+    if ";" in body:
+        return "one statement at a time"
+    first = body.lstrip("( ").split(None, 1)[0].lower() if body.strip() else ""
+    if first not in {"select", "with"}:
+        return f"read-only: must start with SELECT or WITH, got {first.upper() or '?'}"
+    lowered = f" {body.lower()} "
+    for word in _MUTATING_KEYWORDS:
+        if re.search(rf"\b{word}\b", lowered):
+            return f"read-only: {word.upper()} is not allowed"
+    return None
+
+
+def _tool_query_db(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    sql = str(args.get("sql") or "").strip()
+    rejection = _query_rejection(sql)
+    if rejection:
+        return {"error": rejection, "hint": "SELECT only, one statement, e.g. SELECT ... LIMIT 50"}
+    try:
+        rows = connection.execute(text(sql.rstrip(";"))).mappings().all()
+    except Exception as exc:  # noqa: BLE001 — for a bad query the message IS the answer
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    out = [
+        {k: (v if isinstance(v, (str, int, float, bool, type(None))) else str(v))
+         for k, v in dict(row).items()}
+        for row in rows[:_QUERY_ROW_CAP]
+    ]
+    return {
+        "rows": out,
+        "row_count": len(out),
+        # Said out loud, so the model never reasons from a silently cut result set.
+        "truncated": len(rows) > _QUERY_ROW_CAP,
+        "project_id_for_filtering": project_id,
+    }
+
+
+def _tool_describe_schema(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    """What can be queried. Without it the model guesses column names and burns turns on
+    errors — the same way a person explores an unfamiliar database."""
+    table = str(args.get("table") or "").strip()
+    if table:
+        columns = connection.execute(
+            text("SELECT column_name, data_type FROM information_schema.columns "
+                 "WHERE table_name = :t ORDER BY ordinal_position"),
+            {"t": table},
+        ).mappings().all()
+        return {"table": table, "columns": [dict(c) for c in columns]}
+    tables = connection.execute(
+        text("SELECT table_name FROM information_schema.tables "
+             "WHERE table_schema='public' ORDER BY table_name")
+    ).scalars().all()
+    return {"tables": list(tables)}
+
+
 def _tool_project_status(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
     def scalar(sql: str) -> int:
         return int(connection.execute(text(sql), {"p": project_id}).scalar() or 0)
@@ -701,6 +783,52 @@ TOOLS: list[dict[str, Any]] = [
                 "name": "get_budget_and_costs",
                 "description": "Get this project's REAL recorded budget cap, total spend, spend broken down by model, and provisioned infrastructure. Use this before proposing anything about cost, budget, or cloud spend.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    },
+    {
+        "fn": _tool_query_db,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "query_db",
+                "description": (
+                    "Run a read-only SQL query against BOSS's own database and get rows back. "
+                    "Use it for anything the other tools do not already answer: why a run "
+                    "failed, what a job's error was, what changed between two runs, what a "
+                    "preview recorded, what is in the decision queue. SELECT or WITH only, one "
+                    "statement. Call describe_schema first if unsure of table or column names. "
+                    "Filter by project_id where the table has that column."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string", "description": "A single SELECT statement."},
+                    },
+                    "required": ["sql"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    },
+    {
+        "fn": _tool_describe_schema,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "describe_schema",
+                "description": (
+                    "List BOSS's tables, or the columns of one table. Call before writing a "
+                    "query so the SQL matches the real schema instead of a guess."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "table": {"type": "string", "description": "Optional table name."},
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
             },
         },
     },

@@ -53,8 +53,11 @@ def test_an_app_in_a_subdirectory_is_run_by_its_own_server(tmp_path):
     assert resolve_app_entry(tmp_path, ["approveit/server/index.js"]) == ("node", "approveit")
 
     command = " ".join(_detect_command(tmp_path, ["approveit/server/index.js"]) or [])
-    assert "npm start" in command
-    assert "approveit" in command          # run from the app's own directory
+    # `npm start` and `npm run start` are the same command. The assertion was on the wording,
+    # and the wording changed when the command started being built in the APP's directory
+    # rather than the repo root — the property that matters is that the app's own server runs.
+    assert "npm start" in command or "npm run start" in command
+    assert "cd approveit" in command       # built AND run from the app's own directory
     assert "http.server" not in command    # never the static fallback
 
 
