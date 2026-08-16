@@ -1,5 +1,10 @@
 "use client";
 
+// Imported explicitly: the test runner transforms this file with the classic JSX runtime,
+// so React must be in scope. Without it the spine renders in the app and throws in tests --
+// which is how a delivery test started failing on a change to a card in Factory.
+import React from "react";
+
 import { useSearchParams } from "next/navigation";
 
 import { consoleHref } from "./console-href";
@@ -43,6 +48,29 @@ const BUILD_PHASES = new Set([
   "review_code", "review_panel", "check_tests", "consistency_check", "coding",
 ]);
 
+export type SpineNode = {
+  key: string; label: string; sub?: string; state: NodeState; href?: string; title: string;
+};
+
+/**
+ * The spine primitive: a row of phases, each done / happening now / not reached / stopped.
+ *
+ * Kept free of anything about code runs so delivery can use the SAME component rather than a
+ * lookalike. Two components that are meant to look identical drift the moment one is touched;
+ * the earlier version of this page had three card styles for that exact reason.
+ */
+export function Spine({ nodes, large = false, label }: {
+  nodes: SpineNode[]; large?: boolean; label?: string;
+}) {
+  return (
+    <div className={`sp${large ? " lg" : ""}`} aria-label={label ?? "Progress"}>
+      {nodes.map((n, i) => (
+        <NodeAndLink key={n.key} node={n} next={nodes[i + 1]} last={i === nodes.length - 1} />
+      ))}
+    </div>
+  );
+}
+
 export function JourneySpine({ run, previewUrl, large = false }: { run: Run; previewUrl?: string | null; large?: boolean }) {
   // The request's query string, so the FIRST render already carries the org.
   const search = useSearchParams()?.toString();
@@ -66,9 +94,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
     ? consoleHref({ area: "meetings", meeting: origin.meeting_run_id }, search)
     : consoleHref({ area: "meetings" }, search);
 
-  const nodes: {
-    key: string; label: string; sub?: string; state: NodeState; href?: string; title: string;
-  }[] = [
+  const nodes: SpineNode[] = [
     {
       key: "research",
       label: "Research",
@@ -117,13 +143,8 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
     },
   ];
 
-  return (
-    <div className={`sp${large ? " lg" : ""}`} aria-label="Progress through research, spec, build and ship">
-      {nodes.map((n, i) => (
-        <NodeAndLink key={n.key} node={n} next={nodes[i + 1]} last={i === nodes.length - 1} />
-      ))}
-    </div>
-  );
+  return <Spine nodes={nodes} large={large}
+                label="Progress through research, spec, build and ship" />;
 }
 
 // Inline paths, NOT icon components.
@@ -133,19 +154,29 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
 // and the library was not: these are the same glyphs as plain markup, with no component,
 // no props and nothing to hydrate.
 const ICON_PATHS: Record<string, string> = {
+  // Delivery reuses the same glyph vocabulary: a change, a merge, a deploy, a live check.
+  change: "M6 3h7l5 5v13H6zM13 3v5h5",
+  merge: "M7 4v9a4 4 0 004 4h6M7 4a2 2 0 100 4 2 2 0 000-4zm10 11a2 2 0 100 4 2 2 0 000-4z",
+  deploy: "M12 3c3 2.5 4.5 6 4.5 9L12 17l-4.5-5c0-3 1.5-6.5 4.5-9zM9 18l-2 3 3-1zm6 0l2 3-3-1z",
+  live: "M3 12h4l2-5 3 10 2.5-6 1.5 3h5",
   research: "M4 7h5l1.5 3L12 7h4a3 3 0 013 3v4a3 3 0 01-3 3H8a3 3 0 01-3-3v-4z",
   spec: "M6 3h7l5 5v13H6zM13 3v5h5",
   build: "M14 6a4 4 0 00-5.3 5.3L4 16l4 4 4.7-4.7A4 4 0 0018 10l-2.5 2.5L13 10l2.5-2.5z",
   ship: "M12 3c3 2.5 4.5 6 4.5 9L12 17l-4.5-5c0-3 1.5-6.5 4.5-9zM9 18l-2 3 3-1zm6 0l2 3-3-1z",
 };
 
-const ICONS: Record<string, React.ReactNode> = Object.fromEntries(
-  Object.entries(ICON_PATHS).map(([key, d]) => [
-    key,
-    <svg key={key} viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"
-         fill="currentColor"><path d={d} /></svg>,
-  ]),
-);
+/** Built at RENDER time, not at module load: constructing JSX while the module is being
+ *  imported requires React to already be in scope, which broke every test that imported this
+ *  file transitively the moment delivery started using the spine. */
+function PhaseIcon({ phase }: { phase: string }) {
+  const d = ICON_PATHS[phase];
+  if (!d) return null;
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="currentColor">
+      <path d={d} />
+    </svg>
+  );
+}
 
 function NodeAndLink({
   node, next, last,
@@ -159,7 +190,7 @@ function NodeAndLink({
       {/* An icon, not a bare dot. Four identical dots differing only in colour made the four
           phases indistinguishable at a glance -- the reader had to parse the labels to know
           which stage they were looking at. */}
-      <span className="sp-dot">{ICONS[node.key] ?? null}</span>
+      <span className="sp-dot"><PhaseIcon phase={node.key} /></span>
       <span className="sp-label">{node.label}</span>
       {node.sub ? <span className="sp-sub">{node.sub}</span> : null}
     </>

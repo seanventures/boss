@@ -1,5 +1,7 @@
 "use client";
 
+import { Spine, type SpineNode } from "./journey-spine-ui";
+
 /**
  * The CI/CD area: deploy something, hold the credentials it needs, see what shipped.
  *
@@ -17,7 +19,7 @@
  * rendering an empty table that reads like a failure.
  */
 
-import React, { Fragment, useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
 import { formatDateTime } from "../lib/datetime";
 import { getDeliveryPipelineAction } from "./actions";
@@ -258,6 +260,117 @@ export function SandboxDeployFlagNotice({ enabled }: { enabled?: boolean }) {
   );
 }
 
+
+/**
+ * One card per deployable app, on the same card as everything else in the console.
+ *
+ * Delivery was a TABLE: app / environment / repo / kind / ref / status, with the controls
+ * folded into a second row underneath each entry. It answered "what is registered" and left
+ * "what happened to it" to a different section further down, so telling whether an app was
+ * actually live meant reading two places and joining them by name.
+ *
+ * The card says the same things in the order they are asked: what this app is, how far the
+ * last change got, what you can do about it, and where it lives.
+ */
+function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
+  target: Target;
+  stage?: Stage;
+  shipped: boolean;
+  onChanged: () => void;
+}) {
+  const deploy = stage?.deploy_status ?? null;
+  const healthy = stage?.health_check_results?.healthy;
+  const domain = (target.domains && target.domains[0]) || (stage?.target_domains || [])[0];
+
+  const done = (ok: boolean, now = false): "done" | "now" | "todo" | "blocked" =>
+    ok ? "done" : now ? "now" : "todo";
+
+  const nodes: SpineNode[] = [
+    {
+      key: "change",
+      label: "Change",
+      sub: stage?.pull_request_number ? `PR #${stage.pull_request_number} ↗` : "none yet",
+      state: done(Boolean(stage?.pull_request_url)),
+      href: stage?.pull_request_url ?? undefined,
+      title: stage?.pull_request_url
+        ? "The pull request this deployment came from"
+        : "Nothing has been proposed for this app yet",
+    },
+    {
+      key: "merge",
+      label: "Merged",
+      sub: stage?.commit_ref ? stage.commit_ref.slice(0, 7) : "not merged",
+      state: done(Boolean(stage?.commit_ref)),
+      title: stage?.commit_ref
+        ? `Merged as ${stage.commit_ref}`
+        : "The change has not been merged, so there is nothing to deploy",
+    },
+    {
+      key: "deploy",
+      label: "Deploy",
+      // A deploy that FAILED must not read the same as one that never ran: the table showed
+      // both as an empty cell, which is how a broken app looked untouched.
+      sub: deploy ?? "never",
+      state: deploy === "succeeded" || deploy === "deployed"
+        ? "done"
+        : deploy === "failed" || deploy === "rolled_back"
+          ? "blocked"
+          : deploy ? "now" : "todo",
+      title: stage?.failure_reason
+        ? `Deploy failed: ${stage.failure_reason}`
+        : deploy
+          ? `Last deploy ${deploy}${stage?.finished_at ? ` — took ${took(stage.started_at, stage.finished_at)}` : ""}`
+          : "This app has never been deployed",
+    },
+    {
+      key: "live",
+      label: "Live",
+      sub: healthy === true ? "open app ↗" : healthy === false ? "unhealthy" : "not checked",
+      state: healthy === true ? "done" : healthy === false ? "blocked" : "todo",
+      href: healthy === true && domain ? `https://${domain}` : undefined,
+      title: healthy === true
+        ? "Health checks passed — open the running app"
+        : healthy === false
+          ? "The app is deployed but its health check is failing"
+          : "No health check has run for this app",
+    },
+  ];
+
+  return (
+    <article className="mr-meeting-card">
+      <div className="mr-meeting-card-head">
+        <span className="cap-badge tone-blue">{target.environment}</span>
+        <span className={`cap-badge tone-${
+          healthy === true ? "green" : deploy === "failed" ? "amber" : "blue"}`}>
+          {healthy === true ? "live" : deploy === "failed" ? "deploy failed"
+            : deploy ? deploy : "never deployed"}
+        </span>
+        <span className="mr-meeting-date">
+          {stage?.finished_at ? sinceLabel(stage.finished_at) : target.status}
+        </span>
+      </div>
+      <span className="mr-meeting-title">{target.app_name}</span>
+      <p className="detail" style={{ margin: "2px 0 0" }}>
+        {target.repo} · {target.target_kind} · {target.target_ref}
+        {target.auto_deploy ? " · deploys on merge" : ""}
+        {target.paused ? " · paused" : ""}
+      </p>
+      <Spine nodes={nodes} large label={`Delivery progress for ${target.app_name}`} />
+      <div className="ct-actions">
+        <TargetControls target={target as never} shipped={shipped} onChanged={onChanged} />
+      </div>
+      <div className="ct-card-foot">
+        <span className="detail">{target.repo_owner ? `${target.repo_owner}/` : ""}{target.repo}</span>
+        {domain ? (
+          <a className="detail" href={`https://${domain}`} target="_blank" rel="noreferrer">
+            {domain} ↗
+          </a>
+        ) : <span className="detail">no domain yet</span>}
+      </div>
+    </article>
+  );
+}
+
 export function DeliveryPipeline({ initial, secrets, deployments }: {
   initial?: Pipeline | null; secrets?: SecretsView | null; deployments?: any;
 }) {
@@ -324,36 +437,24 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
       <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
       <SecretsPanel initial={secrets} />
 
-      {/* ---- targets: where anything could go at all ---- */}
+      {/* ---- targets: one card per app, the console's card ---- */}
       <section className="ct-block">
         <div className="ct-block-title">Deployment targets</div>
-        <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
-          <thead><tr style={{ textAlign: "left", opacity: .7 }}>
-            <th>app</th><th>environment</th><th>repo</th><th>kind</th><th>ref</th><th>status</th>
-          </tr></thead>
-          <tbody>
-            {data.targets.map((t) => (
-              <Fragment key={t.id}>
-                <tr style={{ borderTop: "1px solid rgba(255,255,255,.07)" }}>
-                  <td>{t.app_name}</td>
-                  <td><span className="cap-badge tone-blue">{t.environment}</span></td>
-                  <td className="detail">{t.repo}</td>
-                  <td>{t.target_kind}</td>
-                  <td className="detail">{t.target_ref}</td>
-                  <td style={{ color: t.status === "active" ? "#3fb950" : "#8b949e" }}>{t.status}</td>
-                </tr>
-                <tr>
-                  {/* Trigger controls sit with the target they act on, so "deploys on merge"
-                      is read in the same glance as which host it deploys to. */}
-                  <td colSpan={6} style={{ paddingBottom: 10 }}>
-                    <TargetControls target={t} shipped={everShipped.has(t.app_name)}
-                                    onChanged={reload} />
-                  </td>
-                </tr>
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+        <div className="mr-grid ct-tiles" style={{ marginTop: 10 }}>
+          {data.targets.map((t) => (
+            <DeliveryTargetCard
+              key={t.id}
+              target={t}
+              // The most recent stage for THIS app. The table left this join to the reader.
+              stage={(data.stages || [])
+                .filter((st) => st.app_name === t.app_name)
+                .sort((a, b) => (b.finished_at || b.started_at || "")
+                  .localeCompare(a.finished_at || a.started_at || ""))[0]}
+              shipped={everShipped.has(t.app_name)}
+              onChanged={reload}
+            />
+          ))}
+        </div>
       </section>
 
       {/* The pipeline table listed every code task run that had ever opened a PR — eighteen
