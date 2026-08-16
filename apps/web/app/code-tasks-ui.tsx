@@ -21,6 +21,7 @@ import {
   followUpCodeTaskAction,
 } from "./actions";
 import { Markdown } from "./markdown";
+import { ClientRelativeTime } from "./client-relative-time";
 import { JourneySpine } from "./journey-spine-ui";
 import { SubmitButton } from "./submit-button";
 
@@ -565,9 +566,9 @@ function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
 
   if (!open) {
     return (
-      <button className="cap-btn" onClick={() => setOpen(true)}
-              title="Ask for a change to this app; it builds on the code that already exists">
-        Change this app
+      <button className="oc-link" onClick={() => setOpen(true)}
+              title="Ask for a change; it builds on the code that already exists">
+        Request a change
       </button>
     );
   }
@@ -707,10 +708,11 @@ function LaunchTask({ run, projectId, label = "Run this task again", onLaunched,
                 // here is the difference between a confirmation and a riddle.
                 ? `started ${startedId.slice(0, 13)}… — it plans, tests and implements before `
                   + `there is anything to preview`
-                : profile
-                       ? `${profile} profile${riskTier != null ? ` · tier ${riskTier}` : ""}`
-                         + " — same as the original · budgeted, review-gated"
-                       : "project default profile · budgeted, review-gated"}
+                // The profile and gating used to be spelled out here on EVERY card, in the
+                // same words, taking a line to say something that never changed and that
+                // nothing could be done about. The profile now appears once, as a pill in the
+                // meta row.
+                : ""}
       </span>
     </div>
   );
@@ -1421,11 +1423,27 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[`chg:${c.id}`]?.run_id} />
                   </div>
+                  {/* Meta as PILLS, the way the Meeting cards do it — the treatment that
+                      already reads well here. Plus the fact that was missing entirely: WHEN.
+                      A list of tasks with no times gives no sense of what is recent, so
+                      everything looks equally current and nothing looks stale. */}
                   <div className="oc-meta">
-                    <span className="detail">{c.spec?.owner}/{c.spec?.repo}{c.spec?.base_branch && c.spec.base_branch !== "main" ? ` @ ${c.spec.base_branch}` : ""}</span>
-                    {st.profile ? <span className="detail">{st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}</span> : null}
-                    {c.pull_request_url ? <span className="ct-card-pr">PR #{c.pull_request_number}</span> : null}
-                    {(st.cost_usd_micros != null) ? <span className="detail">{fmtUsd(st.cost_usd_micros)}</span> : null}
+                    <ClientRelativeTime iso={c.updated_at ?? c.created_at} className="oc-when" />
+                    <span className="oc-pill">{c.spec?.owner}/{c.spec?.repo}</span>
+                    {st.profile ? (
+                      <span className="oc-pill accent">
+                        {st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}
+                      </span>
+                    ) : null}
+                    {c.pull_request_url ? (
+                      <a className="oc-pill" href={c.pull_request_url} target="_blank"
+                         rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                        PR #{c.pull_request_number} ↗
+                      </a>
+                    ) : null}
+                    {(st.cost_usd_micros != null) ? (
+                      <span className="oc-pill">{fmtUsd(st.cost_usd_micros)}</span>
+                    ) : null}
                   </div>
                 </article>
               );

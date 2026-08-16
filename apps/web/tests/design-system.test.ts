@@ -144,7 +144,13 @@ describe("BOSS mission-control design system", () => {
     // It must carry the original's profile, and say which one it is.
     expect(relaunch).toContain('data.set("profile", profile)');
     expect(relaunch).toContain('data.set("risk_tier"');
-    expect(relaunch).toContain("same as the original");
+    // The caption that carried this wording is gone. It read "…same as the original ·
+    // budgeted, review-gated" on EVERY card, in the same words, taking a line to state
+    // something that never varied and that nothing could be done about. What it was guarding
+    // still holds and is asserted above: the relaunch sends the original's profile and tier
+    // rather than silently adopting the project default. The profile is now shown once, as a
+    // pill in the meta row, instead of narrated on every row.
+    expect(relaunch).toMatch(/data\.set\("profile", profile\)/);
     // Nor may the benchmark card. It said "Strict profile" long after the endpoint had been
     // changed to ask for balanced — a caption describing a decision made in another file,
     // which is exactly how it came to be wrong. It must name what the endpoint requests.

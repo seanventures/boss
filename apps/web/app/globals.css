@@ -4955,3 +4955,21 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .sp.lg .sp-sub { font-size: 0.7rem; }
 .sp.lg .sp-link { height: 2px; margin-top: 7px; min-width: 26px; }
 .sp.lg .sp-node.now .sp-dot { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent, #6ea8fe) 20%, transparent); }
+
+/* A secondary action that does not compete with the primary one. "Change this app" was a
+   full-width button beside "Run this task again", so two equally-weighted controls sat on
+   every card and neither read as the obvious thing to do. */
+.oc-link {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-size: 0.78rem; color: var(--muted); text-decoration: underline;
+  text-underline-offset: 3px; text-decoration-color: var(--border);
+}
+.oc-link:hover { color: var(--ink); text-decoration-color: currentColor; }
+
+/* Meta row pills, borrowed from the Meeting cards — the look that already works here. */
+.oc-pill {
+  font-size: 0.7rem; padding: 3px 9px; border-radius: 999px; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap;
+}
+.oc-pill.accent { color: var(--accent-text); background: var(--accent-soft); border-color: var(--accent-line); }
+.oc-when { font-size: 0.72rem; color: var(--muted); }

@@ -1052,6 +1052,10 @@ export type CodeTaskRun = {
     repo?: string;
     base_branch?: string;
   };
+  /** The API has always returned these; the type simply did not declare them, so the console
+   *  could not show WHEN anything happened and every task looked equally current. */
+  created_at?: string;
+  updated_at?: string;
   state: CodeTaskState;
   usage?: { cost_usd_micros?: number; model?: string };
   finalize_ctx?: {

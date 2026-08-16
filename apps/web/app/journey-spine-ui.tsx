@@ -52,6 +52,11 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   // panel that never met.
   const fromMeeting = origin?.kind === "meeting";
   const fromDiscovery = origin?.kind === "discovery";
+  // A meeting's own id, so Spec lands on THAT panel rather than the meetings list. Falls back
+  // to the area when only the origin kind is known.
+  const meetingHref = origin?.task_id
+    ? `?area=meetings&task=${encodeURIComponent(origin.task_id)}`
+    : "?area=meetings";
 
   const nodes: {
     key: string; label: string; sub?: string; state: NodeState; href?: string; title: string;
@@ -59,7 +64,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
     {
       key: "research",
       label: "Research",
-      sub: fromDiscovery ? "dossier" : undefined,
+      sub: fromDiscovery ? "open dossier ↗" : "none",
       state: fromDiscovery ? "done" : "todo",
       href: fromDiscovery ? "?area=discovery" : undefined,
       title: fromDiscovery
@@ -69,9 +74,9 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
     {
       key: "spec",
       label: "Spec",
-      sub: fromMeeting ? "PRD" : undefined,
+      sub: fromMeeting ? "open PRD ↗" : "none",
       state: fromMeeting ? "done" : "todo",
-      href: fromMeeting ? "?area=meetings" : undefined,
+      href: fromMeeting ? meetingHref : undefined,
       title: fromMeeting
         ? "Specced by an agent panel — open the meeting and its PRD"
         : "No panel: this task was written directly",
@@ -79,8 +84,11 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
     {
       key: "build",
       label: "Build",
-      sub: running ? (run.phase || undefined) : fctx.is_followup ? "follow-up" : undefined,
-      state: failed ? "blocked" : shipped ? "done" : running ? "now" : "done",
+      sub: failed ? (status || "stopped") : running ? (run.phase || "working") : "done",
+      // Only a run that genuinely stopped is red. Every Build node was rendering red because
+      // most of the history is failed runs, so the strip read as "everything is broken" and the
+      // colour stopped meaning anything.
+      state: failed ? "blocked" : running ? "now" : "done",
       title: failed
         ? `Stopped during build (${status})`
         : running
@@ -90,7 +98,7 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
     {
       key: "ship",
       label: "Ship",
-      sub: shipped ? "PR" : previewUrl ? "preview" : undefined,
+      sub: previewUrl ? "open app ↗" : shipped ? "open PR ↗" : "not yet",
       state: shipped || previewUrl ? "done" : "todo",
       href: previewUrl ?? run.pull_request_url ?? undefined,
       title: previewUrl
