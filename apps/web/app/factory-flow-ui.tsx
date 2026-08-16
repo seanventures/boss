@@ -3,13 +3,27 @@
 import React, { useEffect, useState } from "react";
 
 import {
+  compileCaptainPlaybook,
+  saveCaptainPlaybook,
+} from "../lib/captain-playbook";
+import {
   fetchFactoryFlowBoard,
   type FactoryFlowBoard,
   emptyFactoryFlowBoard,
 } from "../lib/factory-flow";
 
-export function FactoryFlowBoard({ projectId }: { projectId: string }) {
+export function FactoryFlowBoard({
+  projectId,
+  actor = "executive_console",
+}: {
+  projectId: string;
+  actor?: string;
+}) {
   const [board, setBoard] = useState<FactoryFlowBoard>(emptyFactoryFlowBoard("loading", projectId));
+  const [guide, setGuide] = useState(
+    "Official canary. Must include QA and UX. Panel of 5. Loop until tests pass. Never invent scores.",
+  );
+  const [guideNote, setGuideNote] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,6 +96,36 @@ export function FactoryFlowBoard({ projectId }: { projectId: string }) {
           ))}
         </ul>
       )}
+      <form
+        className="stack"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void (async () => {
+            const compiled = await compileCaptainPlaybook(guide);
+            if ("error" in compiled) {
+              setGuideNote(compiled.error);
+              return;
+            }
+            const saved = await saveCaptainPlaybook(projectId, actor, compiled);
+            setGuideNote(
+              saved.ok
+                ? `Saved reusable playbook ${compiled.playbookKey}. Captain loops until the goal is honestly met.`
+                : saved.error || "save failed",
+            );
+          })();
+        }}
+      >
+        <label>
+          Captain playbook (saved and repeated)
+          <textarea
+            value={guide}
+            onChange={(event) => setGuide(event.target.value)}
+            rows={3}
+          />
+        </label>
+        <button type="submit">Save reusable playbook</button>
+        {guideNote ? <p className="detail">{guideNote}</p> : null}
+      </form>
       {board.findings.length > 0 ? (
         <div>
           <h3>Improve loop findings</h3>

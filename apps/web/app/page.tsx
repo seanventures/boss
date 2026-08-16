@@ -7097,7 +7097,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
-          <FactoryFlowBoard projectId={activeProjectId} />
+          <FactoryFlowBoard projectId={activeProjectId} actor={activeActorId} />
           <ActivityLog projectId={activeProjectId} actor={activeActorId} />
         </section>
 

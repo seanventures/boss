@@ -338,8 +338,11 @@ class FactoryFlowService:
         diagnosis = diagnose_flow(snap)
         snap["diagnosis"] = diagnosis
         from .captain_coordination import plan_staffing
+        from .captain_playbook import apply_playbook_to_plan, default_official_playbook
 
         plan = plan_staffing(snap)
+        if snap.get("official"):
+            plan = apply_playbook_to_plan(plan, default_official_playbook())
         return {
             **{k: snap[k] for k in (
                 "id", "title", "status", "phase", "error", "official",
@@ -403,6 +406,7 @@ class FactoryFlowService:
                 if self._attach_missing_swarm(connection, project_id, item, actor=actor):
                     attached += 1
         captain = {}
+        playbook_loop = {}
         try:
             from .captain_coordination import CaptainCoordinationService
 
@@ -411,6 +415,14 @@ class FactoryFlowService:
             )
         except Exception:  # noqa: BLE001 — flow tick must still return findings
             captain = {"error": "captain_coordinate_failed"}
+        try:
+            from .captain_playbook import CaptainPlaybookService
+
+            playbook_loop = CaptainPlaybookService(self.settings).loop_once(
+                connection, project_id=project_id, actor=actor,
+            )
+        except Exception:  # noqa: BLE001
+            playbook_loop = {"error": "playbook_loop_failed"}
         emit_event(
             connection, project_id, "factory_flow.ticked", actor, "project", project_id,
             {"recorded": recorded, "attached": attached, "stalled": board.get("stalled")},
@@ -424,6 +436,11 @@ class FactoryFlowService:
             "captain": {
                 "assignments_written": (captain or {}).get("assignments_written"),
                 "plans": len((captain or {}).get("plans") or []),
+            },
+            "playbook": {
+                "key": (playbook_loop or {}).get("playbook_key"),
+                "finished": (playbook_loop or {}).get("finished"),
+                "autonomous": (playbook_loop or {}).get("autonomous"),
             },
         }
 
