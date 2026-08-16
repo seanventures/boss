@@ -350,9 +350,15 @@ export default function ConsoleShell({
   // threads by external_ref, so each app gets its own thread and its own history; asking about
   // BugBox cannot surface ApproveIt's answers.
   const [dockedRun, setDockedRun] = useState<string | null>(null);
+  const [dockFacts, setDockFacts] = useState<string | undefined>(undefined);
   useEffect(() => {
-    const read = () =>
-      setDockedRun(new URLSearchParams(window.location.search).get("agent"));
+    const read = () => {
+      const id = new URLSearchParams(window.location.search).get("agent");
+      setDockedRun(id);
+      try {
+        setDockFacts(id ? window.sessionStorage.getItem(`boss.agent.facts.${id}`) ?? undefined : undefined);
+      } catch { setDockFacts(undefined); }
+    };
     read();
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
@@ -598,7 +604,7 @@ export default function ConsoleShell({
             <div className="bx-dock-body">
               <AgentChat projectId={scope.projectId ?? scope.project}
                          actor={scope.actorId ?? scope.actor}
-                         initialTaskId={dockedRun} />
+                         initialTaskId={dockedRun} appFacts={dockFacts} />
             </div>
           </aside>
         ) : null}

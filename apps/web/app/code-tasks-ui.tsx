@@ -1879,6 +1879,27 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                             title="Talk to BOSS about this app — it can read the run, the repo and the preview"
                             onClick={(e) => {
                               e.stopPropagation();
+                              // Everything the card already knows, handed to the dock. The
+                              // console renders these facts inches away; the agent should not
+                              // have to rediscover them.
+                              const m = members[0];
+                              const facts = [
+                                `[app context] You are talking about ONE app in BOSS.`,
+                                `run_id: ${m.id}`,
+                                `app: ${appIdentity(m).name}`,
+                                `repo: ${m.spec?.owner ?? "?"}/${m.spec?.repo ?? "?"}`,
+                                `branch: ${(m.finalize_ctx as Record<string, unknown> | undefined)?.root_run_id
+                                  ? `boss/code/${(m.finalize_ctx as Record<string, unknown>).root_run_id}`
+                                  : `boss/code/${m.id}`}`,
+                                `status: ${m.status ?? "?"}${m.phase ? ` (${m.phase})` : ""}`,
+                                prRun?.pull_request_url ? `pull_request: ${prRun.pull_request_url}` : "pull_request: none",
+                                livePreviewFor(m.id) ? `live_preview: ${livePreviewFor(m.id)}` : "live_preview: none",
+                                `attempts: ${members.length}`,
+                                `Use your tools (inspect_app, diagnose_preview, diagnose_deployment) with run_id ${m.id} when you need more.`,
+                              ].join("\n");
+                              try {
+                                window.sessionStorage.setItem(`boss.agent.facts.${m.id}`, facts);
+                              } catch { /* private mode: the dock still works, with less context */ }
                               const url = new URL(window.location.href);
                               url.searchParams.set("agent", members[0].id);
                               window.history.pushState({}, "", url.toString());

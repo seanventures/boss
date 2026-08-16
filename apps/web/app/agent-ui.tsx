@@ -26,7 +26,11 @@ function railBtn(active: boolean) {
   };
 }
 
-export function AgentChat({ projectId, actor, initialTaskId }: { projectId: string; actor: string; initialTaskId?: string }) {
+export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
+  projectId: string; actor: string; initialTaskId?: string;
+  /** What BOSS already knows about the app this conversation is about. */
+  appFacts?: string;
+}) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [sel, setSel] = useState<string>(initialTaskId || GENERAL);   // GENERAL or a task_id
@@ -87,6 +91,17 @@ export function AgentChat({ projectId, actor, initialTaskId }: { projectId: stri
 
   const runTurn = useCallback((fd: FormData) => {
     fd.set("project_id", projectId); fd.set("actor", actor);
+    // TELL IT WHICH APP.
+    //
+    // The agent has tools that can read a run, its repo, its preview and its deployment — and
+    // no way to know WHICH run the conversation is about, because the thread key is an opaque
+    // id. So it answered "tell me what to do" to "what is the PR link", while the answer sat
+    // in the row behind the card. The facts go in front of the message, with the run id, so
+    // the tools have something to be pointed at.
+    if (appFacts) {
+      const message = String(fd.get("message") ?? "");
+      if (message) fd.set("message", `${appFacts}\n\n${message}`);
+    }
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     startTransition(async () => {
