@@ -186,7 +186,7 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
 
 def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
                         task_id: Optional[str], directive: str, owner: str, repo: str,
-                        review: bool = False) -> dict:
+                        review: bool = False, origin: Optional[dict] = None) -> dict:
     """SINGLE-TASK web-app build (the robust default for a website). Seed a deterministic
     Vite+React+TS+Tailwind scaffold (zero agent turns), then ONE governed task builds the whole app
     feature on top — a handful of files that fit comfortably under the guest's ~40-turn cap. No
@@ -265,7 +265,18 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
             ],
             test_commands=["npm run verify"], owner=owner, repo=repo,
             base_branch=f"boss/code/{root}",
-            finalize_ctx={"root_run_id": root, "web_app_build": True},
+            # WHERE THIS CAME FROM.
+            #
+            # Nothing recorded it before: code_task_runs.task_id is null on every path that
+            # matters, so a meeting and the build it produced had no join between them and the
+            # console could only show three unrelated lists. An operator then has to work out
+            # that a discovery, a panel and four runs are one piece of work, by reading titles.
+            #
+            # `origin` is carried forward by retries and follow-ups too (see
+            # start_followup_task), so every attempt at an outcome points back to the same
+            # beginning and the whole lineage can be drawn as one thing.
+            finalize_ctx={"root_run_id": root, "web_app_build": True,
+                          **({"origin": origin} if origin else {})},
             # tier 0 (review=False): implement ONLY — no design, no separate write_tests stage
             # (which mis-generated Python unittest files for this JS/React app), no adversarial
             # gate. The guest validates itself with `npm run build`. review=True -> tier 2 hardens.

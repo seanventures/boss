@@ -471,6 +471,12 @@ def start_followup_task(
         "is_followup": True,
         "requested_by": actor,
     }
+    # Where the outcome BEGAN, carried forward. root_run_id says which attempts are the same
+    # work; origin says which panel or dossier it came from. A follow-up that keeps the first
+    # and drops the second becomes an orphan on screen -- one app reading as several, which is
+    # the state this linkage exists to remove.
+    if fctx.get("origin"):
+        child_fctx["origin"] = fctx["origin"]
     # Official canaries must stay official across follow-up. Dropping
     # qa_benchmark made /report 404 and broke the 5/5 lineage.
     if fctx.get("official"):
@@ -722,6 +728,9 @@ def retry_code_task(
             base_branch=spec.get("base_branch") or "main",
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
                           "feedback_history": history,
+                          # Carried across every attempt: a retry is the same outcome, and a
+                          # console that loses that shows one app as several.
+                          **({"origin": fctx_prev["origin"]} if fctx_prev.get("origin") else {}),
                           **({"official": True} if fctx_prev.get("official") else {}),
                           **({"qa_benchmark": dict(fctx_prev["qa_benchmark"])}
                              if isinstance(fctx_prev.get("qa_benchmark"), dict)

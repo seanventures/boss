@@ -853,6 +853,15 @@ class DecisionService:
         prd_markdown = args.get("markdown") or ""
         directive = prd_markdown or f"Implement the approved plan: {title}"
 
+        # The beginning of this outcome, recorded so the build can be drawn as the continuation
+        # of the panel that specced it rather than as an unrelated run.
+        origin = {
+            "kind": "meeting",
+            "task_id": task_id,
+            "decision_id": row["id"],
+            "title": title,
+        }
+
         # Turn the approved PRD into a build. Never dump a whole multi-feature PRD into ONE giant
         # governed task (mis-routes -> sprawling code -> gate fail). Two proven paths:
         #  - WEB APP  -> start_web_app_build: scaffold + ONE focused task -> one PR + one approval.
@@ -863,6 +872,7 @@ class DecisionService:
         project_id = row["project_id"]
         settings = self.settings
         jobs = self.jobs
+        origin_ctx = origin
 
         def _launch_build() -> None:
             try:
@@ -876,7 +886,7 @@ class DecisionService:
                     start_web_app_build(
                         engine, settings, jobs,
                         project_id=project_id, task_id=task_id, directive=directive,
-                        owner=owner, repo=repo, review=False)
+                        owner=owner, repo=repo, review=False, origin=origin_ctx)
                 else:
                     start_decomposed_build(
                         engine, settings, jobs,
