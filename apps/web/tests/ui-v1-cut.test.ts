@@ -31,12 +31,28 @@ const HIDDEN_FROM_COMMUNITY_NAV = [
   "agent",
   "dashboard",
   "portfolio",
+  "processes",
+] as const;
+
+/**
+ * Added back to the Community nav after the v1 cut.
+ *
+ * The v1 cut hid these, and the console it produced listed only the places work ENDS UP --
+ * approvals, jobs, reports -- and none of the places it starts. An operator could watch BOSS
+ * work but could not see how to set it going, which read as "the flow is missing".
+ *
+ * Discovery and Meetings are the two ways in besides a direct code task; Apps is where the
+ * result lives; CI/CD and Monitoring are how it reaches production; Shepherd is what happened
+ * when it did not. Hiding them makes the nav shorter and the product unusable by someone who
+ * has not been shown it.
+ */
+const RESTORED_TO_COMMUNITY_NAV = [
   "discovery",
   "meetings",
-  "processes",
-  "shepherd",
+  "apps",
   "delivery",
   "monitoring",
+  "shepherd",
 ] as const;
 
 function read(rel: string): string {
@@ -113,6 +129,16 @@ describe("Community UI v1 cut", () => {
       expect(union, `AreaId missing ${area}`).toContain(area);
       expect(listed, `AREAS missing ${area}`).toContain(area);
       expect(isCommunityPrimaryNavVisible(area, "community")).toBe(false);
+      expect(isCommunityPrimaryNavVisible(area, "enterprise")).toBe(true);
+    }
+
+    // The flow is visible on Community, and every one of these is still an area the paid
+    // editions have -- nothing was moved, only un-hidden.
+    for (const area of RESTORED_TO_COMMUNITY_NAV) {
+      expect(union, `AreaId missing ${area}`).toContain(area);
+      expect(listed, `AREAS missing ${area}`).toContain(area);
+      expect(isCommunityPrimaryNavVisible(area, "community"), `${area} must be visible`)
+        .toBe(true);
       expect(isCommunityPrimaryNavVisible(area, "enterprise")).toBe(true);
     }
   });

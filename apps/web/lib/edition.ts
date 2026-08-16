@@ -143,6 +143,18 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "reports",
   "budget",
   "enterprise",
+
+  // The path from an idea to shipped software. Without these the console lists the places
+  // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an
+  // operator can watch BOSS work but cannot see how to set it going. Discovery and Meetings
+  // are the two ways in besides a direct code task; Apps is where the result lives; Ship and
+  // Shepherd are how it reaches production and what happens when it does not.
+  "discovery",
+  "meetings",
+  "apps",
+  "delivery",
+  "monitoring",
+  "shepherd",
 ]);
 
 /**
