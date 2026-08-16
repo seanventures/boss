@@ -5017,3 +5017,15 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* The spine's phase icon sits where the dot was: same footprint, legible identity. */
 .sp-dot { display: inline-flex; align-items: center; justify-content: center; }
 .sp-dot svg { display: block; }
+
+/* An app card's actions: one row, ranked, sized to their labels.
+   They were block children of a grid card, so each stretched edge to edge and centred its own
+   text -- "Request a change" read as a stray caption floating above the primary button. */
+.ct-actions {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 2px;
+}
+.ct-actions > * { flex: 0 0 auto; }
+/* The change control is secondary to "run it again", but it is still a control. */
+.ct-change-btn { white-space: nowrap; }
+/* Once open, the form owns the row: a three-line textarea has no business sharing it. */
+.ct-change-form { flex: 1 1 100%; display: grid; gap: 8px; }

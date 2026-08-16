@@ -574,7 +574,11 @@ function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
 
   if (!open) {
     return (
-      <button className="oc-link" onClick={() => setOpen(true)}
+      // A button, not a bare link. The card is a grid, so an unwrapped <button> stretched to
+      // the full width and centred its own label -- the control looked like a stray caption
+      // floating between the spine and the primary action. It is also the most common real
+      // action on a finished app (change it), so a muted underline understated it.
+      <button className="cap-btn ct-change-btn" onClick={() => setOpen(true)}
               title="Ask for a change; it builds on the code that already exists">
         Request a change
       </button>
@@ -582,7 +586,7 @@ function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
   }
 
   return (
-    <div style={{ display: "grid", gap: 8 }}>
+    <div className="ct-change-form">
       <textarea
         aria-label="What should change about this app?"
         className="ct-feedback-input"
@@ -1702,14 +1706,21 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     </p>
                   ) : null}
                   <JourneySpine run={members[0] as never} previewUrl={livePreviewFor(members[0].id)} large />
-                  <ChangeThisApp run={members[0]} onStarted={noteLaunch}
-                                 onOpen={(id) => void openRun(id)}
-                                 startedId={launched[`chg:${members[0].id}`]?.run_id} />
-                  <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
+                  {/* ONE action row. These were two block-level children of a grid, so they
+                      stacked full-width and the weaker of the two sat centred above the
+                      stronger -- the change control read as a caption rather than a choice.
+                      Side by side, "change it" and "build it again" are what they are: two
+                      things you can do to this app, ranked. */}
+                  <div className="ct-actions">
+                    <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
+                                     onOpen={(id) => void openRun(id)}
+                                     startedId={launched[members[0].id]?.run_id}
+                                     failed={launched[members[0].id]?.error}
+                                     label="Run this build again" />
+                    <ChangeThisApp run={members[0]} onStarted={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
-                                   startedId={launched[members[0].id]?.run_id}
-                                   failed={launched[members[0].id]?.error}
-                                   label="Run this build again" />
+                                   startedId={launched[`chg:${members[0].id}`]?.run_id} />
+                  </div>
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
