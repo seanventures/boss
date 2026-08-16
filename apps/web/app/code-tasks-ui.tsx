@@ -1557,6 +1557,12 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               const key = (fc(c).app_id as string)
                 || (bench ? `qa:${bench}` : null)
                 || (fc(c).root_run_id as string)
+                // Real lineage that historical runs already carry. A deferred-findings
+                // follow-up records the run it was spawned from, and a retry records its
+                // parent — both are identity, not resemblance, so they can be used for the
+                // history that predates app_id without guessing from titles.
+                || (fc(c).deferred_from_run as string)
+                || (fc(c).parent_run_id as string)
                 || c.id;
               if (!groups.has(key)) { groups.set(key, []); order.push(key); }
               groups.get(key)!.push(c);
