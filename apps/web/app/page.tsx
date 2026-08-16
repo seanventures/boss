@@ -7023,6 +7023,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             </div>
             <PreviewsPanel
+              // A preview row that says only prev_680d… cannot be told apart from the app the
+              // reader is actually looking at. The run already knows its name.
+              runTitles={Object.fromEntries(codeTasksFeed.items.map((t) => [
+                t.id,
+                (t.title ?? "").replace(/^Web app — #?\s*(PRD:)?\s*/i, "").split(/[—:\n]/)[0].trim().slice(0, 40)
+                  || t.id,
+              ]))}
               feed={previewFeed}
               projectId={activeProjectId}
               actor={activeActorId}

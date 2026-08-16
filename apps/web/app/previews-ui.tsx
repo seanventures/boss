@@ -25,7 +25,7 @@ function resolveHref(href: string): string {
   return href.startsWith("http") ? href : `${PREVIEW_API}${href}`;
 }
 
-function PreviewRow({ preview }: { preview: PreviewRec }) {
+function PreviewRow({ preview, appName }: { preview: PreviewRec; appName?: string }) {
   const href = previewOperatorHref(preview);
   const failClosed = previewFailClosedReason(preview);
   const fixture = isFixturePreview(preview);
@@ -49,6 +49,12 @@ function PreviewRow({ preview }: { preview: PreviewRec }) {
       <span className={`cap-badge ${fixture ? "tone-amber" : "tone-blue"}`}>
         {fixture ? PREVIEW_FIXTURE_BADGE : `preview: ${preview.status}`}
       </span>
+      {/* WHICH APP THIS IS.
+          The row showed a bare preview id, and this list is GLOBAL -- every running preview in
+          the project, in creation order. Sitting under a BugBox card, ApproveIt's preview read
+          as one of BugBox's, and the only way to tell them apart was to open both. Nothing was
+          mismatched; the row simply never said what it was serving. */}
+      {appName ? <strong style={{ fontSize: 13 }}>{appName}</strong> : null}
       {preview.id ? <code className="detail">{preview.id}</code> : null}
     </div>
   );
@@ -60,8 +66,11 @@ export function PreviewsHonesty({
   actor,
   createAction,
   createState,
+  runTitles = {},
 }: {
   feed: PreviewFeed;
+  /** run id -> app name, so a row can say which application it is serving. */
+  runTitles?: Record<string, string>;
   projectId: string;
   actor: string;
   createAction?: (formData: FormData) => void | Promise<void>;
@@ -92,7 +101,8 @@ export function PreviewsHonesty({
         ) : (
           <div style={{ display: "grid", gap: 8 }}>
             {inventory.realRunning.map((preview) => (
-              <PreviewRow key={preview.id} preview={preview} />
+              <PreviewRow key={preview.id} preview={preview}
+                          appName={preview.run_id ? runTitles[preview.run_id] : undefined} />
             ))}
           </div>
         )}
@@ -110,7 +120,8 @@ export function PreviewsHonesty({
         ) : (
           <div style={{ display: "grid", gap: 8 }}>
             {inventory.fixtures.map((preview) => (
-              <PreviewRow key={preview.id} preview={preview} />
+              <PreviewRow key={preview.id} preview={preview}
+                          appName={preview.run_id ? runTitles[preview.run_id] : undefined} />
             ))}
           </div>
         )}
@@ -139,7 +150,8 @@ export function PreviewsHonesty({
           <p className="detail">View is fail-closed. Opening an expired preview returns 409.</p>
           <div style={{ display: "grid", gap: 8 }}>
             {inventory.expired.slice(0, 8).map((preview) => (
-              <PreviewRow key={preview.id} preview={preview} />
+              <PreviewRow key={preview.id} preview={preview}
+                          appName={preview.run_id ? runTitles[preview.run_id] : undefined} />
             ))}
           </div>
         </article>
@@ -152,14 +164,17 @@ export function PreviewsPanel({
   feed,
   projectId,
   actor,
+  runTitles,
 }: {
   feed: PreviewFeed;
   projectId: string;
   actor: string;
+  runTitles?: Record<string, string>;
 }) {
   const [state, action] = useActionState(createPreviewFixtureAction, null);
   return (
     <PreviewsHonesty
+      runTitles={runTitles}
       feed={feed}
       projectId={projectId}
       actor={actor}
