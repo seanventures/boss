@@ -1527,26 +1527,35 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                     .replace(/^\[\d+\/\d+\]\s*/, "");
               const open = expandedGroups.has(key);
               return (
-                <div key={key} className="ct-card" style={{ gap: 6, cursor: "default" }}>
+                // The GROUPED card, on the same Meeting styling as the single one.
+                //
+                // Two card paths existed and I restyled only one, so a list that is mostly
+                // groups still showed the old markup — the operator saw no change at all and
+                // reasonably concluded the work had not been done. The identical mistake as
+                // the fetch limit, the housekeeping filter and the preview URL earlier: fix
+                // one path, miss its twin.
+                <div key={key} className="mr-meeting-card" style={{ cursor: "default" }}>
                   <div
+                    className="mr-meeting-card-head"
                     role="button"
                     onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
-                    style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}
+                    style={{ cursor: "pointer" }}
                   >
-                    <div style={{ fontWeight: 700, fontSize: 16, color: "var(--ink)", flex: 1, minWidth: 0 }}>
-                      <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{gi + 1}. {open ? "▾" : "▸"}</span>
-                      {name} <span style={{ color: "var(--muted)", fontWeight: 600 }}>
-                        {benchGroup
-                          ? `· ${total} ${total === 1 ? "attempt" : "attempts"}`
-                          : `· build (${total} tasks)`}
-                      </span>
-                    </div>
-                    <span className={`cap-badge tone-${statusTone(groupStatus)}`} style={{ flexShrink: 0 }}>
+                    <span className={`cap-badge tone-${statusTone(groupStatus)}`}>
                       {benchGroup ? groupStatus : `${doneN}/${total} done`}
                     </span>
+                    <span className="mr-meeting-date">
+                      {gi + 1} · {benchGroup
+                        ? `${total} ${total === 1 ? "attempt" : "attempts"}`
+                        : `${total} tasks`}
+                    </span>
                   </div>
-                  <ContractDetails criteria={members[0].spec?.acceptance_criteria}
-                                   verification={members[0].spec?.test_commands} />
+                  <span className="mr-meeting-title" role="button"
+                        onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
+                        style={{ cursor: "pointer" }}>
+                    {open ? "▾" : "▸"} {name}
+                  </span>
+                  <JourneySpine run={members[0] as never} previewUrl={livePreviewFor(members[0].id)} large />
                   <ChangeThisApp run={members[0]} onStarted={noteLaunch}
                                  onOpen={(id) => void openRun(id)}
                                  startedId={launched[`chg:${members[0].id}`]?.run_id} />
