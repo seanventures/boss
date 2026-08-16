@@ -5097,3 +5097,23 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ff-playbook { display: grid; gap: 4px; max-width: 62ch; margin-top: 10px; }
 .ff-playbook-label { font-size: 0.82rem; font-weight: 600; color: var(--ink); }
 .ff-playbook .ct-feedback-input { margin-top: 4px; }
+
+/* Card actions carry an icon, and the secondary ones stop reading as flat placeholders.
+   A row of same-weight text buttons gives no clue which is the cheap action and which spends
+   a full pipeline run; the icon plus a lifted surface makes the ladder legible at a glance. */
+.ct-actions .cap-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-weight: 550; border-radius: 9px;
+}
+.ct-actions .cap-btn:not(.primary) {
+  background: var(--surface-2, rgba(255,255,255,.045));
+  border: 1px solid var(--border);
+  color: var(--ink-soft, var(--ink));
+}
+.ct-actions .cap-btn:not(.primary):hover {
+  background: rgba(255,255,255,.08);
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 45%, var(--border));
+  color: var(--ink);
+}
+.ct-actions .cap-btn svg { flex: 0 0 auto; opacity: .9; }
+.ct-actions .cap-btn.primary svg { opacity: 1; }

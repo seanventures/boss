@@ -30,6 +30,10 @@ import {
 import { Markdown } from "./markdown";
 import { ClientRelativeTime } from "./client-relative-time";
 import { JourneySpine } from "./journey-spine-ui";
+import {
+  ArrowSquareOut, PencilSimple, PlayCircle, Sparkle,
+} from "@phosphor-icons/react";
+
 import { SubmitButton } from "./submit-button";
 
 function RetryControls({ runId, failingGates = [] }: { runId: string; failingGates?: string[] }) {
@@ -557,7 +561,7 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }
       <a className="cap-btn primary" href={url} target="_blank" rel="noreferrer"
          onClick={(e) => e.stopPropagation()}
          title="Open the running app">
-        Open preview ↗
+        <ArrowSquareOut size={15} weight="bold" aria-hidden /> Open preview
       </a>
     );
   }
@@ -581,7 +585,7 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }
     <form action={action} onClick={(e) => e.stopPropagation()}>
       <input type="hidden" name="run_id" value={run.id} />
       <SubmitButton className="cap-btn primary" pendingLabel="Starting preview…">
-        Run preview
+        <PlayCircle size={15} weight="fill" aria-hidden /> Run preview
       </SubmitButton>
       {state?.error ? <span className="detail"> {state.error}</span> : null}
       {state?.note ? <span className="detail"> {state.note}</span> : null}
@@ -615,7 +619,7 @@ function RebuildWithSpec({ run, projectId, actor }: {
     return (
       <button className="cap-btn" onClick={(e) => { e.stopPropagation(); setOpen(true); }}
               title="Convene a panel to write a new PRD, then build from it">
-        Rebuild with a fresh spec
+        <Sparkle size={15} weight="fill" aria-hidden /> Rebuild with a fresh spec
       </button>
     );
   }
@@ -720,7 +724,7 @@ function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
       // action on a finished app (change it), so a muted underline understated it.
       <button className="cap-btn ct-change-btn" onClick={() => setOpen(true)}
               title="Ask for a change; it builds on the code that already exists">
-        Request a change
+        <PencilSimple size={15} weight="bold" aria-hidden /> Request a change
       </button>
     );
   }
