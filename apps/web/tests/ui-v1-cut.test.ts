@@ -32,6 +32,9 @@ const HIDDEN_FROM_COMMUNITY_NAV = [
   "dashboard",
   "portfolio",
   "processes",
+  // Automatic retry and repair are worth having on by default; watching the reasoning is not
+  // worth a nav entry for a self-hosted operator.
+  "shepherd",
 ] as const;
 
 /**
@@ -50,9 +53,9 @@ const RESTORED_TO_COMMUNITY_NAV = [
   "discovery",
   "meetings",
   "apps",
-  "delivery",
+  "delivery",   // the "CI/CD" nav entry — id and label differ, and cutting it by id would
+                // have removed exactly the area it was meant to keep
   "monitoring",
-  "shepherd",
 ] as const;
 
 function read(rel: string): string {

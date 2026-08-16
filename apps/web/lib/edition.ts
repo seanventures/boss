@@ -147,14 +147,18 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   // The path from an idea to shipped software. Without these the console lists the places
   // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an
   // operator can watch BOSS work but cannot see how to set it going. Discovery and Meetings
-  // are the two ways in besides a direct code task; Apps is where the result lives; Ship and
-  // Shepherd are how it reaches production and what happens when it does not.
+  // are the two ways in besides a direct code task; Apps is where the result lives; CI/CD and
+  // Monitoring are how it reaches production and whether it is alive.
+  //
+  // Task Shepherd is deliberately NOT here. Its automatic retries and repairs are worth having
+  // on by default and not worth a nav entry: a self-hosted operator wants to know a run
+  // recovered, not to watch the reasoning. It stays available to the paid editions and by
+  // deep link.
   "discovery",
   "meetings",
   "apps",
-  "delivery",
+  "delivery",   // labelled "CI/CD" in the nav — the id and the label differ
   "monitoring",
-  "shepherd",
 ]);
 
 /**
