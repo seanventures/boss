@@ -587,7 +587,39 @@ def resolve_app_entry(workdir: Path, changed: Optional[list[str]] = None) -> tup
 
 
 def _detect_command(workdir: Path, changed: Optional[list[str]] = None) -> Optional[list[str]]:
-    """Detect the repo's declared preview command before falling back to stack hints."""
+    """Build the run command FOR THE APP resolve_app_entry chose.
+
+    THE BUG THIS FIXES. resolve_app_entry is the single decision about which app a preview
+    launches, and this function ignored it: it read `workdir/package.json` -- the repo ROOT --
+    and built a command from that. In boss-sandbox the root is a monorepo root whose
+    devDependencies contain `vite`, so the Vite branch fired and ran `npx vite build` at a
+    directory with no index.html and no src. Rollup had nothing to load
+    ("ModuleLoader.loadEntryModule"), nothing ever listened, and the operator was told "app did
+    not serve HTTP within timeout" -- three times, while resolution was correct all along and
+    answered `node:bugbox` every time.
+
+    Resolution being right is worthless if the command ignores it. So the resolved directory is
+    where the command is built AND where it runs.
+    """
+    app_rel = "."
+    try:
+        kind, value = resolve_app_entry(workdir, changed)
+        if kind in {"node", "static"} and value not in {"", "."}:
+            app_rel = value
+    except AmbiguousAppError:
+        # Ambiguity is resolved (or refused) by the caller; here it just means "no better
+        # directory than the root", which is the behaviour that predates this.
+        app_rel = "."
+    command = _detect_command_in(workdir if app_rel == "." else workdir / app_rel, changed)
+    if command and app_rel != "." and command[:2] == ["sh", "-lc"]:
+        # Run it where the app is. `npm install` in the wrong directory installs the wrong
+        # dependency tree, which is the other half of why this failed the way it did.
+        return ["sh", "-lc", f"cd {shlex.quote(app_rel)} && {command[2]}"]
+    return command
+
+
+def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Optional[list[str]]:
+    """Detect the declared preview command for ONE app directory."""
     hint = workdir / "boss.preview.command"
     if hint.is_file() and hint.read_text(errors="ignore").strip():
         return ["sh", "-lc", hint.read_text(errors="ignore").strip()]

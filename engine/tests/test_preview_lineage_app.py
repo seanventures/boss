@@ -122,3 +122,55 @@ def test_the_real_app_directory_is_previewable(tmp_path):
     _write(tmp_path, "bugbox", {"dev": "vite", "start": "node server/index.js"}, index=True)
     kind, value = ps.resolve_app_entry(tmp_path, ["bugbox/src/App.tsx"])
     assert (kind, value) == ("node", "bugbox")
+
+
+# --------------------------------------------------------------------------------------- #
+# The command must be built for the app that was RESOLVED, not for the repo root.
+#
+# resolve_app_entry answered `node:bugbox` correctly every time; _detect_command ignored it and
+# read the ROOT package.json, whose devDependencies contain `vite`. So it ran `npx vite build`
+# in a directory with no index.html and no src: rollup had nothing to load, nothing listened,
+# and three separate preview attempts reported "app did not serve HTTP within timeout".
+# --------------------------------------------------------------------------------------- #
+
+def _monorepo(tmp_path):
+    """A root that looks like a Vite project and is not one, plus the real app beside it."""
+    (tmp_path / "package.json").write_text(json.dumps({
+        "scripts": {"preview": "vite preview"},
+        "devDependencies": {"vite": "^5"},
+    }))
+    app = tmp_path / "bugbox"
+    app.mkdir()
+    (app / "package.json").write_text(json.dumps({
+        "scripts": {"dev": "vite", "build": "vite build", "start": "node server/index.js"},
+        "devDependencies": {"vite": "^5"},
+    }))
+    (app / "index.html").write_text("<html></html>")
+    return tmp_path
+
+
+def test_the_command_runs_in_the_resolved_app_directory(tmp_path):
+    command = ps._detect_command(_monorepo(tmp_path), [])
+    assert command is not None
+    assert command[2].startswith("cd bugbox && ")
+
+
+def test_it_runs_the_apps_own_server_rather_than_serving_static_output(tmp_path):
+    command = ps._detect_command(_monorepo(tmp_path), [])
+    assert "npm start" in command[2]
+
+
+def test_it_never_builds_at_a_root_that_has_nothing_to_build(tmp_path):
+    """The exact failure: `npx vite build` at a directory with no entry module."""
+    command = ps._detect_command(_monorepo(tmp_path), [])
+    assert not command[2].startswith("npm install --no-audit --no-fund --loglevel=error && npx vite build")
+
+
+def test_a_single_app_repo_still_runs_at_its_root(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({
+        "scripts": {"dev": "vite", "build": "vite build"},
+        "devDependencies": {"vite": "^5"},
+    }))
+    (tmp_path / "index.html").write_text("<html></html>")
+    command = ps._detect_command(tmp_path, [])
+    assert command is not None and "cd " not in command[2]
