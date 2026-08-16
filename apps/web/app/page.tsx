@@ -1023,10 +1023,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             </article>
           </div>
+          {/* The flow, as one row, in the order the work happens.
+              These already carried the two ways in — convene a panel, start a code task. What
+              was missing on either side of them is where an idea comes FROM when it is not yet
+              formed (research), and where the result GOES once it exists (apps). An operator
+              landing here could see how to start work and not how to find what it produced,
+              which is most of what "the flow is missing" has meant. */}
           <div className="ov-actions">
             <span className="ov-actions-label">Quick actions</span>
+            <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>Research an idea</AreaLink>
             <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
             <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a code task</AreaLink>
+            <AreaLink className="ov-action" area="apps" orgId={activeOrgId}>See your apps</AreaLink>
             <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
