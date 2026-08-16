@@ -155,6 +155,7 @@ import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
+import { AppsIndex } from "./apps-index-ui";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
@@ -6959,6 +6960,27 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ShepherdConsole initial={shepherdOverview} />
+        </section>
+
+        {/* Apps — the object the console never had.
+            A run is a job; an app is the thing a person has in mind. Its spec is under
+            Meetings, its runs under Code Tasks, its preview under CI/CD and its health under
+            Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
+            hand. This groups the runs into apps and puts each one's life on a single row. */}
+        <section className="panel-stack" data-area="apps" aria-label="Apps">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Apps</span>
+              <h2>Everything built here — with its spec, code, preview and cost on one row.</h2>
+            </div>
+          </div>
+          <AppsIndex
+            projectId={activeProjectId}
+            runs={codeTasksFeed.items as never[]}
+            previews={previewFeed.items as never[]}
+            meetings={[]}
+            benchmarks={qaBenchmarkApps as never[]}
+          />
         </section>
 
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
