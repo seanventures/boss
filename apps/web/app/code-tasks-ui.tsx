@@ -762,13 +762,18 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
       <p className="detail" style={{ marginTop: 4 }}>
         These are pinned product contracts, not canned demos. Launching one creates a strict governed code task with a durable plan, evidence bundle, and final verification report.
       </p>
-      <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+      {/* The benchmark catalogue: the THIRD card path, and the last one still rendering as
+          full-width rows while everything below it had become tiles. Three render paths for
+          the same kind of object is how this page kept looking half-converted — a section
+          nobody had touched sat directly above the section that had, and the difference read
+          as breakage rather than as an omission. */}
+      <div className="mr-grid ct-tiles" style={{ marginTop: 10 }}>
         {benchmarks.map((benchmark) => (
-          <article key={benchmark.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, display: "grid", gap: 7 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-              <strong>{benchmark.name}</strong>
+          <article key={benchmark.id} className="mr-meeting-card">
+            <div className="mr-meeting-card-head">
               <span className="cap-badge tone-blue">{benchmark.tagline}</span>
             </div>
+            <span className="mr-meeting-title">{benchmark.name}</span>
             <p className="detail" style={{ margin: 0 }}>{benchmark.summary}</p>
             <p className="detail" style={{ margin: 0 }}>Exercises: {benchmark.focus.join(" · ")}</p>
             <ContractDetails criteria={benchmark.acceptance_scenarios}
