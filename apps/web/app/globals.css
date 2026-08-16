@@ -5105,15 +5105,20 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   display: inline-flex; align-items: center; gap: 7px;
   font-weight: 550; border-radius: 9px;
 }
+/* One FILLED button per card — the primary action — so the eye lands on it without three
+   controls competing. The others are subordinate, not unstyled: at 4.5% white on an already
+   dark card the fill was invisible, which read as "these buttons have no style" rather than
+   "these are secondary". Enough surface to be a button, still clearly not the primary. */
 .ct-actions .cap-btn:not(.primary) {
-  background: var(--surface-2, rgba(255,255,255,.045));
-  border: 1px solid var(--border);
-  color: var(--ink-soft, var(--ink));
+  background: rgba(255, 255, 255, .085);
+  border: 1px solid rgba(255, 255, 255, .16);
+  color: var(--ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
 }
 .ct-actions .cap-btn:not(.primary):hover {
-  background: rgba(255,255,255,.08);
-  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 45%, var(--border));
-  color: var(--ink);
+  background: rgba(255, 255, 255, .14);
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 55%, rgba(255,255,255,.16));
 }
+.ct-actions .cap-btn:not(.primary):active { background: rgba(255, 255, 255, .10); }
 .ct-actions .cap-btn svg { flex: 0 0 auto; opacity: .9; }
 .ct-actions .cap-btn.primary svg { opacity: 1; }
