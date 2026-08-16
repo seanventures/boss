@@ -463,41 +463,6 @@ class AgentProcessService:
             )
         return self.advance(connection, project_id=project_id, actor=actor, run_id=run["id"])
 
-
-def bind_captain_swarm(
-    connection: Connection,
-    *,
-    settings: Any,
-    project_id: str,
-    actor: str,
-    prd: str,
-    title: str,
-    attach_run_id: str,
-    official: bool = False,
-    engine: str | None = None,
-    review_panel_size: int | None = None,
-    qa_benchmark: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Attach the PRD→captain→QA→UX→panel swarm to an existing factory run.
-
-    Does not start a second code.task. Tick advances the captains against the
-    attached run. Simulated/auto_build=false stays planned-only.
-    """
-    service = AgentProcessService(settings)
-    return service.start_run(
-        connection,
-        project_id=project_id,
-        actor=actor,
-        prd=prd,
-        title=title[:200],
-        auto_build=True,
-        attach_run_id=attach_run_id,
-        official=official,
-        engine=engine,
-        review_panel_size=review_panel_size,
-        qa_benchmark=qa_benchmark,
-    )
-
     def get_run(self, connection: Connection, project_id: str, run_id: str) -> dict[str, Any]:
         self.ensure_schema(connection)
         row = connection.execute(
@@ -1103,3 +1068,38 @@ def bind_captain_swarm(
             except json.JSONDecodeError:
                 pass
         return out
+
+
+def bind_captain_swarm(
+    connection: Connection,
+    *,
+    settings: Any,
+    project_id: str,
+    actor: str,
+    prd: str,
+    title: str,
+    attach_run_id: str,
+    official: bool = False,
+    engine: str | None = None,
+    review_panel_size: int | None = None,
+    qa_benchmark: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach the PRD→captain→QA→UX→panel swarm to an existing factory run.
+
+    Does not start a second code.task. Tick advances the captains against the
+    attached run. Simulated/auto_build=false stays planned-only.
+    """
+    service = AgentProcessService(settings)
+    return service.start_run(
+        connection,
+        project_id=project_id,
+        actor=actor,
+        prd=prd,
+        title=title[:200],
+        auto_build=True,
+        attach_run_id=attach_run_id,
+        official=official,
+        engine=engine,
+        review_panel_size=review_panel_size,
+        qa_benchmark=qa_benchmark,
+    )
