@@ -1407,20 +1407,26 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
               // The header keeps the click and the keyboard affordance the button had.
               const openTask = () => setSelected(c.id);
               return (
-                <article key={c.id} className="ct-card oc-card" style={{ textAlign: "left" }}>
+                // The Meeting card, literally: same class, same CSS, same hover lift. Asked
+                // many times for "the Meeting card look", I kept approximating it with classes
+                // of my own; the Meeting cards already had the treatment, so the honest answer
+                // was to USE it rather than build something adjacent and hope it read the same.
+                <article key={c.id} className="mr-meeting-card">
                   <div
-                    className="oc-head"
+                    className="mr-meeting-card-head"
                     role="button"
                     tabIndex={0}
                     onClick={openTask}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTask(); } }}
                   >
-                    <div className="oc-title">
-                      <span className="oc-n">{label}</span>
-                      {c.title || "(untitled task)"}
-                    </div>
-                    <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
+                    <span className={`cap-badge tone-${statusTone(c.status)}`}>{c.status}</span>
+                    <span className="mr-meeting-date">{label}</span>
                   </div>
+                  <span className="mr-meeting-title" role="button" tabIndex={0}
+                        onClick={openTask}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); openTask(); } }}>
+                    {c.title || "(untitled task)"}
+                  </span>
                   <div className="oc-sub">{outcome}</div>
                   {/* The spine, at the size it was always meant to be: the centre of gravity of
                       the card, not a strip added to it. The acceptance criteria and test
@@ -1442,7 +1448,7 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       already reads well here. Plus the fact that was missing entirely: WHEN.
                       A list of tasks with no times gives no sense of what is recent, so
                       everything looks equally current and nothing looks stale. */}
-                  <div className="oc-meta">
+                  <div className="mr-meeting-foot">
                     {/* Rendered only when the field is actually there. The list endpoint does
                         NOT return created_at/updated_at — I added this fed by a field that does
                         not exist, which put `undefined` into a client component, crashed
@@ -1452,20 +1458,20 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                       <ClientRelativeTime iso={(c.updated_at ?? c.created_at) as string}
                                           className="oc-when" />
                     ) : null}
-                    <span className="oc-pill">{c.spec?.owner}/{c.spec?.repo}</span>
+                    <span className="mr-meeting-pill">{c.spec?.owner}/{c.spec?.repo}</span>
                     {st.profile ? (
-                      <span className="oc-pill accent">
+                      <span className="mr-meeting-pill accent">
                         {st.profile}{st.risk_tier != null ? ` · t${st.risk_tier}` : ""}
                       </span>
                     ) : null}
                     {c.pull_request_url ? (
-                      <a className="oc-pill" href={c.pull_request_url} target="_blank"
+                      <a className="mr-meeting-pill accent" href={c.pull_request_url} target="_blank"
                          rel="noreferrer" onClick={(e) => e.stopPropagation()}>
                         PR #{c.pull_request_number} ↗
                       </a>
                     ) : null}
                     {(st.cost_usd_micros != null) ? (
-                      <span className="oc-pill">{fmtUsd(st.cost_usd_micros)}</span>
+                      <span className="mr-meeting-pill">{fmtUsd(st.cost_usd_micros)}</span>
                     ) : null}
                   </div>
                 </article>
