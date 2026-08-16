@@ -763,6 +763,15 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
   onOpen?: (runId: string) => void;
 }) {
   if (!benchmarks.length) return null;
+  // ONE CARD PER APP, INCLUDING THESE.
+  //
+  // A benchmark is a thing you can build; once built it IS an app, and that app already has a
+  // card below carrying its runs, its PR and its preview. Showing both produced two BugBox
+  // cards in identical styling -- indistinguishable at a glance, and the catalogue one was the
+  // less useful of the pair. The catalogue now offers what is not built yet; the built ones are
+  // named in a line pointing at the app that replaced them.
+  const builtAlready = benchmarks.filter((b) => b.built?.run_id || launched?.[b.id]?.run_id);
+  const notBuiltYet = benchmarks.filter((b) => !(b.built?.run_id || launched?.[b.id]?.run_id));
   return (
     <div className="ct-block" style={{ marginTop: 12 }}>
       <div className="ct-block-title">End-to-end QA benchmarks</div>
@@ -774,8 +783,15 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
           the same kind of object is how this page kept looking half-converted — a section
           nobody had touched sat directly above the section that had, and the difference read
           as breakage rather than as an omission. */}
+      {builtAlready.length ? (
+        <p className="detail" style={{ marginTop: 10 }}>
+          Already built: {builtAlready.map((b) => b.name).join(" · ")} — each is an app below,
+          with its runs inside. Rebuild it from there.
+        </p>
+      ) : null}
+      {notBuiltYet.length === 0 ? null : (
       <div className="mr-grid ct-tiles" style={{ marginTop: 10 }}>
-        {benchmarks.map((benchmark) => (
+        {notBuiltYet.map((benchmark) => (
           <article key={benchmark.id} className="mr-meeting-card">
             <div className="mr-meeting-card-head">
               <span className="cap-badge tone-blue">{benchmark.tagline}</span>
@@ -795,6 +811,7 @@ function QaBenchmarkCatalog({ benchmarks, projectId, actor, defaultOwner, defaul
           </article>
         ))}
       </div>
+      )}
     </div>
   );
 }
