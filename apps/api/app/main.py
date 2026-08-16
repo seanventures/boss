@@ -1157,6 +1157,13 @@ async def lifespan(_: FastAPI):
         print(f"[lifespan] execution substrates: {effective_substrates(settings)}")
     except ValueError as exc:
         raise RuntimeError(f"invalid execution-substrate configuration: {exc}") from exc
+    # On a laptop nothing else supervises the worker, and its absence is invisible: the console
+    # looks healthy while the queue silently fills and meetings stall out ten minutes later.
+    try:
+        from .local_supervisor import start as start_local_supervisor
+        start_local_supervisor()
+    except Exception as exc:  # noqa: BLE001 — never block startup on supervision
+        print(f"[lifespan] local supervisor not started: {exc}")
     yield
 
 
