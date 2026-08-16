@@ -25,6 +25,7 @@ import {
   submitCodeTaskFeedbackAction,
   overrideCodeTaskAction,
   followUpCodeTaskAction,
+  conveneMeetingAction,
 } from "./actions";
 import { Markdown } from "./markdown";
 import { ClientRelativeTime } from "./client-relative-time";
@@ -584,6 +585,80 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }
       </SubmitButton>
       {state?.error ? <span className="detail"> {state.error}</span> : null}
       {state?.note ? <span className="detail"> {state.note}</span> : null}
+    </form>
+  );
+}
+
+
+/**
+ * Rebuild this app by writing a NEW spec first.
+ *
+ * The card used to offer "rebuild from scratch", which re-runs the identical brief. If you are
+ * unhappy with the app you got, that is the one thing that cannot help: the same brief is what
+ * produced it. Re-running a fixed spec is only honest when the spec is deliberately held
+ * constant -- comparing benchmark runs, or recovering from a platform failure -- so it lives on
+ * each attempt inside the card, not here.
+ *
+ * This convenes the PRD panel instead, seeded with the app, its repo, and the thing you say is
+ * wrong. The panel debates, writes a PRD, and the existing approval path starts the build --
+ * the same route "Launch BugBox" takes, so nothing new is invented in the pipeline.
+ */
+function RebuildWithSpec({ run, projectId, actor }: {
+  run: CodeTaskRun; projectId: string; actor: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [complaint, setComplaint] = useState("");
+  const app = appIdentity(run);
+  const repo = `${run.spec?.owner ?? ""}/${run.spec?.repo ?? ""}`.replace(/^\/$/, "");
+
+  if (!open) {
+    return (
+      <button className="cap-btn" onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+              title="Convene a panel to write a new PRD, then build from it">
+        Rebuild with a fresh spec
+      </button>
+    );
+  }
+
+  // The panel is told WHICH app and WHERE it lives, so its PRD is about this product rather
+  // than a fresh idea with the same name.
+  const directive =
+    `Rebuild "${app.name}" — an existing application in ${repo || "this project"}.\n\n`
+    + `What is wrong with the current build: ${complaint.trim()}\n\n`
+    + `Write a PRD for a replacement that fixes this. It must be a real, working full-stack `
+    + `application: a server, a database with migrations and seed data, and a UI that is `
+    + `visually finished — considered layout, typography, spacing and states (loading, empty, `
+    + `error), not an unstyled prototype. Include acceptance scenarios and the evidence `
+    + `required to prove them.`;
+
+  return (
+    <form action={conveneMeetingAction} className="ct-change-form"
+          onClick={(e) => e.stopPropagation()}>
+      <input type="hidden" name="project_id" value={projectId} />
+      <input type="hidden" name="actor" value={actor} />
+      <input type="hidden" name="meeting_type" value="prd_panel" />
+      <input type="hidden" name="directive" value={directive} />
+      <textarea
+        className="ct-feedback-input"
+        rows={3}
+        autoFocus
+        aria-label={`What is wrong with ${app.name}?`}
+        value={complaint}
+        onChange={(event) => setComplaint(event.target.value)}
+        placeholder={"What is wrong with it?\ne.g. the UI is pale and unstyled — it needs a "
+                     + "designed layout, real typography, and proper empty/loading states"}
+      />
+      <div className="ct-actions">
+        <SubmitButton className="cap-btn primary" pendingLabel="Convening the panel…"
+                      disabled={!complaint.trim()}>
+          Convene the panel
+        </SubmitButton>
+        <button type="button" className="cap-btn" onClick={() => setOpen(false)}>Cancel</button>
+        <span className="detail">
+          Writes a new PRD for {repo || "this app"}, then builds it — costs a full panel and
+          pipeline run.
+        </span>
+      </div>
     </form>
   );
 }
@@ -1793,6 +1868,7 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     <ChangeThisApp run={members[0]} onStarted={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[`chg:${members[0].id}`]?.run_id} />
+                    <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor} />
                     {/* Re-running the IDENTICAL brief is not a card-level action.
                         The only honest uses for it are holding the spec constant on purpose --
                         comparing two runs of a benchmark, or re-running after a platform
