@@ -31,7 +31,7 @@ import { Markdown } from "./markdown";
 import { ClientRelativeTime } from "./client-relative-time";
 import { JourneySpine } from "./journey-spine-ui";
 import {
-  ArrowSquareOut, PencilSimple, PlayCircle, Sparkle,
+  ArrowSquareOut, ChatCircleDots, PencilSimple, PlayCircle, Sparkle,
 } from "@phosphor-icons/react";
 
 import { SubmitButton } from "./submit-button";
@@ -1872,6 +1872,20 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     <ChangeThisApp run={members[0]} onStarted={noteLaunch}
                                    onOpen={(id) => void openRun(id)}
                                    startedId={launched[`chg:${members[0].id}`]?.run_id} />
+                    {/* Opens the dock for THIS app. The run id goes in the URL so the
+                        conversation survives walking to another area and back, and so the
+                        agent is never guessing which of fifty apps you mean. */}
+                    <button className="cap-btn"
+                            title="Talk to BOSS about this app — it can read the run, the repo and the preview"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const url = new URL(window.location.href);
+                              url.searchParams.set("agent", members[0].id);
+                              window.history.pushState({}, "", url.toString());
+                              window.dispatchEvent(new PopStateEvent("popstate"));
+                            }}>
+                      <ChatCircleDots size={15} weight="fill" aria-hidden /> Ask BOSS
+                    </button>
                     <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor} />
                     {/* Re-running the IDENTICAL brief is not a card-level action.
                         The only honest uses for it are holding the spec constant on purpose --

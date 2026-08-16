@@ -1,6 +1,7 @@
 "use client";
 
 import { isInConsoleLink } from "./console-href";
+import { AgentChat } from "./agent-ui";
 
 import React, {
   useCallback,
@@ -338,6 +339,32 @@ export default function ConsoleShell({
     return () => document.removeEventListener("click", onClick, true);
   }, []);
 
+  // THE AGENT DOCK.
+  //
+  // Which app the agent is talking about lives in the URL (?agent=<run id>), not in component
+  // state: the console switches areas client-side, so state held here would survive but state
+  // held in the area would not -- and the whole point is that you can open a preview, walk to
+  // the decision queue, and still be in the same conversation about the same app.
+  //
+  // The id is a RUN id, which is what makes the conversation unambiguous. AgentChat keys its
+  // threads by external_ref, so each app gets its own thread and its own history; asking about
+  // BugBox cannot surface ApproveIt's answers.
+  const [dockedRun, setDockedRun] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () =>
+      setDockedRun(new URLSearchParams(window.location.search).get("agent"));
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+
+  const closeDock = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("agent");
+    window.history.pushState({}, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, []);
+
   // Back/forward: restore the active area from the URL (without pushing again).
   useEffect(() => {
     const onPop = () => {
@@ -555,9 +582,24 @@ export default function ConsoleShell({
           </span>
         </header>
 
-        <main className="bx-content" data-active={active} aria-label={activeDef.label}>
+        <main className="bx-content" data-active={active} aria-label={activeDef.label}
+              data-dock={dockedRun ? "open" : undefined}>
           {children}
         </main>
+        {dockedRun ? (
+          <aside className="bx-dock" aria-label="Ask BOSS about this app">
+            <div className="bx-dock-head">
+              <span className="eyebrow">Ask BOSS</span>
+              <code className="detail">{dockedRun}</code>
+              <button type="button" className="cap-btn bx-dock-close" onClick={closeDock}>
+                Close
+              </button>
+            </div>
+            <div className="bx-dock-body">
+              <AgentChat projectId={scope.project} actor={scope.actor} initialTaskId={dockedRun} />
+            </div>
+          </aside>
+        ) : null}
       </div>
 
       {paletteOpen ? (
