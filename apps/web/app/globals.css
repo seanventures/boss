@@ -4877,3 +4877,50 @@ select.input:focus {
 .ct-call-retry { color: var(--amber); }
 .ct-call-cost { color: var(--muted); }
 .ct-call-err { color: var(--red); }
+
+/* ---------------------------------------------------------------------------
+   The journey spine.
+   One outcome's life across four phases, drawn on its card. Deliberately quiet:
+   it sits between the title and the existing controls and must never compete
+   with them — every action on the card still belongs to the card.
+--------------------------------------------------------------------------- */
+.sp {
+  display: flex; align-items: flex-start; gap: 0;
+  padding: 10px 2px 4px; user-select: none;
+}
+.sp-node { display: grid; justify-items: center; gap: 5px; min-width: 62px; }
+.sp-dot {
+  width: 11px; height: 11px; border-radius: 50%;
+  border: 1.5px solid var(--border); background: var(--surface-2);
+  transition: transform 160ms cubic-bezier(.22,1,.36,1), box-shadow 160ms ease;
+}
+.sp-node.done .sp-dot {
+  background: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe);
+}
+/* The phase happening NOW — the one thing on the card that moves. */
+.sp-node.now .sp-dot {
+  background: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #6ea8fe) 22%, transparent);
+  animation: sp-breathe 2.4s ease-in-out infinite;
+}
+.sp-node.blocked .sp-dot {
+  background: #f87171; border-color: #f87171;
+  box-shadow: 0 0 0 4px rgba(248,113,113,.18);
+}
+@keyframes sp-breathe {
+  0%,100% { transform: scale(1); }
+  50%     { transform: scale(1.22); }
+}
+@media (prefers-reduced-motion: reduce) { .sp-node.now .sp-dot { animation: none; } }
+
+.sp-label { font-size: 0.68rem; letter-spacing: .02em; color: var(--muted); white-space: nowrap; }
+.sp-node.done .sp-label, .sp-node.now .sp-label { color: var(--ink-soft); }
+.sp-sub { font-size: 0.64rem; color: var(--muted); opacity: .8; white-space: nowrap; }
+
+/* The connector carries progress: solid behind you, faint ahead. */
+.sp-link { flex: 1; height: 1.5px; background: var(--border); margin-top: 5px; min-width: 14px; }
+.sp-link.done { background: color-mix(in srgb, var(--accent, #6ea8fe) 55%, transparent); }
+
+a.sp-node { text-decoration: none; cursor: pointer; }
+a.sp-node:hover .sp-dot { transform: scale(1.2); }
+a.sp-node:hover .sp-label { color: var(--ink); }

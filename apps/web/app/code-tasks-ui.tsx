@@ -21,6 +21,7 @@ import {
   followUpCodeTaskAction,
 } from "./actions";
 import { Markdown } from "./markdown";
+import { JourneySpine } from "./journey-spine-ui";
 import { SubmitButton } from "./submit-button";
 
 function RetryControls({ runId, failingGates = [] }: { runId: string; failingGates?: string[] }) {
@@ -1248,6 +1249,16 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
   const [showNew, setShowNew] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
+  // The gateway URL for a run's live preview, or null. Built from the preview ID, never from
+  // app_previews.url — that column holds the sandbox-internal address (127.0.0.1:PORT), which
+  // is reachable from the API process and from nowhere a browser runs.
+  const livePreviewFor = (runId: string): string | null => {
+    const p = previews.find(
+      (x) => x.run_id === runId && (x.status === "running" || x.status === "starting"),
+    );
+    return p ? `${PREVIEW_API}/v1/previews/${encodeURIComponent(p.id)}/web/` : null;
+  };
+
   // The panel owns its list.
   //
   // It was rendered from a server prop and refreshed with `router.refresh()`, which re-renders
@@ -1394,6 +1405,11 @@ export function CodeTasksHome({ projectId, codeTasks, apiReachable, previews = [
                     <span className={`cap-badge tone-${statusTone(c.status)}`} style={{ flexShrink: 0 }}>{c.status}</span>
                   </div>
                   <div className="detail">{outcome}</div>
+                  {/* The journey, inside the card that already works.
+                      A previous attempt drew these as a separate read-only list ABOVE this one,
+                      which buried every real control under cards that did nothing. Rendering it
+                      here means drill-in, preview and relaunch all still belong to the card. */}
+                  <JourneySpine run={c as never} previewUrl={livePreviewFor(c.id)} />
                   {/* The same two facts the benchmark cards show, from the fields every governed
                       task already carries. Absent on ad-hoc tasks, in which case nothing renders. */}
                   <ContractDetails criteria={c.spec?.acceptance_criteria}
