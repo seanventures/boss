@@ -27,3 +27,28 @@ export function consoleHref(
   if (params.area && !("run" in params)) next.delete("run");
   return `?${next.toString()}`;
 }
+
+/**
+ * Should a click on this link be handled inside the console instead of navigating?
+ *
+ * Split out from the handler so the cases that matter can be pinned by tests rather than
+ * discovered in a browser: a full navigation re-renders all fifty areas (~6.5MB) and takes
+ * about ten seconds, and hijacking the WRONG link breaks opening a preview or a PR.
+ */
+export function isInConsoleLink(
+  href: string | null,
+  opts: {
+    pathname: string;
+    currentPathname: string;
+    target?: string | null;
+    knownAreas: readonly string[];
+  },
+): boolean {
+  if (!href) return false;
+  // Only same-document query links. "http…" (previews, PRs) and real routes navigate.
+  if (!href.startsWith("?") && !href.startsWith("/?")) return false;
+  if (opts.target === "_blank") return false;
+  if (opts.pathname !== opts.currentPathname) return false;
+  const area = new URLSearchParams(href.slice(href.indexOf("?") + 1)).get("area");
+  return Boolean(area && opts.knownAreas.includes(area));
+}

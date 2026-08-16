@@ -1,5 +1,7 @@
 "use client";
 
+import { isInConsoleLink } from "./console-href";
+
 import React, {
   useCallback,
   useEffect,
@@ -292,6 +294,51 @@ export default function ConsoleShell({
     window.addEventListener("boss:navigate", onNav as EventListener);
     return () => window.removeEventListener("boss:navigate", onNav as EventListener);
   }, [go]);
+
+  // IN-CONSOLE LINKS MUST NOT RELOAD THE CONSOLE.
+  //
+  // The sidebar switches areas client-side, which is why every area is rendered at once: the
+  // trade buys instant tabs. But links inside the page -- "open PRD", "from a panel", "change
+  // this app" -- were plain <a href="?area=...">, so each one did a FULL navigation and paid
+  // to server-render and re-hydrate all fifty areas: ~6.5MB, ~700 buttons, about ten seconds
+  // to open a PRD whose data the browser already had.
+  //
+  // Nothing about that round trip was needed. The panels already restore their selection from
+  // the URL on popstate (see MeetingRooms), so pushing the URL and announcing it does the same
+  // work instantly. Anything genuinely external -- previews, PRs, new tabs, modified clicks --
+  // is left alone and navigates normally.
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = (event.target as HTMLElement | null)?.closest?.("a");
+      if (!link) return;
+      const raw = link.getAttribute("href");
+      if (!raw || link.target === "_blank" || link.hasAttribute("download")) return;
+      // Only same-document query-string links: "?area=…" or "/?area=…".
+      if (!raw.startsWith("?") && !raw.startsWith("/?")) return;
+
+      const url = new URL(raw, window.location.href);
+      if (!isInConsoleLink(raw, {
+        pathname: url.pathname,
+        currentPathname: window.location.pathname,
+        target: link.target,
+        knownAreas: AREAS.map((a) => a.id),
+      })) return;
+      const area = url.searchParams.get("area") as AreaId;
+
+      event.preventDefault();
+      window.history.pushState({}, "", url.toString());
+      // Tell every panel that reads the URL -- the same signal Back/Forward sends.
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      setActive(area as AreaId);
+    };
+    // CAPTURE phase, deliberately. The spine nodes and card pills call stopPropagation() so a
+    // click on them does not also open the card behind them -- which would stop a bubble-phase
+    // listener from ever seeing exactly the links this exists to speed up.
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
 
   // Back/forward: restore the active area from the URL (without pushing again).
   useEffect(() => {
