@@ -5122,3 +5122,26 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ct-actions .cap-btn:not(.primary):active { background: rgba(255, 255, 255, .10); }
 .ct-actions .cap-btn svg { flex: 0 0 auto; opacity: .9; }
 .ct-actions .cap-btn.primary svg { opacity: 1; }
+
+/* The change/feedback textarea had NO base rule — only a margin override — so the browser drew
+   a white box with its default serif metrics inside a dark console. Fourth instance today of
+   markup naming a class no rule matches: it fails silently and reads as a design choice. */
+.ct-feedback-input {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.ct-feedback-input::placeholder { color: var(--muted); opacity: .85; }
+.ct-feedback-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent, #6ea8fe) 60%, var(--border));
+  background: rgba(255, 255, 255, .07);
+}
