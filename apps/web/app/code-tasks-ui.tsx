@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 
 import { consoleHref } from "./console-href";
+import { appIdentity } from "./app-identity";
 
 import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -1285,6 +1286,7 @@ function leadLine(raw: string): string {
   return `${text.slice(0, cut > 20 ? cut : 81)}…`;
 }
 
+
 function isInternalRun(run: { title?: string }): boolean {
   return INTERNAL_RUN.test((run.title ?? "").trim());
 }
@@ -1627,7 +1629,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
             }
             return order.map((key, gi) => {
               const members = groups.get(key)!;
-              if (members.length === 1) return renderCard(members[0], `${gi + 1}.`);
+              // Singletons used to render as a bare run card, so an app looked like one thing
+              // until it had a second attempt and then became another. One shape for every app.
               // Decomposed build → one bucket. Aggregate status + one PR/approval for the whole thing.
               // A benchmark bucket counts ATTEMPTS; a decomposed build counts its planned
               // parts. Reusing "N tasks" for both would call three attempts a three-part build.
@@ -1672,6 +1675,10 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
                     style={{ cursor: "pointer" }}
                   >
+                    {/* The kind of thing this is, in the badge the benchmark cards use. */}
+                    {appIdentity(members[0]).kind ? (
+                      <span className="cap-badge tone-blue">{appIdentity(members[0]).kind}</span>
+                    ) : null}
                     <span className={`cap-badge tone-${statusTone(groupStatus)}`}>
                       {anyShipped ? "shipped" : anyRunning ? "building" : groupStatus}
                     </span>
@@ -1686,8 +1693,13 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                   <span className="mr-meeting-title" role="button"
                         onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
                         style={{ cursor: "pointer" }}>
-                    {open ? "▾" : "▸"} {name}
+                    {open ? "▾" : "▸"} {benchGroup?.name ? name : appIdentity(members[0]).name}
                   </span>
+                  {appIdentity(members[0]).blurb ? (
+                    <p className="detail" style={{ margin: "2px 0 0" }}>
+                      {appIdentity(members[0]).blurb}
+                    </p>
+                  ) : null}
                   <JourneySpine run={members[0] as never} previewUrl={livePreviewFor(members[0].id)} large />
                   <ChangeThisApp run={members[0]} onStarted={noteLaunch}
                                  onOpen={(id) => void openRun(id)}
@@ -1706,6 +1718,11 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     <div style={{ display: "grid", gap: 8, marginTop: 6, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
                       {/* Named by KIND. "•/5" told you an attempt existed and nothing about
                           what it was; "follow-up" and "retry 1" tell the story of the app. */}
+                      <span className="detail">
+                        {members.length === 1
+                          ? "The run that built it"
+                          : `${members.length} runs on this app, newest first`}
+                      </span>
                       {members.map((m) => renderCard(m, attemptKind(m)))}
                     </div>
                   ) : null}
