@@ -5092,3 +5092,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    grid, so `order` applies to these sections directly. */
 .bx-content[data-active="decisions"] .frame > section[aria-label="Decision inbox"] { order: -2; }
 .bx-content[data-active="decisions"] .frame > section.approval-rules-section { order: 0; }
+
+/* Captain playbook: a labelled field, not raw browser chrome. */
+.ff-playbook { display: grid; gap: 4px; max-width: 62ch; margin-top: 10px; }
+.ff-playbook-label { font-size: 0.82rem; font-weight: 600; color: var(--ink); }
+.ff-playbook .ct-feedback-input { margin-top: 4px; }

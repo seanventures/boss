@@ -115,16 +115,26 @@ export function FactoryFlowBoard({
           })();
         }}
       >
-        <label>
-          Captain playbook (saved and repeated)
+        {/* Bare <label>/<textarea>/<button> with no classes, so the browser drew its own:
+            a white box in a dark console, the label welded to its left, and a system button.
+            Unstyled controls do not look unfinished to a reader -- they look broken. */}
+        <label className="ff-playbook">
+          <span className="ff-playbook-label">Captain playbook</span>
+          <span className="detail">
+            Saved once and repeated: Captain follows it every loop until the goal is honestly met.
+          </span>
           <textarea
+            className="ct-feedback-input"
             value={guide}
             onChange={(event) => setGuide(event.target.value)}
             rows={3}
+            placeholder="e.g. Official canary. Must include QA and UX. Panel of 5. Loop until green."
           />
         </label>
-        <button type="submit">Save reusable playbook</button>
-        {guideNote ? <p className="detail">{guideNote}</p> : null}
+        <div className="ct-actions">
+          <button className="cap-btn primary" type="submit">Save reusable playbook</button>
+          {guideNote ? <span className="detail">{guideNote}</span> : null}
+        </div>
       </form>
       {board.findings.length > 0 ? (
         <div>
