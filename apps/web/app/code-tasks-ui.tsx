@@ -523,6 +523,71 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
  *
  * The branch is never named here. The run knows which app it built; that is the point.
  */
+
+/**
+ * The card's PRIMARY action, chosen from the app's actual state.
+ *
+ * Every card led with "Run this build again" -- the most expensive thing on the page (a fresh
+ * panel and a full pipeline, minutes and real money) offered as the obvious button, on apps
+ * that were already built and running. Nobody wants that on a working app; what they want is
+ * to SEE it. Meanwhile the preview, the cheap and useful action, was either absent or buried
+ * in the spine.
+ *
+ * So the button answers the state:
+ *   preview live      -> Open preview   (a link, straight to the running app)
+ *   preview starting  -> Starting...    (disabled; it is already happening)
+ *   built, no preview -> Run preview    (the common case, one click, seconds)
+ *   still building    -> Building...    (disabled; nothing to preview yet)
+ *   nothing built     -> Run build      (there IS no app; this is the honest action)
+ * Rebuilding stays available, demoted to a secondary control, where a deliberate act belongs.
+ */
+function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }: {
+  run: CodeTaskRun;
+  previewUrl: string | null;
+  previewStarting: boolean;
+  shipped: boolean;
+  running: boolean;
+}) {
+  const [state, action] = useActionState(startPreviewAction, null);
+  const url = state?.url || previewUrl;
+
+  if (url) {
+    return (
+      <a className="cap-btn primary" href={url} target="_blank" rel="noreferrer"
+         onClick={(e) => e.stopPropagation()}
+         title="Open the running app">
+        Open preview ↗
+      </a>
+    );
+  }
+  if (previewStarting) {
+    return <button className="cap-btn primary" disabled>Preview starting…</button>;
+  }
+  if (running) {
+    return (
+      <button className="cap-btn primary" disabled
+              title="The build is still running — there is nothing to preview yet">
+        Building…
+      </button>
+    );
+  }
+  if (!shipped) {
+    // No PR and no completed run: there is no app here yet. Offering "Run preview" would be a
+    // button that can only fail.
+    return null;
+  }
+  return (
+    <form action={action} onClick={(e) => e.stopPropagation()}>
+      <input type="hidden" name="run_id" value={run.id} />
+      <SubmitButton className="cap-btn primary" pendingLabel="Starting preview…">
+        Run preview
+      </SubmitButton>
+      {state?.error ? <span className="detail"> {state.error}</span> : null}
+      {state?.note ? <span className="detail"> {state.note}</span> : null}
+    </form>
+  );
+}
+
 function ChangeThisApp({ run, onStarted, onOpen, startedId }: {
   run: CodeTaskRun;
   startedId?: string | null;
@@ -1711,15 +1776,27 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       stronger -- the change control read as a caption rather than a choice.
                       Side by side, "change it" and "build it again" are what they are: two
                       things you can do to this app, ranked. */}
+                  {/* Ranked by what someone actually wants: see it, change it, and only then
+                      rebuild it. "Run this build again" was the primary control on every card
+                      including working apps -- the most expensive action in the most prominent
+                      slot. */}
                   <div className="ct-actions">
+                    <AppPrimaryAction
+                      run={members[0]}
+                      previewUrl={livePreviewFor(members[0].id)}
+                      previewStarting={previews.some(
+                        (x) => x.run_id === members[0].id && x.status === "starting")}
+                      shipped={anyShipped}
+                      running={anyRunning}
+                    />
+                    <ChangeThisApp run={members[0]} onStarted={noteLaunch}
+                                   onOpen={(id) => void openRun(id)}
+                                   startedId={launched[`chg:${members[0].id}`]?.run_id} />
                     <LaunchTask run={members[0]} projectId={projectId} onLaunched={noteLaunch}
                                      onOpen={(id) => void openRun(id)}
                                      startedId={launched[members[0].id]?.run_id}
                                      failed={launched[members[0].id]?.error}
-                                     label="Run this build again" />
-                    <ChangeThisApp run={members[0]} onStarted={noteLaunch}
-                                   onOpen={(id) => void openRun(id)}
-                                   startedId={launched[`chg:${members[0].id}`]?.run_id} />
+                                     label="Rebuild from scratch" />
                   </div>
                   <div className="ct-card-foot">
                     <span className="detail">{members[0].spec?.owner}/{members[0].spec?.repo}</span>
