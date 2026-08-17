@@ -875,6 +875,24 @@ class DecisionService:
             "title": title,
         }
 
+        # SPEC A FEATURE FOR AN APP THAT ALREADY EXISTS.
+        #
+        # Both build paths below start a NEW app: they seed a scaffold on a new branch. So a
+        # panel could only ever produce a replacement, and "convene the panel, then add this
+        # feature to the app I already have" had nowhere to land — the operator's choice was a
+        # thought-through rebuild or an unspecced change, with nothing in between.
+        #
+        # The marker is an explicit contract between the console and this handler, not a guess
+        # at intent: the card appends it when convening a panel about an existing app, and it
+        # is stripped from the directive before the PRD is used. A panel-written PRD then
+        # becomes the instruction for a follow-up on the app's OWN branch, which is exactly what
+        # "Request a change" does — with a spec in front of it.
+        extend_run_id = None
+        extend_match = re.search(r"\[boss:extend_run=(crun_[a-z0-9]+)\]", directive or "")
+        if extend_match:
+            extend_run_id = extend_match.group(1)
+            directive = re.sub(r"\s*\[boss:extend_run=crun_[a-z0-9]+\]\s*", " ", directive).strip()
+
         # Turn the approved PRD into a build. Never dump a whole multi-feature PRD into ONE giant
         # governed task (mis-routes -> sprawling code -> gate fail). Two proven paths:
         #  - WEB APP  -> start_web_app_build: scaffold + ONE focused task -> one PR + one approval.
@@ -895,6 +913,25 @@ class DecisionService:
                 )
 
                 engine = get_engine()
+                if extend_run_id:
+                    # The PRD is the instruction, and the app's own branch is the base — the
+                    # follow-up path that already knows how to continue an app rather than
+                    # restart it. Nothing new is invented: this is "Request a change" with a
+                    # panel's spec instead of a sentence typed into a box.
+                    from .code_task_service import start_followup_task
+
+                    with engine.begin() as connection:
+                        start_followup_task(
+                            connection,
+                            parent_run_id=extend_run_id,
+                            instructions=(
+                                "A panel specced this FEATURE for the app that already exists on "
+                                "this branch. Extend it — do not re-scaffold, do not rebuild.\n\n"
+                                + directive
+                            ),
+                            jobs=jobs,
+                        )
+                    return
                 if _looks_like_web_app(directive):
                     start_web_app_build(
                         engine, settings, jobs,

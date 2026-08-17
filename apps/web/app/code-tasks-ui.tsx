@@ -607,8 +607,10 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }
  * wrong. The panel debates, writes a PRD, and the existing approval path starts the build --
  * the same route "Launch BugBox" takes, so nothing new is invented in the pipeline.
  */
-function RebuildWithSpec({ run, projectId, actor }: {
+function RebuildWithSpec({ run, projectId, actor, mode = "rebuild" }: {
   run: CodeTaskRun; projectId: string; actor: string;
+  /** "rebuild" replaces the app; "feature" specs an addition to the one that exists. */
+  mode?: "rebuild" | "feature";
 }) {
   const [open, setOpen] = useState(false);
   const [complaint, setComplaint] = useState("");
@@ -626,14 +628,25 @@ function RebuildWithSpec({ run, projectId, actor }: {
 
   // The panel is told WHICH app and WHERE it lives, so its PRD is about this product rather
   // than a fresh idea with the same name.
-  const directive =
-    `Rebuild "${app.name}" — an existing application in ${repo || "this project"}.\n\n`
-    + `What is wrong with the current build: ${complaint.trim()}\n\n`
-    + `Write a PRD for a replacement that fixes this. It must be a real, working full-stack `
-    + `application: a server, a database with migrations and seed data, and a UI that is `
-    + `visually finished — considered layout, typography, spacing and states (loading, empty, `
-    + `error), not an unstyled prototype. Include acceptance scenarios and the evidence `
-    + `required to prove them.`;
+  // Two different asks, and the difference matters to the pipeline: a rebuild starts a new
+  // app, a feature continues this one. The [boss:extend_run=...] marker is an explicit
+  // contract with the decision handler — it routes the approved PRD to a follow-up on this
+  // app's own branch instead of a fresh scaffold, and is stripped before the PRD is used.
+  const directive = mode === "feature"
+    ? `Add a feature to "${app.name}" — an existing, working application in `
+      + `${repo || "this project"}. [boss:extend_run=${run.id}]\n\n`
+      + `What is wanted: ${complaint.trim()}\n\n`
+      + `Write a PRD for THIS FEATURE ONLY. The app already exists and must keep working: do `
+      + `not redesign it, do not re-scaffold it, do not restate the whole product. Cover what `
+      + `changes, what must not change, the acceptance scenarios for the new behaviour, and `
+      + `the evidence required to prove them.`
+    : `Rebuild "${app.name}" — an existing application in ${repo || "this project"}.\n\n`
+      + `What is wrong with the current build: ${complaint.trim()}\n\n`
+      + `Write a PRD for a replacement that fixes this. It must be a real, working full-stack `
+      + `application: a server, a database with migrations and seed data, and a UI that is `
+      + `visually finished — considered layout, typography, spacing and states (loading, empty, `
+      + `error), not an unstyled prototype. Include acceptance scenarios and the evidence `
+      + `required to prove them.`;
 
   return (
     <form action={conveneMeetingAction} className="ct-change-form"
@@ -649,8 +662,10 @@ function RebuildWithSpec({ run, projectId, actor }: {
         aria-label={`What is wrong with ${app.name}?`}
         value={complaint}
         onChange={(event) => setComplaint(event.target.value)}
-        placeholder={"What is wrong with it?\ne.g. the UI is pale and unstyled — it needs a "
-                     + "designed layout, real typography, and proper empty/loading states"}
+        placeholder={mode === "feature"
+          ? "What should it gain?\ne.g. bulk-close issues from the list, with an undo window"
+          : "What is wrong with it?\ne.g. the UI is pale and unstyled — it needs a designed "
+            + "layout, real typography, and proper empty/loading states"}
       />
       <div className="ct-actions">
         <SubmitButton className="cap-btn primary" pendingLabel="Convening the panel…"
@@ -659,8 +674,9 @@ function RebuildWithSpec({ run, projectId, actor }: {
         </SubmitButton>
         <button type="button" className="cap-btn" onClick={() => setOpen(false)}>Cancel</button>
         <span className="detail">
-          Writes a new PRD for {repo || "this app"}, then builds it — costs a full panel and
-          pipeline run.
+          {mode === "feature"
+            ? `Specs the feature, then builds it onto this app's own branch — costs a panel and a run.`
+            : `Writes a new PRD for ${repo || "this app"}, then builds a replacement — costs a panel and a run.`}
         </span>
       </div>
     </form>
@@ -1907,6 +1923,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                             }}>
                       <ChatCircleDots size={15} weight="fill" aria-hidden /> Ask BOSS
                     </button>
+                    <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor}
+                                     mode="feature" />
                     <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor} />
                     {/* Re-running the IDENTICAL brief is not a card-level action.
                         The only honest uses for it are holding the spec constant on purpose --
