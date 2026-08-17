@@ -326,6 +326,85 @@ def _tool_budget_and_costs(connection: Connection, project_id: str, settings: Se
 
 
 # --------------------------------------------------------------------------------------- #
+# A shell, in the app's own code.
+#
+# `read_repo_file` answers "what is in this file" and nothing else; the next question always
+# needed the next tool. A shell answers the questions nobody enumerated: grep the tree, diff
+# two files, run the app's checks, read its log. The workspace is a disposable shallow clone of
+# the run's branch with a tokenless remote, so exploring is free and publishing is impossible.
+# --------------------------------------------------------------------------------------- #
+
+
+def _run_repo_and_branch(connection: Connection, run_id: str) -> Optional[dict]:
+    """Where this run's code lives. The branch rule matches work_branch_for: a retry or
+    follow-up shares the ROOT's branch, so the shell lands in the app, not in an empty one."""
+    row = connection.execute(
+        text("SELECT id, spec, finalize_ctx FROM code_task_runs WHERE id = :i"),
+        {"i": run_id},
+    ).mappings().first()
+    if not row:
+        return None
+    spec = row["spec"] or {}
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            spec = {}
+    fctx = row["finalize_ctx"] or {}
+    if isinstance(fctx, str):
+        try:
+            fctx = json.loads(fctx)
+        except ValueError:
+            fctx = {}
+    root = fctx.get("root_run_id") or row["id"]
+    return {
+        "owner": spec.get("owner"),
+        "repo": spec.get("repo"),
+        "branch": f"boss/code/{root}",
+        "run_id": row["id"],
+    }
+
+
+def _open_workspace(connection: Connection, settings: Settings, run_id: str, force: bool = False):
+    from .agent_shell import ensure_workspace
+
+    target = _run_repo_and_branch(connection, run_id)
+    if not target or not target.get("owner") or not target.get("repo"):
+        return None, f"no repo recorded for run {run_id}"
+    from .repo_host import clone_url_for
+
+    clone_url = clone_url_for(
+        getattr(settings, "target_repo_host", "github") or "github",
+        target["owner"], target["repo"], settings.github_token or "",
+    )
+    return ensure_workspace(
+        run_id,
+        owner=target["owner"], repo=target["repo"], branch=target["branch"],
+        clone_url=clone_url, force=force,
+    )
+
+
+def _tool_run_shell(connection: Connection, project_id: str, settings: Settings, args: dict) -> dict:
+    from .agent_shell import run_in_workspace
+
+    run_id = str(args.get("run_id") or "").strip()
+    command = str(args.get("command") or "").strip()
+    if not run_id:
+        return {"error": "run_id is required — the shell opens in that app's code"}
+    workspace, problem = _open_workspace(connection, settings, run_id)
+    if problem or workspace is None:
+        return {"error": problem or "could not open a workspace"}
+    result = run_in_workspace(workspace, command, cwd=args.get("cwd"))
+    # Every command is recorded. An agent with a shell must leave a trail a person can read.
+    emit_event(
+        connection, project_id, "agent.shell_command", "agent", "code_task_run", run_id,
+        {"command": command[:500], "exit_code": result.get("exit_code"),
+         "refused": bool(result.get("error"))},
+    )
+    return result
+
+
+# --------------------------------------------------------------------------------------- #
 # Ask the database.
 #
 # The agent had twelve hand-written tools and still could not answer "why did the last build
@@ -783,6 +862,42 @@ TOOLS: list[dict[str, Any]] = [
                 "name": "get_budget_and_costs",
                 "description": "Get this project's REAL recorded budget cap, total spend, spend broken down by model, and provisioned infrastructure. Use this before proposing anything about cost, budget, or cloud spend.",
                 "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    },
+    {
+        "fn": _tool_run_shell,
+        "schema": {
+            "type": "function",
+            "function": {
+                "name": "run_shell",
+                "description": (
+                    "Run a shell command inside a checkout of an app's own code, and get "
+                    "stdout, stderr and the exit code back. This is the general tool: use it to "
+                    "grep the tree, read any file, diff, inspect package.json or config, run "
+                    "the app's tests or build, or reproduce a failure — instead of asking for a "
+                    "tool that does not exist. The workspace is a disposable clone of the run's "
+                    "branch; editing files there is fine and affects nothing real. A non-zero "
+                    "exit is a RESULT worth reporting, not a failure of the tool. Publishing "
+                    "(git push, gh pr) is refused — start real work with change_existing_app or "
+                    "create_followup_task."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run_id": {
+                            "type": "string",
+                            "description": "The run whose app you want to look at (crun_...).",
+                        },
+                        "command": {"type": "string", "description": "One shell command."},
+                        "cwd": {
+                            "type": "string",
+                            "description": "Optional directory inside the checkout, e.g. 'bugbox'.",
+                        },
+                    },
+                    "required": ["run_id", "command"],
+                    "additionalProperties": False,
+                },
             },
         },
     },
