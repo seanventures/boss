@@ -76,6 +76,7 @@ FORBIDDEN_POST_PREFIXES = (
     "/v1/metatron/watch",
     "/v1/metatron/drive",
     "/v1/metatron/overwatch",
+    "/v1/metatron/theater",
     "/v1/process-manager",
 )
 
@@ -195,6 +196,13 @@ def build_probes(
         Probe(
             "workforce.metatron-session",
             "/v1/metatron/session",
+            query={**q, "actor": actor},
+            required=False,
+            expect=EXPECT_2XX_OR_404,
+        ),
+        Probe(
+            "workforce.metatron-theater",
+            "/v1/metatron/theater",
             query={**q, "actor": actor},
             required=False,
             expect=EXPECT_2XX_OR_404,

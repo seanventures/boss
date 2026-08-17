@@ -362,6 +362,7 @@ WORKFORCE_CATALOG = {
     "workforce.agent-process-runs": "/v1/agent-processes/runs",
     "workforce.metatron-goals": "/v1/metatron/goals",
     "workforce.metatron-session": "/v1/metatron/session",
+    "workforce.metatron-theater": "/v1/metatron/theater",
     "workforce.process-manager": "/v1/process-manager",
     "workforce.activity": "/v1/activity",
 }
@@ -396,6 +397,7 @@ def test_workforce_writes_are_forbidden_post_prefixes():
     assert "/v1/metatron/watch" in covered
     assert "/v1/metatron/drive" in covered
     assert "/v1/metatron/overwatch" in covered
+    assert "/v1/metatron/theater" in covered
     assert "/v1/process-manager" in covered
 
 
@@ -454,6 +456,7 @@ def test_run_feature_sweep_workforce_404_is_skip_evidence_not_pass():
             "/v1/agent-processes/runs": 404,
             "/v1/metatron/goals": 404,
             "/v1/metatron/session": 404,
+            "/v1/metatron/theater": 404,
             "/v1/process-manager": 404,
             "/v1/activity": 404,
             "/v1/diag/sandbox-echo": 422,
@@ -473,4 +476,5 @@ def test_run_feature_sweep_workforce_404_is_skip_evidence_not_pass():
     assert ("POST", "/v1/agent-processes/templates") not in posts
     assert ("POST", "/v1/agent-processes/runs") not in posts
     assert ("POST", "/v1/metatron/session") not in posts
+    assert ("POST", "/v1/metatron/theater") not in posts
     assert ("POST", "/v1/process-manager") not in posts

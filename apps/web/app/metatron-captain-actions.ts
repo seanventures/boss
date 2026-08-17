@@ -190,3 +190,27 @@ export async function runMetatronCaptainOverwatchAction(
     actor: actor || "executive_console",
   });
 }
+
+export async function loadMetatronTheaterAction(
+  projectId: string,
+  actor: string,
+): Promise<MetatronCaptainActionResult> {
+  const project = encodeURIComponent(projectId);
+  const who = encodeURIComponent(actor);
+  return captainGet(`/v1/metatron/theater?project_id=${project}&actor=${who}`);
+}
+
+export async function runMetatronTheaterAction(
+  formData: FormData,
+): Promise<MetatronCaptainActionResult> {
+  const projectId = String(formData.get("project_id") ?? "").trim();
+  const actor = String(formData.get("actor") ?? "").trim();
+  if (!projectId) {
+    return { ok: false, error: "project_id is required." };
+  }
+  return captainPost("/v1/metatron/theater", {
+    project_id: projectId,
+    actor: actor || "executive_console",
+    auto: true,
+  });
+}

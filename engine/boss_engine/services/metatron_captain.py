@@ -39,8 +39,13 @@ HELP_REPLY = (
     "measure goals, validate every action, apply only safe moves, then verify. "
     "Decisions stay human. BOSS self-change is a PR. "
     "I can author and start agent processes (PRD handoffs) from chat; "
-    "simulated starts never spend.\n"
-    "Try: remember … · set goal … · watch · overwatch · measure · drive · "
+    "simulated starts never spend. I have overwatch of captains, agents, "
+    "and official work, and I can re-prioritize or staff more force "
+    "against high-level objectives. I never launch a second factory job "
+    "while official work is in flight, invent a pass, or auto-resolve "
+    "decisions.\n"
+    "Try: remember … · set goal … · watch · overwatch · theater · "
+    "reprioritize official · staff captains · measure · drive · "
     "drive auto · build … · build a process … · start process … · "
     "list processes · goals · memory"
 )
@@ -111,6 +116,11 @@ def interpret_turn(message: str) -> dict[str, Any]:
         return {"intent": "help", "text": raw}
     if lowered in {"overwatch", "run overwatch", "overwatch now", "keep watch"}:
         return {"intent": "overwatch", "text": raw}
+    if lowered in {"theater", "command", "fleet", "command theater"} or re.search(
+        r"\b(reprioritize|prioriti[sz]e official|staff captains?|assign (more )?resources|command the fleet)\b",
+        lowered,
+    ):
+        return {"intent": "theater", "text": raw, "auto": True}
     if lowered in {"watch", "scan", "tick"}:
         return {"intent": "watch", "text": raw}
     if lowered in {"measure", "score", "how are we doing"}:
@@ -434,6 +444,9 @@ def findings_from_snapshot(snapshot: dict[str, Any], goals: list[dict[str, Any]]
             "directive": title,
             "gaps": quality_gaps,
         })
+    from .metatron_command import fleet_findings
+
+    findings.extend(fleet_findings(snapshot))
     if not findings:
         findings.append({
             "id": "steady",
@@ -487,6 +500,11 @@ def proposed_moves_from_findings(findings: list[dict[str, Any]], *, auto: bool) 
                 "apply": bool(auto),
             })
             continue
+        if action in {"reprioritize_and_staff", "staff_and_loop"}:
+            from .metatron_command import command_moves
+
+            moves.extend(command_moves([finding], auto=auto))
+            continue
         moves.append({
             "kind": "propose",
             "status": "proposed",
@@ -511,13 +529,14 @@ ACTION_KINDS = frozenset({
     "restart_preview", "launch_factory_job",
     "escalate_decision", "propose_deadletter_review", "propose",
     "build_process", "start_process", "list_processes",
+    "theater", "reprioritize_official", "staff_captain", "loop_playbook",
 })
 
 # Mutating intents that must pass validation before session_turn runs them.
 # list_processes is read-only.
 MUTATING_INTENTS = frozenset({
     "remember", "set_goal", "drive", "act", "prioritize", "overwatch",
-    "build_process", "start_process",
+    "build_process", "start_process", "theater",
 })
 
 
@@ -539,6 +558,7 @@ def validate_action(
     if action in {
         "restart_preview", "launch_factory_job", "escalate_decision",
         "propose_deadletter_review", "propose",
+        "reprioritize_official", "staff_captain", "loop_playbook",
     }:
         return validate_move(
             {**payload, "kind": action},
@@ -587,7 +607,7 @@ def validate_action(
                 budget_state not in {"red", "orange"},
                 f"budget_state={budget_state}",
             )
-    elif action in {"drive", "act", "prioritize"} and auto:
+    elif action in {"drive", "act", "prioritize", "theater"} and auto:
         check(
             "budget_not_red",
             budget_state not in {"red", "orange"},
@@ -674,6 +694,11 @@ def validate_move(
     checks: list[dict[str, Any]] = []
     kind = str(move.get("kind") or "")
 
+    from .metatron_command import COMMAND_KINDS, validate_command
+
+    if kind in COMMAND_KINDS:
+        return validate_command(move, snapshot, auto=auto, budget_state=budget_state)
+
     def check(name: str, ok: bool, detail: str) -> None:
         checks.append({"name": name, "ok": ok, "detail": detail})
 
@@ -758,7 +783,7 @@ class MetatronCaptain:
             parsed["intent"],
             parsed,
             snapshot=snapshot,
-            auto=bool(parsed.get("auto")) or parsed["intent"] in {"act", "prioritize", "overwatch"},
+            auto=bool(parsed.get("auto")) or parsed["intent"] in {"act", "prioritize", "overwatch", "theater"},
             in_flight=int(snapshot.get("in_flight") or 0),
             budget_state=str(snapshot.get("budget_state") or "unknown"),
         )
@@ -852,6 +877,20 @@ class MetatronCaptain:
                 "validation": action_verdict,
             })
             reply = self._render_overwatch(cycle)
+        elif parsed["intent"] == "theater":
+            cycle = self.command_once(
+                connection, project_id=project_id, actor=actor,
+                auto=bool(parsed.get("auto", True)),
+            )
+            watch = (cycle.get("overwatch") or {}).get("watch") or cycle.get("watch")
+            actions.append({
+                "kind": "theater",
+                "applied": len(cycle.get("applied") or []),
+                "rejected": len(cycle.get("rejected") or []),
+                "fleet": cycle.get("fleet") or {},
+                "validation": action_verdict,
+            })
+            reply = self._render_theater(cycle)
         elif parsed["intent"] == "build_process":
             built = self._build_process(
                 connection, project_id=project_id, actor=actor, description=parsed.get("text") or "",
@@ -993,7 +1032,9 @@ class MetatronCaptain:
             except Exception:
                 return 0
 
-        return {
+        from .metatron_command import MetatronCommand
+
+        snap = {
             "budget_state": health.get("budget_state"),
             "open_tasks": summary.get("open_tasks", 0),
             "pending_decisions": summary.get("pending_decisions", 0),
@@ -1014,6 +1055,7 @@ class MetatronCaptain:
             "top_risks": health.get("top_risks") or [],
             "scorecard": self._latest_run_scorecard(connection, project_id),
         }
+        return MetatronCommand(self.settings).overlay_snapshot(connection, project_id, snap)
 
     def _latest_run_scorecard(self, connection: Connection, project_id: str) -> dict[str, Any] | None:
         """Attach the newest completed run's v1.1 card. Missing stays None."""
@@ -1256,6 +1298,64 @@ class MetatronCaptain:
             ),
         }
 
+    def theater(self, connection: Connection, *, project_id: str, actor: str) -> dict[str, Any]:
+        """Read-only fleet view: captains, official work, proposed command powers."""
+        self.ensure_schema(connection)
+        from .metatron_command import command_moves, fleet_findings
+
+        snapshot = self.gather_snapshot(connection, project_id)
+        findings = fleet_findings(snapshot)
+        moves = command_moves(findings, auto=False)
+        fleet = {
+            "official_in_flight": snapshot.get("official_in_flight") or 0,
+            "official_queued": snapshot.get("official_queued") or 0,
+            "factory_stalled": snapshot.get("factory_stalled") or 0,
+            "captain_assignments": snapshot.get("captain_assignments") or 0,
+            "playbooks": snapshot.get("playbooks") or 0,
+            "agent_process_runs": snapshot.get("agent_process_runs") or 0,
+            "active_goals": snapshot.get("active_goals") or 0,
+            "in_flight": snapshot.get("in_flight") or 0,
+            "budget_state": snapshot.get("budget_state"),
+        }
+        return {
+            "project_id": project_id,
+            "actor": actor,
+            "fleet": fleet,
+            "findings": findings,
+            "moves": moves,
+            "latest_overwatch": self.latest_overwatch(connection, project_id),
+            "note": (
+                "Metatron theater is observe-only. POST with auto=true applies "
+                "re-prioritize / staff / playbook loop — never a second factory job."
+            ),
+        }
+
+    def command_once(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        auto: bool = True,
+    ) -> dict[str, Any]:
+        """Apply bounded command powers via the existing overwatch apply path."""
+        view = self.theater(connection, project_id=project_id, actor=actor)
+        if not auto:
+            return {
+                **view,
+                "status": "proposed",
+                "applied": [],
+                "rejected": [],
+            }
+        cycle = self.overwatch_once(connection, project_id=project_id, actor=actor)
+        return {
+            **cycle,
+            "fleet": view.get("fleet") or {},
+            "command_findings": view.get("findings") or [],
+            "command_moves": view.get("moves") or [],
+            "watch": cycle.get("watch") or view.get("latest_overwatch"),
+        }
+
     def verify_cycle(
         self,
         connection: Connection,
@@ -1386,6 +1486,23 @@ class MetatronCaptain:
     ) -> dict[str, Any]:
         kind = move.get("kind")
         scope = self._scope(connection, project_id)
+        from .metatron_command import COMMAND_KINDS, MetatronCommand
+
+        if kind in COMMAND_KINDS:
+            result = MetatronCommand(self.settings)._apply(
+                connection, project_id=project_id, actor=actor, move=move,
+            )
+            if result.get("status") == "applied":
+                minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+                receipt, _ = self.receipts.create_or_reuse(
+                    connection, scope["org_id"], scope["workspace_id"], project_id,
+                    f"metatron:command:{kind}:{project_id}:{minute}",
+                    f"metatron.command.{kind}",
+                    {"kind": kind, "project_id": project_id},
+                    result,
+                )
+                result["receipt_id"] = receipt.get("id")
+            return result
         if kind == "restart_preview":
             if not verify_run:
                 return {"status": "rejected", "error": "no verify-green run to preview"}
@@ -1733,6 +1850,27 @@ class MetatronCaptain:
             lines.append(f"- rejected {move.get('kind')}: {', '.join(failed) or move.get('error')}")
         if not cycle.get("applied") and not cycle.get("rejected"):
             lines.append("No apply this cycle. Still watching.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_theater(cycle: dict[str, Any]) -> str:
+        fleet = cycle.get("fleet") or {}
+        lines = [
+            cycle.get("note") or "Metatron theater.",
+            (
+                f"Fleet: official={fleet.get('official_in_flight') or 0} "
+                f"queued={fleet.get('official_queued') or 0} "
+                f"stalled={fleet.get('factory_stalled') or 0} "
+                f"captain assignments={fleet.get('captain_assignments') or 0} "
+                f"playbooks={fleet.get('playbooks') or 0}."
+            ),
+        ]
+        for finding in (cycle.get("command_findings") or cycle.get("findings") or [])[:4]:
+            lines.append(f"- {finding.get('id')}: {finding.get('title')}")
+        for move in (cycle.get("applied") or [])[:6]:
+            lines.append(f"- applied {move.get('kind')}: {move.get('status')}")
+        if not cycle.get("applied"):
+            lines.append("No command power applied. Official work was not duplicated.")
         return "\n".join(lines)
 
     @staticmethod

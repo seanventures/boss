@@ -142,6 +142,8 @@ def test_validate_action_process_intents():
     assert "process" in HELP_REPLY.lower()
     assert "build a process" in HELP_REPLY
     assert "list processes" in HELP_REPLY
+    assert "theater" in HELP_REPLY.lower()
+    assert "reprioritize official" in HELP_REPLY
 
 
 def test_working_software_goal_needs_preview_and_verify():

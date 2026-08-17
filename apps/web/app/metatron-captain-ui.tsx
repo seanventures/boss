@@ -7,6 +7,7 @@ import {
   GOAL_KIND_OPTIONS,
   mapMetatronCaptainSession,
   mapMetatronDriveResult,
+  mapMetatronTheater,
   mapMetatronWatchTick,
   unavailableMetatronCaptain,
   type MetatronCaptainState,
@@ -14,9 +15,11 @@ import {
 import {
   createMetatronCaptainGoalAction,
   loadMetatronCaptainSessionAction,
+  loadMetatronTheaterAction,
   proposeMetatronCaptainDriveAction,
   refreshMetatronCaptainWatchAction,
   runMetatronCaptainOverwatchAction,
+  runMetatronTheaterAction,
   sendMetatronCaptainMessageAction,
 } from "./metatron-captain-actions";
 import { SubmitButton } from "./submit-button";
@@ -38,10 +41,19 @@ export function MetatronCaptain({
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    loadMetatronCaptainSessionAction(projectId, actor).then((result) => {
+    loadMetatronCaptainSessionAction(projectId, actor).then(async (result) => {
       if (!alive) return;
       if (result.ok && result.data) {
-        setState(mapMetatronCaptainSession(result.data));
+        const next = mapMetatronCaptainSession(result.data);
+        const theater = await loadMetatronTheaterAction(projectId, actor);
+        if (!alive) return;
+        setState({
+          ...next,
+          theater:
+            theater.ok && theater.data
+              ? mapMetatronTheater(theater.data)
+              : next.theater,
+        });
         setError(null);
       } else {
         setState(
@@ -142,6 +154,30 @@ export function MetatronCaptain({
           );
         });
       }}
+      onTheater={(formData) => {
+        setError(null);
+        startTransition(async () => {
+          const result = await runMetatronTheaterAction(formData);
+          if (result.ok && result.data) {
+            setState((prev) => ({
+              ...prev,
+              apiReachable: true,
+              theater: mapMetatronTheater(result.data ?? {}),
+              lastOverwatch: mapMetatronDriveResult(result.data ?? {}),
+              watch:
+                mapMetatronWatchTick(
+                  (result.data?.watch as Record<string, unknown> | undefined) ??
+                    result.data,
+                ) ?? prev.watch,
+            }));
+            return;
+          }
+          applyFailure(
+            result.error ?? "Theater command failed.",
+            result.unavailable,
+          );
+        });
+      }}
       onOverwatch={(formData) => {
         setError(null);
         startTransition(async () => {
@@ -185,6 +221,7 @@ export function MetatronCaptainView({
   onWatch,
   onDrive,
   onOverwatch,
+  onTheater,
 }: {
   projectId: string;
   actor: string;
@@ -197,6 +234,7 @@ export function MetatronCaptainView({
   onWatch: (formData: FormData) => void;
   onDrive: (formData: FormData) => void;
   onOverwatch?: (formData: FormData) => void;
+  onTheater?: (formData: FormData) => void;
 }) {
   const unavailable = !loading && !state.apiReachable;
   const blocked =
@@ -213,9 +251,13 @@ export function MetatronCaptainView({
         </div>
       </div>
       <p className="detail">
-        Community self-hosted captain. Always-on overwatch: observe, measure
-        goals, validate every action, apply only safe moves, then verify.
-        Decisions stay human. BOSS self-change is a PR, never a silent write.
+        Community self-hosted captain. Always-on overwatch of systems,
+        agents, and captains: observe, measure goals, validate every
+        action, apply only safe moves, then verify. Metatron can
+        re-prioritize official work and assign more captain force against
+        high-level objectives. Decisions stay human. BOSS self-change is a
+        PR, never a silent write. Never a second factory job while official
+        work is in flight.
       </p>
 
       {loading ? (
@@ -405,6 +447,51 @@ export function MetatronCaptainView({
           <input type="hidden" name="actor" value={actor} />
           <SubmitButton className="button" type="submit" disabled={pending}>
             Run overwatch now
+          </SubmitButton>
+        </form>
+      ) : null}
+
+      <h4>Theater</h4>
+      <p className="detail">
+        Fleet overwatch of official runs, captains, playbooks, and swarms.
+        Command powers re-prioritize official jobs, staff more agents, and
+        loop a playbook. They never invent a pass or start a second factory
+        job.
+      </p>
+      {state.theater ? (
+        <div data-testid="metatron-captain-theater">
+          <p className="detail">
+            official {state.theater.fleet.officialInFlight} · queued{" "}
+            {state.theater.fleet.officialQueued} · stalled{" "}
+            {state.theater.fleet.factoryStalled} · captains{" "}
+            {state.theater.fleet.captainAssignments} · playbooks{" "}
+            {state.theater.fleet.playbooks}
+          </p>
+          {state.theater.note ? (
+            <p className="detail">{state.theater.note}</p>
+          ) : null}
+          {state.theater.findings.length > 0 ? (
+            <ul className="detail">
+              {state.theater.findings.map((finding) => (
+                <li key={finding.id}>
+                  [{finding.severity}] {finding.title}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <p className="empty-state" data-testid="metatron-captain-empty-theater">
+          No theater snapshot yet. Command the fleet to observe and apply
+          bounded powers.
+        </p>
+      )}
+      {onTheater ? (
+        <form data-testid="metatron-captain-theater-run" action={onTheater}>
+          <input type="hidden" name="project_id" value={projectId} />
+          <input type="hidden" name="actor" value={actor} />
+          <SubmitButton className="button" type="submit" disabled={pending}>
+            Command the fleet
           </SubmitButton>
         </form>
       ) : null}

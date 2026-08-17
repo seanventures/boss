@@ -148,3 +148,37 @@ def captain_overwatch(payload: WatchRequest) -> dict[str, Any]:
         return _captain().overwatch_once(
             connection, project_id=payload.project_id, actor=payload.actor
         )
+
+
+class TheaterRequest(BaseModel):
+    project_id: str
+    actor: str = "executive_console"
+    auto: bool = Field(
+        default=True,
+        description="Apply bounded command powers (reprioritize/staff/loop). Never a second factory job.",
+    )
+
+
+@router.get("/v1/metatron/theater")
+def captain_theater(project_id: str, actor: str = "executive_console") -> dict[str, Any]:
+    """Fleet view of official work, captains, and proposed command powers."""
+    if not project_id.strip():
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(get_engine()) as connection:
+        _require(connection, project_id, actor)
+        return _captain().theater(connection, project_id=project_id, actor=actor)
+
+
+@router.post("/v1/metatron/theater")
+def captain_theater_enact(payload: TheaterRequest) -> dict[str, Any]:
+    """Observe the fleet, then apply validated command powers when auto=true."""
+    if not payload.project_id.strip():
+        raise HTTPException(status_code=422, detail="project_id is required")
+    with begin(get_engine()) as connection:
+        _require(connection, payload.project_id, payload.actor)
+        return _captain().command_once(
+            connection,
+            project_id=payload.project_id,
+            actor=payload.actor,
+            auto=payload.auto,
+        )

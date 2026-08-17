@@ -1,5 +1,32 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-17 Metatron theater / command (◐)
+
+- Metatron overwatch now overlays official runs, captain assignments,
+  playbooks, and agent-process swarms.
+- Bounded powers: `reprioritize_official`, `staff_captain`, `loop_playbook`.
+  Never a second factory job, invented pass, or auto-applied decision.
+- HTTP `GET/POST /v1/metatron/theater`. Chat: theater / reprioritize official.
+- Not public GA. Official trio still not 3/3 `passed=true`.
+
+## 2026-08-16 factory flow + improve loop (◐)
+
+- Live API+web `30c50e3`. Worker still `27d8239` (in-flight official).
+- `GET /v1/factory/flow` shows factory phase + swarm handoffs + diagnosis.
+- Tick recorded 8 findings (crash, dishonest verify, stale heartbeat,
+  queued-serial) and attached 2 missing official swarms.
+- Loop never edits BOSS; findings + recommended_fix only. Not GA.
+
+## 2026-08-16 official captain swarms (◐)
+
+- API `f9a9285` (worker still `27d8239` so in-flight verify was not killed).
+- Official follow-up now starts `prd_to_accepted_work` **attached** to the
+  factory run: architect + CTO + VP-PM + PM + captain + QA + UX + panel.
+- Attach does not spawn a second budgeted code.task.
+- Live: `aprun_b8a12d018af942c792f7` HookWatch, `aprun_cb8ce08dbba44ea4bb20`
+  ApproveIt, `aprun_944ef7347dff49a6b571` BugBox — all waiting on captain_build
+  bound to the official factory jobs. Still 0/3 passed. Not GA.
+
 ## 2026-08-16 factory crash + shepherd watch (◐)
 
 - Live shared tag `27d8239`. Health 200. Shepherd watch 200 (was 500).

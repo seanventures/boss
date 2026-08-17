@@ -74,6 +74,26 @@ export type MetatronDriveResult = {
   watchId?: string;
 };
 
+export type MetatronTheaterFleet = {
+  officialInFlight: number;
+  officialQueued: number;
+  factoryStalled: number;
+  captainAssignments: number;
+  playbooks: number;
+  agentProcessRuns: number;
+  activeGoals: number;
+  budgetState?: string;
+};
+
+export type MetatronTheater = {
+  note?: string;
+  status?: string;
+  fleet: MetatronTheaterFleet;
+  findings: MetatronWatchFinding[];
+  moves: Array<{ kind?: string; status?: string; detail?: string }>;
+  applied: unknown[];
+};
+
 export type MetatronCaptainState = {
   apiReachable: boolean;
   blockedReason?: string;
@@ -84,6 +104,7 @@ export type MetatronCaptainState = {
   watch: MetatronWatchTick | null;
   lastDrive: MetatronDriveResult | null;
   lastOverwatch: MetatronDriveResult | null;
+  theater: MetatronTheater | null;
 };
 
 export function emptyMetatronCaptain(): MetatronCaptainState {
@@ -95,6 +116,7 @@ export function emptyMetatronCaptain(): MetatronCaptainState {
     watch: null,
     lastDrive: null,
     lastOverwatch: null,
+    theater: null,
   };
 }
 
@@ -170,7 +192,46 @@ export function mapMetatronCaptainSession(
     lastOverwatch: payload.last_overwatch
       ? mapMetatronDriveResult(payload.last_overwatch as Record<string, unknown>)
       : null,
+    theater: payload.theater
+      ? mapMetatronTheater(payload.theater as Record<string, unknown>)
+      : payload.fleet
+        ? mapMetatronTheater(payload)
+        : null,
   };
+}
+
+export function mapMetatronTheater(
+  payload: Record<string, unknown>,
+): MetatronTheater {
+  const fleet = asRecord(payload.fleet);
+  const findingsSource = Array.isArray(payload.command_findings)
+    ? payload.command_findings
+    : payload.findings;
+  return {
+    note: asString(payload.note),
+    status: asString(payload.status),
+    fleet: {
+      officialInFlight: asNumber(fleet.official_in_flight),
+      officialQueued: asNumber(fleet.official_queued),
+      factoryStalled: asNumber(fleet.factory_stalled),
+      captainAssignments: asNumber(fleet.captain_assignments),
+      playbooks: asNumber(fleet.playbooks),
+      agentProcessRuns: asNumber(fleet.agent_process_runs),
+      activeGoals: asNumber(fleet.active_goals),
+      budgetState: asString(fleet.budget_state),
+    },
+    findings: asWatch({ findings: findingsSource })?.findings ?? [],
+    moves: asMoves(payload.command_moves ?? payload.moves),
+    applied: Array.isArray(payload.applied) ? payload.applied : [],
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 export function mapMetatronDriveResult(

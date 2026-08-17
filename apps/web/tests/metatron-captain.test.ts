@@ -122,6 +122,9 @@ describe("Metatron Captain island", () => {
     expect(markup).toContain('data-testid="metatron-captain-overwatch"');
     expect(markup).toContain("Run overwatch now");
     expect(markup).toContain("Always-on overwatch");
+    expect(markup).toContain('data-testid="metatron-captain-theater-run"');
+    expect(markup).toContain("Command the fleet");
+    expect(markup).toContain("re-prioritize official");
     expect(markup).toContain('data-testid="metatron-captain-drive"');
     expect(markup).toContain("Propose next moves");
     expect(markup).toContain("Launch validated work");
