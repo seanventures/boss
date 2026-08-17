@@ -16,7 +16,7 @@ from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
 from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import start_code_task
-from .core import make_id
+from .core import emit_event, make_id
 from .discovery_service import start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
@@ -318,6 +318,15 @@ class IntentRouter:
             convo[-1]["content"] if convo else "")
         history = convo[:-1] if convo else []
         reply = ""
+        # WHY THE ANSWER IS MISSING, IF IT IS.
+        #
+        # Every failure here used to collapse into `reply = ""` and then into a friendly
+        # sentence about telling BOSS what to do. A budget cap, a model outage, a tool raising
+        # — all three produced the SAME text as a model deliberately choosing to be
+        # conversational. So an agent that was broken and an agent that was working looked
+        # identical from the outside, and the operator's reasonable conclusion was that the
+        # agent is useless rather than that something failed. Say which it was.
+        failure: Optional[str] = None
         try:
             reservation = self.budget.reserve(
                 connection, project_id, "model",
@@ -334,16 +343,38 @@ class IntentRouter:
                         allow_writes=False, max_steps=4,
                     )
                     reply = str(turn.reply or "").strip()
+                    if not reply:
+                        failure = "the model returned an empty answer"
                 finally:
                     try:
                         self.budget.release(connection, project_id, reservation["reservation_id"], "answer")
                     except Exception:  # noqa: BLE001
                         pass
-        except Exception:  # noqa: BLE001 — a model/budget hiccup must never break the chat
-            reply = ""
+            else:
+                # The single most likely cause, and previously invisible: no budget was
+                # granted, so the model was never called at all.
+                failure = (
+                    f"no model budget was granted for this answer "
+                    f"(reservation {reservation.get('status') or 'refused'})"
+                )
+        except Exception as exc:  # noqa: BLE001 — a hiccup must never break the chat
+            failure = f"{type(exc).__name__}: {exc}"
         if not reply:
-            reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
-                     "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
+            if failure:
+                try:
+                    emit_event(connection, project_id, "agent.answer_unavailable", "orchestrator",
+                               "project", project_id, {"reason": failure[:400]})
+                except Exception:  # noqa: BLE001
+                    pass
+                reply = (
+                    f"I could not answer that: {failure}. This is a failure on my side, not a "
+                    "limit on what BOSS knows — the question is worth asking again once it is "
+                    "fixed. You can still tell me to act (e.g. “build it”, “add a currency "
+                    "picker”) and I will start the governed flow."
+                )
+            else:
+                reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
+                         "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
         return RouterTurn(reply=reply)
 
     def _existing_app_for_task(self, connection: Connection, project_id: str,
