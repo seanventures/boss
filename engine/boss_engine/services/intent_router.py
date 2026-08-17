@@ -389,6 +389,29 @@ class IntentRouter:
         """
         if not task_id:
             return None, None
+        # THE CHAT MAY BE SCOPED TO A RUN, NOT A TASK.
+        #
+        # The console's agent dock is opened from an app card, and an app card holds a RUN id
+        # (crun_...) — that is what makes the conversation unambiguous. This lookup only knew
+        # how to find an app by task_id, so a run-scoped chat found nothing, `extend` came out
+        # False, and "add a currency picker" would have quietly REBUILT the app on main instead
+        # of changing it. The most expensive possible misreading of a cheap request.
+        if str(task_id).startswith("crun_"):
+            row = connection.execute(
+                text("SELECT id, finalize_ctx FROM code_task_runs "
+                     "WHERE project_id = :p AND id = :r LIMIT 1"),
+                {"p": project_id, "r": task_id},
+            ).mappings().first()
+            if not row:
+                return None, None
+            fc = row["finalize_ctx"]
+            if isinstance(fc, str):
+                try:
+                    fc = json.loads(fc)
+                except (ValueError, TypeError):
+                    fc = {}
+            root = (fc or {}).get("root_run_id") or row["id"]
+            return (f"boss/code/{root}", root)
         row = connection.execute(
             text("SELECT id, finalize_ctx FROM code_task_runs "
                  "WHERE project_id = :p AND task_id = :t AND status = 'completed' "
