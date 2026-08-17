@@ -26,6 +26,14 @@ function railBtn(active: boolean) {
   };
 }
 
+/** Hide the machine-addressed context block from the human transcript. */
+export function stripAppFacts(content: string): string {
+  const text = content ?? "";
+  if (!text.startsWith("[app context]")) return text;
+  const split = text.indexOf("\n\n");
+  return split === -1 ? "" : text.slice(split + 2).trimStart();
+}
+
 export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** What BOSS already knows about the app this conversation is about. */
@@ -196,7 +204,13 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>
               <span>{m.role === "assistant" ? "BOSS" : m.role === "user" ? "You" : "tool"}</span>
-              <p style={{ whiteSpace: "pre-wrap" }}>{m.content}</p>
+              {/* The app-facts block is addressed to the MODEL, not to the reader. It was
+                  prepended to the outgoing message and then echoed back in the transcript, so
+                  every question appeared with a wall of run_id / live_preview / "use your
+                  tools" above it — context doing its job and ruining the conversation. */}
+              <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                {stripAppFacts(m.content)}
+              </p>
               {m.actions && m.actions.length > 0 ? (
                 <div className="agent-action-row">
                   {m.actions.map((a, j) => <span className="agent-action" key={j}>{a.kind.replaceAll("_", " ")}</span>)}

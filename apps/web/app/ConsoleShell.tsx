@@ -364,6 +364,31 @@ export default function ConsoleShell({
     return () => window.removeEventListener("popstate", read);
   }, []);
 
+  // Width is the operator's choice and it persists. A chat you cannot widen is a chat you
+  // stop using for anything longer than a sentence.
+  const [dockWidth, setDockWidth] = useState(520);
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem("boss.dock.width") || 0);
+    if (saved >= 320) setDockWidth(Math.min(saved, window.innerWidth - 280));
+  }, []);
+  const startResize = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    const onMove = (move: MouseEvent) => {
+      // Clamped so the panel can never swallow the console or shrink past readable.
+      const next = Math.max(320, Math.min(window.innerWidth - 280, window.innerWidth - move.clientX));
+      setDockWidth(next);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      setDockWidth((w) => { window.localStorage.setItem("boss.dock.width", String(w)); return w; });
+    };
+    document.body.style.userSelect = "none";     // dragging must not select the page text
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
   const closeDock = useCallback(() => {
     const url = new URL(window.location.href);
     url.searchParams.delete("agent");
@@ -588,12 +613,22 @@ export default function ConsoleShell({
           </span>
         </header>
 
+        {/* The console gets out of the panel's way rather than hiding behind it. The dock is
+            fixed-position, so without this inset the right-hand column of cards sat underneath
+            it, unreachable. */}
         <main className="bx-content" data-active={active} aria-label={activeDef.label}
-              data-dock={dockedRun ? "open" : undefined}>
+              data-dock={dockedRun ? "open" : undefined}
+              style={dockedRun ? { paddingRight: dockWidth + 16 } : undefined}>
           {children}
         </main>
         {dockedRun ? (
-          <aside className="bx-dock" aria-label="Ask BOSS about this app">
+          <aside className="bx-dock" aria-label="Ask BOSS about this app"
+                 style={{ width: dockWidth }}>
+            {/* Drag to resize. The panel is fixed and overlays the page, so without this it
+                simply hid the right-hand column of cards with no way to see them again. */}
+            <div className="bx-dock-grip" onMouseDown={startResize}
+                 role="separator" aria-orientation="vertical"
+                 aria-label="Resize the panel" title="Drag to resize" />
             <div className="bx-dock-head">
               <span className="eyebrow">Ask BOSS</span>
               <code className="detail">{dockedRun}</code>
