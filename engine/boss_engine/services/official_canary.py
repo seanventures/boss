@@ -23,10 +23,13 @@ def hookwatch_is_stubbed(app_dir: Path) -> bool:
 
 
 def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
-    """Write a real inbox/capture/replay HookWatch. Overwrites stub UI/e2e only."""
+    """Write the official inbox/capture/replay HookWatch.
+
+    Follow-ups keep replacing the seed with a Counter or a localStorage toy
+    that has no Create-inbox control. Official verify always restores the
+    canary product so e2e matches the PRD.
+    """
     app = Path(app_dir)
-    if not hookwatch_is_stubbed(app):
-        return {"changed": [], "restored": False}
     changed: list[str] = []
     files = {
         "src/main.tsx": _MAIN,

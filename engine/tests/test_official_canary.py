@@ -48,6 +48,9 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     assert "expect(true)" not in e2e
     assert "create inbox" in e2e.lower()
     assert hookwatch_is_stubbed(app) is False
+    again = restore_official_hookwatch(app)
+    assert again["restored"] is True
+    assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
 
 
 def test_prepare_restores_official_hookwatch_and_unstubs_verify(tmp_path: Path):
