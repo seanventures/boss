@@ -137,12 +137,17 @@ const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
 // only thing that decides what a Community operator sees in the sidebar, so an area dropped
 // here is still present for Enterprise and Cloud — and still reachable by ?area= for everyone.
 //
-// Not listed, deliberately: activity (47,921 events, ~75% one internal audit event — not
-// empty, unreadable), reliability (incidents: 0 rows) and reports/Evidence
-// (drift_reports: 0). They return here the moment they have something to show.
+// Not listed, deliberately:
+//   activity  — 47,921 events, ~75% a single internal audit-export event. Not empty, unreadable.
+//   reliability — incidents: 0 rows.
+//   reports/Evidence — drift_reports: 0 rows.
+//   work ("Jobs") — NOT empty: 5 open tasks, 196 jobs, 4,287 receipts. Hidden because the
+//     screen is plumbing rather than a place decisions get made; Factory and Approvals are
+//     where the same work is actually acted on. Worth revisiting if open tasks ever need to be
+//     seen on their own.
+// Each returns the moment it earns a click.
 const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "overview",
-  "work",
   "decisions",
   "code_tasks",
   "budget",

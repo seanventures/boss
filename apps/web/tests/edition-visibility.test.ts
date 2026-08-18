@@ -125,7 +125,6 @@ describe("community nav honesty helpers", () => {
     // They remain reachable via ?area=, so this asserts the NAV cut, not their existence.
     const shown = [
       "overview",
-      "work",
       "decisions",
       "code_tasks",
       "budget",
@@ -265,11 +264,11 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).not.toContain('data-area-nav="infra"');
     expect(html).not.toContain('data-area-nav="ops"');
     expect(html).not.toContain('data-area-nav="org"');
-    expect(html).toContain('data-area-nav="work"');
     expect(html).toContain('data-area-nav="decisions"');
     expect(html).toContain('data-area-nav="code_tasks"');
     expect(html).toContain('data-area-nav="budget"');
-    // Removed from the nav on 2026-08-18 — empty or unreadable, see ConsoleShell's AREAS note.
+    // Cut from Community on 2026-08-18 — see the reasons recorded in lib/edition.ts.
+    expect(html).not.toContain('data-area-nav="work"');
     expect(html).not.toContain('data-area-nav="activity"');
     expect(html).not.toContain('data-area-nav="reliability"');
     expect(html).not.toContain('data-area-nav="reports"');
