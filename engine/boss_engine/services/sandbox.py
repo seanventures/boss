@@ -203,6 +203,13 @@ class EphemeralSandbox:
         limit = timeout or self.settings.sandbox_validation_timeout_seconds
         started = time.monotonic()
         workdir = cwd or self.path
+        restore_note = ""
+        try:
+            from .official_canary import maybe_restore_for_command
+
+            restore_note = maybe_restore_for_command(workdir, command)
+        except Exception as exc:  # noqa: BLE001 — verify must still run
+            restore_note = f"[boss] sandbox.restore failed {type(exc).__name__}: {exc}\n"
         env = {**os.environ, "CI": "1"}
         # Image-global `playwright` (browser install CLI) has no `test` command.
         # Prefer the app's node_modules/.bin so @playwright/test / vite win.
@@ -228,7 +235,7 @@ class EphemeralSandbox:
                 exit_code=completed.returncode,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 timed_out=False,
-                stdout=self._truncate(completed.stdout),
+                stdout=restore_note + self._truncate(completed.stdout),
                 stderr=self._truncate(completed.stderr),
             )
         except subprocess.TimeoutExpired as error:
@@ -238,7 +245,7 @@ class EphemeralSandbox:
                 exit_code=None,
                 duration_ms=int((time.monotonic() - started) * 1000),
                 timed_out=True,
-                stdout=self._truncate(error.stdout or ""),
+                stdout=restore_note + self._truncate(error.stdout or ""),
                 stderr=self._truncate(error.stderr or ""),
             )
         except OSError as error:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from boss_engine.services.official_canary import (
     hookwatch_is_stubbed,
+    maybe_restore_for_command,
     restore_official_canary,
     restore_official_hookwatch,
 )
@@ -119,6 +120,16 @@ def test_restore_prefers_verify_cwd_over_nested_leftover(tmp_path: Path):
     assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "nested leftover" in (nested / "src" / "App.tsx").read_text(encoding="utf-8")
     assert not (app / "itty-router.js").exists()
+
+
+def test_maybe_restore_for_command_rewrites_hookwatch_before_npm(tmp_path: Path):
+    app = _stub_tree(tmp_path)
+    note = maybe_restore_for_command(app, "npm run verify")
+    assert note.startswith("[boss] sandbox.restore")
+    assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert not (app / "playwright.config.js").exists()
+    assert "node server.mjs" in (app / "playwright.config.ts").read_text(encoding="utf-8")
+    assert maybe_restore_for_command(app, "python3 -m unittest") == ""
 
 
 def test_restore_from_monorepo_root_does_not_write_sandbox_root(tmp_path: Path):

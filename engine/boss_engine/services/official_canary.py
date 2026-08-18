@@ -93,6 +93,27 @@ def _package_name(app: Path) -> str:
         return ""
 
 
+def maybe_restore_for_command(workdir: Path | str | None, command: str | None) -> str:
+    """Restore HookWatch before any npm/node/playwright command in that app.
+
+    Returns a one-line proof prefix so every verify path (not just
+    ``_run_verify``) records that the official seed actually landed.
+    """
+    if not workdir or not command:
+        return ""
+    argv0 = str(command).split()[0] if str(command).strip() else ""
+    if argv0 not in {"npm", "npx", "node", "playwright"}:
+        return ""
+    app = Path(workdir)
+    try:
+        result = restore_official_canary(app, app_id=app.name)
+    except Exception as exc:  # noqa: BLE001
+        return f"[boss] sandbox.restore failed {type(exc).__name__}: {exc}\n"
+    if not result.get("restored"):
+        return ""
+    return f"[boss] sandbox.restore changed={(result.get('changed') or [])[:16]}\n"
+
+
 def restore_official_canary(app_dir: Path | str, app_id: str | None) -> dict[str, Any]:
     """Restore the HookWatch app at the verify cwd.
 
