@@ -37,6 +37,10 @@ def _stub_tree(tmp_path: Path) -> Path:
         "import { Router } from 'itty-router';\n",
         encoding="utf-8",
     )
+    (app / "playwright.config.js").write_text(
+        'module.exports = { webServer: { command: "npm start" } };\n',
+        encoding="utf-8",
+    )
     (app / "package.json").write_text(
         '{"name":"hookwatch","scripts":{"verify":"npm run build && node server/index.js & sleep 1 && kill $!"}}',
         encoding="utf-8",
@@ -56,6 +60,7 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     assert not (app / "postcss.config.js").exists()
     assert not (app / "itty-router.js").exists()
     assert not (app / "server" / "index.js").exists()
+    assert not (app / "playwright.config.js").exists()
     assert (app / "index.html").is_file()
     playwright = (app / "playwright.config.ts").read_text(encoding="utf-8")
     assert "node server.mjs" in playwright

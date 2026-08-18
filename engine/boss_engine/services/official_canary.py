@@ -60,6 +60,9 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
         "tailwind.config.js",
         "itty-router.js",
         "db.js",
+        "playwright.config.js",
+        "playwright.config.mjs",
+        "playwright.config.cjs",
     ):
         extra = app / leftover
         if extra.is_file():

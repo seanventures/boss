@@ -1806,7 +1806,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         last_verify_cwd = None
         last_verify_output = ""
 
-        def _run_verify():
+        def _run_verify(*, record: bool = True):
             """Authoritative test command, scoped to the official app directory."""
             nonlocal last_verify_cwd, last_verify_output
             cwd = verification_target.resolve_verify_cwd(root, app_id=_app_id)
@@ -1865,14 +1865,31 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     cwd=str(cwd),
                     timeout=install_timeout,
                 )
+            # npm install / the implementer can recreate leftover Playwright
+            # configs. Force the official HookWatch tree again immediately
+            # before the authoritative command so e2e cannot start itty-router
+            # or a metrics stub.
+            try:
+                forced = verification_target.prepare_web_verify_env(
+                    cwd,
+                    scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
+                    app_id=_app_id,
+                )
+                prep_note += (
+                    f"[boss] pre-verify restore restored="
+                    f"{bool((forced.get('restored') or {}).get('restored'))} "
+                    f"changed={(forced.get('changed') or [])[:16]}\n"
+                )
+            except Exception as exc:  # noqa: BLE001
+                prep_note += f"[boss] pre-verify restore failed: {type(exc).__name__}: {exc}\n"
             result = sandbox.run(test_cmd, cwd=str(cwd))
-            last_verify_output = (
+            output = (
                 prep_note
                 + ((result.stdout or "") + "\n" + (result.stderr or ""))
             )[-4000:]
-            if result.ok and verification_target.verify_output_disproves_pass(
-                last_verify_output
-            ):
+            if record:
+                last_verify_output = output
+            if result.ok and verification_target.verify_output_disproves_pass(output):
                 from dataclasses import replace as _dc_replace
 
                 result = _dc_replace(
@@ -2489,6 +2506,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     root,
                 )
 
+        # Freeze implement-time verify so later panel/mutation probes cannot
+        # replace the official /report evidence.
+        official_verify_output = last_verify_output
+        official_tests_passed = tests_passed
+        official_test_exit = test_exit_code
+
         # QUALITY LOOP — one bounded improve pass after a green authoritative test run
         # when UI/UX evidence is thin. Frozen tests stay frozen. If the pass breaks
         # tests, restore the last green implementation files.
@@ -2547,6 +2570,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     if q_ok:
                         tests_passed = True
                         test_exit_code = q_test.exit_code
+                        official_tests_passed = True
+                        official_test_exit = q_test.exit_code
+                        official_verify_output = last_verify_output
                         impl_files = [
                             fc.path for fc in sandbox.diff() if not _is_test_path(fc.path)
                         ] or impl_files
@@ -2680,7 +2706,13 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                       engine_override="echo")
                     panel["full"] = bool(rr.tests_passed)
                 else:
-                    panel["full"] = bool(_run_verify().ok)   # APP-3
+                    # Official canaries already ran the authoritative suite
+                    # during implement. Re-running here clobbers last_verify_output
+                    # and can start a leftover webServer. Reuse that result.
+                    if _app_id:
+                        panel["full"] = bool(tests_passed)
+                    else:
+                        panel["full"] = bool(_run_verify(record=False).ok)
 
             def _do_consistency():
                 set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id,
@@ -2834,7 +2866,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         a, m = _route("check_tests")
                         r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
                         cost += int(r5.get("cost_usd_micros") or 0)
-                        mut = _run_verify()
+                        mut = _run_verify(record=False)
                         mutation_caught = not bool(mut.ok)
                         for p, content in orig.items():
                             (root / p).write_text(content, encoding="utf-8")
@@ -3041,11 +3073,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             "substrate": "microvm" if use_microvm else "local",
             "sandbox_task_ids": guest_vm_ids,
             "test_author_independent": do_separate_tests, "reviewer_independent": do_review,
-            "tests_passed": tests_passed, "adversarial_verdict": verdict,
+            "tests_passed": official_tests_passed, "adversarial_verdict": verdict,
             "test_files": test_files, "impl_files": impl_files,
-            "test_command": test_cmd, "test_exit_code": test_exit_code,
+            "test_command": test_cmd, "test_exit_code": official_test_exit,
             "verify_cwd": last_verify_cwd,
-            "last_verify_output": last_verify_output,
+            "last_verify_output": official_verify_output or last_verify_output,
             "tests": (
                 [{
                     "command": test_cmd,
@@ -3192,6 +3224,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     # (regressions_ok = panel["full"]), so one execution refreshes both gates.
                     _post = _run_verify()
                     tests_passed = bool(_post.ok)
+                    official_tests_passed = tests_passed
+                    official_test_exit = _post.exit_code
+                    official_verify_output = last_verify_output
                     gates["written_tests_pass"] = tests_passed
                     if "nothing_broke" in gates:
                         gates["nothing_broke"] = tests_passed
