@@ -136,6 +136,12 @@ const ICONS = {
 
 // THE FULL CONSOLE LIVES HERE. Editions SUBTRACT from it; they never define it.
 //
+// Order inside a group is the ORDER OF WORK, not the order things were built: research it
+// (Discovery), spec it (Meetings), build it (Factory), approve it (Approvals), ship it (CI/CD),
+// watch it (Monitoring). It had drifted into an accretion — Approvals and Task Board sat above
+// Discovery because they existed first — so the sidebar described the codebase's history
+// instead of the operator's path.
+//
 // Activity log, Reliability and Evidence were briefly deleted from this list to get them out
 // of the Community sidebar. That hid them everywhere — Enterprise and Cloud too — which is not
 // what "cut from Community" means. The edition allowlist in lib/edition.ts is the only place
@@ -146,22 +152,20 @@ const ICONS = {
 // yet (incidents: 0 rows, drift_reports: 0), and Activity log holds 47,921 events of which
 // ~75% are a single internal audit-export event — not empty, unreadable.
 const AREAS: AreaDef[] = [
-  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
-  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
+  { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
+  { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
+  { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
+  { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
+  { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
+  { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "metatron", label: "Metatron", sub: "Always-on captain: chat, goals, validated overwatch", group: "Run", icon: ICONS.metatron },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
-  { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
   { id: "activity", label: "Activity log", sub: "Searchable events, steps, failures, stuck work", group: "Run", icon: ICONS.activity },
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
-  { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
-  { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
-  { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
-  { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
-  { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
@@ -177,6 +181,8 @@ const AREAS: AreaDef[] = [
   { id: "capabilities", label: "Capabilities", sub: "Agent tools & MCP servers — discover, audit, extend", group: "Platform", icon: ICONS.capabilities },
   { id: "studio", label: "Agent Studio", sub: "Build focused always-on agents, then compose full studio roles", group: "Platform", icon: ICONS.studio },
   { id: "sandboxes", label: "Sandboxes", sub: "Execution plane — inspect sandboxes & governed console", group: "Platform", icon: ICONS.sandboxes },
+  { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
+  { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
   {
     id: "enterprise",
     label: "Editions & SSO",
