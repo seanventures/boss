@@ -69,7 +69,8 @@ _STUB_SCRIPT = re.compile(
     r"""(?:^|[;&|])\s*(?:echo\s+|process\.exit\(0\)|exit\s+0\b)
         |skipping
         |\|\|\s*(?:true|exit\s+0)\b
-        |^\s*true\s*$""",
+        |^\s*true\s*$
+        |sleep\s+\d+\s*&&\s*kill""",
     re.I | re.X,
 )
 _BARE_VITE = re.compile(r"(^|[;&|]\s*)vite\b")
@@ -350,6 +351,14 @@ def honest_verify_status(
     return "pass"
 
 
+def _e2e_is_placeholder(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return "placeholder passing test" in text or "expect(true).toBeTruthy()" in text
+
+
 def _existing_e2e_specs(app_dir: Path) -> list[Path]:
     found: list[Path] = []
     for folder in (app_dir / "e2e", app_dir / "tests" / "e2e"):
@@ -407,8 +416,14 @@ def seed_acceptance_e2e(
         )
         changed.append("add:playwright.config.ts")
 
-    if _existing_e2e_specs(app):
+    existing = _existing_e2e_specs(app)
+    live_specs = [path for path in existing if not _e2e_is_placeholder(path)]
+    if live_specs:
         return {"changed": changed, "seeded_specs": 0, "reason": "specs_exist"}
+    for path in existing:
+        if _e2e_is_placeholder(path):
+            path.unlink()
+            changed.append(f"delete:{path.name}")
 
     e2e_dir = app / "e2e"
     e2e_dir.mkdir(parents=True, exist_ok=True)
@@ -439,14 +454,19 @@ def prepare_web_verify_env(
     app_dir: Path | str,
     *,
     scenarios: list[str] | None = None,
+    app_id: str | None = None,
 ) -> dict[str, Any]:
     """Harden package.json, seed missing e2e, and name install commands."""
+    from .official_canary import restore_official_canary
+
+    restored = restore_official_canary(app_dir, app_id)
     hardened = harden_web_package(app_dir)
     seeded = seed_acceptance_e2e(app_dir, scenarios)
     hardened["seeded"] = seeded
+    hardened["restored"] = restored
     hardened["changed"] = list(hardened.get("changed") or []) + list(
         seeded.get("changed") or []
-    )
+    ) + list(restored.get("changed") or [])
     hardened["install_command"] = NPM_INSTALL_CMD
     hardened["browser_install_command"] = PLAYWRIGHT_INSTALL_CMD
     return hardened

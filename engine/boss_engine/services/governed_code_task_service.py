@@ -1822,6 +1822,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 prep = verification_target.prepare_web_verify_env(
                     cwd,
                     scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
+                    app_id=_app_id,
                 )
             except Exception:  # noqa: BLE001
                 prep = {
