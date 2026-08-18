@@ -134,16 +134,17 @@ const ICONS = {
   components: SquaresFour,
 } as const;
 
-// Activity log, Reliability and QA/Evidence are OFF the nav, deliberately and reversibly.
+// THE FULL CONSOLE LIVES HERE. Editions SUBTRACT from it; they never define it.
 //
-// Reliability and QA had nothing behind them — incidents: 0 rows, drift_reports: 0 — so they
-// were menu items promising a screen that could only ever be empty. Activity log is the
-// opposite problem: 47,921 events, of which ~75% are one internal audit-export event, so it
-// reads as noise rather than as a log. A nav entry that cannot reward a click costs more than
-// it gives.
+// Activity log, Reliability and Evidence were briefly deleted from this list to get them out
+// of the Community sidebar. That hid them everywhere — Enterprise and Cloud too — which is not
+// what "cut from Community" means. The edition allowlist in lib/edition.ts is the only place
+// that decides what a Community operator sees; this list stays complete so nothing is lost by
+// hiding it somewhere else.
 //
-// Nothing is deleted: the areas, their sections and their components remain, and ?area=activity
-// / reliability / reports still render them. Restoring one is a single line here.
+// Why those three are cut from Community: Reliability and Evidence have nothing behind them
+// yet (incidents: 0 rows, drift_reports: 0), and Activity log holds 47,921 events of which
+// ~75% are a single internal audit-export event — not empty, unreadable.
 const AREAS: AreaDef[] = [
   { id: "foundations", label: "Foundations", sub: "Design system — tokens, type, motion, status language", group: "Platform", icon: ICONS.foundations },
   { id: "components", label: "Components", sub: "Component library — buttons, composer, orbs, overlays", group: "Platform", icon: ICONS.components },
@@ -153,6 +154,7 @@ const AREAS: AreaDef[] = [
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
+  { id: "activity", label: "Activity log", sub: "Searchable events, steps, failures, stuck work", group: "Run", icon: ICONS.activity },
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
@@ -161,7 +163,9 @@ const AREAS: AreaDef[] = [
   { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
+  { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
   { id: "ai-sre", label: "AI SRE", sub: "Honest capability ledger — category, status, and remaining gap", group: "Run", icon: ICONS["ai-sre"] },
+  { id: "reports", label: "Evidence", sub: "Throughput, receipts, cost, and agent scorecards", group: "Run", icon: ICONS.reports },
   { id: "budget", label: "Budget", sub: "Live spend, reservations, token efficiency, and cap pressure", group: "Govern", icon: ICONS.budget },
   { id: "pipeline", label: "Coding Pipeline", sub: "VAG — cheap models build, frontier models verify · profiles, tiers & run costs", group: "Govern", icon: ICONS.pipeline },
   { id: "comms", label: "Communications", sub: "Outbox discipline before external sends", group: "Govern", icon: ICONS.comms },

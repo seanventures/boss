@@ -133,6 +133,13 @@ export function editionDisplayName(editionId?: string | null): string {
  */
 const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
 
+// The Community cut. The full console is defined in ConsoleShell's AREAS; this list is the
+// only thing that decides what a Community operator sees in the sidebar, so an area dropped
+// here is still present for Enterprise and Cloud — and still reachable by ?area= for everyone.
+//
+// Not listed, deliberately: activity (47,921 events, ~75% one internal audit event — not
+// empty, unreadable), reliability (incidents: 0 rows) and reports/Evidence
+// (drift_reports: 0). They return here the moment they have something to show.
 const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "overview",
   "work",
