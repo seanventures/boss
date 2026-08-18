@@ -120,14 +120,14 @@ describe("community nav honesty helpers", () => {
   });
 
   it("Community v1 primary nav is the small home cut, not the full console", () => {
+    // Activity log, Reliability and QA/Evidence were dropped from the nav: two had zero rows
+    // behind them (incidents, drift_reports) and the third was 75% one internal audit event.
+    // They remain reachable via ?area=, so this asserts the NAV cut, not their existence.
     const shown = [
       "overview",
-      "activity",
       "work",
       "decisions",
-      "reliability",
       "code_tasks",
-      "reports",
       "budget",
       "enterprise",
     ];
@@ -265,13 +265,14 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).not.toContain('data-area-nav="infra"');
     expect(html).not.toContain('data-area-nav="ops"');
     expect(html).not.toContain('data-area-nav="org"');
-    expect(html).toContain('data-area-nav="activity"');
     expect(html).toContain('data-area-nav="work"');
     expect(html).toContain('data-area-nav="decisions"');
-    expect(html).toContain('data-area-nav="reliability"');
     expect(html).toContain('data-area-nav="code_tasks"');
-    expect(html).toContain('data-area-nav="reports"');
     expect(html).toContain('data-area-nav="budget"');
+    // Removed from the nav on 2026-08-18 — empty or unreadable, see ConsoleShell's AREAS note.
+    expect(html).not.toContain('data-area-nav="activity"');
+    expect(html).not.toContain('data-area-nav="reliability"');
+    expect(html).not.toContain('data-area-nav="reports"');
     const enterpriseNav = html.match(
       /data-area-nav="enterprise"[\s\S]*?<\/button>/,
     )?.[0] ?? "";

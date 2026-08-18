@@ -135,12 +135,9 @@ const COMMUNITY_HIDDEN_PRIMARY_NAV = new Set(["foundations", "components"]);
 
 const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "overview",
-  "activity",
   "work",
   "decisions",
-  "reliability",
   "code_tasks",
-  "reports",
   "budget",
   "enterprise",
 
