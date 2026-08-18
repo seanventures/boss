@@ -489,7 +489,12 @@ def start_followup_task(
         child_fctx["official"] = True
     bench = fctx.get("qa_benchmark")
     if isinstance(bench, dict) and bench:
-        child_fctx["qa_benchmark"] = dict(bench)
+        try:
+            from .benchmark_apps import hydrate_official_benchmark
+
+            child_fctx["qa_benchmark"] = hydrate_official_benchmark(bench)
+        except Exception:  # noqa: BLE001 — catalog miss must not drop lineage
+            child_fctx["qa_benchmark"] = dict(bench)
     parent_design = (run.get("state") or {}).get("design")
     if isinstance(parent_design, dict) and str(parent_design.get("plan") or "").strip():
         child_fctx["inherited_design"] = dict(parent_design)

@@ -1,5 +1,14 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-17 official PRD-as-plan hydrate (◐)
+
+- Official follow-ups stored slim `qa_benchmark` (id/name only), so
+  `/report` plan stayed `not_recorded` even when `npm run verify` passed.
+- `hydrate_official_benchmark` fills catalog prompt/scenarios; official
+  spec.instructions also count as the PRD. Unknown ids stay not_recorded.
+- HookWatch still fails typecheck (TS7053). ApproveIt/BugBox should certify
+  once this API is live. Not public GA.
+
 ## 2026-08-17 Metatron theater / command (◐)
 
 - Metatron overwatch now overlays official runs, captain assignments,

@@ -200,6 +200,26 @@ def get_benchmark_app(benchmark_id: str) -> dict[str, Any] | None:
     return next((item for item in list_benchmark_apps() if item["id"] == target), None)
 
 
+def hydrate_official_benchmark(benchmark: dict[str, Any] | None) -> dict[str, Any]:
+    """Fill prompt/scenarios from the catalog when a follow-up dropped them.
+
+    Official lineage often stores a slim qa_benchmark (id + name only). The
+    catalog entry is the official PRD; using it is not inventing a plan.
+    Unknown ids stay as stored.
+    """
+    bench = dict(benchmark or {})
+    catalog = get_benchmark_app(str(bench.get("id") or ""))
+    if catalog is None:
+        return bench
+    if not str(bench.get("prompt") or "").strip() and catalog.get("prompt"):
+        bench["prompt"] = catalog["prompt"]
+    if not (bench.get("acceptance_scenarios") or []) and catalog.get("acceptance_scenarios"):
+        bench["acceptance_scenarios"] = list(catalog["acceptance_scenarios"])
+    if not str(bench.get("name") or "").strip():
+        bench["name"] = catalog.get("name") or bench.get("id")
+    return bench
+
+
 def benchmark_task_input(benchmark_id: str) -> dict[str, Any]:
     """Materialize the pinned task contract passed to the governed code-task runtime."""
     benchmark = get_benchmark_app(benchmark_id)
@@ -964,7 +984,9 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
     """Render only observed evidence; an absent command is never treated as a pass."""
     spec = run.get("spec") or {}
     context = run.get("finalize_ctx") or {}
-    benchmark = context.get("qa_benchmark") or spec.get("qa_benchmark") or {}
+    benchmark = hydrate_official_benchmark(
+        context.get("qa_benchmark") or spec.get("qa_benchmark") or {}
+    )
     verify = observed_verify(run)
     from .verification_target import honest_verify_status
 
@@ -975,9 +997,11 @@ def completion_report(run: dict[str, Any], *, llm_calls: list[dict[str, Any]] | 
     run = apply_observed_test_outcomes(run, verify_status=verify_status)
     plan = (run.get("state") or {}).get("design")
     inherited = context.get("inherited_design")
+    official_prd = str(spec.get("instructions") or "").strip()
     bench_plan = (
         str(benchmark.get("prompt") or "").strip()
         or any(str(item).strip() for item in (benchmark.get("acceptance_scenarios") or []))
+        or (bool(context.get("official") or benchmark.get("official")) and bool(official_prd))
     )
     plan_status = (
         "pass"

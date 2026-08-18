@@ -58,6 +58,59 @@ def test_completion_report_never_certifies_missing_evidence():
     assert "not certified" in report["message"]
 
 
+def test_completion_report_hydrates_official_prd_when_followup_dropped_scenarios():
+    """Slim official qa_benchmark still has a plan: the catalog PRD."""
+    report = completion_report(
+        {
+            "id": "crun_slim_official",
+            "status": "completed",
+            "spec": {
+                "instructions": (
+                    "Build ApproveIt for submitting and approving expense requests."
+                )
+            },
+            "state": {
+                "design": {},
+                "tests": [
+                    {"command": "npm run verify", "exit_code": 0, "timed_out": False}
+                ],
+                "tests_passed": True,
+                "test_command": "npm run verify",
+                "test_exit_code": 0,
+            },
+            "finalize_ctx": {
+                "official": True,
+                "qa_benchmark": {
+                    "id": "approveit",
+                    "name": "ApproveIt",
+                    "official": True,
+                },
+            },
+        }
+    )
+    assert report["results"][0]["status"] == "pass"
+    assert report["results"][1]["status"] == "pass"
+    assert report["passed"] is True
+    assert report["honesty"]["invented_scores"] == []
+
+
+def test_completion_report_does_not_invent_plan_for_unknown_benchmark():
+    report = completion_report(
+        {
+            "id": "crun_unknown",
+            "status": "completed",
+            "state": {
+                "tests": [
+                    {"command": "npm run verify", "exit_code": 0, "timed_out": False}
+                ]
+            },
+            "finalize_ctx": {"qa_benchmark": {"id": "not-a-catalog-app"}},
+        }
+    )
+    assert report["results"][0]["status"] == "not_recorded"
+    assert report["passed"] is False
+
+
 def test_completion_report_requires_plan_and_successful_authoritative_verify():
     benchmark = benchmark_task_input("approveit")["finalize_ctx"]["qa_benchmark"]
     report = completion_report(
