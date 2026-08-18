@@ -32,6 +32,7 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
     app = Path(app_dir)
     changed: list[str] = []
     files = {
+        "index.html": _INDEX,
         "src/main.tsx": _MAIN,
         "src/App.tsx": _APP,
         "src/lib/utils.ts": _UTILS,
@@ -57,15 +58,15 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
         "postcss.config.mjs",
         "tailwind.config.ts",
         "tailwind.config.js",
+        "itty-router.js",
+        "db.js",
     ):
         extra = app / leftover
-        if extra.exists():
+        if extra.is_file():
             extra.unlink()
             changed.append(f"delete:{leftover}")
     leftover_server = app / "server" / "index.js"
-    if leftover_server.is_file() and "itty-router" in leftover_server.read_text(
-        encoding="utf-8", errors="ignore"
-    ):
+    if leftover_server.is_file():
         leftover_server.unlink()
         changed.append("delete:server/index.js")
     placeholder = app / "e2e" / "home.spec.ts"
@@ -78,24 +79,32 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
     return {"changed": changed, "restored": True}
 
 
-def restore_official_canary(app_dir: Path | str, app_id: str | None) -> dict[str, Any]:
-    """Restore into hookwatch/, never the sandbox monorepo root."""
-    app = Path(app_dir)
-    nested = app / "hookwatch"
-    if (nested / "package.json").is_file():
-        return restore_official_hookwatch(nested)
-    named = str(app_id or "").strip().strip("/").lower()
-    pkg_name = ""
+def _package_name(app: Path) -> str:
     try:
         import json
 
-        pkg_name = str(
+        return str(
             (json.loads((app / "package.json").read_text(encoding="utf-8")) or {}).get("name") or ""
         ).strip().lower()
     except Exception:
-        pkg_name = ""
-    if named == "hookwatch" or app.name == "hookwatch" or pkg_name == "hookwatch":
+        return ""
+
+
+def restore_official_canary(app_dir: Path | str, app_id: str | None) -> dict[str, Any]:
+    """Restore the HookWatch app at the verify cwd.
+
+    If cwd is already ``hookwatch/`` (dir or package name), restore HERE even
+    when a leftover ``hookwatch/hookwatch/`` tree exists. Only walk into
+    ``hookwatch/`` when cwd is the sandbox monorepo root. ``app_id`` alone
+    must not restore the monorepo root.
+    """
+    app = Path(app_dir)
+    if app.name == "hookwatch" or _package_name(app) == "hookwatch":
         return restore_official_hookwatch(app)
+    nested = app / "hookwatch"
+    named = str(app_id or "").strip().strip("/").lower()
+    if (nested / "package.json").is_file() or named == "hookwatch":
+        return restore_official_hookwatch(nested)
     return {"changed": [], "restored": False}
 
 
@@ -119,6 +128,7 @@ def _ensure_start_script(app: Path) -> None:
     scripts["build"] = "npx --package=vite vite build"
     scripts["test:e2e"] = "npx --package=@playwright/test playwright test"
     scripts["verify"] = "npm run typecheck && npm run build && npm run test:e2e"
+    payload["type"] = "module"
     deps = payload.setdefault("dependencies", {})
     if isinstance(deps, dict):
         deps.setdefault("react", "^18.2.0")
@@ -181,6 +191,20 @@ export default defineConfig({
 });
 """
 
+_INDEX = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HookWatch</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+"""
+
 _PLAYWRIGHT = """import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
@@ -188,9 +212,9 @@ export default defineConfig({
   timeout: 30_000,
   use: { baseURL: "http://127.0.0.1:4173", headless: true },
   webServer: {
-    command: "npm run build && PORT=4173 node server.mjs",
+    command: "sh -c 'fuser -k 4173/tcp >/dev/null 2>&1 || true; exec env PORT=4173 node server.mjs'",
     url: "http://127.0.0.1:4173/api/health",
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: true,
     timeout: 120_000,
   },
 });
@@ -303,7 +327,15 @@ const server = http.createServer(async (req, res) => {
   return serveStatic(req, res);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(`hookwatch port ${PORT} in use`);
+    process.exit(1);
+  }
+  throw err;
+});
+
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`hookwatch listening on ${PORT}`);
 });
 """

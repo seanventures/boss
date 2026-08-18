@@ -80,6 +80,8 @@ _PLAYWRIGHT_BARE = re.compile(
 )
 _VERIFY_DISPROOF = re.compile(
     r"webServer was not able to start"
+    r"|webServer exited early"
+    r"|Process from config\.webServer exited early"
     r"|Executable doesn.?t exist"
     r"|placeholder passing test"
     r"|expect\(true\)\.toBeTruthy\(\)"

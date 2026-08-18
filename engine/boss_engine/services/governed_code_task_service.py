@@ -1818,18 +1818,27 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 verification_target.ensure_verify_script(cwd)
             except Exception:  # noqa: BLE001 — never fail a run on script bookkeeping
                 pass
+            prep_note = ""
             try:
                 prep = verification_target.prepare_web_verify_env(
                     cwd,
                     scenarios=(fctx.get("qa_benchmark") or {}).get("acceptance_scenarios"),
                     app_id=_app_id,
                 )
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 prep = {
                     "install_command": verification_target.NPM_INSTALL_CMD,
                     "browser_install_command": verification_target.PLAYWRIGHT_INSTALL_CMD,
                     "changed": [],
+                    "error": f"{type(exc).__name__}: {exc}",
                 }
+                prep_note = f"[boss] prepare_web_verify_env failed: {prep['error']}\n"
+            else:
+                restored = prep.get("restored") if isinstance(prep.get("restored"), dict) else {}
+                prep_note = (
+                    f"[boss] restore restored={bool(restored.get('restored'))} "
+                    f"changed={(prep.get('changed') or [])[:16]}\n"
+                )
             if str(test_cmd or "").startswith("npm "):
                 install_timeout = max(
                     300,
@@ -1842,7 +1851,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 )
                 if install.exit_code != 0:
                     last_verify_output = (
-                        (install.stdout or "") + "\n" + (install.stderr or "")
+                        prep_note
+                        + (install.stdout or "")
+                        + "\n"
+                        + (install.stderr or "")
                     )[-4000:]
                     return install
                 sandbox.run(
@@ -1854,7 +1866,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     timeout=install_timeout,
                 )
             result = sandbox.run(test_cmd, cwd=str(cwd))
-            last_verify_output = ((result.stdout or "") + "\n" + (result.stderr or ""))[-4000:]
+            last_verify_output = (
+                prep_note
+                + ((result.stdout or "") + "\n" + (result.stderr or ""))
+            )[-4000:]
             if result.ok and verification_target.verify_output_disproves_pass(
                 last_verify_output
             ):
@@ -2786,33 +2801,47 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # check tests (mutation) — plant one bug, expect the tests to FAIL. In the
             # micro-VM substrate the mutation runs in ITS OWN VM against the committed
             # work branch and its diff is simply never committed — nothing to restore.
-            with _transaction(engine) as c:
-                _phase(c, "check_tests")
-            if use_microvm:
-                if impl_files:
-                    res5 = _guest_stage("check_tests", "check_tests",
-                                        _mutate_prompt(impl_files), test_cmds=[test_cmd],
-                                        stage_title=f"Mutation probe — {title}")
-                    r5 = {"cost_usd_micros": res5.cost_usd_micros,
-                          "summary": res5.summary, "model": stage_routes["check_tests"]["model"]}
-                    # A real suite FAILS on the planted bug. Only meaningful if the
-                    # mutator actually changed an implementation file.
-                    mutated = any(not _is_test_path(fc.path) for fc in res5.diff)
-                    mutation_caught = (not bool(res5.tests_passed)) if mutated else None
+            # Official /report reads tests_passed + last_verify_output. The mutation
+            # probe is supposed to fail; never let that failure clobber implement-time
+            # evidence. Skip the probe when authoritative verify already failed.
+            implement_verify_output = last_verify_output
+            implement_tests_passed = tests_passed
+            implement_test_exit = test_exit_code
+            implement_verify_cwd = last_verify_cwd
+            if not tests_passed:
+                mutation_caught = None
             else:
-                # serial: it edits the workdir, then restores it so the PR diff is
-                # unchanged. snapshot impl, plant one bug, restore after.
-                orig = {p: (root / p).read_text(errors="ignore")
-                        for p in impl_files if (root / p).exists()}
-                if orig:
-                    set_llm_context(stage="check_tests")
-                    a, m = _route("check_tests")
-                    r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
-                    cost += int(r5.get("cost_usd_micros") or 0)
-                    mut = _run_verify()
-                    mutation_caught = not bool(mut.ok)
-                    for p, content in orig.items():
-                        (root / p).write_text(content, encoding="utf-8")
+                with _transaction(engine) as c:
+                    _phase(c, "check_tests")
+                if use_microvm:
+                    if impl_files:
+                        res5 = _guest_stage("check_tests", "check_tests",
+                                            _mutate_prompt(impl_files), test_cmds=[test_cmd],
+                                            stage_title=f"Mutation probe — {title}")
+                        r5 = {"cost_usd_micros": res5.cost_usd_micros,
+                              "summary": res5.summary, "model": stage_routes["check_tests"]["model"]}
+                        # A real suite FAILS on the planted bug. Only meaningful if the
+                        # mutator actually changed an implementation file.
+                        mutated = any(not _is_test_path(fc.path) for fc in res5.diff)
+                        mutation_caught = (not bool(res5.tests_passed)) if mutated else None
+                else:
+                    # serial: it edits the workdir, then restores it so the PR diff is
+                    # unchanged. snapshot impl, plant one bug, restore after.
+                    orig = {p: (root / p).read_text(errors="ignore")
+                            for p in impl_files if (root / p).exists()}
+                    if orig:
+                        set_llm_context(stage="check_tests")
+                        a, m = _route("check_tests")
+                        r5 = a.run_role(_mutate_prompt(list(orig.keys())), root, model=m)
+                        cost += int(r5.get("cost_usd_micros") or 0)
+                        mut = _run_verify()
+                        mutation_caught = not bool(mut.ok)
+                        for p, content in orig.items():
+                            (root / p).write_text(content, encoding="utf-8")
+                        last_verify_output = implement_verify_output
+                        tests_passed = implement_tests_passed
+                        test_exit_code = implement_test_exit
+                        last_verify_cwd = implement_verify_cwd
 
         # IaC VERIFY LANE (spec 05 §3.2 / T3): whenever the produced diff touches
         # Terraform/HCL files, run fmt/validate/lint/security/plan-dry with NO cloud

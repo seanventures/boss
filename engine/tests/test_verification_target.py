@@ -195,6 +195,9 @@ def test_honest_verify_status_rejects_swallowed_webserver_failure():
 
     output = "Error: Process from config.webServer was not able to start. Exit code: 1"
     assert verify_output_disproves_pass(output) is True
+    assert verify_output_disproves_pass(
+        "Error: Process from config.webServer exited early."
+    ) is True
     assert honest_verify_status({"command": "npm run verify", "exit_code": 0}, output) == "fail"
     assert honest_verify_status({"command": "npm run verify", "exit_code": 0}, "  ✓ create") == "pass"
     assert honest_verify_status(None, "") == "not_recorded"

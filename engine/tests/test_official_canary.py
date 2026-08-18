@@ -28,6 +28,15 @@ def _stub_tree(tmp_path: Path) -> Path:
         "export default { plugins: { tailwindcss: {}, autoprefixer: {} } };\n",
         encoding="utf-8",
     )
+    (app / "itty-router.js").write_text(
+        "export const Router = () => ({ all() { return this; }, fetch() {} });\n",
+        encoding="utf-8",
+    )
+    (app / "server").mkdir()
+    (app / "server" / "index.js").write_text(
+        "import { Router } from 'itty-router';\n",
+        encoding="utf-8",
+    )
     (app / "package.json").write_text(
         '{"name":"hookwatch","scripts":{"verify":"npm run build && node server/index.js & sleep 1 && kill $!"}}',
         encoding="utf-8",
@@ -45,6 +54,12 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     assert not (app / "src" / "react-app.d.ts").exists()
     assert not (app / "e2e" / "home.spec.ts").exists()
     assert not (app / "postcss.config.js").exists()
+    assert not (app / "itty-router.js").exists()
+    assert not (app / "server" / "index.js").exists()
+    assert (app / "index.html").is_file()
+    playwright = (app / "playwright.config.ts").read_text(encoding="utf-8")
+    assert "node server.mjs" in playwright
+    assert "npm run build &&" not in playwright
     e2e = (app / "e2e" / "inbox.spec.ts").read_text(encoding="utf-8")
     assert "expect(true)" not in e2e
     assert "create inbox" in e2e.lower()
@@ -77,6 +92,35 @@ def test_prepare_restores_official_hookwatch_and_unstubs_verify(tmp_path: Path):
     assert prep["restored"]["restored"] is True
     import json
 
-    scripts = json.loads((app / "package.json").read_text(encoding="utf-8"))["scripts"]
+    payload = json.loads((app / "package.json").read_text(encoding="utf-8"))
+    scripts = payload["scripts"]
     assert "sleep" not in scripts["verify"]
     assert "typecheck" in scripts["verify"]
+    assert payload.get("type") == "module"
+
+
+def test_restore_prefers_verify_cwd_over_nested_leftover(tmp_path: Path):
+    app = _stub_tree(tmp_path)
+    nested = app / "hookwatch"
+    nested.mkdir()
+    (nested / "package.json").write_text('{"name":"nested-leftover"}', encoding="utf-8")
+    (nested / "src").mkdir()
+    (nested / "src" / "App.tsx").write_text(
+        "export function App() { return <div>nested leftover</div>; }\n",
+        encoding="utf-8",
+    )
+    result = restore_official_canary(app, app_id="hookwatch")
+    assert result["restored"] is True
+    assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "nested leftover" in (nested / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert not (app / "itty-router.js").exists()
+
+
+def test_restore_from_monorepo_root_does_not_write_sandbox_root(tmp_path: Path):
+    app = _stub_tree(tmp_path)
+    (tmp_path / "package.json").write_text('{"name":"boss-sandbox"}', encoding="utf-8")
+    result = restore_official_canary(tmp_path, app_id="hookwatch")
+    assert result["restored"] is True
+    assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert not (tmp_path / "server.mjs").exists()
+    assert not (tmp_path / "src" / "App.tsx").exists()
