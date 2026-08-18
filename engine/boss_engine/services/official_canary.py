@@ -73,8 +73,22 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
 
 
 def restore_official_canary(app_dir: Path | str, app_id: str | None) -> dict[str, Any]:
-    if str(app_id or "").strip().lower() == "hookwatch":
-        return restore_official_hookwatch(app_dir)
+    app = Path(app_dir)
+    named = str(app_id or "").strip().strip("/").lower()
+    pkg_name = ""
+    try:
+        import json
+
+        pkg_name = str(
+            (json.loads((app / "package.json").read_text(encoding="utf-8")) or {}).get("name") or ""
+        ).strip().lower()
+    except Exception:
+        pkg_name = ""
+    if named == "hookwatch" or app.name == "hookwatch" or pkg_name == "hookwatch":
+        return restore_official_hookwatch(app)
+    nested = app / "hookwatch"
+    if (nested / "package.json").is_file():
+        return restore_official_hookwatch(nested)
     return {"changed": [], "restored": False}
 
 
@@ -184,7 +198,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4173);
 const dist = path.join(__dirname, "dist");
 
-const inboxes = new Map();
+const DATA = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, "hookwatch.json")
+  : path.join(__dirname, ".hookwatch.json");
+
+function loadState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(DATA, "utf8"));
+    return new Map((raw || []).map((row) => [row.id, row]));
+  } catch {
+    return new Map();
+  }
+}
+
+function saveState(map) {
+  fs.mkdirSync(path.dirname(DATA), { recursive: true });
+  fs.writeFileSync(DATA, JSON.stringify([...map.values()]), "utf8");
+}
+
+const inboxes = loadState();
 
 function json(res, status, body) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -223,6 +255,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/inboxes") {
     const id = `inb_${Date.now().toString(36)}`;
     inboxes.set(id, { id, events: [] });
+    saveState(inboxes);
     return json(res, 201, { id, endpoint: `/api/inboxes/${id}/events` });
   }
   if (req.method === "GET" && url.pathname === "/api/inboxes") {
@@ -243,6 +276,7 @@ const server = http.createServer(async (req, res) => {
         timestamp: new Date().toISOString(),
       };
       inbox.events.unshift(event);
+      saveState(inboxes);
       return json(res, 200, event);
     }
     if (req.method === "GET" && parts.length === 3) {
@@ -250,6 +284,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && parts[3] === "clear") {
       inbox.events = [];
+      saveState(inboxes);
       return json(res, 200, { cleared: true });
     }
     if (req.method === "POST" && parts[3] === "events" && parts[5] === "replay") {
@@ -370,7 +405,7 @@ export default function App() {
           <ul>
             {events.map((row) => (
               <li key={row.id}>
-                <div>
+                <div data-testid="captured-event">
                   {row.method} {row.contentType} {row.timestamp}
                 </div>
                 <pre>{row.body}</pre>

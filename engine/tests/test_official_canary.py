@@ -2,6 +2,7 @@ from pathlib import Path
 
 from boss_engine.services.official_canary import (
     hookwatch_is_stubbed,
+    restore_official_canary,
     restore_official_hookwatch,
 )
 from boss_engine.services.verification_target import prepare_web_verify_env
@@ -52,6 +53,13 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     assert again["restored"] is True
     assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "hookwatch_active" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
+
+
+def test_restore_finds_hookwatch_by_directory_when_app_id_missing(tmp_path: Path):
+    app = _stub_tree(tmp_path)
+    result = restore_official_canary(app, app_id=None)
+    assert result["restored"] is True
+    assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
 
 
 def test_prepare_restores_official_hookwatch_and_unstubs_verify(tmp_path: Path):
