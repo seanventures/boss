@@ -158,7 +158,7 @@ const AREAS: AreaDef[] = [
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
-  { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, and observability suite", group: "Run", icon: ICONS.monitoring },
+  { id: "monitoring", label: "Observability", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "metatron", label: "Metatron", sub: "Always-on captain: chat, goals, validated overwatch", group: "Run", icon: ICONS.metatron },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },

@@ -6937,10 +6937,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         {/* Monitoring is its own area: "did it ship" and "is it working" are different
             questions asked at different times, and one page answering both buries whichever
             you did not come for. */}
-        <section className="panel-stack" data-area="monitoring" aria-label="Monitoring">
+        <section className="panel-stack" data-area="monitoring" aria-label="Observability">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Monitoring</span>
+              <span className="eyebrow">Observability</span>
               <h2>
                 {(!deploymentHealth?.targets?.length && !observability?.deployed)
                   ? "Not configured — health and dashboards appear after CI/CD onboarding."
