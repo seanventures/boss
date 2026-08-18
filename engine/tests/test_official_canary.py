@@ -23,6 +23,10 @@ def _stub_tree(tmp_path: Path) -> Path:
         'test("placeholder passing test", async () => { expect(true).toBeTruthy(); });\n',
         encoding="utf-8",
     )
+    (app / "postcss.config.js").write_text(
+        "export default { plugins: { tailwindcss: {}, autoprefixer: {} } };\n",
+        encoding="utf-8",
+    )
     (app / "package.json").write_text(
         '{"name":"hookwatch","scripts":{"verify":"npm run build && node server/index.js & sleep 1 && kill $!"}}',
         encoding="utf-8",
@@ -39,6 +43,7 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     assert "inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8").lower()
     assert not (app / "src" / "react-app.d.ts").exists()
     assert not (app / "e2e" / "home.spec.ts").exists()
+    assert not (app / "postcss.config.js").exists()
     e2e = (app / "e2e" / "inbox.spec.ts").read_text(encoding="utf-8")
     assert "expect(true)" not in e2e
     assert "create inbox" in e2e.lower()

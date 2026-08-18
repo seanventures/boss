@@ -48,6 +48,17 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
     if shim.exists():
         shim.unlink()
         changed.append("delete:src/react-app.d.ts")
+    for leftover in (
+        "postcss.config.js",
+        "postcss.config.cjs",
+        "postcss.config.mjs",
+        "tailwind.config.ts",
+        "tailwind.config.js",
+    ):
+        extra = app / leftover
+        if extra.exists():
+            extra.unlink()
+            changed.append(f"delete:{leftover}")
     placeholder = app / "e2e" / "home.spec.ts"
     if placeholder.is_file() and "placeholder passing test" in placeholder.read_text(
         encoding="utf-8", errors="ignore"
