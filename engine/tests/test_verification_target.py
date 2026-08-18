@@ -203,6 +203,11 @@ def test_honest_verify_status_rejects_swallowed_webserver_failure():
     assert honest_verify_status({"exit_code": 0}, stub_log) == "fail"
     node_stub = "> approveit@1.0.0 verify\n> node -e 'process.exit(0)'\n"
     assert verify_output_disproves_pass(node_stub) is True
+    sleep_kill = "> hookwatch@1.0.0 verify\n> npm run build && node server/index.js & sleep 1 && kill $!\n"
+    assert verify_output_disproves_pass(sleep_kill) is True
+    assert honest_verify_status({"exit_code": 0}, sleep_kill) == "fail"
+    missing = "Failed to load PostCSS config: Cannot find module 'tailwindcss'\n"
+    assert verify_output_disproves_pass(missing) is True
 
 
 def test_official_app_id_reads_benchmark_context():
