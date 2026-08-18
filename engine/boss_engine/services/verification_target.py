@@ -54,6 +54,8 @@ REQUIRED_WEB_DEV_DEPS = {
     "vite": "^5.3.1",
     "@playwright/test": "^1.45.0",
     "typescript": "^5.4.5",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
     "eslint": "^8.57.0",
     "eslint-plugin-react": "^7.34.3",
     "eslint-plugin-react-hooks": "^4.6.2",
@@ -78,6 +80,8 @@ _PLAYWRIGHT_BARE = re.compile(
 _VERIFY_DISPROOF = re.compile(
     r"webServer was not able to start"
     r"|Executable doesn.?t exist"
+    r"|placeholder passing test"
+    r"|expect\(true\)\.toBeTruthy\(\)"
     r"|error: unknown command"
     r"|vite: not found"
     r"|ENOENT"
@@ -288,6 +292,46 @@ def verify_output_disproves_pass(output: str | None) -> bool:
     """True when exit 0 still printed a swallowed runner failure."""
     text = str(output or "")
     return bool(text and _VERIFY_DISPROOF.search(text))
+
+
+_TSC_FILE = re.compile(
+    r"(?:^|\n)((?:[\w./-]+/)*[\w.-]+\.(?:ts|tsx|js|jsx))\(\d+,\d+\):",
+)
+
+
+def attach_failing_sources(
+    evidence: str,
+    root: Path,
+    *,
+    limit: int = 3,
+    max_chars: int = 2000,
+) -> str:
+    """Append the files tsc named so repair edits the real source, not a guess."""
+    text = str(evidence or "")
+    paths: list[str] = []
+    for match in _TSC_FILE.finditer(text):
+        rel = match.group(1).lstrip("./")
+        if rel not in paths:
+            paths.append(rel)
+    chunks: list[str] = []
+    for rel in paths[:limit]:
+        candidates = [root / rel, *root.glob(f"**/{rel}")]
+        found = next((p for p in candidates if p.is_file()), None)
+        if found is None:
+            continue
+        try:
+            body = found.read_text(encoding="utf-8")[:max_chars]
+        except OSError:
+            continue
+        shown = str(found.relative_to(root)) if found.is_relative_to(root) else rel
+        chunks.append(f"\n--- {shown} ---\n{body}")
+    if not chunks:
+        return text
+    return (
+        text
+        + "\n\nThe failing files currently contain (fix these; do not invent a new file):\n"
+        + "".join(chunks)
+    )
 
 
 def honest_verify_status(

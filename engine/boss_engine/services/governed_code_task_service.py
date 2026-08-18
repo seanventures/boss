@@ -2468,7 +2468,10 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     for p, content in tests_orig.items():
                         (root / p).write_text(content, encoding="utf-8")
             else:
-                evidence_text = f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}"
+                evidence_text = verification_target.attach_failing_sources(
+                    f"$ {test_cmd} (exit {test_exit_code})\n{fail_output[-3000:]}",
+                    root,
+                )
 
         # QUALITY LOOP — one bounded improve pass after a green authoritative test run
         # when UI/UX evidence is thin. Frozen tests stay frozen. If the pass breaks

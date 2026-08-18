@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from boss_engine.services.verification_target import (
+    attach_failing_sources,
     ensure_verify_script,
     official_app_id,
     resolve_verify_cwd,
@@ -235,6 +236,20 @@ def test_sandbox_verify_runs_inside_named_app_not_repo_root(tmp_path: Path):
     )
     assert result.exit_code == 0, result.stderr
     assert result.stdout.strip() == "hookwatch"
+
+
+def test_attach_failing_sources_includes_the_file_tsc_named(tmp_path: Path):
+    app = tmp_path / "hookwatch" / "src" / "lib"
+    app.mkdir(parents=True)
+    (app / "utils.ts").write_text("export const broken = (\n", encoding="utf-8")
+    evidence = (
+        "src/lib/utils.ts(6,4): error TS1109: Expression expected.\n"
+        "src/lib/utils.ts(8,4): error TS1109: Expression expected.\n"
+    )
+    attached = attach_failing_sources(evidence, tmp_path)
+    assert "--- hookwatch/src/lib/utils.ts ---" in attached
+    assert "export const broken" in attached
+    assert attach_failing_sources("all good", tmp_path) == "all good"
 
 
 def test_vite_scaffold_declares_verify_so_official_apps_are_not_root_gated():
