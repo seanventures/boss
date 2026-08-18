@@ -280,18 +280,23 @@ type EventRow = {
 
 export default function App() {
   const [inboxes, setInboxes] = useState<Inbox[]>([]);
-  const [active, setActive] = useState<string>("");
+  const [active, setActive] = useState<string>(
+    () => (typeof localStorage === "undefined" ? "" : localStorage.getItem("hookwatch_active") || ""),
+  );
   const [events, setEvents] = useState<EventRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function refresh() {
+  async function refresh(nextActive = active) {
     try {
       const list = await fetch("/api/inboxes").then((r) => r.json());
       setInboxes(list);
-      if (active) {
-        const detail = await fetch(`/api/inboxes/${active}`).then((r) => r.json());
+      const chosen = nextActive || list[0]?.id || "";
+      if (chosen && chosen !== active) setActive(chosen);
+      if (chosen) {
+        const detail = await fetch(`/api/inboxes/${chosen}`).then((r) => r.json());
         setEvents(detail.events || []);
+        localStorage.setItem("hookwatch_active", chosen);
       }
       setError(null);
     } catch (err) {
@@ -392,6 +397,7 @@ test("create inbox, capture webhook, persist after refresh, replay, clear", asyn
   await page.getByRole("button", { name: /send test webhook/i }).click();
   await expect(page.getByText(/application\\/json/i)).toBeVisible();
   await page.reload();
+  await page.getByRole("button", { name: /inbox /i }).first().click();
   await expect(page.getByText(/application\\/json/i)).toBeVisible();
   await page.getByRole("button", { name: /replay/i }).first().click();
   await page.getByRole("button", { name: /clear-history/i }).click();

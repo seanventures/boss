@@ -51,6 +51,7 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     again = restore_official_hookwatch(app)
     assert again["restored"] is True
     assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "hookwatch_active" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
 
 
 def test_prepare_restores_official_hookwatch_and_unstubs_verify(tmp_path: Path):
