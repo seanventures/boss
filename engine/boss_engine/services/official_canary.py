@@ -62,6 +62,12 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
         if extra.exists():
             extra.unlink()
             changed.append(f"delete:{leftover}")
+    leftover_server = app / "server" / "index.js"
+    if leftover_server.is_file() and "itty-router" in leftover_server.read_text(
+        encoding="utf-8", errors="ignore"
+    ):
+        leftover_server.unlink()
+        changed.append("delete:server/index.js")
     placeholder = app / "e2e" / "home.spec.ts"
     if placeholder.is_file() and "placeholder passing test" in placeholder.read_text(
         encoding="utf-8", errors="ignore"
@@ -73,7 +79,11 @@ def restore_official_hookwatch(app_dir: Path | str) -> dict[str, Any]:
 
 
 def restore_official_canary(app_dir: Path | str, app_id: str | None) -> dict[str, Any]:
+    """Restore into hookwatch/, never the sandbox monorepo root."""
     app = Path(app_dir)
+    nested = app / "hookwatch"
+    if (nested / "package.json").is_file():
+        return restore_official_hookwatch(nested)
     named = str(app_id or "").strip().strip("/").lower()
     pkg_name = ""
     try:
@@ -86,9 +96,6 @@ def restore_official_canary(app_dir: Path | str, app_id: str | None) -> dict[str
         pkg_name = ""
     if named == "hookwatch" or app.name == "hookwatch" or pkg_name == "hookwatch":
         return restore_official_hookwatch(app)
-    nested = app / "hookwatch"
-    if (nested / "package.json").is_file():
-        return restore_official_hookwatch(nested)
     return {"changed": [], "restored": False}
 
 
@@ -181,7 +188,7 @@ export default defineConfig({
   timeout: 30_000,
   use: { baseURL: "http://127.0.0.1:4173", headless: true },
   webServer: {
-    command: "npm run build && PORT=4173 npm start",
+    command: "npm run build && PORT=4173 node server.mjs",
     url: "http://127.0.0.1:4173/api/health",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

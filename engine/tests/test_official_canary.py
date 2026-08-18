@@ -55,6 +55,15 @@ def test_restore_official_hookwatch_replaces_counter_and_placeholder(tmp_path: P
     assert "hookwatch_active" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
 
 
+def test_restore_from_repo_root_writes_into_hookwatch_subdir(tmp_path: Path):
+    app = _stub_tree(tmp_path)
+    (tmp_path / "package.json").write_text('{"name":"sandbox"}', encoding="utf-8")
+    result = restore_official_canary(tmp_path, app_id="hookwatch")
+    assert result["restored"] is True
+    assert "Create inbox" in (app / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert not (tmp_path / "src" / "App.tsx").exists()
+
+
 def test_restore_finds_hookwatch_by_directory_when_app_id_missing(tmp_path: Path):
     app = _stub_tree(tmp_path)
     result = restore_official_canary(app, app_id=None)
