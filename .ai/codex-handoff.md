@@ -1,5 +1,30 @@
 # Codex Handoff
 
+## 2026-08-19 official trio 3/3 — Grok session handoff
+
+- `origin/main` is `973de1f`. Tree is clean. No uncommitted factory diffs.
+- Official trio honest `passed=true` (not GA):
+  - ApproveIt `crun_4cbbba9000ba4c24bef9`
+  - BugBox `crun_3f7f47a0ebd94cf390dd`
+  - HookWatch `crun_d0f67becce96419cb41c`
+- Live: api+worker `973de1f`, web `24e531b`. Factory execute path is API
+  `POST` `run_code_task` (worker only leases). Future factory restore
+  fixes must roll **API**, not worker-only.
+- HookWatch restore now: verify cwd, leftover PostCSS/itty-router/
+  `playwright.config.js` deleted, seed rewritten immediately before
+  `npm run verify`, and again inside `EphemeralSandbox.run` for every
+  npm/node/playwright command. Mutation does not clobber official
+  `tests_passed` / `last_verify_output`.
+- Tests: `engine/tests/test_official_canary.py` +
+  `engine/tests/test_verification_target.py` (23 passed).
+- Do **not**: stamp public GA, merge sealed #174, unfreeze Firecracker,
+  invent scorecard 5/5 (innovation still missing_evidence).
+- Plane: BOSS-381 commented with 3/3 evidence; leave GA umbrella open.
+- Parallel agent branch `ai/grok/hookwatch-official-restore-cwd` was
+  the first of the three commits (`d06efd7`); later `d720c73` and
+  `973de1f` landed on `main`. Fast-forward that branch to `main` if
+  you keep using it.
+
 ## 2026-08-09 BOSS-336 v0.11.0 release
 
 - `ai/codex/release-v0.11.0` starts from contributor-current `main` at

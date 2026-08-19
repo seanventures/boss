@@ -1,5 +1,21 @@
 # BOSS Autonomous Activity Log
 
+## 2026-08-19 — Grok — Official trio 3/3 honest reports
+
+- HookWatch was the last miss. Official follow-ups kept failing with
+  Playwright `webServer exited early` (implementer `server.mjs` main-guard,
+  leftover PostCSS / itty-router / `playwright.config.js`).
+- Restore was rolled to worker only. Factory runs in the API
+  (`client.run_code_task`), so restore never executed. Same 1963-char
+  verify blob, no `[boss]` prefix.
+- Shipped on `main`: `d06efd7` (restore cwd + mutation isolation),
+  `d720c73` (force seed immediately before verify), `973de1f`
+  (restore inside `sandbox.run`). Rolled **API+worker** `973de1f`.
+- HookWatch `crun_d0f67becce96419cb41c` honest `passed=true`: restore
+  prefix present, `npm run verify` exit 0, Playwright 1 passed.
+- Trio complete. Innovation still not_scored. Not GA. Plane BOSS-381
+  commented. Sealed #174 not merged.
+
 ## 2026-08-16 — Grok — Factory crash after green official verify
 
 - Official BugBox `crun_bb2fd50b475b4ac9bf85` recovered tests (attempt 3 /

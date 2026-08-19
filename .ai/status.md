@@ -1,5 +1,18 @@
 # BOSS Autonomous Delivery Status
 
+## 2026-08-19 official trio 3/3 honest `/report` (◐, not GA)
+
+- Official BugBox / HookWatch / ApproveIt are all honest `passed=true`.
+  Innovation stays `missing_evidence` (not invented). Not public GA.
+- ApproveIt `crun_4cbbba9000ba4c24bef9`. BugBox `crun_3f7f47a0ebd94cf390dd`.
+  HookWatch `crun_d0f67becce96419cb41c` (npm run verify exit 0, Playwright
+  1 passed, restore prefix present).
+- Root cause of HookWatch misses: `code.task` runs in the **API** via
+  `client.run_code_task`. Worker-only rolls never applied restore.
+- Live shared tag `973de1f` (api + worker). Web still `24e531b`.
+- `origin/main` `973de1f`. Plane BOSS-381 has the 3/3 evidence comment.
+  Do not stamp GA. Do not merge sealed #174. Do not unfreeze Firecracker.
+
 ## 2026-08-17 official PRD-as-plan hydrate (◐)
 
 - Official follow-ups stored slim `qa_benchmark` (id/name only), so
