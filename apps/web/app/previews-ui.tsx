@@ -16,13 +16,82 @@ import {
   previewOpenLabel,
   previewOperatorHref,
 } from "../lib/previews";
-import { createPreviewFixtureAction } from "./actions";
+import { approvePreviewAction, createPreviewFixtureAction, previewGateAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 
 function resolveHref(href: string): string {
   return href.startsWith("http") ? href : `${PREVIEW_API}${href}`;
+}
+
+/**
+ * The single human gate between "the preview looks right" and "it is live".
+ *
+ * Deliberately NOT a new console page. The judgement being made here is about what is on
+ * screen in THIS preview, so the control belongs on the preview row; a separate Approvals
+ * area would be a third place to look for one delivery.
+ *
+ * Approving does not deploy. It approves the run's merge decision, which merges, which fires
+ * the delivery trigger that already existed — so there stays exactly one path to a deployment.
+ * The gate is fetched BEFORE the button renders so the row can say what approving will do,
+ * and refuse when it would do nothing.
+ */
+function ApprovePreview({ preview }: { preview: PreviewRec }) {
+  const [gate, setGate] = React.useState<any>(null);
+  const [state, action] = useActionState(approvePreviewAction, null);
+
+  React.useEffect(() => {
+    let live = true;
+    if (!preview.id) return;
+    previewGateAction(preview.id).then((r) => {
+      if (live && r.ok) setGate(r.data);
+    });
+    return () => {
+      live = false;
+    };
+  }, [preview.id, state?.ok]);
+
+  if (!preview.id || isFixturePreview(preview)) return null;
+  if (!gate) return null;
+
+  if (gate.decision_status && gate.decision_status !== "pending") {
+    return (
+      <span className="cap-badge tone-green" data-testid="preview-already-approved">
+        merge {String(gate.decision_status)}
+      </span>
+    );
+  }
+  if (!gate.can_approve) {
+    // Say WHY rather than rendering a dead button. "You cannot approve" without a reason is
+    // the thing that sends people to the API to find out.
+    return (
+      <span className="detail" data-testid="preview-approve-blocked" title={String(gate.blockers?.join("; ") ?? "")}>
+        cannot approve: {String(gate.blockers?.[0] ?? "unknown")}
+      </span>
+    );
+  }
+
+  const willDeploy: string[] = gate.will_deploy ?? [];
+  return (
+    <form action={action} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+      <input type="hidden" name="preview_id" value={preview.id} />
+      <SubmitButton className="cap-btn tone-green" data-testid="preview-approve">
+        Approve &amp; ship
+      </SubmitButton>
+      {/* What the click actually causes, before it is clicked. */}
+      <span className="detail" data-testid="preview-approve-effect">
+        {willDeploy.length
+          ? `merges ${gate.title ? `“${gate.title}”` : "the PR"} → deploys ${willDeploy.join(", ")}`
+          : "merges the PR (no auto-deploy target configured)"}
+      </span>
+      {state && !state.ok ? (
+        <span className="cap-badge tone-red" data-testid="preview-approve-error">
+          {state.error}
+        </span>
+      ) : null}
+    </form>
+  );
 }
 
 function PreviewRow({ preview, appName }: { preview: PreviewRec; appName?: string }) {
@@ -56,6 +125,7 @@ function PreviewRow({ preview, appName }: { preview: PreviewRec; appName?: strin
           mismatched; the row simply never said what it was serving. */}
       {appName ? <strong style={{ fontSize: 13 }}>{appName}</strong> : null}
       {preview.id ? <code className="detail">{preview.id}</code> : null}
+      <ApprovePreview preview={preview} />
     </div>
   );
 }

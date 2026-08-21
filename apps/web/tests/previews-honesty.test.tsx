@@ -29,6 +29,11 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("../app/actions", () => ({
   createPreviewFixtureAction: vi.fn(),
+  // The preview row now carries the approve gate. These honesty tests are about what the row
+  // SAYS, not about approving, so the gate resolves to nothing and the control renders null —
+  // which is also the correct real-world behaviour for a preview with no merge decision.
+  approvePreviewAction: vi.fn(),
+  previewGateAction: vi.fn(async () => ({ ok: false })),
 }));
 
 vi.mock("../app/submit-button", () => ({

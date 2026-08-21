@@ -160,7 +160,10 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
     );
     expect(markup).toContain('data-empty-state="configured"');
     expect(markup).toContain("Deploy an app");
-    expect(markup).toContain("Deployment targets");
+    // Renamed from "Deployment targets": the section answers "which app runs where", and a
+    // host is now a first-class thing an app is pointed AT. The assertion still guards the
+    // same property — the deploy machinery appears once a target exists.
+    expect(markup).toContain("Apps and where they deploy");
     expect(markup).toContain("demo");
     expect(markup).not.toContain('data-testid="sandbox-deploy-disabled"');
   });

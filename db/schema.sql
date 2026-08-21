@@ -5473,3 +5473,75 @@ CREATE TABLE IF NOT EXISTS process_manager_proposals (
 );
 CREATE INDEX IF NOT EXISTS idx_process_manager_proposals_project
   ON process_manager_proposals(project_id, created_at DESC);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Fleet: a VM is a first-class object.
+--
+-- Before this, the host lived as a string inside every deployment_target's
+-- `target_ref` ("root@2.29.2.202:22"). Ten apps on one VM meant ten copies of that
+-- string and ten secret bindings to the SAME key, nowhere to ask "what runs on this
+-- box?", and a key rotation that meant editing ten rows. The host is the thing that
+-- has credentials, an architecture and a port budget — not the app.
+--
+-- `target_ref` is NOT dropped. It stays as a derived projection of the host so every
+-- existing connector, `_split_ref` call and test keeps working untouched; host_id
+-- becomes the source of truth and target_ref is written from it.
+-- Design: docs/product/DEPLOYMENT_FLEET_AND_APPROVAL_FLOW.md
+CREATE TABLE IF NOT EXISTS deployment_hosts (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  address TEXT NOT NULL,
+  ssh_user TEXT NOT NULL DEFAULT 'root',
+  ssh_port INTEGER NOT NULL DEFAULT 22,
+  -- ONE key per host. This is the whole point of the table.
+  key_secret_ref TEXT REFERENCES secret_refs(id),
+  -- Not decoration: hetzner-tenant-01 is arm64 and hetzner-ci-01 is amd64. An image
+  -- built for the wrong one fails as a confusing runtime crash, not a deploy error,
+  -- so the build step reads this.
+  arch TEXT,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- Port budget for apps co-located on this host. `bootstrap` already picks a free
+  -- port; this bounds where it may look.
+  port_min INTEGER NOT NULL DEFAULT 8000,
+  port_max INTEGER NOT NULL DEFAULT 8999,
+  max_apps INTEGER,
+  -- registered: known, no verified credential yet
+  -- verified:   preflight passed; selectable as a deploy destination
+  -- degraded:   was verified, last preflight failed
+  -- retired:    do not schedule here
+  status TEXT NOT NULL DEFAULT 'registered',
+  last_preflight_at TIMESTAMPTZ,
+  last_preflight JSONB NOT NULL DEFAULT '{}'::jsonb,
+  notes TEXT,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_deployment_hosts_project
+  ON deployment_hosts(project_id, status, created_at DESC);
+
+-- The app -> VM edge. Nullable so existing targets keep working before backfill.
+ALTER TABLE deployment_targets
+  ADD COLUMN IF NOT EXISTS host_id TEXT REFERENCES deployment_hosts(id);
+CREATE INDEX IF NOT EXISTS idx_deployment_targets_host
+  ON deployment_targets(host_id);
+
+-- Which repo paths belong to this app. [] means "the whole repo" so single-app repos
+-- behave exactly as before. This is what lets ONE merge fan out to N apps on N hosts.
+ALTER TABLE deployment_targets
+  ADD COLUMN IF NOT EXISTS path_globs JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- The PUBLIC half of this host's key, kept so the install command can be shown again without
+-- minting a new one. Losing the command on a page refresh left "Generate key" as the only
+-- apparent way back — and that ROTATES, invalidating the command the operator was part-way
+-- through running. A public key is not a secret; the private half stays in the backend.
+ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS key_public TEXT;
+
+-- Where the OPERATOR's own admin key lives on their machine, so the install command can be
+-- rendered with the right `-i`. BOSS cannot discover this — a laptop with no default identity
+-- fails the push with "Permission denied (publickey)", which looks identical to BOSS's key not
+-- being installed and sends people to debug the wrong machine. Optional; blank means "my
+-- default SSH access works".
+ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS admin_identity_file TEXT;

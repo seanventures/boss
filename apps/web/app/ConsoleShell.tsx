@@ -45,6 +45,7 @@ import {
   UsersThree,
   Wallet,
   Wrench,
+  X,
   type Icon,
 } from "@phosphor-icons/react";
 import {
@@ -649,8 +650,13 @@ export default function ConsoleShell({
             <div className="bx-dock-head">
               <span className="eyebrow">Ask BOSS</span>
               <code className="detail">{dockedRun}</code>
-              <button type="button" className="cap-btn bx-dock-close" onClick={closeDock}>
-                Close
+              {/* Icon, not a labelled button. The head is a tight strip already holding the
+                  title and the run id, and a text "Close" competed with both while doing the
+                  most ordinary thing in the panel. aria-label keeps it announced to screen
+                  readers, and title keeps it discoverable on hover. */}
+              <button type="button" className="cap-btn bx-dock-close" onClick={closeDock}
+                      aria-label="Close the Ask BOSS panel" title="Close">
+                <X size={14} weight="bold" aria-hidden />
               </button>
             </div>
             <div className="bx-dock-body">

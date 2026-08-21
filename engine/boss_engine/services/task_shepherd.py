@@ -39,6 +39,13 @@ INFRASTRUCTURE = 9
 UNKNOWN = 10
 PR_STEP_FAILED = 11
 NOT_A_FAILURE = 12
+# Delivery classes. A merge now continues into a deployment, so the shepherd's ledger has
+# to cover what happens AFTER the PR closes — otherwise the one part of the pipeline that
+# touches a real host is the one part with no failure taxonomy.
+DEPLOY_FAILED = 13
+HEALTH_CHECK_FAILED = 14
+CANARY_REGRESSED = 15
+PROMOTION_BLOCKED = 16
 
 CLASS_NAMES = {
     SPEND_CAP: "provider spend/rate cap",
@@ -53,6 +60,10 @@ CLASS_NAMES = {
     UNKNOWN: "unknown",
     PR_STEP_FAILED: "pull-request step failed",
     NOT_A_FAILURE: "not a failure",
+    DEPLOY_FAILED: "deployment failed",
+    HEALTH_CHECK_FAILED: "health check failed",
+    CANARY_REGRESSED: "canary regressed",
+    PROMOTION_BLOCKED: "promotion blocked",
 }
 
 # Exact phrases the engine itself writes. Deliberately NOT loose tokens: a bare "timeout"
@@ -60,6 +71,17 @@ CLASS_NAMES = {
 # which would have classified a genuine code finding as a platform fault. Reviewer prose is
 # not a status code.
 _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
+    # Delivery first: these are precise strings emitted by deploy_service / the rollout
+    # engine, and matching them before the generic INFRASTRUCTURE phrases keeps a failed
+    # health gate from being filed as "infrastructure" and retried blindly.
+    (HEALTH_CHECK_FAILED, ("health check failed", "health gate failed",
+                           "unhealthy after deploy", "rolled_back")),
+    (CANARY_REGRESSED, ("canary regressed", "canary verdict: regression",
+                        "telemetry regression")),
+    (PROMOTION_BLOCKED, ("promotion blocked", "no active production deployment_target",
+                         "must reference a production target")),
+    (DEPLOY_FAILED, ("deployment failed", "deploy failed", "docker run failed",
+                     "rsync failed", "no connector for target_kind")),
     (SPEND_CAP, ("spend limit", "usage limit", "rate limit exceeded", "quota exceeded",
                  "too many requests")),
     (TURN_CAP, ("error_max_turns", "max_turns_exhausted", "ran out of turns")),
@@ -143,6 +165,37 @@ class Remedy:
 ESCALATE = Remedy("escalate", "ask the operator one decision-shaped question", 0.0, None)
 
 REMEDIES: dict[int, tuple[Remedy, ...]] = {
+    DEPLOY_FAILED: (
+        Remedy("redeploy_same_commit",
+               "redeploy the same commit — transfer and docker steps are idempotent",
+               0.0, "redeploy_deployment"),
+        Remedy("preflight_target",
+               "run preflight: a missing credential or absent docker explains most of "
+               "these, and reports it without a second failed deploy",
+               0.0, "preflight_target"),
+        ESCALATE,
+    ),
+    HEALTH_CHECK_FAILED: (
+        # NOT a retry-first class. deploy_service already restored the previous build, so
+        # the host is serving and nothing is on fire; redeploying the same broken commit
+        # would simply fail the same gate again and churn the rollback.
+        Remedy("open_fix_task", "open a task against the failing health check", 6.0,
+               "create_code_task"),
+        ESCALATE,
+    ),
+    CANARY_REGRESSED: (
+        # The rollout engine rolls back on its own; the shepherd's job is the follow-up,
+        # not the reaction.
+        Remedy("open_regression_task",
+               "open a task with the telemetry delta as evidence", 6.0,
+               "create_code_task"),
+        ESCALATE,
+    ),
+    PROMOTION_BLOCKED: (
+        # Usually configuration, not code: no production target registered for this app.
+        # There is nothing to retry, so this escalates by design.
+        ESCALATE,
+    ),
     SPEND_CAP: (
         Remedy("wait_resume", "wait for the cap to reset, resume from the checkpoint", 3.0,
                "retry_code_task"),

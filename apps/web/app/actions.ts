@@ -3670,6 +3670,322 @@ export async function confirmCodeTaskFeedbackAction(
   }
 }
 
+// ---- Delivery: the preview gate, the fleet, and promotion ----
+// Design: docs/product/DEPLOYMENT_FLEET_AND_APPROVAL_FLOW.md
+// No new console page. These hang off the surfaces that already own the work: the preview
+// card (approve) and delivery-manage (fleet), because a separate "Approvals" page would be a
+// third place to look for the same delivery.
+
+/** What approving this preview will actually do — read BEFORE showing the button. */
+export async function previewGateAction(previewId: string): Promise<ActionResult> {
+  const id = (previewId ?? "").trim();
+  if (!id) return { ok: false, error: "missing preview id" };
+  try {
+    const r = await fetch(`${API_URL}/v1/previews/${encodeURIComponent(id)}/gate`, {
+      headers: authHeaders({}),
+      cache: "no-store",
+    });
+    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/**
+ * Approve the preview — the single human gate on the way to live.
+ *
+ * Does NOT deploy. It approves the run's merge decision, which merges, which fires the one
+ * delivery trigger that already existed.
+ */
+export async function approvePreviewAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("preview_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing preview_id" };
+  const res = await postJsonReturn(`/v1/previews/${encodeURIComponent(id)}/approve`, {
+    actor: getActor(formData),
+    note: String(formData.get("note") ?? "").trim() || undefined,
+  });
+  revalidatePath("/");
+  return res;
+}
+
+/** Promote a succeeded staging deployment to production — the second gate. */
+export async function promoteDeploymentAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("deployment_run_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing deployment_run_id" };
+  const res = await postJsonReturn(`/v1/deployments/${encodeURIComponent(id)}/promote`, {
+    actor: getActor(formData),
+    note: String(formData.get("note") ?? "").trim() || undefined,
+  });
+  revalidatePath("/");
+  return res;
+}
+
+// ---- Fleet: VMs, and the apps riding on them ----
+
+export async function listDeploymentHostsAction(projectId: string): Promise<ActionResult> {
+  const p = (projectId ?? "").trim();
+  if (!p) return { ok: false, error: "missing project_id" };
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/deployment-hosts?project_id=${encodeURIComponent(p)}`,
+      { headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+export async function registerDeploymentHostAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const res = await postJsonReturn(`/v1/deployment-hosts`, {
+    project_id: String(formData.get("project_id") ?? "").trim(),
+    name: String(formData.get("name") ?? "").trim(),
+    address: String(formData.get("address") ?? "").trim(),
+    ssh_user: String(formData.get("ssh_user") ?? "root").trim() || "root",
+    ssh_port: Number(formData.get("ssh_port") ?? 22) || 22,
+    // Not cosmetic: an image built for the wrong architecture fails as a confusing runtime
+    // crash rather than a deploy error, so the build step reads this.
+    arch: String(formData.get("arch") ?? "").trim() || undefined,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+  return res;
+}
+
+/** Mint the host's keypair. Returns the PUBLIC half and the exact line to run on the box. */
+export async function generateHostKeyAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("host_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing host_id" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/key`,
+    {
+      actor: getActor(formData),
+      // Which store holds the PRIVATE half. platform_secret_store is unconfigured on a
+      // fully-local run, so the caller has to be able to pick "file" — the same choice the
+      // credentials wizard already offers.
+      backend: String(formData.get("backend") ?? "").trim() || "platform_secret_store",
+    },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/** Point an app at a verified host, from the app card. */
+export async function setupDeploymentAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const runId = String(formData.get("run_id") ?? "").trim();
+  if (!runId) return { ok: false, error: "missing run_id" };
+  const res = await postJsonReturn(
+    `/v1/code-tasks/${encodeURIComponent(runId)}/setup-deployment`,
+    {
+      actor: getActor(formData),
+      host_id: String(formData.get("host_id") ?? "").trim(),
+      app_name: String(formData.get("app_name") ?? "").trim(),
+      app_port: String(formData.get("app_port") ?? "").trim() || undefined,
+      environment: "staging",
+      auto_deploy: true,
+    },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/**
+ * Ship this app to its linked TARGET for the first time — later changes go through
+ * Approve & ship.
+ *
+ * Deploys the target, not the run. `/v1/code-tasks/{id}/deploy` is the older plan/ssh path
+ * that needs an explicit host and user; using it here would ask the card to re-supply an
+ * address the host record already owns — the exact duplication `host_id` exists to remove.
+ */
+export async function deployRunNowAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const targetId = String(formData.get("target_id") ?? "").trim();
+  if (!targetId) return { ok: false, error: "this app is not linked to a host yet" };
+  const res = await postJsonReturn("/v1/delivery/deploy", {
+    target_id: targetId,
+    // Which code task this shipped. The endpoint already accepts it; not sending it left
+    // `release_packet.code_task_run_id` null, so the app card — which finds its deployment by
+    // exactly that link — could not see the deploy it had just started, and went on showing
+    // "not deployed" beside a running deployment.
+    code_task_run_id: String(formData.get("run_id") ?? "").trim() || undefined,
+    actor: getActor(formData),
+  });
+  revalidatePath("/");
+  return res;
+}
+
+/** What this code task shipped — powers the deployment line on the app card. */
+export async function runDeploymentsAction(
+  runId: string, appName?: string,
+): Promise<ActionResult> {
+  const id = (runId ?? "").trim();
+  if (!id) return { ok: false, error: "missing run id" };
+  const q = appName ? `?app_name=${encodeURIComponent(appName)}` : "";
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/code-tasks/${encodeURIComponent(id)}/deployments${q}`,
+      { headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+/**
+ * Retry a deployment that failed.
+ *
+ * The case this exists for is the honest one: a deploy that failed on a network blip or a host
+ * that was briefly unreachable. Same commit, same target — `redeploy` is idempotent by receipt,
+ * so a retry cannot double-apply.
+ */
+export async function retryDeploymentAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("deployment_run_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing deployment_run_id" };
+  const res = await postJsonReturn(
+    `/v1/delivery/deployments/${encodeURIComponent(id)}/redeploy`,
+    { actor: getActor(formData) },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/**
+ * PATH 1 — adopt a key the customer already has. The private half goes straight through to the
+ * secret backend; BOSS keeps a reference and a fingerprint, never the material.
+ */
+export async function adoptHostKeyAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("host_id") ?? "").trim();
+  const privateKey = String(formData.get("private_key") ?? "");
+  if (!id) return { ok: false, error: "missing host_id" };
+  if (!privateKey.trim()) return { ok: false, error: "paste the PRIVATE key" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/adopt-key`,
+    {
+      actor: getActor(formData),
+      private_key: privateKey,
+      backend: String(formData.get("backend") ?? "").trim() || "file",
+    },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/** PATH 2 — BOSS generates its own key and installs it over the credential it already has. */
+export async function installHostKeyAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("host_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing host_id" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/install-key`,
+    {
+      actor: getActor(formData),
+      backend: String(formData.get("backend") ?? "").trim() || "file",
+    },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/** Make a reachable host able to RUN a deployment — today that means docker. */
+export async function provisionHostAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("host_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing host_id" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/provision`,
+    { actor: getActor(formData) },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/** Actually connect. `verified` is evidence, not a checkbox someone ticked. */
+export async function verifyDeploymentHostAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("host_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing host_id" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/verify`, {},
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/**
+ * Hand the host back the way BOSS found it, and stop scheduling on it.
+ *
+ * The other half of onboarding — and the real decommission path later. Removes only BOSS's own
+ * keys; leaves docker, the deploy directory, and any key the customer lent BOSS.
+ */
+export async function retireHostAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const id = String(formData.get("host_id") ?? "").trim();
+  if (!id) return { ok: false, error: "missing host_id" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(id)}/retire`,
+    {
+      actor: getActor(formData),
+      revoke_key: String(formData.get("revoke_key") ?? "true") === "true",
+      remove_docker: String(formData.get("remove_docker") ?? "false") === "true",
+      purge: String(formData.get("purge") ?? "false") === "true",
+      force: String(formData.get("force") ?? "false") === "true",
+    },
+  );
+  revalidatePath("/");
+  return res;
+}
+
+/** Point an app at a host. target_ref is derived, so the two cannot drift. */
+export async function attachTargetToHostAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const hostId = String(formData.get("host_id") ?? "").trim();
+  const targetId = String(formData.get("target_id") ?? "").trim();
+  if (!hostId || !targetId) return { ok: false, error: "host_id and target_id are required" };
+  const res = await postJsonReturn(
+    `/v1/deployment-hosts/${encodeURIComponent(hostId)}/attach`,
+    { target_id: targetId },
+  );
+  revalidatePath("/");
+  return res;
+}
+
 export async function startPreviewAction(
   _prev: { url?: string; error?: string; note?: string } | null,
   formData: FormData,

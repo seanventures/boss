@@ -24,6 +24,7 @@ Boundaries, each carried from something already paid for:
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 from typing import Any, Optional
 
@@ -37,25 +38,85 @@ from .core import emit_event
 AUTO_DEPLOY_ENVIRONMENTS = frozenset({"staging", "dev", "preview"})
 
 
-def target_for(connection, project_id: str, repo: str, environment: str) -> Optional[dict]:
-    """The deployment target for this repo+environment, or None if none is registered.
+def _globs_of(target: dict) -> list[str]:
+    """`path_globs` as a list, whatever the driver handed back (JSONB or TEXT)."""
+    raw = target.get("path_globs") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    return [str(g) for g in raw if str(g).strip()]
 
-    Returning None is the normal case for a project that has not opted into delivery, and it
-    must stay silent: a repo with no target is not a failure, it is a repo nobody asked to
-    deploy.
+
+def _path_matches(path: str, globs: list[str]) -> bool:
+    """Does a changed repo path fall inside any of this app's globs?
+
+    `fnmatch` treats `*` as crossing `/`, so "apps/web/**" and "apps/web/*" both match
+    "apps/web/src/main.tsx". That is the forgiving direction on purpose: a glob that matches
+    too much causes an extra deploy of unchanged code, while one that matches too little
+    causes an app to silently never ship — which is the exact defect (G1) this function exists
+    to remove.
+    """
+    p = (path or "").lstrip("./")
+    for g in globs:
+        g = g.strip().lstrip("./")
+        if fnmatch.fnmatch(p, g) or fnmatch.fnmatch(p, g.rstrip("/") + "/*"):
+            return True
+    return False
+
+
+def targets_for(connection, project_id: str, repo: str, environment: str, *,
+                changed_paths: Optional[list[str]] = None) -> list[dict]:
+    """EVERY target this merge should deploy — a list, deliberately.
+
+    This used to be `target_for`, returning one row via `ORDER BY created_at DESC LIMIT 1`.
+    The TABLE is keyed `(project_id, app_name, environment)`, so a repo holding two apps has
+    two targets — and the singular resolver deployed whichever was registered most recently
+    while the other silently never shipped. Because the no-target path is (correctly) quiet,
+    nothing reported it. Returning a list is the fix; the callers fan out.
+
+    `path_globs` scopes a target to part of the repo. Empty globs mean the whole repo, so
+    every existing single-app target keeps behaving exactly as it did.
     """
     # SELECT * rather than a column list. The list version omitted `required_resources` in
     # execute_deployment and silently stranded the target's declared port; the same list here
     # would have omitted `auto_deploy` and made this function permanently answer "not
     # automatic". A projection that must be extended per new consumer will eventually not be.
-    row = connection.execute(
+    rows = connection.execute(
         sql("SELECT * FROM deployment_targets "
             "WHERE project_id = :p AND repo = :r AND environment = :e "
             "  AND status = 'active' "
-            "ORDER BY created_at DESC LIMIT 1"),
+            "ORDER BY created_at DESC"),
         {"p": project_id, "r": repo, "e": environment},
-    ).mappings().first()
-    return dict(row) if row else None
+    ).mappings().all()
+
+    selected: list[dict] = []
+    for row in rows:
+        target = dict(row)
+        globs = _globs_of(target)
+        if not globs:
+            selected.append(target)          # whole-repo target: always in scope
+        elif changed_paths is None:
+            # We could not determine what changed. Deploy it anyway rather than skip it:
+            # an unnecessary deploy of unchanged code is cheap and visible, an app that
+            # silently stops shipping is G1 all over again. The caller records that globs
+            # went unevaluated so this is never a mystery.
+            target["_globs_unevaluated"] = True
+            selected.append(target)
+        elif any(_path_matches(p, globs) for p in changed_paths):
+            selected.append(target)
+    return selected
+
+
+def target_for(connection, project_id: str, repo: str, environment: str) -> Optional[dict]:
+    """Back-compat shim: the first target, or None. Prefer `targets_for`.
+
+    Kept so any caller outside this module keeps working, but it carries the singular-resolver
+    hazard by construction — anything that deploys should use `targets_for`.
+    """
+    found = targets_for(connection, project_id, repo, environment)
+    return found[0] if found else None
 
 
 def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_id: str,
@@ -69,11 +130,32 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
     """
     from ..db import begin
 
-    result: dict[str, Any] = {"status": "skipped", "reason": "no active staging target"}
+    result: dict[str, Any] = {"status": "skipped", "reason": "no active staging target",
+                              "deployments": []}
+    planned_runs: list[dict[str, Any]] = []
     try:
         with begin(engine) as c:
-            target = target_for(c, project_id, repo, "staging")
-            if not target:
+            # What did this task actually change? Reuses the preview's lineage resolver rather
+            # than deriving a second file list — `state.impl_files` is per-ATTEMPT and on a
+            # repair holds only the touched-up files, which is precisely how the preview once
+            # served the wrong app. Best-effort: if it cannot be determined, `targets_for`
+            # falls open and deploys every target rather than silently skipping scoped ones.
+            changed_paths: Optional[list[str]] = None
+            try:
+                from .preview_service import lineage_impl_files
+
+                run_row = c.execute(
+                    sql("SELECT * FROM code_task_runs WHERE id = :i"), {"i": run_id}
+                ).mappings().first()
+                if run_row:
+                    found = lineage_impl_files(engine, dict(run_row))
+                    changed_paths = [str(f) for f in found] or None
+            except Exception:  # noqa: BLE001 — path scoping is an optimisation, not a gate
+                changed_paths = None
+
+            targets = targets_for(c, project_id, repo, "staging",
+                                  changed_paths=changed_paths)
+            if not targets:
                 # Silent by design. Recorded at debug level via the event so the absence is
                 # visible when someone asks "why did nothing deploy?", without alarming a
                 # project that never wanted delivery.
@@ -82,61 +164,78 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                             "repo": repo})
                 return result
 
-            if not target.get("auto_deploy"):
-                # A target that has not opted in is planned-only, exactly as before. Silent
-                # rather than alarming: most repos never asked to deploy on merge.
-                emit_event(c, project_id, "delivery.not_auto", actor, "code_task_run", run_id,
-                           {"why": "auto_deploy is off for this target",
-                            "target": target["id"]})
-                return {"status": "skipped", "reason": "auto_deploy is off",
-                        "target_id": target["id"]}
+            for target in targets:
+                if target.get("_globs_unevaluated"):
+                    emit_event(c, project_id, "delivery.globs_unevaluated", actor,
+                               "code_task_run", run_id,
+                               {"why": "changed paths unknown; deploying this scoped target "
+                                       "anyway rather than skipping it",
+                                "target": target["id"], "app_name": target.get("app_name")})
 
-            if target.get("paused"):
-                # Paused is louder than not-configured: someone turned this OFF deliberately
-                # and will want to know a merge went by while it was.
-                emit_event(c, project_id, "delivery.paused", actor, "code_task_run", run_id,
-                           {"why": "auto-deploy is paused", "target": target["id"],
-                            "commit_ref": commit_ref})
-                return {"status": "paused", "target_id": target["id"]}
+                if not target.get("auto_deploy"):
+                    # A target that has not opted in is planned-only, exactly as before.
+                    # Silent rather than alarming: most repos never asked to deploy on merge.
+                    emit_event(c, project_id, "delivery.not_auto", actor, "code_task_run",
+                               run_id, {"why": "auto_deploy is off for this target",
+                                        "target": target["id"]})
+                    planned_runs.append({"status": "skipped", "reason": "auto_deploy is off",
+                                         "target_id": target["id"],
+                                         "app_name": target.get("app_name")})
+                    continue
 
-            if target["environment"] not in AUTO_DEPLOY_ENVIRONMENTS:
-                emit_event(c, project_id, "delivery.gated", actor, "code_task_run", run_id,
-                           {"why": f"{target['environment']} requires a promotion decision",
-                            "target": target["id"]})
-                return {"status": "gated", "environment": target["environment"],
-                        "target_id": target["id"]}
+                if target.get("paused"):
+                    # Paused is louder than not-configured: someone turned this OFF
+                    # deliberately and will want to know a merge went by while it was.
+                    emit_event(c, project_id, "delivery.paused", actor, "code_task_run",
+                               run_id, {"why": "auto-deploy is paused", "target": target["id"],
+                                        "commit_ref": commit_ref})
+                    planned_runs.append({"status": "paused", "target_id": target["id"],
+                                         "app_name": target.get("app_name")})
+                    continue
 
-            from .resource_plane import ResourcePlaneService
+                if target["environment"] not in AUTO_DEPLOY_ENVIRONMENTS:
+                    emit_event(c, project_id, "delivery.gated", actor, "code_task_run", run_id,
+                               {"why": f"{target['environment']} requires a promotion decision",
+                                "target": target["id"]})
+                    planned_runs.append({"status": "gated",
+                                         "environment": target["environment"],
+                                         "target_id": target["id"],
+                                         "app_name": target.get("app_name")})
+                    continue
 
-            plane = ResourcePlaneService(settings)
-            planned = plane.plan_deployment_run(
-                c,
-                project_id=project_id,
-                deployment_target_id=target["id"],
-                commit_ref=commit_ref,
-                release_packet={
-                    "source": "code_task_merge",
-                    "code_task_run_id": run_id,
-                    "decision_id": decision_id,
-                    "repo": repo,
-                },
-                # The merge is already paid for; the deployment itself is not an LLM cost.
-                expected_cost_usd_micros=0,
-                reservation_id=None,
-                actor=actor,
-            )
-            emit_event(c, project_id, "delivery.deployment_planned", actor,
-                       "code_task_run", run_id,
-                       {"deployment_run_id": planned.get("deployment_run_id")
-                        or planned.get("id"),
-                        "environment": target["environment"], "target": target["id"],
-                        "commit_ref": commit_ref})
-            deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
-            c.execute(sql("UPDATE deployment_runs SET trigger = 'merge' WHERE id = :i"),
-                      {"i": deployment_run_id})
-            result = {"status": "planned", "environment": target["environment"],
-                      "target_id": target["id"],
-                      "deployment_run_id": deployment_run_id}
+                from .resource_plane import ResourcePlaneService
+
+                plane = ResourcePlaneService(settings)
+                planned = plane.plan_deployment_run(
+                    c,
+                    project_id=project_id,
+                    deployment_target_id=target["id"],
+                    commit_ref=commit_ref,
+                    release_packet={
+                        "source": "code_task_merge",
+                        "code_task_run_id": run_id,
+                        "decision_id": decision_id,
+                        "repo": repo,
+                        "app_name": target.get("app_name"),
+                    },
+                    # The merge is already paid for; the deployment is not an LLM cost.
+                    expected_cost_usd_micros=0,
+                    reservation_id=None,
+                    actor=actor,
+                )
+                deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
+                emit_event(c, project_id, "delivery.deployment_planned", actor,
+                           "code_task_run", run_id,
+                           {"deployment_run_id": deployment_run_id,
+                            "environment": target["environment"], "target": target["id"],
+                            "app_name": target.get("app_name"), "commit_ref": commit_ref})
+                c.execute(sql("UPDATE deployment_runs SET trigger = 'merge' WHERE id = :i"),
+                          {"i": deployment_run_id})
+                planned_runs.append({"status": "planned",
+                                     "environment": target["environment"],
+                                     "target_id": target["id"],
+                                     "app_name": target.get("app_name"),
+                                     "deployment_run_id": deployment_run_id})
 
     except Exception as exc:  # noqa: BLE001
         # A delivery failure must never un-merge a PR or fail a completed code task.
@@ -146,23 +245,43 @@ def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_i
                            {"error": f"{type(exc).__name__}: {exc}"[:300], "repo": repo})
         except Exception:  # noqa: BLE001
             pass
-        result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:300]}
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:300],
+                "deployments": planned_runs}
 
     # Execute OUTSIDE the transaction above, and outside the merge's own transaction: a deploy
     # takes minutes, does network I/O, and must not hold a database lock or be rolled back by
     # something unrelated finishing badly. Until this existed, a merge planned a deployment and
     # nothing ever ran it — the row simply sat there, which is why every deployment so far was
     # started by hand. That is the whole of the missing "continuous".
-    if result.get("status") == "planned" and result.get("deployment_run_id"):
+    #
+    # Sequential, not concurrent: two apps on ONE host would otherwise race for ports and for
+    # the same docker daemon. Fan-out is about not dropping an app, not about speed.
+    for entry in planned_runs:
+        if entry.get("status") != "planned" or not entry.get("deployment_run_id"):
+            continue
         try:
-            outcome = execute_deployment(engine, settings, result["deployment_run_id"],
+            outcome = execute_deployment(engine, settings, entry["deployment_run_id"],
                                          actor=actor)
-            result = {**result, "status": "executed", "deployment": outcome}
+            entry["status"] = "executed"
+            entry["deployment"] = outcome
         except Exception as exc:  # noqa: BLE001
             # Still never raises: the PR has merged, and a delivery failure must not be
-            # reported as a failure of work that already shipped.
-            result = {**result, "status": "execute_failed",
-                      "error": f"{type(exc).__name__}: {exc}"[:300]}
+            # reported as a failure of work that already shipped. One app failing must also
+            # not stop the next one from deploying.
+            entry["status"] = "execute_failed"
+            entry["error"] = f"{type(exc).__name__}: {exc}"[:300]
+
+    statuses = {e.get("status") for e in planned_runs}
+    if not planned_runs:
+        overall = "skipped"
+    elif len(statuses) == 1:
+        overall = statuses.pop()
+    else:
+        overall = "partial"
+    result = {"status": overall, "deployments": planned_runs}
+    # Back-compat: callers written against the single-target era read these top-level keys.
+    if len(planned_runs) == 1:
+        result = {**planned_runs[0], **result, "status": planned_runs[0].get("status", overall)}
     return result
 
 
@@ -225,6 +344,40 @@ def redeploy(engine, settings: Settings, deployment_run_id: str, *,
             **execute_deployment(engine, settings, new_id, actor=actor)}
 
 
+# How long any single deployment may run before it is treated as hung. Generous on purpose:
+# a real build + transfer of a Node app to a small VM takes minutes, and killing a slow-but-
+# healthy deploy is a worse failure than a stale row. This bounds the case that actually
+# happened — a step that spins forever because its worker died or an SSH never returned.
+DEPLOYMENT_MAX_RUNTIME_SECONDS = 45 * 60
+
+
+def fail_hung_deployments(engine, *, max_seconds: int = DEPLOYMENT_MAX_RUNTIME_SECONDS
+                          ) -> dict[str, Any]:
+    """Close out deployments that have been running implausibly long.
+
+    `fail_orphaned_deployments` only runs at API startup, so a deployment that hung while the
+    API stayed up was never reconciled: BugBox sat in `preflight` for minutes with the console
+    faithfully polling a step that would never finish. Startup-only cleanup assumes the thing
+    that goes wrong is a restart; the thing that actually goes wrong is a hang.
+
+    Safe to call on a schedule — it only touches rows that are BOTH still open and older than
+    the cap, so a healthy long deploy is never interrupted.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        rows = c.execute(
+            sql("UPDATE deployment_runs SET status='failed', finished_at=now(), "
+                "failure_reason = COALESCE(failure_reason, "
+                "  'this deployment ran longer than the maximum and was treated as hung. "
+                "The host may hold a partial release — redeploy to be sure.') "
+                "WHERE status IN ('created','running','in_progress') "
+                "  AND COALESCE(started_at, created_at) < now() - make_interval(secs => :s) "
+                "RETURNING id"),
+            {"s": int(max_seconds)}).mappings().all()
+    return {"failed": [r["id"] for r in rows]}
+
+
 def fail_orphaned_deployments(engine) -> dict[str, Any]:
     """Close out deployments whose executing process no longer exists.
 
@@ -245,7 +398,13 @@ def fail_orphaned_deployments(engine) -> dict[str, Any]:
                 "  'the API restarted while this deployment was running, so it was abandoned "
                 "mid-flight. The host may hold a partial release — redeploy to be sure.'), "
                 "updated_at=now() "
-                "WHERE status IN ('running','planning') RETURNING id")).mappings().all()
+                # `created` too. A deployment is inserted as 'created' and only becomes
+                # 'running' once execution starts writing steps — so a worker that died in
+                # between left a row this sweep did not match, and it stayed 'created' with a
+                # step spinning forever. At startup NOTHING of this process is mid-deployment,
+                # so every non-terminal row is abandoned by definition.
+                "WHERE status IN ('created','running','planning','in_progress') "
+                "RETURNING id")).mappings().all()
     return {"abandoned": len(rows), "ids": [r["id"] for r in rows][:10]}
 
 

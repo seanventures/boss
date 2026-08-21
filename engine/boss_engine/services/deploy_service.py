@@ -220,6 +220,31 @@ def _ssh_key_file(settings: Settings) -> str:
     return path
 
 
+def _kill_process_group(argv: list[str]) -> None:
+    """Reap anything the timed-out command left behind.
+
+    Best-effort by design: the caller has already decided this attempt failed, and a cleanup
+    that raises would turn a handled timeout back into the unhandled exception this exists to
+    prevent.
+    """
+    import signal
+
+    try:
+        target = " ".join(argv[:6])
+        for line in subprocess.run(["ps", "-Ao", "pid=,pgid=,command="],
+                                   capture_output=True, text=True, timeout=10).stdout.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) < 3 or not parts[0].isdigit():
+                continue
+            if parts[2].startswith(target[:40]):
+                try:
+                    os.killpg(int(parts[1]), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+    except Exception:  # noqa: BLE001 — cleanup must never raise
+        pass
+
+
 def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: int = 180):
     """Run a command on the host. A host that does not answer is a RESULT, not an exception.
 
@@ -233,10 +258,27 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
     """
     argv = ["ssh", "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",
             "-o", f"ConnectTimeout={max(5, min(timeout, 20))}",
+            # ConnectTimeout bounds the TCP HANDSHAKE only. A host that accepts the connection
+            # and then stops answering — a stopped VM, a dropped route, a firewall that
+            # blackholes established flows — hangs indefinitely, which is exactly what a
+            # decommissioned box does. ServerAlive* makes ssh itself give up after ~30s.
+            "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=3",
+            # Never read the caller's stdin: an ssh that inherits a terminal can block waiting
+            # on it forever, and BOSS runs these from API threads with no terminal at all.
+            "-n",
             "-p", str(port), f"{user}@{host}", command]
     try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        # start_new_session puts ssh in its OWN process group, so the timeout path can kill the
+        # whole tree rather than just the process Python is holding.
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              start_new_session=True)
     except subprocess.TimeoutExpired:
+        # `subprocess.run` kills only the direct child, and an ssh that has forked or is stuck
+        # in an uninterruptible wait survives it. Orphans then accumulate: polling a dead host
+        # every few seconds left dozens of live ssh processes, each holding an API worker
+        # thread, until the console could not reach its own API. One unreachable host must not
+        # be able to take down the control plane.
+        _kill_process_group(argv)
         return subprocess.CompletedProcess(
             argv, returncode=124,   # the conventional timeout code, as `timeout(1)` uses
             stdout="",
@@ -475,6 +517,25 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
         except Exception:  # noqa: BLE001 — an unreadable package.json is "no build"
             has_build = False
 
+    # A BUILD SCRIPT IS NOT A STATEMENT THAT THE APP IS STATIC.
+    #
+    # This returned "static" the moment package.json had a `build`, BEFORE the resolver below
+    # ever ran — so a full-stack app took the nginx branch on the strength of having a
+    # frontend. BugBox is exactly that: `build` (vite) AND `start` (node server/index.js).
+    # Its UI deployed, its API did not, and every request failed with "Could not reach the
+    # API" on a deployment the health gate had passed — because a static shell answers 200
+    # on `/` whether or not anything behind it works.
+    #
+    # `start` is the app saying it is a SERVER. When both are present the app is built and
+    # then RUN, which is what `npm start` expects anyway: vite writes dist/, the server serves
+    # it plus its own routes from one process. Same rule the node branch below already uses.
+    has_start = False
+    if pkg.is_file():
+        try:
+            has_start = bool((_json.loads(pkg.read_text()).get("scripts") or {}).get("start"))
+        except Exception:  # noqa: BLE001
+            has_start = False
+
     if has_build:
         env = {**os.environ, "HOME": str(work), "npm_config_cache": str(work / ".npm"),
                "npm_config_fund": "false", "npm_config_audit": "false"}
@@ -483,7 +544,17 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
                        timeout=900, check=True)
         if not (work / "dist").is_dir():
             raise RuntimeError("build script ran but did not produce ./dist")
-        return (work, "static", "", sha)
+        if not has_start:
+            return (work, "static", "", sha)
+        # Built, and it has a server to run. Ship the whole app directory — its package.json is
+        # the run contract — laid out under the same `dist` name every mode uses, so staging,
+        # rollback and cleanup stay one implementation.
+        payload = Path(tempfile.mkdtemp(prefix="boss-deploy-payload-"))
+        shutil.copytree(work, payload / "dist",
+                        ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__",
+                                                      ".npm", "data", ".e2e-data"))
+        shutil.rmtree(work, ignore_errors=True)
+        return (payload, "node", "", sha)
 
     # No build step: the servable tree IS the source, and WHICH tree is the question the preview
     # resolver already answers. The previous code said it used that answer and then implemented

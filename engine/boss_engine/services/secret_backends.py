@@ -558,6 +558,24 @@ def resolve_target_secret(connection, target: dict, name: str,
                 return FileBackend().get(path)
             raise SecretUnavailable(
                 f"legacy ref {legacy!r} is bound but unset — refusing global fallback")
+
+    # THE HOST'S OWN KEY. A target with no explicit binding but a `host_id` uses the
+    # credential its machine holds.
+    #
+    # Without this the fleet's central promise — "one key per host; rotating it never touches
+    # the apps riding on it" — was words on a panel: `attach_target` set host_id and nothing
+    # ever read it at deploy time, so an app onboarded through the wizard failed preflight with
+    # "no ssh_key bound to this target" while its host sat verified two panels away.
+    #
+    # Resolved through the host rather than COPIED into the target on attach, deliberately.
+    # A copy is a second writable home for one credential: rotate the host key and every
+    # target still points at the retired one. Same reasoning that makes `target_ref` derived.
+    if name == "ssh_key" and target.get("host_id") and connection is not None:
+        row = connection.execute(
+            sql("SELECT key_secret_ref FROM deployment_hosts WHERE id = :i"),
+            {"i": target["host_id"]}).mappings().first()
+        if row and row["key_secret_ref"]:
+            return resolve_secret_ref(connection, row["key_secret_ref"], settings)
     return None
 
 

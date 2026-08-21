@@ -23,7 +23,9 @@ import React, { useCallback, useEffect, useState } from "react";
 
 import { formatDateTime } from "../lib/datetime";
 import { getDeliveryPipelineAction } from "./actions";
-import { OnboardWizard, SecretsPanel, TargetControls, type SecretsView } from "./delivery-manage";
+import {
+  FleetPanel, OnboardWizard, SecretsPanel, TargetControls, type SecretsView,
+} from "./delivery-manage";
 import { DeployWizard, RecentDeployments } from "./deploy-ui";
 
 type Stage = {
@@ -44,6 +46,8 @@ type Target = {
   repo_owner?: string | null; app_entry?: string | null; app_port?: string | null;
   domains?: string[] | null;
   auto_deploy?: boolean; paused?: boolean;
+  /** Read by `deployedUrl` so a link and its health probe cannot disagree about the scheme. */
+  health_checks?: Array<{ scheme?: string; path?: string }> | null;
 };
 export type Pipeline = {
   project_id: string; stages: Stage[]; targets: Target[]; configured: boolean;
@@ -52,6 +56,28 @@ export type Pipeline = {
   sandbox_merge_enabled?: boolean;
   error?: string;
 };
+
+/**
+ * The URL a deployed app is actually reachable on.
+ *
+ * The scheme is READ, never assumed. This file hardcoded `https://` while `deploy-ui.tsx`
+ * hardcoded `http://` — two files with two opinions about one address, so the console offered
+ * a TLS link to a plain-HTTP app and the click failed with a protocol error that looked like
+ * the deployment was broken. The target already declares its scheme for the health probe;
+ * the link uses the same answer.
+ */
+export function deployedUrl(
+  domain?: string | null,
+  target?: { health_checks?: Array<{ scheme?: string }> | null } | null,
+): string | undefined {
+  if (!domain) return undefined;
+  if (/^https?:\/\//i.test(domain)) return domain;
+  const declared = target?.health_checks?.[0]?.scheme;
+  // No declaration: a bare host:port is a plain address, not a certificate. Guessing https
+  // there is the guess that produced this bug.
+  const scheme = declared || (/:\d+$/.test(domain) ? "http" : "https");
+  return `${scheme}://${domain}`;
+}
 
 const tone = (s: string | null) => {
   if (!s) return "#8b949e";
@@ -327,7 +353,7 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
       label: "Live",
       sub: healthy === true ? "open app ↗" : healthy === false ? "unhealthy" : "not checked",
       state: healthy === true ? "done" : healthy === false ? "blocked" : "todo",
-      href: healthy === true && domain ? `https://${domain}` : undefined,
+      href: healthy === true ? deployedUrl(domain, target) : undefined,
       title: healthy === true
         ? "Health checks passed — open the running app"
         : healthy === false
@@ -362,7 +388,7 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
       <div className="ct-card-foot">
         <span className="detail">{target.repo_owner ? `${target.repo_owner}/` : ""}{target.repo}</span>
         {domain ? (
-          <a className="detail" href={`https://${domain}`} target="_blank" rel="noreferrer">
+          <a className="detail" href={deployedUrl(domain, target)} target="_blank" rel="noreferrer">
             {domain} ↗
           </a>
         ) : <span className="detail">no domain yet</span>}
@@ -429,17 +455,18 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
   return (
     <div style={{ display: "grid", gap: 18 }} data-empty-state="configured">
       <SandboxDeployFlagNotice enabled={data.sandbox_deploy_enabled} />
-      <div><DeployWizard targets={(data.targets || []) as any} /></div>
 
-      {/* Onboarding and credentials: the steps that used to be SQL and ssh-keygen.
-          Health and the metrics stack now live in the Monitoring area — this page is about
-          getting a change shipped, not about how it behaves afterwards. */}
-      <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
-      <SecretsPanel initial={secrets} />
+      {/* THIS SCREEN IS SETUP. The day-to-day loop is not here.
+          Once an app is pointed at a verified host, approving a preview deploys it and the
+          result appears on the app card — so the only reason to come back is to add a host,
+          add an app, or look at what happened. Seven stacked panels made that impossible to
+          see: two overlapping onboarding wizards, a raw credential table, and a manual deploy
+          form all competed with the two things anyone actually needs. */}
+      <FleetPanel projectId={data.project_id} targets={(data.targets || []) as any} />
 
       {/* ---- targets: one card per app, the console's card ---- */}
       <section className="ct-block">
-        <div className="ct-block-title">Deployment targets</div>
+        <div className="ct-block-title">Apps and where they deploy</div>
         <div className="mr-grid ct-tiles" style={{ marginTop: 10 }}>
           {data.targets.map((t) => (
             <DeliveryTargetCard
@@ -462,6 +489,20 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
           it already appears under Code Tasks. Replaced by actual deployments, with their steps
           and logs one click away. */}
       <RecentDeployments deployments={deployments?.deployments} />
+
+      {/* Everything below is reachable, not prominent. None of it is deleted: a credential you
+          can only inspect through the API is a credential nobody can debug at 2am. But none of
+          it belongs in the path of someone shipping a change either. */}
+      <details className="dm-advanced">
+        <summary className="detail">Advanced — credentials, manual deploy, per-app onboarding</summary>
+        <div style={{ display: "grid", gap: 18, marginTop: 12 }}>
+          {/* Still the right tool for the FIRST deploy of an app that merged before it had a
+              target — BugBox is exactly that. Not the everyday path. */}
+          <div><DeployWizard targets={(data.targets || []) as any} /></div>
+          <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
+          <SecretsPanel initial={secrets} />
+        </div>
+      </details>
     </div>
   );
 }

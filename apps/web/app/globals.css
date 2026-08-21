@@ -5037,6 +5037,152 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ct-actions > * { flex: 0 0 auto; }
 /* The change control is secondary to "run it again", but it is still a control. */
 .ct-change-btn { white-space: nowrap; }
+/* Linking an app to a VM, from the card. Sits inside .ct-deploy-line, so it inherits the row
+   treatment rather than introducing a second one. */
+.ct-deploy-setup { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ct-deploy-setup input, .ct-deploy-setup select {
+  font-size: 12px; padding: 4px 7px; border-radius: 6px;
+  background: var(--surface-2, rgba(255,255,255,.04));
+  border: 1px solid var(--border, rgba(255,255,255,.14)); color: inherit;
+}
+
+/* The deployment line on an app card: one row, secondary to the actions above it. It reports;
+   it is not a control surface. The exception is Retry, which has to be reachable at exactly
+   the moment the row says something went wrong. */
+.ct-deploy-line {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  /* min-width:0 is the fix for the overflow: a flex child defaults to min-width:auto, so a
+     long failure reason pushed the row — and the Retry button — outside the card. */
+  min-width: 0; max-width: 100%;
+  margin-top: 4px; padding: 5px 8px;
+  border-radius: var(--r, 8px);
+  background: var(--surface-2, #0F1830);
+  border: 1px solid var(--border, #1C2740);
+  font-size: .74rem;
+}
+.ct-deploy-line > * { min-width: 0; }
+/* The reason is context, not the headline. Full text stays in the tooltip. */
+.ct-deploy-reason {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 26ch;
+}
+/* Progress lives under the status row, inside the card. A deployment that reports nothing
+   until it ends is the thing the live stepper was built to fix; not surfacing it here would
+   send someone to the CI/CD screen for exactly the information the card is already polling. */
+.ct-deploy-wrap { display: grid; gap: 0; min-width: 0; }
+.ct-deploy-steps {
+  margin: -1px 0 0; padding: 8px 10px;
+  border: 1px solid var(--border, #1C2740); border-top: 0;
+  border-radius: 0 0 var(--r, 8px) var(--r, 8px);
+  background: var(--surface-2, #0F1830);
+  font-size: .72rem; overflow-x: auto;
+}
+.ct-deploy-line .ct-deploy-toggle {
+  font-size: 11px; padding: 3px 9px; margin-left: auto;
+}
+
+/* Deploying is a real action, and on an app that has never shipped it IS the primary one —
+   so it takes the same `.cap-btn.primary` the card's main control uses rather than a
+   lookalike with its own sizes. The previous version set its own font-size and padding,
+   which is exactly how a button ends up "styled" and still visibly smaller than the thing
+   it was meant to match.
+   Only the gap and icon alignment are added here; everything else is inherited. */
+.ct-deploy-line .ct-deploy-action {
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.ct-deploy-line .ct-deploy-action svg { flex: 0 0 auto; }
+/* Retry follows a failure, so it carries the failure's colour instead of the accent. */
+.ct-deploy-line[data-deploy-status="failed"] .ct-deploy-action,
+.ct-deploy-line[data-deploy-status="rolled_back"] .ct-deploy-action {
+  background: var(--red, #F2647A); border-color: var(--red, #F2647A);
+  color: #fff;
+}
+.ct-deploy-line[data-deploy-status="failed"],
+.ct-deploy-line[data-deploy-status="rolled_back"] { border-color: rgba(242,100,122,.35); }
+
+/* Advanced: reachable, never in the way. Setup screens accrete panels because every one of
+   them was needed once; a disclosure keeps that history without charging the everyday user
+   for it. */
+.dm-advanced { border-top: 1px solid var(--border, #1C2740); padding-top: 12px; }
+.dm-advanced > summary { cursor: pointer; opacity: .75; }
+.dm-advanced > summary:hover { opacity: 1; }
+
+/* Retire: reachable at every stage, but never the thing your eye lands on first. */
+.fleet-retire { margin-top: 2px; }
+.fleet-retire > summary { cursor: pointer; opacity: .75; }
+.fleet-retire > summary:hover { opacity: 1; }
+.fleet-retire label { display: block; }
+.fleet-retire em { opacity: .7; }
+
+/* ---- Host onboarding wizard --------------------------------------------
+   The stage is DERIVED from host state, so this bar reports where a host IS —
+   it is not a set of tabs someone can jump between. */
+.fleet-steps {
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  list-style: none; margin: 2px 0; padding: 0;
+}
+.fleet-step {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: .74rem; color: var(--faint, #8092B3);
+}
+.fleet-step-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid var(--border-strong, #26365C);
+  font-size: .66rem; line-height: 1;
+}
+.fleet-step[data-state="current"] { color: var(--ink, #EEF3FB); font-weight: 600; }
+.fleet-step[data-state="current"] .fleet-step-dot {
+  border-color: var(--accent, #2F6FE0); background: var(--accent-soft, rgba(47,111,224,.14));
+  color: var(--accent-text, #2EC5C5);
+}
+.fleet-step[data-state="done"] { color: var(--green, #34D399); }
+.fleet-step[data-state="done"] .fleet-step-dot {
+  border-color: var(--green, #34D399); color: var(--green, #34D399);
+}
+/* The panel for the CURRENT step only. Indented so it reads as belonging to the stage bar
+   above it rather than as another row of controls. */
+.fleet-stage {
+  display: grid; gap: 8px;
+  padding: 10px 12px; border-radius: var(--r, 8px);
+  background: var(--surface-2, #0F1830);
+  border: 1px solid var(--border, #1C2740);
+}
+
+/* ---- Card overflow menu ------------------------------------------------
+   The action row had five same-weight buttons, so the common action (see the app)
+   competed with four rare ones. One primary stays; the rest live behind this. */
+.ct-menu-wrap { position: relative; display: inline-flex; }
+.ct-menu-trigger {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; padding: 0;            /* square: it holds a glyph, not a word */
+}
+.ct-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+  min-width: 264px; padding: 6px;
+  background: var(--surface-3, #16213C);
+  border: 1px solid var(--border-strong, #26365C);
+  border-radius: var(--r-lg, 10px);
+  box-shadow: var(--shadow-lg, 0 30px 80px rgba(0,0,0,.6));
+  display: grid; gap: 2px;
+}
+.ct-menu-item {
+  display: flex; align-items: flex-start; gap: 9px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--ink, #EEF3FB);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.ct-menu-item:hover, .ct-menu-item:focus-visible {
+  background: var(--accent-soft, rgba(47,111,224,.14));
+  outline: none;
+}
+/* Focus must be visible: the menu is keyboard-navigable and a hover-only affordance
+   would leave arrow-key users unable to see where they are. */
+.ct-menu-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-line, rgba(47,111,224,.4)); }
+.ct-menu-icon { display: inline-flex; margin-top: 1px; color: var(--accent-text, #2EC5C5); }
+.ct-menu-text { display: grid; gap: 1px; }
+.ct-menu-label { font-size: .82rem; font-weight: 550; line-height: 1.25; }
+.ct-menu-hint { font-size: .72rem; color: var(--faint, #8092B3); line-height: 1.3; }
+
 /* Once open, the form owns the row: a three-line textarea has no business sharing it. */
 .ct-change-form { flex: 1 1 100%; display: grid; gap: 8px; }
 
@@ -5165,7 +5311,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   padding: 12px 14px; border-bottom: 1px solid var(--border);
 }
 .bx-dock-head code { margin-left: auto; font-size: 11px; }
-.bx-dock-close { padding: 4px 10px; font-size: 0.74rem; }
+/* Icon button: square, not text-shaped. The old 4px/10px was sized for the word
+   "Close"; keeping it around a 14px glyph left the X floating off-centre. */
+.bx-dock-close { display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; line-height: 1; flex: 0 0 auto; }
 /* THE SCROLL. min-height:0 is the whole fix: a flex child defaults to min-height:auto, so the
    body grew to fit the transcript instead of scrolling, and older messages went off-screen
    with no way back to them. */

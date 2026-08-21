@@ -29,6 +29,13 @@ import {
   setAutoDeployAction,
   teardownTargetAction, verifySecretAction,
 } from "./actions";
+import {
+  adoptHostKeyAction, generateHostKeyAction, installHostKeyAction,
+  attachTargetToHostAction, listDeploymentHostsAction, provisionHostAction,
+  registerDeploymentHostAction,
+  retireHostAction,
+  verifyDeploymentHostAction,
+} from "./actions";
 import { LiveDeployment } from "./deploy-ui";
 
 type Secret = {
@@ -1103,4 +1110,437 @@ export function TargetControls({ target, shipped, onChanged }: {
     )}
    </div>
   );
+}
+
+/**
+ * The fleet: VMs, and the apps riding on each — as a WIZARD, not a control panel.
+ *
+ * The first version put every capability in one row: adopt, generate, install, provision,
+ * verify, and a backend picker. Six same-weight buttons with no order, so the honest question
+ * ("what do I press next?") had no answer on screen — and the wrong answer (Generate key)
+ * silently ROTATED the credential and invalidated an install command the operator was
+ * part-way through running.
+ *
+ * So the stage is DERIVED from the host's own state rather than chosen by the operator, and
+ * only the action that advances that stage is offered as primary. Everything else stays
+ * reachable but demoted. The rule this encodes: a wizard that lets you press step 4 while
+ * step 2 is unfinished is a control panel wearing a costume.
+ */
+
+type FleetHost = {
+  id: string; name: string; address: string; ssh_user: string; ssh_port: number;
+  status: string; arch?: string | null; app_count: number;
+  apps?: Array<{ app_name: string }>;
+  key_secret_ref?: string | null;
+  install_command?: string | null;
+  install_variants?: Record<string, string | boolean> | null;
+  last_preflight?: {
+    reachable?: boolean; problems?: string[];
+    findings?: Array<{ kind: string; detail: string; remedy: string }>;
+  } | null;
+};
+
+type Stage = "credential" | "install" | "verify" | "provision" | "ready";
+
+const STAGES: Array<{ id: Stage; label: string }> = [
+  { id: "credential", label: "Credential" },
+  { id: "install", label: "Authorise" },
+  { id: "verify", label: "Verify" },
+  { id: "provision", label: "Provision" },
+  { id: "ready", label: "Ready" },
+];
+
+/** Where this host actually is, read from its own state — never from what was last clicked. */
+export function hostStage(h: FleetHost): Stage {
+  const pf = h.last_preflight ?? {};
+  const problems = pf.problems ?? [];
+  if (h.status === "verified") return "ready";
+  if (!h.key_secret_ref) return "credential";
+  // A pending install line means BOSS minted a key that is not on the box yet. That is a
+  // distinct state from "we never had a credential", and conflating them is what made
+  // "Generate key" look like the remedy for a key that was already generated.
+  if (h.install_command && !pf.reachable) return "install";
+  if (!pf.reachable) return "verify";
+  if (problems.some((p) => /docker/i.test(p))) return "provision";
+  return "verify";
+}
+
+function StageBar({ current }: { current: Stage }) {
+  const at = STAGES.findIndex((s) => s.id === current);
+  return (
+    <ol className="fleet-steps" aria-label="Host onboarding progress">
+      {STAGES.map((s, i) => (
+        <li key={s.id} className="fleet-step"
+            data-state={i < at ? "done" : i === at ? "current" : "todo"}
+            aria-current={i === at ? "step" : undefined}>
+          <span className="fleet-step-dot">{i < at ? "✓" : i + 1}</span>
+          <span>{s.label}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export function FleetPanel({ projectId, targets = [] }: {
+  projectId: string;
+  /** The project's deployment targets, so a verified host can be linked to an app without
+   *  leaving the wizard — "where does this run?" is the question a freshly-onboarded host
+   *  immediately raises, and answering it elsewhere is how hosts end up verified and unused. */
+  targets?: Array<{ id: string; app_name: string; environment: string; host_id?: string | null }>;
+}) {
+  const [hosts, setHosts] = React.useState<FleetHost[]>([]);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+  const [minted, setMinted] = React.useState<Record<string, any>>({});
+  const [openReg, setOpenReg] = React.useState(false);
+  const [adoptFor, setAdoptFor] = React.useState<string | null>(null);
+  const [keyBackend, setKeyBackend] = React.useState("file");
+  const [copied, setCopied] = React.useState<string | null>(null);
+  const [route, setRoute] = React.useState<Record<string, string>>({});
+
+  const reload = React.useCallback(async () => {
+    const r = await listDeploymentHostsAction(projectId);
+    if (r.ok) setHosts((((r.data as any)?.hosts ?? []) as FleetHost[]));
+    else setErr(r.error ?? "could not load hosts");
+  }, [projectId]);
+
+  React.useEffect(() => { void reload(); }, [reload]);
+
+  async function run(fn: () => Promise<{ ok: boolean; error?: string; data?: any }>,
+                    after?: (d: any) => void) {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fn();
+      if (!r.ok) setErr(r.error ?? "failed");
+      else after?.(r.data);
+      await reload();
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <section className="ct-block" data-testid="fleet-panel">
+      <div className="ct-block-title">Hosts</div>
+      <p className="detail" style={{ marginTop: 0 }}>
+        The machines apps deploy to. One key per host — rotating it never touches the apps
+        riding on it.
+      </p>
+
+      {err ? <div className="cap-badge tone-red" data-testid="fleet-error">{err}</div> : null}
+
+      {hosts.length === 0 ? (
+        <p className="detail">No hosts yet. Register one to give BOSS somewhere to deploy.</p>
+      ) : null}
+
+      <div style={{ display: "grid", gap: 14 }}>
+        {hosts.map((h) => {
+          const stage = hostStage(h);
+          const pf = h.last_preflight ?? {};
+          const cmd = minted[h.id]?.install_command || h.install_command;
+          const tone = h.status === "verified" ? "tone-green"
+            : h.status === "degraded" ? "tone-red" : "tone-amber";
+          return (
+            <div key={h.id} className="ct-outcome" data-testid="fleet-host"
+                 data-stage={stage} style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <strong>{h.name}</strong>
+                <code className="detail">{h.ssh_user}@{h.address}:{h.ssh_port}</code>
+                <span className={`cap-badge ${tone}`}>{h.status}</span>
+                {h.arch ? <span className="cap-badge tone-blue">{h.arch}</span> : null}
+                <span className="detail">
+                  {h.app_count} app{h.app_count === 1 ? "" : "s"}
+                  {h.app_count ? `: ${(h.apps ?? []).map((a) => a.app_name).join(", ")}` : ""}
+                </span>
+              </div>
+
+              <StageBar current={stage} />
+
+              {/* ── STEP 1: a credential. Two honest routes, stated as a choice. ── */}
+              {stage === "credential" ? (
+                <div className="fleet-stage">
+                  <p className="detail" style={{ margin: 0 }}>
+                    BOSS needs a way in. It cannot place the FIRST key on a machine it has no
+                    access to — so either lend it a key that already works, or have it mint one
+                    for you to push.
+                  </p>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <ActionButton busy={busy}
+                      label={adoptFor === h.id ? "Cancel" : "I have a key that works"}
+                      busyLabel="…" onClick={() => setAdoptFor(adoptFor === h.id ? null : h.id)} />
+                    <ActionButton busy={busy} label="Generate a key for me" busyLabel="Generating…"
+                      title="BOSS mints a keypair; you push the public half with one command"
+                      onClick={() => run(
+                        () => generateHostKeyAction(null, formOf({ host_id: h.id, backend: keyBackend })),
+                        (d) => setMinted((p) => ({ ...p, [h.id]: d })))} />
+                    <label className="detail" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                      store in
+                      <select value={keyBackend} onChange={(e) => setKeyBackend(e.target.value)}
+                              aria-label="Secret backend for this host's key">
+                        <option value="file">file (local)</option>
+                        <option value="platform_secret_store">platform_secret_store</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {adoptFor === h.id ? (
+                    <form style={{ display: "grid", gap: 6, marginTop: 6 }}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const fd = new FormData(e.currentTarget as HTMLFormElement);
+                        fd.set("host_id", h.id); fd.set("backend", keyBackend);
+                        void run(() => adoptHostKeyAction(null, fd), () => setAdoptFor(null));
+                      }}>
+                      <span className="detail">
+                        Paste the PRIVATE key that already works on {h.address}. It goes straight
+                        to the secret store — BOSS keeps a reference and a fingerprint, never the
+                        key itself.
+                      </span>
+                      <textarea name="private_key" rows={4} required
+                                aria-label="Existing private key for this host"
+                                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                                style={{ width: "100%", fontFamily: "var(--mono)", fontSize: 12 }} />
+                      <div><button className="cap-btn" type="submit" disabled={busy}>Adopt key</button></div>
+                    </form>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* ── STEP 2: the one thing BOSS cannot do for you. ── */}
+              {stage === "install" && cmd ? (
+                <div className="fleet-stage" data-testid="fleet-install">
+                  {/* Onboarding does not fail because a customer is careless — it fails because
+                      the tool assumed a situation they are not in. So ask which one. */}
+                  <label className="detail" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    How will you reach {h.address}?
+                    <select value={route[h.id] ?? "from_laptop"}
+                            aria-label="How you can reach this host"
+                            onChange={(e) => setRoute((p) => ({ ...p, [h.id]: e.target.value }))}>
+                      <option value="from_laptop">I can SSH to it from my machine</option>
+                      <option value="on_host">Only a provider web console</option>
+                      <option value="cloud_init">It doesn’t exist yet</option>
+                    </select>
+                  </label>
+                  <strong style={{ color: "var(--amber, #F5B544)" }}>
+                    {(route[h.id] ?? "from_laptop") === "from_laptop"
+                      ? `Run this FROM YOUR MACHINE — it pushes the key to ${h.ssh_user}@${h.address}.`
+                      : (route[h.id] === "on_host"
+                        ? "Paste this INTO THE PROVIDER CONSOLE, logged in on the host."
+                        : "Give this as user-data when you create the machine — then nothing manual happens at all.")}
+                  </strong>
+                  <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", margin: "6px 0" }}>
+                    {(() => {
+                      const v = (minted[h.id]?.install_variants || h.install_variants) as any;
+                      const key = route[h.id] ?? "from_laptop";
+                      return (v?.[key]) || cmd;
+                    })()}
+                  </pre>
+                  {(route[h.id] ?? "from_laptop") === "from_laptop" ? (
+                    <p className="detail" style={{ margin: 0 }}>
+                      <code>Permission denied (publickey)</code> here means <em>your</em> access
+                      needs a key — set “Your SSH key” on the host and this command will carry
+                      the right <code>-i</code>.
+                    </p>
+                  ) : null}
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <ActionButton busy={false} label={copied === h.id ? "Copied" : "Copy command"}
+                      busyLabel="…" onClick={() => {
+                        void navigator.clipboard?.writeText(cmd);
+                        setCopied(h.id); window.setTimeout(() => setCopied(null), 2000);
+                      }} />
+                    <ActionButton busy={busy} label="I've run it — verify" busyLabel="Connecting…"
+                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                  </div>
+                  {/* The trap this wizard exists to close. */}
+                  <p className="detail" style={{ margin: "6px 0 0" }}>
+                    Expect <code>BOSS_KEY_INSTALLED</code>. Don’t generate another key — that
+                    mints a new one and invalidates this command.
+                  </p>
+                </div>
+              ) : null}
+
+              {/* ── STEP 3: prove it, with a real session. ── */}
+              {stage === "verify" ? (
+                <div className="fleet-stage">
+                  <p className="detail" style={{ margin: 0 }}>
+                    BOSS has a credential for this host. Verify opens a real SSH session — it is
+                    evidence, not a checkbox.
+                  </p>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
+                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                    <ActionButton busy={busy} label="Let BOSS install its own key"
+                      busyLabel="Installing…"
+                      title="Replaces the borrowed credential with one BOSS owns and can rotate"
+                      onClick={() => run(() => installHostKeyAction(
+                        null, formOf({ host_id: h.id, backend: keyBackend })))} />
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ── STEP 4: make it able to actually run something. ── */}
+              {stage === "provision" ? (
+                <div className="fleet-stage">
+                  <p className="detail" style={{ margin: 0 }}>
+                    Reachable, but it cannot run a deployment yet — BOSS ships apps as
+                    containers and this host has no docker.
+                  </p>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <ActionButton busy={busy} label="Install docker" busyLabel="Provisioning…"
+                      onClick={() => run(() => provisionHostAction(null, formOf({ host_id: h.id })))} />
+                    <ActionButton busy={busy} label="Verify" busyLabel="Connecting…"
+                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ── DONE. ── */}
+              {stage === "ready" ? (
+                <div className="fleet-stage" data-testid="fleet-ready">
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="cap-badge tone-green">Ready to deploy</span>
+                    {h.app_count ? (
+                      <span className="detail">
+                        Running here: {(h.apps ?? []).map((a) => a.app_name).join(", ")}
+                      </span>
+                    ) : (
+                      <span className="detail">Nothing points here yet.</span>
+                    )}
+                  </div>
+
+                  {/* THE LINK. A verified host with no app is a machine nobody deploys to, and
+                      the question "which app runs here?" arrives the moment onboarding ends —
+                      so it is answered here rather than on another screen. */}
+                  {(() => {
+                    const free = targets.filter((t) => !t.host_id);
+                    if (!free.length) {
+                      return (
+                        <span className="detail">
+                          {targets.length
+                            ? "Every app is already pointed at a host."
+                            : "No apps registered yet — add one below to deploy here."}
+                        </span>
+                      );
+                    }
+                    return (
+                      <form style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const fd = new FormData(e.currentTarget as HTMLFormElement);
+                          fd.set("host_id", h.id);
+                          void run(() => attachTargetToHostAction(null, fd));
+                        }}>
+                        <label className="detail" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          Deploy here:
+                          <select name="target_id" aria-label="App to deploy to this host">
+                            {free.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.app_name} ({t.environment})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <button className="cap-btn" type="submit" disabled={busy}>
+                          Set as target
+                        </button>
+                      </form>
+                    );
+                  })()}
+
+                  <div>
+                    <ActionButton busy={busy} label="Re-verify" busyLabel="Connecting…"
+                      onClick={() => run(() => verifyDeploymentHostAction(null, formOf({ host_id: h.id })))} />
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Retire is available at EVERY stage, not just when Ready. Onboarding that can
+                  only be undone once it has succeeded is not undoable — the moment you most
+                  want out is halfway through, when something is wrong. */}
+              <details className="fleet-retire">
+                <summary className="detail">Retire this host…</summary>
+                <form style={{ display: "grid", gap: 6, marginTop: 6 }}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const fd = new FormData(e.currentTarget as HTMLFormElement);
+                    fd.set("host_id", h.id);
+                    for (const k of ["revoke_key", "remove_docker", "purge", "force"]) {
+                      fd.set(k, fd.get(k) === "on" ? "true" : "false");
+                    }
+                    void run(() => retireHostAction(null, fd));
+                  }}>
+                  <span className="detail">
+                    Removes only the keys BOSS put on {h.address} (a backup is left beside the
+                    file). A key you lent BOSS is never removed.
+                  </span>
+                  <label className="detail">
+                    <input type="checkbox" name="revoke_key" defaultChecked /> revoke BOSS’s key
+                    on the host
+                  </label>
+                  <label className="detail">
+                    <input type="checkbox" name="remove_docker" /> also uninstall docker
+                    <em> — only if nothing else on this box uses it</em>
+                  </label>
+                  <label className="detail">
+                    <input type="checkbox" name="purge" /> delete the record entirely
+                    <em> — otherwise it is kept, marked retired, for the audit trail</em>
+                  </label>
+                  {h.app_count ? (
+                    <label className="detail">
+                      <input type="checkbox" name="force" /> detach the {h.app_count} app(s)
+                      still pointed here
+                    </label>
+                  ) : null}
+                  <div>
+                    <button className="cap-btn tone-red" type="submit" disabled={busy}>
+                      Retire host
+                    </button>
+                  </div>
+                </form>
+              </details>
+
+              {/* Findings stay visible at every stage: they are the reason for the stage. */}
+              {(pf.findings ?? []).length ? (
+                <ul className="detail" data-testid="fleet-findings" style={{ margin: 0 }}>
+                  {(pf.findings ?? []).map((f, i) => (
+                    <li key={i}><strong>{f.kind}</strong>: {f.remedy || f.detail}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 12 }}>
+        <ActionButton busy={busy} label={openReg ? "Cancel" : "Register a host"}
+          busyLabel="…" onClick={() => setOpenReg((v) => !v)} />
+      </div>
+
+      {openReg ? (
+        <form style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const fd = new FormData(e.currentTarget as HTMLFormElement);
+            fd.set("project_id", projectId);
+            void run(() => registerDeploymentHostAction(null, fd), () => setOpenReg(false));
+          }}>
+          <Field label="Name" name="name" placeholder="hetzner-ci-01" required />
+          <Field label="Address" name="address" placeholder="2.29.2.202" required />
+          <Field label="SSH user" name="ssh_user" defaultValue="root" />
+          {/* Left blank on purpose: verify reads `uname -m` from the box and corrects it. */}
+          <Field label="Arch (optional)" name="arch" placeholder="detected on verify" />
+          {/* BOSS cannot discover this, and getting it wrong fails the push with an error that
+              points at the host instead of at the laptop. Blank = "my default ssh works". */}
+          <Field label="Your SSH key (optional)" name="admin_identity_file"
+                 placeholder="~/.ssh/id_ed25519 — blank if plain ssh works" />
+          <button className="cap-btn" type="submit" disabled={busy}>Register</button>
+        </form>
+      ) : null}
+    </section>
+  );
+}
+
+function formOf(values: Record<string, string>): FormData {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(values)) fd.set(k, v);
+  return fd;
 }

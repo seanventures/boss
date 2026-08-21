@@ -26,12 +26,19 @@ import {
   overrideCodeTaskAction,
   followUpCodeTaskAction,
   conveneMeetingAction,
+  deployRunNowAction,
+  listDeploymentHostsAction,
+  retryDeploymentAction,
+  runDeploymentsAction,
+  setupDeploymentAction,
 } from "./actions";
+import { LiveDeployment } from "./deploy-ui";
 import { Markdown } from "./markdown";
 import { ClientRelativeTime } from "./client-relative-time";
 import { JourneySpine } from "./journey-spine-ui";
 import {
-  ArrowSquareOut, ChatCircleDots, PencilSimple, PlayCircle, Sparkle,
+  ArrowSquareOut, ArrowsClockwise, ChatCircleDots, DotsThree, PencilSimple,
+  PlayCircle, RocketLaunch, Sparkle,
 } from "@phosphor-icons/react";
 
 import { SubmitButton } from "./submit-button";
@@ -607,21 +614,363 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }
  * wrong. The panel debates, writes a PRD, and the existing approval path starts the build --
  * the same route "Launch BugBox" takes, so nothing new is invented in the pipeline.
  */
-function RebuildWithSpec({ run, projectId, actor, mode = "rebuild" }: {
+
+/**
+ * Point this app at a VM — the association that makes every later deploy automatic.
+ *
+ * The link is a row in `deployment_targets`: (project, app_name, environment) → host_id, with
+ * `target_ref` DERIVED from the host so the address has one writable home. On merge,
+ * `delivery_pipeline.targets_for()` resolves the app's targets and ships to each. That is the
+ * whole of "future deployments happen automatically" — the association IS the automation.
+ *
+ * Offered on the card because the alternative was a wizard on another screen, which is the
+ * trip this work exists to remove. Shown only when the app has no destination yet.
+ */
+function SetupDeployment({ run, projectId, onDone }: {
+  run: CodeTaskRun; projectId: string; onDone: () => void;
+}) {
+  const [hosts, setHosts] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const app = appIdentity(run);
+
+  useEffect(() => {
+    void listDeploymentHostsAction(projectId).then((r) => {
+      if (r.ok) setHosts((((r.data as any)?.hosts ?? []) as any[])
+        // Only VERIFIED hosts. Offering an unproven one produces a target that fails at
+        // deploy time, far from the moment the choice was made.
+        .filter((h) => h.status === "verified"));
+    });
+  }, [projectId]);
+
+  const ready = hosts.length > 0;
+  return (
+    <div className="ct-deploy-setup" data-testid="app-setup-deployment">
+      {!ready ? (
+        // Naming the missing thing beats an empty picker: "no hosts" reads as a broken form.
+        <span className="detail">
+          No verified host yet. Onboard one in CI/CD → Hosts, then this app can be pointed at it.
+        </span>
+      ) : (
+        <form
+          style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const fd = new FormData(e.currentTarget as HTMLFormElement);
+            fd.set("run_id", run.id);
+            setBusy(true); setMsg(null);
+            const r = await setupDeploymentAction(null, fd);
+            setBusy(false);
+            setMsg(r.ok
+              ? `target set: ${(r.data as any)?.host ?? "host"} — deploy it once below`
+              : (r.error ?? "could not set the target"));
+            if (r.ok) onDone();
+          }}
+        >
+          {/* "Target", not "host". `deployment_targets` is what the model calls this, and a
+              button that says "host" while the data says "target" gives one concept two
+              names — the kind of drift that later makes a docs page and a screen disagree.
+              A host is the MACHINE; the target is this app's placement on it. */}
+          <span className="detail">App&rsquo;s target:</span>
+          <select name="host_id" aria-label="Host to deploy this app to">
+            {hosts.map((h) => (
+              <option key={h.id} value={h.id}>{h.name} ({h.arch ?? "?"})</option>
+            ))}
+          </select>
+          {/* Defaulted from the card, editable: the app's DISPLAY name and the name a
+              container is created under are not always the same string, and the second one
+              is the one a deploy has to live with. */}
+          <input name="app_name" defaultValue={app.name}
+                 aria-label="App name on the host"
+                 style={{ width: 130, fontSize: 12 }} />
+          <input name="app_port" placeholder="port (auto)"
+                 aria-label="App port — blank lets BOSS pick a free one"
+                 style={{ width: 92, fontSize: 12 }} />
+          <button className="cap-btn" type="submit" disabled={busy}>
+            {busy ? "Saving…" : "Set target"}
+          </button>
+        </form>
+      )}
+      {msg ? <span className="detail" style={{ marginLeft: 6 }}>{msg}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * What this app SHIPPED, on the card where it was approved.
+ *
+ * The point of the delivery work is that approving a preview deploys the app without anyone
+ * visiting the CI/CD screen — which only holds if the result is visible here. Otherwise
+ * "autonomous" means "happens somewhere you have to go and look", which is the same number of
+ * screens with an extra step of faith.
+ *
+ * Renders nothing when the app has never deployed: a card for a task that was never meant to
+ * ship should not grow a permanently empty deployment row.
+ */
+function DeploymentLine({ run, projectId, deployable }: {
+  run: CodeTaskRun; projectId: string;
+  /** Has this app produced reviewed code? A blocked or still-building task has nothing to
+   *  ship, and offering "Deploy now" there promises something the pipeline cannot honour —
+   *  it would clone, build, transfer, and only then fail at the health gate. */
+  deployable: boolean;
+}) {
+  const [linked, setLinked] = useState<string | null>(null);
+  const [targetId, setTargetId] = useState<string | null>(null);
+  const [deploys, setDeploys] = useState<any[]>([]);
+  const [retrying, setRetrying] = useState(false);
+  // Set the moment a deploy is accepted and cleared only when a live run is
+  // visible. Without it the button re-enabled as soon as the POST returned —
+  // before any deployment_run existed to render — so the card still said "not
+  // deployed" with an ACTIVE button beside it, and a second click would start a
+  // second deployment of the same commit.
+  const [starting, setStarting] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const r = await runDeploymentsAction(run.id, appIdentity(run).name);
+    if (r.ok) {
+      const d = (r.data as any) ?? {};
+      setDeploys((d.deployments ?? []) as any[]);
+      setLinked(d.linked_host ?? null);
+      setTargetId(d.linked_target_id ?? null);
+    }
+  }, [run]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // Poll only while something is actually moving. A card that polls forever is a card that
+  // keeps a browser and an API busy describing a deployment that finished yesterday.
+  const latest = deploys[0];
+  const live = latest && ["created", "running", "in_progress", "deploying"].includes(latest.status);
+  // The deployment row now reports its own state, so the optimistic latch can stand down.
+  useEffect(() => { if (latest) setStarting(false); }, [latest]);
+  useEffect(() => {
+    if (!live) return;
+    const t = window.setInterval(() => { void load(); }, 4000);
+    return () => window.clearInterval(t);
+  }, [live, load]);
+
+  // No deployment yet. That is either "no destination" (offer to link one) or "linked but
+  // never shipped" (offer the first deploy). Rendering nothing here is what left an already
+  // merged app with no way forward on its own card.
+  // Nothing to ship, or still shipping it: the row would be an empty promise on a card that
+  // already says BLOCKED or BUILDING two inches above.
+  if (!deployable && !latest) return null;
+
+  if (!latest) {
+    return (
+      <div className="ct-deploy-line" data-testid="app-deployment-none">
+        {linked ? (
+          <>
+            <span className="cap-badge tone-amber">not deployed</span>
+            <span className="detail">{linked}</span>
+            <button className="cap-btn primary ct-deploy-action"
+                    disabled={retrying || starting}
+                    data-testid="app-deploy-first"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      setRetrying(true); setNote(null);
+                      const fd = new FormData();
+                      fd.set("target_id", targetId ?? "");
+                      fd.set("run_id", run.id);
+                      const r = await deployRunNowAction(null, fd);
+                      setNote(r.ok ? null : (r.error ?? "deploy failed"));
+                      if (r.ok) setStarting(true);
+                      setRetrying(false);
+                      await load();
+                    }}>
+              <RocketLaunch size={15} weight="fill" aria-hidden />{" "}
+              {retrying || starting ? "Deploying…" : "Deploy now"}
+            </button>
+            {note ? <span className="detail">{note}</span> : null}
+          </>
+        ) : (
+          <SetupDeployment run={run} projectId={projectId} onDone={load} />
+        )}
+      </div>
+    );
+  }
+
+  const ok = ["succeeded", "deployed", "completed"].includes(latest.status);
+  const failed = ["failed", "rolled_back", "execute_failed", "blocked"].includes(latest.status);
+  const where = latest.host_name || latest.environment || "target";
+
+  return (
+    <div className="ct-deploy-wrap">
+    <div className="ct-deploy-line" data-testid="app-deployment"
+         data-deploy-status={latest.status}>
+      <span className={`cap-badge ${ok ? "tone-green" : failed ? "tone-red" : "tone-amber"}`}>
+        {ok ? "deployed" : failed ? "deploy failed" : latest.status}
+      </span>
+      <span className="detail">
+        {where}
+        {latest.finished_at ? <> · <ClientRelativeTime iso={latest.finished_at} /></> : null}
+      </span>
+      {ok && latest.url ? (
+        <a className="cap-btn" href={latest.url} target="_blank" rel="noreferrer">Open ↗</a>
+      ) : null}
+      {failed ? (
+        <>
+          {/* The reason, not just the verdict. "Deploy failed" with no cause is the message
+              that sends someone to the CI/CD screen — the trip this line exists to remove. */}
+          {latest.failure_reason ? (
+            <span className="detail ct-deploy-reason" title={latest.failure_reason}>
+              {String(latest.failure_reason).slice(0, 60)}
+            </span>
+          ) : null}
+          <button className="cap-btn primary ct-deploy-action" disabled={retrying}
+                  data-testid="app-deployment-retry"
+                  title="Ship the same commit to the same target again"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setRetrying(true); setNote(null);
+                    const fd = new FormData();
+                    fd.set("deployment_run_id", latest.id);
+                    const r = await retryDeploymentAction(null, fd);
+                    setNote(r.ok ? "retry started" : (r.error ?? "retry failed"));
+                    setRetrying(false);
+                    await load();
+                  }}>
+            <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+          {note ? <span className="detail">{note}</span> : null}
+        </>
+      ) : null}
+      {/* Steps, timings and logs, without leaving the card. Reuses the CI/CD stepper rather
+          than drawing a second one: it renders real recorded state, and a lookalike here
+          would be a second opinion about what a deployment is doing. */}
+      {(live || expanded) && latest.id ? (
+        <button className="cap-btn ct-deploy-toggle"
+                onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}>
+          {expanded ? "hide steps" : "steps"}
+        </button>
+      ) : null}
+    </div>
+    {(live || expanded) && latest.id ? (
+      <div className="ct-deploy-steps" data-testid="app-deployment-steps">
+        <LiveDeployment runId={latest.id} />
+      </div>
+    ) : null}
+    </div>
+  );
+}
+
+/**
+ * The card's overflow menu.
+ *
+ * The action row had grown to five controls — preview, change, ask, feature, rebuild — all
+ * competing at the same weight, so the one thing you usually want (see the app) had to be
+ * found among four things you rarely want. One primary button stays visible; everything else
+ * moves in here.
+ *
+ * Written rather than imported because the console has no menu primitive and this is the
+ * first one. Kept to what a menu must actually do to be usable: close on Escape, close on an
+ * outside click, move with the arrow keys, and announce itself. A div that merely looks like
+ * a menu is the version that traps keyboard users.
+ */
+type MenuItem = {
+  id: string;
+  label: string;
+  icon?: React.ReactNode;
+  hint?: string;
+  onSelect: () => void;
+};
+
+function ActionMenu({ items, label = "More actions" }:
+                    { items: MenuItem[]; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const wrap = useRef<HTMLDivElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  useEffect(() => { if (open) itemRefs.current[active]?.focus(); }, [open, active]);
+
+  if (!items.length) return null;
+
+  return (
+    <div className="ct-menu-wrap" ref={wrap}>
+      <button type="button" className="cap-btn ct-menu-trigger"
+              aria-haspopup="menu" aria-expanded={open} aria-label={label} title={label}
+              onClick={(e) => { e.stopPropagation(); setActive(0); setOpen((v) => !v); }}>
+        <DotsThree size={18} weight="bold" aria-hidden />
+      </button>
+      {open ? (
+        <div className="ct-menu" role="menu" aria-label={label}
+             onClick={(e) => e.stopPropagation()}
+             onKeyDown={(e) => {
+               if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => (i + 1) % items.length); }
+               if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => (i - 1 + items.length) % items.length); }
+             }}>
+          {items.map((item, i) => (
+            <button key={item.id} type="button" role="menuitem" className="ct-menu-item"
+                    ref={(el) => { itemRefs.current[i] = el; }}
+                    onClick={(e) => { e.stopPropagation(); setOpen(false); item.onSelect(); }}>
+              {item.icon ? <span className="ct-menu-icon" aria-hidden>{item.icon}</span> : null}
+              <span className="ct-menu-text">
+                <span className="ct-menu-label">{item.label}</span>
+                {/* What it costs / what it does, so the choice is made in the menu rather
+                    than by opening each panel to find out. */}
+                {item.hint ? <span className="ct-menu-hint">{item.hint}</span> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RebuildWithSpec({ run, projectId, actor, mode = "rebuild",
+                          open: openProp, onOpenChange }: {
   run: CodeTaskRun; projectId: string; actor: string;
   /** "rebuild" replaces the app; "feature" specs an addition to the one that exists. */
   mode?: "rebuild" | "feature";
+  /** Controlled: when supplied, the panel is opened by something else (the actions menu)
+   *  and this component renders no trigger of its own. Uncontrolled use is unchanged. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const controlled = openProp !== undefined;
+  const [openState, setOpenState] = useState(false);
+  const open = controlled ? !!openProp : openState;
+  const setOpen = (v: boolean) => { if (controlled) onOpenChange?.(v); else setOpenState(v); };
   const [complaint, setComplaint] = useState("");
   const app = appIdentity(run);
   const repo = `${run.spec?.owner ?? ""}/${run.spec?.repo ?? ""}`.replace(/^\/$/, "");
 
   if (!open) {
+    // Controlled: the menu owns the trigger, so render nothing until it opens us.
+    if (controlled) return null;
+    // The label MUST follow `mode`. Both modes rendered "Rebuild with a fresh spec", so the
+    // card showed two identical buttons side by side where one ADDS to the app and the other
+    // REPLACES it — a difference you could only discover by opening one. Only the expanded
+    // panel distinguished them, which is too late to be a choice.
+    const isFeature = mode === "feature";
     return (
       <button className="cap-btn" onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-              title="Convene a panel to write a new PRD, then build from it">
-        <Sparkle size={15} weight="fill" aria-hidden /> Rebuild with a fresh spec
+              data-mode={mode}
+              title={isFeature
+                ? "Convene a panel to spec a new feature, then build it onto this app"
+                : "Convene a panel to write a new PRD, then rebuild this app from it"}>
+        <Sparkle size={15} weight="fill" aria-hidden />{" "}
+        {isFeature ? "Add a feature" : "Rebuild with a fresh spec"}
       </button>
     );
   }
@@ -1499,6 +1848,38 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Which app card has its spec panel open, and in which mode. KEYED BY RUN ID: the cards are
+  // a .map(), so a single boolean here would open the panel on every app at once.
+  const [specPanel, setSpecPanel] = useState<Record<string, "feature" | "rebuild" | undefined>>({});
+
+  /**
+   * Open the Ask BOSS dock for ONE app, pre-loaded with what the card already knows.
+   *
+   * Was an inline handler on a button in the action row; extracted unchanged when that row
+   * became a menu. The facts matter: the console renders them inches away, so the agent should
+   * not have to rediscover the repo, branch or preview it is being asked about.
+   */
+  const askBossAbout = useCallback((m: CodeTaskRun) => {
+    const rootRunId = (m.finalize_ctx as Record<string, unknown> | undefined)?.root_run_id;
+    const pr = (m as unknown as { pull_request_url?: string }).pull_request_url;
+    const facts = [
+      `[app context] You are talking about ONE app in BOSS.`,
+      `run_id: ${m.id}`,
+      `app: ${appIdentity(m).name}`,
+      `repo: ${m.spec?.owner ?? "?"}/${m.spec?.repo ?? "?"}`,
+      `branch: ${rootRunId ? `boss/code/${rootRunId}` : `boss/code/${m.id}`}`,
+      `status: ${m.status ?? "?"}${m.phase ? ` (${m.phase})` : ""}`,
+      pr ? `pull_request: ${pr}` : "pull_request: none",
+      `Use your tools (inspect_app, diagnose_preview, diagnose_deployment) with run_id ${m.id} when you need more.`,
+    ].join("\n");
+    try {
+      window.sessionStorage.setItem(`boss.agent.facts.${m.id}`, facts);
+    } catch { /* private mode: the dock still works, with less context */ }
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", m.id);
+    window.history.pushState({}, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, []);
 
   // The gateway URL for a run's live preview, or null. Built from the preview ID, never from
   // app_previews.url — that column holds the sandbox-internal address (127.0.0.1:PORT), which
@@ -1885,47 +2266,48 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       shipped={anyShipped}
                       running={anyRunning}
                     />
-                    <ChangeThisApp run={members[0]} onStarted={noteLaunch}
-                                   onOpen={(id) => void openRun(id)}
-                                   startedId={launched[`chg:${members[0].id}`]?.run_id} />
-                    {/* Opens the dock for THIS app. The run id goes in the URL so the
-                        conversation survives walking to another area and back, and so the
-                        agent is never guessing which of fifty apps you mean. */}
-                    <button className="cap-btn"
-                            title="Talk to BOSS about this app — it can read the run, the repo and the preview"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              // Everything the card already knows, handed to the dock. The
-                              // console renders these facts inches away; the agent should not
-                              // have to rediscover them.
-                              const m = members[0];
-                              const facts = [
-                                `[app context] You are talking about ONE app in BOSS.`,
-                                `run_id: ${m.id}`,
-                                `app: ${appIdentity(m).name}`,
-                                `repo: ${m.spec?.owner ?? "?"}/${m.spec?.repo ?? "?"}`,
-                                `branch: ${(m.finalize_ctx as Record<string, unknown> | undefined)?.root_run_id
-                                  ? `boss/code/${(m.finalize_ctx as Record<string, unknown>).root_run_id}`
-                                  : `boss/code/${m.id}`}`,
-                                `status: ${m.status ?? "?"}${m.phase ? ` (${m.phase})` : ""}`,
-                                prRun?.pull_request_url ? `pull_request: ${prRun.pull_request_url}` : "pull_request: none",
-                                livePreviewFor(m.id) ? `live_preview: ${livePreviewFor(m.id)}` : "live_preview: none",
-                                `attempts: ${members.length}`,
-                                `Use your tools (inspect_app, diagnose_preview, diagnose_deployment) with run_id ${m.id} when you need more.`,
-                              ].join("\n");
-                              try {
-                                window.sessionStorage.setItem(`boss.agent.facts.${m.id}`, facts);
-                              } catch { /* private mode: the dock still works, with less context */ }
-                              const url = new URL(window.location.href);
-                              url.searchParams.set("agent", members[0].id);
-                              window.history.pushState({}, "", url.toString());
-                              window.dispatchEvent(new PopStateEvent("popstate"));
-                            }}>
-                      <ChatCircleDots size={15} weight="fill" aria-hidden /> Ask BOSS
-                    </button>
-                    <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor}
-                                     mode="feature" />
-                    <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor} />
+                    {/* Everything that is not "see the app" lives in one menu.
+                        Five same-weight buttons meant the common action competed with four
+                        rare ones. "Request a change" is gone on purpose: it and the feature
+                        panel did the same job from the operator's side, and the panel is the
+                        one that writes a spec first. */}
+                    <ActionMenu
+                      label="More actions for this app"
+                      items={[
+                        {
+                          id: "ask",
+                          label: "Ask BOSS",
+                          hint: "reads the run, repo and preview",
+                          icon: <ChatCircleDots size={15} weight="fill" />,
+                          onSelect: () => askBossAbout(members[0]),
+                        },
+                        {
+                          id: "feature",
+                          label: "Add a feature",
+                          hint: "specs it first, then builds onto this app",
+                          icon: <Sparkle size={15} weight="fill" />,
+                          onSelect: () => setSpecPanel((m) => ({ ...m, [members[0].id]: "feature" })),
+                        },
+                        {
+                          id: "rebuild",
+                          label: "Rebuild with a fresh spec",
+                          hint: "replaces this app — writes a new PRD",
+                          icon: <Sparkle size={15} weight="fill" />,
+                          onSelect: () => setSpecPanel((m) => ({ ...m, [members[0].id]: "rebuild" })),
+                        },
+                      ]}
+                    />
+                    {/* The panel the menu opens. Controlled, so the menu owns the trigger. */}
+                    {/* Shipped state, where the change was approved. */}
+                    <DeploymentLine run={members[0]} projectId={projectId}
+                                    deployable={anyShipped && !anyRunning} />
+                    {specPanel[members[0].id] ? (
+                      <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor}
+                                       mode={specPanel[members[0].id]} open
+                                       onOpenChange={(o) => {
+                                         if (!o) setSpecPanel((m) => ({ ...m, [members[0].id]: undefined }));
+                                       }} />
+                    ) : null}
                     {/* Re-running the IDENTICAL brief is not a card-level action.
                         The only honest uses for it are holding the spec constant on purpose --
                         comparing two runs of a benchmark, or re-running after a platform

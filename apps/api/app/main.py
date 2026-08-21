@@ -7845,7 +7845,17 @@ def delivery_health_sweep_endpoint(project_id: Optional[str] = None):
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     from .services.deployment_health import sweep
-    return sweep(engine, settings, project_id=project_id)
+    from .services.delivery_pipeline import fail_hung_deployments
+
+    # Reconcile hung deployments on the same cadence. This sweep already runs on a timer, and
+    # a deployment that hangs while the API stays up was previously reconciled by nothing —
+    # `fail_orphaned_deployments` only runs at startup, which assumes the failure mode is a
+    # restart when the observed one is a hang.
+    hung = fail_hung_deployments(engine)
+    result = sweep(engine, settings, project_id=project_id)
+    if hung.get("failed"):
+        result = {**result, "hung_deployments_failed": hung["failed"]}
+    return result
 
 
 def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) -> dict:
@@ -7866,8 +7876,25 @@ def _start_deployment_in_background(run_id: str, actor: str, *, trigger: str) ->
     def _run() -> None:
         try:
             execute_deployment(engine, settings, run_id, actor=actor)
-        except Exception:  # noqa: BLE001 — already recorded on the run; never crash the thread
-            pass
+        except Exception as exc:  # noqa: BLE001 — never crash the thread, but never go quiet
+            # RECORD IT. This used to `pass` on the assumption the failure was already written
+            # to the run — true only if the crash happened after execute_deployment started
+            # writing steps. A failure BEFORE that (a bad credential, an unreachable host, a
+            # raise inside preflight) left the row saying `running` with a step spinning
+            # forever: the console polled it indefinitely and an operator read a dead thread as
+            # a slow deploy. A background worker that can fail silently is a worker whose
+            # status cannot be trusted.
+            try:
+                with begin(engine) as c:
+                    c.execute(
+                        text("UPDATE deployment_runs SET status='failed', finished_at=now(), "
+                             "failure_reason = COALESCE(failure_reason, :why) "
+                             "WHERE id = :i AND status NOT IN "
+                             "  ('succeeded','failed','rolled_back')"),
+                        {"i": run_id,
+                         "why": f"the deployment worker stopped: {type(exc).__name__}: {exc}"[:400]})
+            except Exception:  # noqa: BLE001 — the DB may be the thing that failed
+                pass
 
     threading.Thread(target=_run, name=f"deploy-{run_id}", daemon=True).start()
     return {"deployment_run_id": run_id, "status": "started", "trigger": trigger,
@@ -7962,6 +7989,274 @@ def delivery_deploy_endpoint(payload: dict):
                 **execute_deployment(engine, settings, run_id, actor=actor)}
 
     return _start_deployment_in_background(run_id, actor, trigger="manual")
+
+
+# ── Fleet: hosts as first-class objects ──────────────────────────────────────
+# Design: docs/product/DEPLOYMENT_FLEET_AND_APPROVAL_FLOW.md
+# The app-side view of the map (deployment_targets) already existed. These add the VM side,
+# which is the direction an operator asks for first: what runs on this box, and can it deploy?
+
+@app.get("/v1/deployment-hosts")
+def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = False):
+    """Every VM, with the apps riding on it and its last preflight verdict."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.deployment_fleet import list_hosts
+
+    with begin(engine) as connection:
+        return {"hosts": list_hosts(connection, project_id,
+                                    include_retired=include_retired)}
+
+
+@app.post("/v1/deployment-hosts")
+def register_deployment_host_endpoint(payload: dict):
+    """Record a VM. Touches nothing on the machine — status starts at `registered`.
+
+    Nothing may be scheduled here until `/verify` has actually connected, so a typo in the
+    address surfaces now rather than as a failed deployment later.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = str(payload.get("project_id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    address = str(payload.get("address") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
+    if not (project_id and name and address and actor):
+        raise HTTPException(status_code=422,
+                            detail="project_id, name, address and actor are required")
+    from sqlalchemy.exc import IntegrityError
+
+    from boss_engine.services.deployment_fleet import register_host
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "task_create")
+        try:
+            return register_host(
+                connection, project_id=project_id, name=name, address=address,
+                ssh_user=str(payload.get("ssh_user") or "root"),
+                ssh_port=int(payload.get("ssh_port") or 22),
+                arch=(payload.get("arch") or None),
+                labels=payload.get("labels") or {},
+                port_min=int(payload.get("port_min") or 8000),
+                port_max=int(payload.get("port_max") or 8999),
+                max_apps=payload.get("max_apps"),
+                notes=(payload.get("notes") or None),
+                # Where the OPERATOR's own key lives. Optional — blank means "my default SSH
+                # access already works", which is true for most people and false in a way that
+                # is very hard to diagnose for the rest.
+                admin_identity_file=(payload.get("admin_identity_file") or None),
+                actor=actor)
+        except IntegrityError:
+            raise HTTPException(status_code=409,
+                                detail=f"a host named {name!r} already exists in this project")
+
+
+@app.post("/v1/deployment-hosts/{host_id}/key")
+def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] = None):
+    """Mint this host's keypair and return the public half plus the exact install line.
+
+    The private half goes to the secret store and is never returned. Installing the public half
+    is the operator's step: BOSS cannot place the FIRST key without already having access, and
+    it must not ask for or hold a host password to get there.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from boss_engine.services.deployment_fleet import generate_host_key, get_host
+    from boss_engine.services.secret_backends import SecretUnavailable
+
+    with begin(engine) as connection:
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
+        try:
+            return generate_host_key(
+                connection, settings, host_id=host_id,
+                backend=str((payload or {}).get("backend") or "platform_secret_store"),
+                actor=actor)
+        except (SecretUnavailable, ValueError) as exc:
+            # 422 with the reason, not a bare 500. An unconfigured secret backend is an
+            # ordinary local-run condition ("all secrets left BLANK = fully local"), and an
+            # opaque 500 sent the operator to the server log to discover a settings problem.
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/deployment-hosts/{host_id}/adopt-key")
+def adopt_deployment_host_key_endpoint(host_id: str, payload: dict):
+    """PATH 1 — the customer brings a key that already works on the host.
+
+    The private half goes straight through to the secret backend and is never retained here;
+    only a reference and a fingerprint are kept. This is the common case, and it needs no
+    install step at all — the key is already authorised on the box.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str(payload.get("actor") or "").strip()
+    private_key = str(payload.get("private_key") or "")
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    if not private_key.strip():
+        raise HTTPException(status_code=422, detail="private_key is required")
+    from boss_engine.services.deployment_fleet import adopt_host_key, get_host
+    from boss_engine.services.secret_backends import SecretUnavailable
+
+    with begin(engine) as connection:
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
+        try:
+            return adopt_host_key(
+                connection, settings, host_id=host_id, private_key=private_key,
+                backend=str(payload.get("backend") or "file"), actor=actor)
+        except (SecretUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/deployment-hosts/{host_id}/install-key")
+def install_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] = None):
+    """PATH 2 — BOSS generates its OWN key and installs it over the credential it already has.
+
+    This is host onboarding as a capability rather than an instruction sheet. It requires a
+    working credential to start from, which is what `adopt-key` provides.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from boss_engine.services.deployment_fleet import get_host, install_generated_key
+    from boss_engine.services.secret_backends import SecretUnavailable
+
+    with begin(engine) as connection:
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
+        try:
+            return install_generated_key(
+                connection, settings, host_id=host_id,
+                backend=str((payload or {}).get("backend") or "file"), actor=actor)
+        except (SecretUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/deployment-hosts/{host_id}/provision")
+def provision_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None):
+    """Make a reachable host able to RUN a deployment — today that means docker.
+
+    Separate from `verify` deliberately: checking is read-only and safe any time, installing
+    packages changes someone's machine and should be an explicit act.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str((payload or {}).get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from boss_engine.services.deployment_fleet import get_host, provision_host
+    from boss_engine.services.secret_backends import SecretUnavailable
+
+    with begin(engine) as connection:
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
+        try:
+            return provision_host(
+                connection, settings, host_id=host_id,
+                install_docker=bool((payload or {}).get("install_docker", True)), actor=actor)
+        except (SecretUnavailable, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/deployment-hosts/{host_id}/verify")
+def verify_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None):
+    """Actually connect. `verified` is evidence, not a checkbox.
+
+    Returns classified findings rather than a raw error: "permission denied" sends people to
+    regenerate a key that was never the problem, and an expired root password looks identical
+    to a broken key while key auth has in fact succeeded.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.deployment_fleet import get_host, verify_host
+
+    with begin(engine) as connection:
+        if not get_host(connection, host_id):
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        return verify_host(connection, settings, host_id=host_id)
+
+
+@app.post("/v1/deployment-hosts/{host_id}/retire")
+def retire_deployment_host_endpoint(host_id: str, payload: Optional[dict] = None):
+    """Hand the host back the way BOSS found it, and stop scheduling on it.
+
+    Onboarding that cannot be undone is onboarding nobody wants to try — and this is also the
+    real operation for decommissioning a box later. Removes only BOSS's OWN key, leaves docker
+    and the deploy directory unless explicitly asked, and refuses while apps are still attached
+    unless `force`.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    p = payload or {}
+    actor = str(p.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from boss_engine.services.deployment_fleet import get_host, retire_host
+
+    with begin(engine) as connection:
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        require_project_actor(connection, host["project_id"], actor, "task_create")
+        try:
+            return retire_host(
+                connection, settings, host_id=host_id,
+                revoke_key=bool(p.get("revoke_key", True)),
+                remove_docker=bool(p.get("remove_docker", False)),
+                purge=bool(p.get("purge", False)),
+                force=bool(p.get("force", False)),
+                actor=actor)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/deployment-hosts/{host_id}/attach")
+def attach_target_to_host_endpoint(host_id: str, payload: dict):
+    """Point an app at this host, deriving target_ref so the two cannot drift."""
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    target_id = str(payload.get("target_id") or "").strip()
+    if not target_id:
+        raise HTTPException(status_code=422, detail="target_id is required")
+    from boss_engine.services.deployment_fleet import attach_target
+
+    with begin(engine) as connection:
+        try:
+            return attach_target(connection, target_id=target_id, host_id=host_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/v1/deployment-hosts/backfill")
+def backfill_deployment_hosts_endpoint(payload: dict):
+    """Create one host per distinct target_ref and re-point existing targets at it.
+
+    Idempotent, and never edits a target that already has a host_id — so the fleet table
+    arrives without a flag day.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    from boss_engine.services.deployment_fleet import backfill_hosts_from_targets
+
+    with begin(engine) as connection:
+        return backfill_hosts_from_targets(connection, project_id=project_id)
 
 
 @app.post("/v1/deployment-targets/{target_id}/auto-deploy")
@@ -8113,6 +8408,78 @@ def delivery_redeploy_endpoint(deployment_run_id: str, payload: Optional[dict] =
         return result
     return _start_deployment_in_background(result["deployment_run_id"], actor,
                                            trigger="redeploy")
+
+
+@app.post("/v1/deployments/{deployment_run_id}/promote")
+def promote_deployment_endpoint(deployment_run_id: str, payload: dict):
+    """Promote a SUCCEEDED staging deployment to production — the second human gate.
+
+    Reuses PromotionOrchestrator rather than running a rollout here: promotion already has
+    gating, pipeline verdicts and rollback in one place, and a shortcut path would be a second
+    opinion about what "promoted" means.
+
+    Refuses to promote a run that did not succeed. Promoting a failed build is the single most
+    expensive mistake this endpoint could make easy.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str(payload.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+
+    with begin(engine) as connection:
+        run = connection.execute(
+            text("SELECT * FROM deployment_runs WHERE id = :i"),
+            {"i": deployment_run_id}).mappings().first()
+        if not run:
+            raise HTTPException(status_code=404, detail="no such deployment run")
+        run = dict(run)
+        require_project_actor(connection, run["project_id"], actor, "task_create")
+
+        if run.get("status") not in ("succeeded", "deployed", "completed"):
+            raise HTTPException(
+                status_code=409,
+                detail=(f"deployment is {run.get('status')!r}; only a succeeded staging "
+                        "deployment may be promoted"))
+        if run.get("environment") != "staging":
+            raise HTTPException(
+                status_code=409,
+                detail=f"run targets {run.get('environment')!r}, not staging")
+
+        production = connection.execute(
+            text("SELECT id FROM deployment_targets "
+                 "WHERE project_id = :p AND app_name = :a AND repo = :r "
+                 "  AND environment = 'production' AND status = 'active' "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"p": run["project_id"], "a": run["app_name"], "r": run["repo"]}
+        ).mappings().first()
+        if not production:
+            # Common and legitimate when everything runs on one box. Say what is missing
+            # rather than inventing a production target.
+            raise HTTPException(
+                status_code=422,
+                detail=(f"no active production deployment_target for app "
+                        f"{run['app_name']!r} in {run['repo']!r}. Register one, or keep "
+                        "deploying to this environment only."))
+
+        from boss_engine.services.promotion_orchestrator import PromotionOrchestrator
+
+        try:
+            result = PromotionOrchestrator(settings).promote(
+                connection,
+                project_id=run["project_id"],
+                staging_target_id=run["deployment_target_id"],
+                production_target_id=production["id"],
+                commit_ref=str(run.get("commit_ref") or ""),
+                actor=actor,
+                release_packet={"source": "promotion_gate",
+                                "promoted_from_run": deployment_run_id,
+                                "approved_by": actor,
+                                "note": str(payload.get("note") or "")[:500]},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        return {"promoted_from": deployment_run_id, "approved_by": actor, **result}
 
 
 @app.get("/v1/delivery/targets/{target_id}/preflight")
@@ -8410,6 +8777,242 @@ def deploy_code_task_endpoint(run_id: str, payload: Optional[dict] = None):
     return {"result": result, "plan": plan}
 
 
+# What makes a code task run shippable. Deliberately a small, explicit set rather than a
+# "not obviously broken" check: deploying is the one action here that reaches a real machine,
+# and the failure mode of guessing wrong is a broken build placed on a customer's host.
+DEPLOYABLE_STATUSES = frozenset({"completed"})
+UNDEPLOYABLE_STATUSES = frozenset({"blocked", "failed", "cancelled", "queued", "running"})
+
+
+def assert_run_is_deployable(run: dict) -> None:
+    """Refuse to ship a run that never produced reviewed code.
+
+    The UI hides the control for these, but hiding a button is not a guard — the endpoint is
+    reachable directly, and a guard that lives only in the console is a guard that is not
+    there. Raises with the REASON, because "cannot deploy" without one sends an operator to
+    the logs to discover a state the console already knew.
+
+    Without this, deploying a blocked run was accepted and failed LATE: after a clone, a build
+    and a transfer, at the health gate, with an error about the app rather than about the fact
+    that this task never finished.
+    """
+    status = str(run.get("status") or "").lower()
+    if status in UNDEPLOYABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"this task is {status!r} — there is no reviewed build to deploy. "
+                    "Fix or re-run the task first."))
+    if status not in DEPLOYABLE_STATUSES and not run.get("pull_request_url"):
+        raise HTTPException(
+            status_code=409,
+            detail=(f"this task is {status!r} and opened no pull request, so nothing has been "
+                    "built and reviewed for it yet."))
+
+
+@app.post("/v1/code-tasks/{run_id}/setup-deployment")
+def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
+    """Point an app at a verified host — the missing link between the Factory and the fleet.
+
+    Onboarding a host and approving a preview were both reachable, and nothing joined them: an
+    app that had already merged had no way to acquire a destination except a per-app wizard on
+    another screen, which is the trip the delivery work exists to remove. This creates the
+    `deployment_target` from what the code task already knows, attaches the host so `target_ref`
+    is derived rather than retyped, and turns on deploy-on-merge.
+
+    It does NOT deploy. Creating a destination and shipping to it are different decisions, and
+    the second one has its own button.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str(payload.get("actor") or "").strip()
+    host_id = str(payload.get("host_id") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    if not host_id:
+        raise HTTPException(status_code=422, detail="host_id is required")
+
+    from boss_engine.services.deployment_fleet import attach_target, get_host
+
+    with begin(engine) as connection:
+        run = connection.execute(
+            text("SELECT id, project_id, spec, title, status, pull_request_url "
+                 "FROM code_task_runs WHERE id = :i"),
+            {"i": run_id}).mappings().first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Code task run not found.")
+        run = dict(run)
+        require_project_actor(connection, run["project_id"], actor, "task_create")
+        assert_run_is_deployable(run)
+
+        host = get_host(connection, host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        if host.get("status") != "verified":
+            # A target pointed at an unproven host fails at deploy time, long after the
+            # decision was made and somewhere less obvious than here.
+            raise HTTPException(
+                status_code=422,
+                detail=f"host {host['name']!r} is {host['status']!r}, not verified. "
+                       "Finish onboarding it first.")
+
+        spec = run.get("spec") or {}
+        if isinstance(spec, str):
+            try:
+                spec = json.loads(spec)
+            except ValueError:
+                spec = {}
+        # The BARE repo name: `settings.target_github_repo` is what the merge path keys on, and
+        # a target stored as "owner/name" is a target the delivery seam will never resolve.
+        repo = str(payload.get("repo") or spec.get("repo") or settings.target_github_repo or "")
+        repo = repo.rsplit("/", 1)[-1]
+        app_name = str(payload.get("app_name") or "").strip()
+        if not app_name:
+            raise HTTPException(status_code=422, detail="app_name is required")
+        environment = str(payload.get("environment") or "staging")
+
+        existing = connection.execute(
+            text("SELECT id FROM deployment_targets WHERE project_id = :p AND app_name = :a "
+                 "AND environment = :e"),
+            {"p": run["project_id"], "a": app_name, "e": environment}).mappings().first()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{app_name!r} already has a {environment} target. "
+                       "Attach it to this host from the Hosts panel instead.")
+
+    # DECLARE THE HEALTH CHECK, and its scheme.
+    #
+    # `_health_url` defaults to https and says, correctly, that the target should state the
+    # scheme rather than have the code infer it from the shape of a domain. This endpoint said
+    # nothing — so a target reached by bare IP was probed over TLS and the gate failed with
+    # `WRONG_VERSION_NUMBER` on an app that was serving perfectly. Deciding it HERE is not
+    # inference: at creation we know the destination is a host address with no certificate.
+    address = str(host["address"])
+    looks_like_ip = all(part.isdigit() for part in address.split(".")) and address.count(".") == 3
+    scheme = "http" if (looks_like_ip or ":" in address) else "https"
+
+    created = create_deployment_target_endpoint({
+        "project_id": run["project_id"],
+        "app_name": app_name,
+        "repo": repo,
+        "environment": environment,
+        "target_kind": "ssh",
+        "health_checks": [{"scheme": scheme, "path": "/", "expect_status": 200}],
+        # Replaced immediately by `attach_target`, which derives it from the host record so the
+        # address has exactly one writable home.
+        "target_ref": f"{host.get('ssh_user') or 'root'}@{host['address']}",
+        "app_entry": payload.get("app_entry"),
+        "app_port": payload.get("app_port"),
+        "repo_owner": payload.get("repo_owner") or spec.get("owner"),
+        "actor": actor,
+    })
+    target_id = created.get("id") or (created.get("target") or {}).get("id")
+
+    with begin(engine) as connection:
+        attached = attach_target(connection, target_id=target_id, host_id=host_id)
+        if payload.get("auto_deploy", True):
+            connection.execute(
+                text("UPDATE deployment_targets SET auto_deploy = true, updated_at = now() "
+                     "WHERE id = :i"), {"i": target_id})
+
+    # PREPARE THE APP'S SLOT ON THE HOST: deploy directory, docker check, and a free port —
+    # which also writes the domain the port belongs to.
+    #
+    # Linking without this produced a target that resolved its key and its host and then
+    # blocked at preflight with "target has no domain, so health cannot be observed": a
+    # deployment that cannot be health-checked is one the gate cannot pass. The port hunt has
+    # to happen against the real machine, and this is the first moment BOSS has one.
+    #
+    # Best-effort: a target that exists but has not been bootstrapped is recoverable from the
+    # CI/CD screen, whereas losing the target because a port scan timed out is not.
+    bootstrap_report = None
+    try:
+        bootstrap_report = bootstrap_deployment_target_endpoint(target_id, {"apply_port": True})
+    except HTTPException as exc:
+        bootstrap_report = {"error": str(exc.detail)[:200]}
+    except Exception as exc:  # noqa: BLE001
+        bootstrap_report = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+
+    return {"run_id": run_id, "target_id": target_id, "app_name": app_name,
+            "bootstrap": bootstrap_report,
+            "host": attached.get("host_name"), "target_ref": attached.get("target_ref"),
+            "arch": attached.get("arch"), "auto_deploy": bool(payload.get("auto_deploy", True)),
+            "next": "Deploy it once from here; after that a merged change ships by itself."}
+
+
+@app.get("/v1/code-tasks/{run_id}/deployments")
+def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
+                                       app_name: Optional[str] = None):
+    """What this code task actually SHIPPED, if anything.
+
+    Joined on `release_packet->>'code_task_run_id'` — the link the delivery seam already
+    records — rather than by matching app names. An app's display name, its target's
+    `app_name` and its repo folder are three different strings that agree right up until they
+    do not, and a status panel that silently shows another app's deployment is worse than one
+    that shows nothing.
+
+    Powers the deployment line on the app card, so shipping can be watched from where the
+    change was approved instead of on the CI/CD screen.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        rows = connection.execute(
+            text("SELECT r.id, r.app_name, r.environment, r.status, r.commit_ref, "
+                 "       r.started_at, r.finished_at, r.failure_reason, r.trigger, "
+                 "       t.domains, t.health_checks, h.name AS host_name "
+                 "FROM deployment_runs r "
+                 "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id "
+                 "LEFT JOIN deployment_hosts h ON h.id = t.host_id "
+                 "WHERE r.release_packet->>'code_task_run_id' = :run "
+                 "ORDER BY r.created_at DESC LIMIT :lim"),
+            {"run": run_id, "lim": max(1, min(int(limit), 20))}).mappings().all()
+    out = []
+    for row in rows:
+        item = dict(row)
+        for key in ("started_at", "finished_at"):
+            if item.get(key) is not None:
+                item[key] = str(item[key])
+        # A FULLY-QUALIFIED url, resolved once, server-side.
+        #
+        # `domains` holds a bare `host:port`. Every consumer then had to prepend a scheme, and
+        # three of them did it differently: delivery-ui hardcoded https (broken link),
+        # deploy-ui hardcoded http, and the app card prepended nothing at all — so "Open"
+        # resolved as a RELATIVE path and navigated to localhost:3001/2.29.2.202:3010. Handing
+        # out an address that is not a URL guarantees each caller invents the missing half.
+        # The scheme the health probe uses is the scheme the link uses.
+        domains = item.get("domains") or []
+        raw = domains[0] if isinstance(domains, list) and domains else None
+        if raw and "://" not in str(raw):
+            checks = item.get("health_checks") or []
+            declared = (checks[0].get("scheme") if isinstance(checks, list) and checks
+                        and isinstance(checks[0], dict) else None)
+            raw = f"{declared or 'http'}://{raw}"
+        item["url"] = raw
+        item.pop("domains", None)
+        item.pop("health_checks", None)
+        out.append(item)
+
+    # Is this app pointed at a host at all? Looked up by `app_name` deliberately: unlike the
+    # deployment join above — where matching names would risk showing another app's result —
+    # `deployment_targets` is KEYED by (project, app_name, environment). The name IS the
+    # identity here, so matching on it is the correct lookup rather than a guess.
+    linked_host = None
+    linked_target_id = None
+    if app_name:
+        with begin(engine) as connection:
+            row = connection.execute(
+                text("SELECT t.id AS target_id, h.name FROM deployment_targets t "
+                     "JOIN deployment_hosts h ON h.id = t.host_id "
+                     "WHERE t.app_name = :a AND t.status = 'active' "
+                     "ORDER BY t.created_at DESC LIMIT 1"),
+                {"a": app_name}).mappings().first()
+            linked_host = row["name"] if row else None
+            linked_target_id = row["target_id"] if row else None
+    return {"run_id": run_id, "deployments": out, "linked_host": linked_host,
+            "linked_target_id": linked_target_id}
+
+
 @app.post("/v1/code-tasks/{run_id}/preview")
 def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
     """Preview a built app from retained rootfs, Docker, or a managed host process."""
@@ -8601,6 +9204,68 @@ async def preview_websocket_proxy(websocket: WebSocket, preview_id: str, path: s
             await websocket.close()
         except Exception:
             pass
+
+
+@app.get("/v1/previews/{preview_id}/gate")
+def preview_gate_endpoint(preview_id: str):
+    """What will approving this preview actually do?
+
+    The console must be able to say "approve merges PR #123 and deploys `web` to
+    hetzner-ci-01" BEFORE the click. An approval whose consequence is discovered afterwards is
+    not an approval.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.preview_approval import describe_gate
+
+    with begin(engine) as connection:
+        found = describe_gate(connection, preview_id=preview_id)
+        if not found:
+            raise HTTPException(status_code=404, detail="no such preview")
+        return found
+
+
+@app.post("/v1/previews/{preview_id}/approve")
+def approve_preview_endpoint(preview_id: str, payload: dict):
+    """Approve what the preview shows — the single human gate on the path to live.
+
+    This does NOT deploy. It approves the run's existing `review_pull_request` decision, which
+    merges, which fires the one delivery trigger that already exists. Adding a second path into
+    `deployment_runs` is the "two copies of one decision" defect that produced the
+    preview-resolver and test-oracle bugs, so the seam is deliberately an approval and not a
+    deploy call.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    actor = str(payload.get("actor") or "").strip()
+    if not actor:
+        raise HTTPException(status_code=422, detail="actor is required")
+    from boss_engine.services.preview_approval import (
+        PreviewGateError, record_preview_approval,
+    )
+
+    with begin(engine) as connection:
+        try:
+            gate = record_preview_approval(
+                connection, preview_id=preview_id, actor=actor,
+                note=str(payload.get("note") or "").strip() or None)
+        except PreviewGateError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc))
+
+    # Approve the merge decision through the SAME endpoint a human uses. Calling the existing
+    # transition keeps role checks, receipts and the merge itself on one path; a private
+    # shortcut here would be a second way to merge.
+    decision_id = gate["decision_id"]
+    card = approve_decision(
+        decision_id,
+        DecisionActionRequest(actor=actor,
+                              note=f"Preview {preview_id} approved by {actor}"
+                                   + (f": {gate['note']}" if gate.get("note") else "")),
+    )
+    return {"preview_id": preview_id, "decision_id": decision_id,
+            "approved_by": actor, "decision": card,
+            "app_targets": gate.get("app_targets", []),
+            "note": "merge decision approved; delivery follows the merge trigger"}
 
 
 @app.post("/v1/previews/{preview_id}/stop")
