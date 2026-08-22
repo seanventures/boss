@@ -322,11 +322,23 @@ Recorded because the *pattern* cost more time than either bug.
 * **Status:** fixed, pending deploy.
 
 
+### I28 — `awaiting_plan_approval` is set but never cleared *(latent)*
+* **Saw:** a run at `running / review_panel`, well past its approval gate, still carrying
+  `state.awaiting_plan_approval = true`.
+* **Not the BLOCKED bug.** The console renders `phase`, not this flag; checked before assuming.
+* **Why it still matters:** `governed_code_task_service.py:1323` reads it to decide whether to
+  restore a prior design on resume. Left set, a later resume of the same run can resurrect a
+  stale plan that was already superseded.
+* **Shape:** S1 — a flag set on the way in with no path back.
+* **Status:** open, deliberately not fixed mid-session. One line, in the governed resume path,
+  with no observed failure attached to it; the right time is with the R7 work, not now.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are twenty-seven; the shapes are twelve. Fixing shapes is what stops recurrence.
+The incidents are twenty-eight; the shapes are twelve. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
