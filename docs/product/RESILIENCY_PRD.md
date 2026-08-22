@@ -14,8 +14,8 @@ end-to-end exercise of BOSS: Discovery → PRD panel → code task → preview �
 finish. Not because any single component is broken beyond repair, but because **the path had
 never been run end to end**, and every stage failed the first time it was executed for real.
 
-Eighteen distinct defects surfaced. Individually each looks like a small bug. Collectively they
-share eight root-cause shapes, and those shapes are the actual product problem:
+Twenty distinct defects surfaced. Individually each looks like a small bug. Collectively they
+share nine root-cause shapes, and those shapes are the actual product problem:
 
 > Work stops, and nothing notices. The console keeps rendering the last thing it was told.
 > An operator is the only monitor the system has.
@@ -211,6 +211,36 @@ Each row: what the operator saw, what was actually true, and the defect undernea
 * **Status:** shipped.
 
 
+### I19 — The queue has exactly one lane
+* **Saw:** two runs sitting at `phase=queued` for a long time with nothing visibly wrong.
+* **Cause:** `run_worker_cycle` claims ONE job and runs it **synchronously** in the main loop:
+
+  ```python
+  job = client.poll(...)   # one job
+  ...                       # executed inline; the loop does not continue until it returns
+  ```
+
+  There is no concurrency setting because there is no concurrency — one worker process, one job
+  at a time, start to finish. Lease renewal is bounded by `job_max_runtime_seconds` (**5400s =
+  90 minutes**), so a single long or hung job can hold the entire system for an hour and a half.
+  On the day, an autopilot-invented `Auto-repair: turn cap exhausted` held the lane while the
+  operator's work waited behind it.
+* **Why the priority work did not save us:** priority bands decide *who goes next*. They cannot
+  make anything *overlap*. A 3-minute PRD meeting still waits behind a 90-minute build. **I
+  fixed the ordering of a queue that has one server.**
+* **Status:** diagnosed, NOT fixed. See R7.
+
+### I20 — BOSS cannot see the machine it runs on
+* **Saw:** `exited -9`, and no way to tell OOM from a deploy restart from an internal kill.
+* **Cause:** BOSS can query its own database in fine detail and has `inspect_host` for
+  *deployment* hosts, but nothing reports its own containers' memory, CPU or restart history.
+  The ops API exposes container status only.
+* **Consequence:** every diagnosis of a killed process is a guess, and the operator waits while
+  hypotheses are tested one at a time. In this session that cost roughly an hour before the real
+  cause (I13, BOSS's own reaper) was found by reading code rather than data.
+* **Status:** open. See R8.
+
+
 ---
 
 ## 3. The shapes
@@ -227,6 +257,7 @@ The incidents are twelve; the shapes are five. Fixing shapes is what stops recur
 | **S6** | **A guard patched instead of fixed.** The check is wrong in kind; each failure tightens the heuristic rather than replacing it. Pattern-matching `ps`; an exact-match confirmation. | I13, I15 |
 | **S7** | **A label that answers a different question.** The field is computed correctly and measures something other than what its name claims. | I16, I12 |
 | **S8** | **Identity derived from text that legitimately varies.** Fingerprints over prose the engine itself rewrites. | I17, I5 |
+| **S9** | **A fix at the wrong layer.** The diagnosis is right and the remedy addresses a different property of the system — ordering when the constraint is capacity. | I19 |
 
 **The counter-measure to each is the same: a test that rejects the SHAPE, not the instance.**
 Three such tests now exist (dedupe anti-pattern, bare priority literals, artifact-consumer
@@ -313,6 +344,22 @@ false positive is therefore fatal, not merely annoying.
 Discovery → PRD → Build → Ship carry three unrelated names and nothing links them, so an operator
 cannot tell that a completed panel started a build.
 * **Acceptance:** from any card, one click to the artefact of every completed upstream stage.
+
+### R7 — More than one lane *(the constraint behind most of §2)*
+One worker, one job, executed inline, with a 90-minute lease ceiling. Every queueing symptom in
+this document is downstream of it, and no amount of priority tuning changes it.
+* **Work, in order of risk:** (a) run N worker processes — the job table already leases safely
+  with `FOR UPDATE SKIP LOCKED`, so this is mostly deployment; (b) separate the lanes by class
+  so interactive work is never behind batch, whatever its priority; (c) shorten
+  `job_max_runtime_seconds` for classes that should never take 90 minutes.
+* **Acceptance:** a PRD meeting starts within a minute while a code task is building; one hung
+  job cannot stall unrelated work.
+
+### R8 — BOSS can see its own machine
+`exited -9` cost an hour of guessing because nothing reports memory, CPU or restart history for
+BOSS's own containers. `inspect_host` exists for deployment hosts and has no equivalent here.
+* **Acceptance:** "why did this process die?" is answerable from BOSS, with evidence, in one
+  question.
 
 ### R6a — Monitoring events as a first-class subsystem *(requested)*
 Today a run sat dead for 53 minutes and **nothing emitted an event**. Status is polled by
