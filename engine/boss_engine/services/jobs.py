@@ -424,13 +424,24 @@ class JobLeaseService:
         if isinstance(payload, dict):
             run_id = payload.get("run_id")
         if run_id:
+            # Both run tables, not just code tasks. Cancelling a meeting.step job closed the
+            # job and left meeting_runs at 'running', so the card read "PANEL SITTING" for a
+            # panel that would never sit — indefinitely, with no terminal state anywhere in
+            # the UI. Fixing this for code_task_runs and not for meeting_runs was the same
+            # miss twice in one file.
+            note = f"cancelled with its job: {reason}"
             connection.execute(
                 text("UPDATE code_task_runs SET status = 'cancelled', "
                      "error = COALESCE(error, :e), updated_at = :now "
                      "WHERE id = :r AND status NOT IN "
                      "('completed','failed','cancelled')"),
-                {"r": run_id, "now": now_utc(),
-                 "e": f"cancelled with its job: {reason}"})
+                {"r": run_id, "now": now_utc(), "e": note})
+            connection.execute(
+                text("UPDATE meeting_runs SET status = 'cancelled', "
+                     "error = COALESCE(error, :e), updated_at = :now "
+                     "WHERE id = :r AND status NOT IN "
+                     "('completed','failed','cancelled')"),
+                {"r": run_id, "now": now_utc(), "e": note})
         return {"ok": True, "job_id": job_id, "kind": row["kind"], "status": "cancelled",
                 "run_id": run_id}
 

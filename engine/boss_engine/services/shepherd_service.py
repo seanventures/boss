@@ -382,6 +382,76 @@ STARVED_AFTER_MINUTES = 12
 WEDGED_AFTER_MINUTES = 120
 
 
+#: Runs whose execution is a job. If the job is gone and the run still says it is working, the
+#: run is lying — nothing will ever move it. Every one of these produced the same symptom at
+#: some point today: a card that sits forever with no terminal state.
+#:
+#: (table, id column, the statuses that mean "still working")
+_RUN_TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("code_task_runs", "id", ("running", "repairing", "queued")),
+    ("meeting_runs", "id", ("running", "queued")),
+    ("discovery_runs", "id", ("running",)),
+)
+
+#: Grace period before a run with no job is called abandoned. Long enough that a run created
+#: milliseconds before its job is never mistaken for an orphan.
+ORPHAN_AFTER_MINUTES = 20
+
+
+def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
+                         actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:
+    """Close any run that claims to be working but has no job that could advance it.
+
+    THE PLATFORM-LAYER FIX for a symptom that appeared three separate ways in one afternoon:
+    a preview button stuck on "Starting…", a convene button stuck on "Convening…", and a
+    meeting card reading "PANEL SITTING" two hours after its job had gone. Each was fixed in
+    the UI where it surfaced, which is treating the symptom: the UI was faithfully rendering a
+    row that said `running`, and the row was wrong.
+
+    A run's execution IS its job. When the job is cancelled, deadlettered or lost with the
+    process, nothing remains that can advance the run — so a run in a working state with no
+    live job is not in progress, it is abandoned, and saying so is the whole fix. No UI branch
+    is needed for a state the data no longer produces.
+
+    Deliberately generic over the run tables rather than written for code tasks: fixing
+    code_task_runs and not meeting_runs is exactly the miss that produced the third instance.
+    """
+    from ..db import begin
+
+    closed: list[dict[str, Any]] = []
+    for table, id_col, working in _RUN_TABLES:
+        try:
+            with begin(engine) as c:
+                rows = c.execute(
+                    sql(f"SELECT r.{id_col} AS id FROM {table} r "
+                        f"WHERE r.project_id = :p AND r.status = ANY(:working) "
+                        f"  AND r.updated_at < now() - (:m || ' minutes')::interval "
+                        f"  AND NOT EXISTS (SELECT 1 FROM jobs j "
+                        f"                  WHERE j.payload->>'run_id' = r.{id_col} "
+                        f"                    AND j.status IN ('queued','running','leased')) "
+                        f"LIMIT 200"),
+                    {"p": project_id, "working": list(working),
+                     "m": ORPHAN_AFTER_MINUTES}).mappings().all()
+                ids = [r["id"] for r in rows]
+                if ids:
+                    c.execute(
+                        sql(f"UPDATE {table} SET status = 'cancelled', "
+                            f"error = COALESCE(error, :e), updated_at = now() "
+                            f"WHERE {id_col} = ANY(:ids)"),
+                        {"ids": ids,
+                         "e": "abandoned: no job remains that could advance this run"})
+                    closed.append({"table": table, "count": len(ids), "ids": ids[:10]})
+        except Exception as exc:  # noqa: BLE001 — one missing table must not stop the rest
+            closed.append({"table": table, "error": f"{type(exc).__name__}"})
+
+    total = sum(int(c.get("count") or 0) for c in closed)
+    if total:
+        with begin(engine) as c:
+            emit_event(c, project_id, "shepherd.abandoned_runs_closed", actor,
+                       "project", project_id, {"closed": closed})
+    return {"project_id": project_id, "closed_total": total, "detail": closed}
+
+
 def sweep_starved_work(engine, settings: Settings, project_id: str, *,
                        actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:
     """Find work that is queued and not progressing, and unblock it.
@@ -515,6 +585,8 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     # the condition in which something is starving, so skipping the check when the queue is
     # deep would blind the sensor in the only situation it exists for.
     unstarved = sweep_starved_work(engine, settings, project_id, actor=actor)
+    # A run that cannot move is not progress. Closing it is what stops a card sitting forever.
+    abandoned = sweep_abandoned_runs(engine, settings, project_id, actor=actor)
 
     with begin(engine) as c:
         queue_depth = int(c.execute(
@@ -523,6 +595,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     if queue_depth > QUEUE_DEPTH_PAUSE:
         return {"project_id": project_id, "considered": len(candidates), "applied": [],
                 "deferred": [], "escalated": [], "failed": [], "unstarved": unstarved,
+                "abandoned": abandoned,
                 "paused_because": f"{queue_depth} jobs already queued or running; repair work "
                                   "must not push ahead of the operator's work"}
 
@@ -559,7 +632,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             failed.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"[:160]})
     return {"project_id": project_id, "considered": len(candidates),
             "applied": applied, "deferred": deferred, "escalated": escalated,
-            "failed": failed, "unstarved": unstarved}
+            "failed": failed, "unstarved": unstarved, "abandoned": abandoned}
 
 
 def act(engine, settings: Settings, jobs, run_id: str, *,
