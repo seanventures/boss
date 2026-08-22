@@ -1,0 +1,8 @@
+[
+  {
+    "run_id": "crun_99502eb07701444faf92",
+    "config": "hybrid_claude_repair3",
+    "task": "slugify",
+    "status": "completed"
+  }
+]

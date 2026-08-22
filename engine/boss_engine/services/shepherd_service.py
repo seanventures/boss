@@ -396,7 +396,15 @@ NO_PROGRESS_MINUTES = 25
 #:
 #: (table, id column, the statuses that mean "still working")
 _RUN_TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("code_task_runs", "id", ("running", "repairing", "queued")),
+    # 'blocked' is included, and the no-live-job rule is what makes that safe.
+    #
+    # I excluded it earlier reasoning that blocked means "waiting on a human", which is a
+    # legitimate resting state. That is true only WHILE A JOB EXISTS TO RESUME. A run blocked
+    # on a decision whose job has gone can never proceed — approving the decision resumes
+    # nothing — yet it renders as a live BLOCKED card, indistinguishable from a build that is
+    # genuinely waiting for its operator. One such card sat next to a running build of the same
+    # app and made the running one look blocked.
+    ("code_task_runs", "id", ("running", "repairing", "queued", "blocked")),
     ("meeting_runs", "id", ("running", "queued")),
     ("discovery_runs", "id", ("running",)),
 )

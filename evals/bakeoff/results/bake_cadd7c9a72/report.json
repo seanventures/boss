@@ -1,0 +1,25 @@
+{
+  "batch_id": "bake_cadd7c9a72",
+  "total_runs": 1,
+  "configs": {
+    "hybrid_claude_repair3": {
+      "runs": 1,
+      "gate_pass": 0,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 0,
+      "retries": 0,
+      "llm_calls": 1,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {
+        "run:failed": 1
+      },
+      "repair_hist": {
+        "0": 1
+      },
+      "mean_wall_clock_s": 2.1,
+      "pass_rate": 0.0,
+      "cost_per_verified_outcome_usd_micros": null
+    }
+  }
+}

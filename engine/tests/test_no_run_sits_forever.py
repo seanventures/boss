@@ -142,3 +142,28 @@ def test_consistency_report_covers_each_of_those_tables():
     for table in ("code_task_runs", "meeting_runs", "discovery_runs", "app_previews", "jobs",
                   "decisions"):
         assert table in src, f"consistency_report never asks about {table}"
+
+
+def test_a_blocked_run_whose_job_is_gone_is_abandoned_too():
+    """'Blocked' is only a legitimate resting state while a job exists to resume.
+
+    A run blocked on a decision whose job has been cancelled can never proceed — approving the
+    decision resumes nothing — but it renders as a live BLOCKED card. One sat beside a running
+    build of the same app and made the running one look blocked.
+    """
+    covered = {t: working for t, _id, working in _RUN_TABLES}
+    assert "blocked" in covered["code_task_runs"]
+
+
+def test_a_blocked_run_that_still_has_a_job_is_left_alone():
+    """The no-live-job rule is the whole safety of including 'blocked'."""
+    src = inspect.getsource(shepherd_service.sweep_abandoned_runs)
+    assert "NOT EXISTS" in src
+    assert "'queued','running','leased'" in src
+
+
+def test_a_blocked_run_is_closed_as_cancelled_not_completed():
+    """Its phase is awaiting_*, never 'done', so the phase rule already handles it —
+    but assert it, because closing abandoned work as 'completed' would fake a success."""
+    src = inspect.getsource(shepherd_service.sweep_abandoned_runs)
+    assert 'str(r["phase"] or "") == "done"' in src

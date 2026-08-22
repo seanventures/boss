@@ -1,0 +1,23 @@
+{
+  "batch_id": "bake_003d5bf041",
+  "total_runs": 1,
+  "configs": {
+    "hybrid_claude_repair3": {
+      "runs": 1,
+      "gate_pass": 1,
+      "false_pass": 0,
+      "known_bad_runs": 0,
+      "total_cost_usd_micros": 1183589,
+      "retries": 0,
+      "llm_calls": 10,
+      "price_estimated_calls": 0,
+      "failure_breakdown": {},
+      "repair_hist": {
+        "0": 1
+      },
+      "mean_wall_clock_s": 267.8,
+      "pass_rate": 1.0,
+      "cost_per_verified_outcome_usd_micros": 1183589
+    }
+  }
+}
