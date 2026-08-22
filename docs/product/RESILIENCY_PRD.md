@@ -417,10 +417,21 @@ are the same payload.
   never connected — this is the abandoned BOSS-13 refactor its own test still asserts.
 * **Acceptance:** any single area < 1.5 MB and < 3s server render; `area-data.test.ts` passes.
 
-### R2 — Index the grown tables
-Warmup masks a 28.9s cold query; it does not make it fast.
-* **Blocked on:** goldeneye's `DATABASE_URL`, which is not in the ops secret store.
-* **Acceptance:** cold first query < 3s; remove the warmup or keep it as belt-and-braces.
+### R2 — Find out what is actually slow before indexing anything
+*Premise re-checked and it does not hold.* `db/schema.sql` already carries **242** indexes,
+including on every table this item named — `idx_jobs_claimable` and `idx_jobs_ranked_claimable`,
+`idx_events_project_created`, `idx_code_task_runs_project`, `idx_app_previews_project/_run`.
+A 28.9s cold query against well-indexed tables is not a missing index; it is cold connection
+setup, an empty page cache, or pool exhaustion.
+
+Adding indexes on that reasoning would have been S9 — a real diagnosis answered at the wrong
+layer — and would have left the actual cause untouched while looking like progress.
+
+* **Not blocked on `DATABASE_URL` either.** The API self-migrates via `ensure_schema` on boot,
+  so idempotent DDL ships with a normal deploy. That was a wrong assumption, not a constraint.
+* **Do first:** measure cold vs warm latency per endpoint from outside, and get one `EXPLAIN
+  (ANALYZE, BUFFERS)` of the slow path. Then decide — index, pool sizing, or pre-warm.
+* **Acceptance:** cold first query < 3s, *with the reason named*.
 
 ### R3 — Make Ask BOSS a reliable first responder
 Fix the three defects in §5. Add a proactive opening move: on any "stuck/slow/not started"
