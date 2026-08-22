@@ -432,11 +432,155 @@ def _aes_gcm_decrypt(key: bytes, blob: bytes) -> bytes:
     return AESGCM(key).decrypt(nonce, ct, None)
 
 
+class DatabaseBackend:
+    """AES-256-GCM ciphertext in Postgres. The only store that survives a container.
+
+    THE BUG THIS EXISTS FOR: every other local backend writes under BOSS_SECRETS_DIR, which
+    on a containerised install is the container's own filesystem. Deploying BOSS therefore
+    DESTROYED every host credential it had generated — the deployment_hosts row still said
+    "credential bound", the secret it pointed at was gone, and the console reported
+    "secret 'ssh_key' is bound but unusable: … does not exist" on a host that had been
+    working an hour earlier. A self-hosted operator should not have to know to mount a
+    volume before the product stops losing its own keys.
+
+    Encrypted with the same envelope as LocalVaultBackend, so the database holds ciphertext
+    and the master key stays in the environment: a DB dump is not a key compromise.
+    """
+
+    kind = "database"
+
+    def __init__(self, engine: Any = None, master_key: Optional[bytes] = None):
+        self._engine = engine
+        self._provisioned_key = False
+        if master_key is not None:
+            self._key = master_key
+            return
+        try:
+            self._key = _load_kms_master_key()
+        except SecretUnavailable:
+            # NO CONFIGURED MASTER KEY. Provision one, persist it, and be honest about what
+            # that is worth.
+            #
+            # Refusing here would reproduce the defect this class exists to fix: the previous
+            # default backend was also unconfigured out of the box, so a new operator's first
+            # action returned HTTP 500 and the obvious workaround (`file`) then lost the key
+            # on the next deploy. A self-hosted product has to work before it is tuned.
+            #
+            # WHAT THIS IS AND IS NOT: with BOSS_KMS_MASTER_KEY set, the database holds
+            # ciphertext and the key lives in the environment — a DB dump is not a key
+            # compromise. Without it, the key sits beside the ciphertext, so this protects
+            # against casual inspection and file-level leaks, NOT against someone who has the
+            # database. `health()` reports which mode is in effect rather than implying the
+            # stronger one.
+            self._key = self._ensure_provisioned_key()
+            self._provisioned_key = True
+
+    def _ensure_provisioned_key(self) -> bytes:
+        import base64
+
+        with self._conn() as c:
+            row = c.execute(sql("SELECT ciphertext FROM secret_material "
+                                "WHERE ref_key = '__boss_master_key__'")).mappings().first()
+            if row:
+                return base64.urlsafe_b64decode(bytes(row["ciphertext"]))
+            generated = os.urandom(32)
+            c.execute(sql(
+                "INSERT INTO secret_material (ref_key, ciphertext) "
+                "VALUES ('__boss_master_key__', :v) ON CONFLICT (ref_key) DO NOTHING"),
+                {"v": base64.urlsafe_b64encode(generated)})
+            row = c.execute(sql("SELECT ciphertext FROM secret_material "
+                                "WHERE ref_key = '__boss_master_key__'")).mappings().first()
+        return base64.urlsafe_b64decode(bytes(row["ciphertext"]))
+
+    def _conn(self):
+        if self._engine is None:
+            from ..db import get_engine
+
+            self._engine = get_engine()
+        return self._engine.begin()
+
+    def get(self, key: str) -> str:
+        with self._conn() as c:
+            row = c.execute(sql("SELECT ciphertext FROM secret_material WHERE ref_key = :k"),
+                            {"k": key}).mappings().first()
+        if not row:
+            raise SecretUnavailable(f"{key} does not exist")
+        blob = bytes(row["ciphertext"])
+        try:
+            return _aes_gcm_decrypt(self._key, blob).decode("utf-8")
+        except Exception:  # noqa: BLE001
+            # An operator who starts without BOSS_KMS_MASTER_KEY and sets one later would
+            # otherwise find every previously-stored secret undecryptable. Fall back to the
+            # auto-provisioned key so that upgrade path stays non-destructive; put() re-encrypts
+            # under the configured key, so material migrates as it is rewritten.
+            fallback = self._provisioned_key_if_present()
+            if fallback is None or fallback == self._key:
+                raise
+            return _aes_gcm_decrypt(fallback, blob).decode("utf-8")
+
+    def _provisioned_key_if_present(self) -> Optional[bytes]:
+        import base64
+
+        with self._conn() as c:
+            row = c.execute(sql("SELECT ciphertext FROM secret_material "
+                                "WHERE ref_key = '__boss_master_key__'")).mappings().first()
+        return base64.urlsafe_b64decode(bytes(row["ciphertext"])) if row else None
+
+    def put(self, key: str, value: str) -> None:
+        blob = _aes_gcm_encrypt(self._key, value.encode("utf-8"))
+        with self._conn() as c:
+            c.execute(sql(
+                "INSERT INTO secret_material (ref_key, ciphertext, updated_at) "
+                "VALUES (:k, :v, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (ref_key) DO UPDATE SET ciphertext = EXCLUDED.ciphertext, "
+                "                                    updated_at = CURRENT_TIMESTAMP"),
+                {"k": key, "v": blob})
+
+    def list_keys(self) -> list[str]:
+        # The provisioned master key shares this table but is not a secret anyone stored,
+        # so it must not appear as one (or be deletable through the normal path).
+        with self._conn() as c:
+            rows = c.execute(sql("SELECT ref_key FROM secret_material "
+                                 "WHERE ref_key <> '__boss_master_key__' ORDER BY ref_key")).all()
+        return [r[0] for r in rows]
+
+    def delete(self, key: str) -> None:
+        if key == "__boss_master_key__":
+            raise SecretUnavailable(
+                "refusing to delete the master key — every stored secret would become "
+                "undecryptable")
+        with self._conn() as c:
+            c.execute(sql("DELETE FROM secret_material WHERE ref_key = :k"), {"k": key})
+
+    def health(self) -> dict[str, Any]:
+        try:
+            info: dict[str, Any] = {
+                "ok": True,
+                "kind": self.kind,
+                "keys": len(self.list_keys()),
+                "durable": True,
+            }
+            if self._provisioned_key:
+                info["key_mode"] = "auto_provisioned"
+                info["note"] = (
+                    "No BOSS_KMS_MASTER_KEY is configured, so BOSS generated one and stored it "
+                    "in the same database as the secrets. Secrets survive redeploys and are not "
+                    "readable by casual inspection, but anyone with the database has both halves. "
+                    "Set BOSS_KMS_MASTER_KEY to keep the key out of the database.")
+            else:
+                info["key_mode"] = "configured"
+            return info
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "kind": self.kind, "error": str(exc)}
+
+
 def backend_for(kind: str, settings: Settings) -> SecretBackend:
     """Map a stored `ref_kind`/`storage_backend` onto an implementation."""
     normalised = (kind or "").strip().lower()
     if normalised in ("env", "environment"):
         return EnvBackend()
+    if normalised in ("database", "db", "postgres"):
+        return DatabaseBackend()
     if normalised in ("file", "local_runner"):
         return FileBackend()
     if normalised in ("local_vault", "kms_local", "boss_vault"):

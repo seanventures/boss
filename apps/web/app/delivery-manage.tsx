@@ -1158,7 +1158,12 @@ export function hostStage(h: FleetHost): Stage {
   const pf = h.last_preflight ?? {};
   const problems = pf.problems ?? [];
   if (h.status === "verified") return "ready";
-  if (!h.key_secret_ref) return "credential";
+  // A BINDING IS NOT A CREDENTIAL. `key_secret_ref` says a secret was recorded, not that it
+  // still resolves — and when the store lost it, the wizard cheerfully showed "Credential ✓"
+  // while preflight reported "secret 'ssh_key' is bound but unusable". Trust the last real
+  // attempt over the pointer: if resolution failed, we are back at step one.
+  const credentialGone = problems.some((p) => /bound but unusable|does not exist/i.test(p));
+  if (!h.key_secret_ref || credentialGone) return "credential";
   // A pending install line means BOSS minted a key that is not on the box yet. That is a
   // distinct state from "we never had a credential", and conflating them is what made
   // "Generate key" look like the remedy for a key that was already generated.
@@ -1197,7 +1202,7 @@ export function FleetPanel({ projectId, targets = [] }: {
   const [minted, setMinted] = React.useState<Record<string, any>>({});
   const [openReg, setOpenReg] = React.useState(false);
   const [adoptFor, setAdoptFor] = React.useState<string | null>(null);
-  const [keyBackend, setKeyBackend] = React.useState("file");
+  const [keyBackend, setKeyBackend] = React.useState("database");
   const [copied, setCopied] = React.useState<string | null>(null);
   const [route, setRoute] = React.useState<Record<string, string>>({});
   const [blocker, setBlocker] = React.useState<Blocker | null>(null);
@@ -1292,7 +1297,10 @@ export function FleetPanel({ projectId, targets = [] }: {
                       store in
                       <select value={keyBackend} onChange={(e) => setKeyBackend(e.target.value)}
                               aria-label="Secret backend for this host's key">
-                        <option value="file">file (local)</option>
+                        {/* Durable by default. `file` writes to the container's own disk,
+                            so a deploy silently destroys every key BOSS generated. */}
+                        <option value="database">database (survives restarts)</option>
+                        <option value="file">file (local disk — lost on redeploy)</option>
                         <option value="platform_secret_store">platform_secret_store</option>
                       </select>
                     </label>

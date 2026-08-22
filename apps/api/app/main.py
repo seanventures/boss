@@ -8136,7 +8136,11 @@ def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] 
         try:
             return generate_host_key(
                 connection, settings, host_id=host_id,
-                backend=str((payload or {}).get("backend") or "platform_secret_store"),
+                # `database` by default: it is the only store that survives the process.
+                # The old default was platform_secret_store, which is unconfigured on a
+                # self-hosted install, so the first thing a new operator saw was a 500; the
+                # obvious workaround, `file`, then lost the key on the next deploy.
+                backend=str((payload or {}).get("backend") or "database"),
                 actor=actor)
         except (SecretUnavailable, ValueError, RuntimeError) as exc:
             # RuntimeError too: `generate_keypair` raises it when ssh-keygen fails or is not

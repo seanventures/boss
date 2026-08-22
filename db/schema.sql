@@ -5545,3 +5545,17 @@ ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS key_public TEXT;
 -- being installed and sends people to debug the wrong machine. Optional; blank means "my
 -- default SSH access works".
 ALTER TABLE deployment_hosts ADD COLUMN IF NOT EXISTS admin_identity_file TEXT;
+
+-- Encrypted secret material, so a generated credential survives the process that made it.
+--
+-- Every other local backend writes under BOSS_SECRETS_DIR — the CONTAINER's filesystem on a
+-- containerised install. Deploying BOSS destroyed every host key it had generated: the
+-- deployment_hosts row still claimed a bound credential, and the secret it referenced was
+-- gone. Ciphertext only; the master key stays in the environment, so a database dump is not
+-- a key compromise.
+CREATE TABLE IF NOT EXISTS secret_material (
+  ref_key TEXT PRIMARY KEY,
+  ciphertext BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
