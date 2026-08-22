@@ -30,6 +30,7 @@ from typing import Optional
 from ..config import Settings
 from ..ports import get_engine_ports, sql
 from .code_agent import CodeTaskSpec, RepoContext, make_code_agent
+from .jobs import JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_REQUESTED
 from .core import emit_event
 from .core import emit_event, make_id
 from .github_app_adapter import GitHubAppAdapter
@@ -204,6 +205,7 @@ def start_code_task(
     repair_retries: Optional[int] = None, review_panel_size: Optional[int] = None,
     substrate: Optional[str] = None, repo_host: Optional[str] = None,
     allow_duplicate: bool = False, simulated: bool = False,
+    job_priority: Optional[int] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
 
@@ -410,8 +412,13 @@ def start_code_task(
             },
         )
         return run_id
+    # Work an operator asked for runs at REQUESTED. Work the system decided to do on its own
+    # — a shepherd retry — must not queue ahead of a person, so the caller passes BACKGROUND.
     jobs.create_job(connection, project_id=project_id, task_id=task_id,
-                    kind="code.task", priority=46, payload={"run_id": run_id})
+                    kind="code.task",
+                    priority=(job_priority if job_priority is not None
+                              else JOB_PRIORITY_REQUESTED),
+                    payload={"run_id": run_id})
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
     return run_id
@@ -599,7 +606,7 @@ def _prior_failing_gates(fctx_prev: dict, state: dict) -> list[str]:
 def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
-    allow_test_retirement: bool = False,
+    allow_test_retirement: bool = False, job_priority: Optional[int] = None,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -788,6 +795,7 @@ def retry_code_task(
             repair_retries=(repair_retries if isinstance(repair_retries, int)
                             else spec.get("repair_retries")),
             substrate=substrate_override,
+            job_priority=job_priority,
         )
         if allow_test_retirement:
             # Declared on the RUN's spec so the gate can read it. Kept out of start_code_task's

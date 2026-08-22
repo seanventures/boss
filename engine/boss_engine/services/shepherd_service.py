@@ -26,6 +26,7 @@ from typing import Any, Optional
 from ..config import Settings
 from ..ports import sql
 from .core import emit_event, make_id
+from .jobs import JOB_PRIORITY_BACKGROUND
 
 logger = logging.getLogger(__name__)
 
@@ -512,8 +513,11 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
         note = (f"Task Shepherd: {p['class_name']}. {p['check']} "
                 f"Applying remedy {remedy.id!r}: {remedy.describe}.")
         if remedy.action in ("retry_code_task", "extend_code_task"):
+            # BACKGROUND: a repair the system chose to do must never queue ahead of a person.
+            # Eleven of these went in front of an operator's PRD meeting and it never started.
             res = retry_code_task(engine, settings, jobs, run_id, fix_note=note,
-                                  profile=("lean" if remedy.id == "reissue_lean" else None))
+                                  profile=("lean" if remedy.id == "reissue_lean" else None),
+                                  job_priority=JOB_PRIORITY_BACKGROUND)
             new_run = res.get("run_id")
             outcome = "started"
         elif remedy.action == "restart_preview":

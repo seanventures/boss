@@ -28,6 +28,7 @@ from sqlalchemy.engine import Connection
 from ..config import Settings
 from ..db import begin
 from .claude_cli_adapter import make_chat_adapter
+from .jobs import JOB_PRIORITY_INTERACTIVE
 from .core import create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
@@ -632,7 +633,7 @@ def convene_prd_meeting_core(
     )
     job = jobs.create_job(
         connection, project_id=project_id, task_id=task_id,
-        kind="meeting.step", priority=48, payload={"run_id": run_id},
+        kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id},
     )
     return {"task_id": task_id, "run_id": run_id, "job_id": job["id"]}
 
@@ -746,7 +747,7 @@ def advance_meeting_run(engine, settings: Settings, jobs, run_id: str) -> dict:
     with begin(engine) as c:
         _save_phase(c, run_id, state, add_cost, model, next_phase)
         jobs.create_job(c, project_id=run["project_id"], task_id=run["task_id"],
-                        kind="meeting.step", priority=48, payload={"run_id": run_id})
+                        kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id})
     return {"status": "running", "done": False, "phase": next_phase}
 
 
@@ -1105,7 +1106,7 @@ def _advance_simulated_phase(connection, settings: Settings, jobs, run: dict) ->
         project_id=run["project_id"],
         task_id=run["task_id"],
         kind="meeting.step",
-        priority=48,
+        priority=JOB_PRIORITY_INTERACTIVE,
         payload={"run_id": run["id"], "simulated": True},
     )
     return {"status": "running", "done": False, "phase": next_phase, "simulated": True}

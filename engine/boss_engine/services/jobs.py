@@ -202,6 +202,29 @@ def enqueue_job(
     }
 
 
+# --------------------------------------------------------------------------- #
+# Job priority — ONE table, because scattered magic numbers ranked us backwards
+# --------------------------------------------------------------------------- #
+# `claim_job` orders by `priority ASC`, so a LOWER number runs SOONER.
+#
+# These were invented per call site — 40, 45, 46, 48, 80 across six services — with no shared
+# table and no statement of what the ordering meant. The result was exactly backwards: a
+# `code.task` sat at 46 and a `meeting.step` at 48, so batch build work outranked the meeting
+# an operator was watching. It stayed invisible until something produced batch work in bulk;
+# then eleven code tasks queued ahead of a PRD meeting and it never started.
+#
+# The ordering rule is WHO IS WAITING, not what kind of work it is:
+#   * a person watching a screen right now      -> INTERACTIVE
+#   * work a person asked for and walked away   -> REQUESTED
+#   * work the system decided to do by itself   -> BACKGROUND
+#
+# A shepherd retry is BACKGROUND even though it is a code.task, and a meeting is INTERACTIVE
+# even though it is cheap: provenance decides, not kind.
+JOB_PRIORITY_INTERACTIVE = 20
+JOB_PRIORITY_REQUESTED = 46
+JOB_PRIORITY_BACKGROUND = 90
+
+
 class JobLeaseService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -337,6 +360,39 @@ class JobLeaseService:
         job.pop("dedupe_key")
         job.pop("created")
         return job
+
+    def cancel_queued_job(
+        self, connection: Connection, job_id: str, *, reason: str, actor: str = "operator",
+    ) -> dict[str, Any]:
+        """Cancel a job that has not started. Never touches one that is running.
+
+        There was no way to un-queue work. When a bulk producer filled the queue, the only
+        remedy was to wait it out — an autopilot sweep put eleven code tasks in front of an
+        operator's meeting and there was no lever anywhere to take them back.
+
+        Deliberately refuses anything leased or running: killing work mid-flight leaves a
+        half-written branch and a lease nobody owns, which is a worse problem than the queue.
+        """
+        row = connection.execute(
+            text("SELECT id, status, kind FROM jobs WHERE id = :id"),
+            {"id": job_id}).mappings().first()
+        if not row:
+            return {"ok": False, "error": "no such job"}
+        if row["status"] in ("succeeded", "cancelled", "deadlettered"):
+            return {"ok": True, "job_id": job_id, "status": row["status"],
+                    "note": "already terminal"}
+        if row["status"] not in ("queued", "failed_retryable"):
+            return {"ok": False, "job_id": job_id, "status": row["status"],
+                    "error": f"job is {row['status']}; only a job that has not started "
+                             "can be cancelled"}
+        connection.execute(
+            text("UPDATE jobs SET status = 'cancelled', "
+                 "last_error = CAST(:e AS JSONB), updated_at = :now WHERE id = :id "
+                 "AND status IN ('queued','failed_retryable')"),
+            {"id": job_id, "now": now_utc(),
+             "e": json.dumps({"message": "cancelled before start", "reason": reason,
+                              "actor": actor})})
+        return {"ok": True, "job_id": job_id, "kind": row["kind"], "status": "cancelled"}
 
     def claim_job(
         self,

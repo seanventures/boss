@@ -9451,6 +9451,55 @@ def stop_preview_endpoint(preview_id: str, payload: Optional[dict] = None):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
+def without_internal_bulk(run: dict) -> dict:
+    """Strip engine-internal file bodies before a run crosses the API boundary.
+
+    `finalize_ctx.pending_diff` is how the verifier ratchet re-applies a change after a gate
+    failure: a list of {path, content} holding the FULL TEXT of every file the agent wrote. The
+    engine needs it. A browser never does — and it was being serialized into the console on
+    every page load.
+
+    Measured on goldeneye: 11.4 MB of HTML and 18-67 seconds per page, including EIGHT complete
+    package-lock.json files at ~139-176 KB each. The console looked broken because it was
+    shipping the repair loop's scratch space to the browser.
+
+    Paths and sizes are kept, so a diff view can still say what changed and fetch a body when
+    someone actually opens one.
+    """
+    fctx = run.get("finalize_ctx")
+    if not isinstance(fctx, dict) or "pending_diff" not in fctx:
+        return run
+    pending = fctx.get("pending_diff")
+    if not isinstance(pending, list):
+        return run
+    summarised = [
+        {"path": f.get("path"), "bytes": len(f.get("content") or "")}
+        if isinstance(f, dict) else f
+        for f in pending
+    ]
+    return {**run, "finalize_ctx": {**fctx, "pending_diff": summarised}}
+
+
+@app.post("/v1/jobs/{job_id}/cancel")
+def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
+    """Cancel a job that has not started yet.
+
+    There was no way to un-queue work. When a bulk producer filled the queue the only remedy
+    was to wait it out. Refuses anything already leased or running: killing work mid-flight
+    leaves a half-written branch and an unowned lease.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    body = payload or {}
+    with begin(engine) as c:
+        result = jobs.cancel_queued_job(
+            c, job_id, reason=str(body.get("reason") or "cancelled by operator"),
+            actor=str(body.get("actor") or "operator"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("error") or "cannot cancel")
+    return result
+
+
 @app.get("/v1/code-tasks")
 def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List code-task runs for a project (newest first) for the Code Tasks view."""
@@ -9461,7 +9510,8 @@ def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
     with begin(engine) as c:
         return {
             "project_id": project_id,
-            "code_tasks": list_code_task_runs(c, project_id, limit),
+            "code_tasks": [without_internal_bulk(r)
+                           for r in list_code_task_runs(c, project_id, limit)],
         }
 
 
@@ -9475,7 +9525,8 @@ def get_code_task_endpoint(run_id: str):
         run = load_code_task_run(c, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="code task not found")
-    return run
+    # Same boundary as the list: opening ONE run should not ship a lockfile either.
+    return without_internal_bulk(run)
 
 
 @app.get("/v1/bakeoff/{batch_id}/report")
