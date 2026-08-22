@@ -553,6 +553,25 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
  *   nothing built     -> Run build      (there IS no app; this is the honest action)
  * Rebuilding stays available, demoted to a secondary control, where a deliberate act belongs.
  */
+/**
+ * The attempt "Run preview" should act on, given an app's attempts newest-first.
+ *
+ * THE RUN THE BUTTON ACTS ON MUST BE THE RUN THE BUTTON WAS ENABLED BY. The card enables the
+ * action from `anyShipped` — does ANY attempt have something to show — but fired it at the
+ * newest attempt. For an app whose latest run is a blocked follow-up, that means enabling on
+ * the strength of the completed run and then previewing the blocked one, which the API
+ * rightly rejects with 409 "has not opened a pull request yet".
+ *
+ * Falls back to the newest attempt so the caller always has a run; when nothing has shipped
+ * the card does not render the action at all.
+ */
+export function pickPreviewRun<T extends { status?: string; pull_request_url?: string | null }>(
+  membersNewestFirst: T[],
+): T {
+  return membersNewestFirst.find(
+    (m) => m.status === "completed" || m.pull_request_url) ?? membersNewestFirst[0];
+}
+
 function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }: {
   run: CodeTaskRun;
   previewUrl: string | null;
@@ -2201,6 +2220,14 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
               const groupStatus = anyShipped
                 ? "completed" : anyRunning ? "running" : anyBroken ? "blocked" : "running";
               const prRun = members.find((m) => m.pull_request_url);
+              // THE RUN THE BUTTON ACTS ON MUST BE THE RUN THE BUTTON WAS ENABLED BY.
+              // `anyShipped` asks whether ANY attempt produced something previewable, but the
+              // action was wired to members[0] — the NEWEST attempt. On an app whose latest
+              // run is a blocked follow-up, that enabled "Run preview" on the strength of the
+              // completed run and then fired it at the blocked one, which 409s with
+              // "has not opened a pull request yet". Members are newest-first, so this is the
+              // most recent attempt that actually has something to show.
+              const previewRun = pickPreviewRun(members);
               const benchGroup = (fc(members[0]).qa_benchmark as { name?: string } | undefined);
               const name = benchGroup?.name
                 ? `${benchGroup.name} — QA benchmark`
@@ -2259,10 +2286,10 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       slot. */}
                   <div className="ct-actions">
                     <AppPrimaryAction
-                      run={members[0]}
-                      previewUrl={livePreviewFor(members[0].id)}
+                      run={previewRun}
+                      previewUrl={livePreviewFor(previewRun.id)}
                       previewStarting={previews.some(
-                        (x) => x.run_id === members[0].id && x.status === "starting")}
+                        (x) => x.run_id === previewRun.id && x.status === "starting")}
                       shipped={anyShipped}
                       running={anyRunning}
                     />

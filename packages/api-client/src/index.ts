@@ -5392,6 +5392,27 @@ function withQuery(path: string, query?: Record<string, QueryValue>): string {
   return qs ? `${path}?${qs}` : path;
 }
 
+/**
+ * Turn a failed response into a sentence an operator can act on.
+ *
+ * The API already answers "why" carefully — a blocked preview returns message, run_status,
+ * run_phase and next_action. All of it was being discarded in favour of "BOSS API request
+ * failed: 409", so the console showed a bare status code for a fault the server had fully
+ * explained. Callers render `error.message`, so the explanation has to live there.
+ */
+export function describeApiFailure(status: number, body: unknown): string {
+  const detail = (body as { detail?: unknown } | undefined)?.detail ?? body;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as Record<string, unknown>;
+    const parts = [d.message, d.next_action]
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+    if (parts.length) return parts.join(" ");
+    if (typeof d.error === "string" && d.error.trim()) return d.error;
+  }
+  return `BOSS API request failed: ${status}`;
+}
+
 export function createBossApiClient(config: BossApiClientConfig) {
   const baseUrl = config.baseUrl.replace(/\/$/, "");
   const fetchImpl = config.fetchImpl ?? fetch;
@@ -5423,7 +5444,7 @@ export function createBossApiClient(config: BossApiClientConfig) {
         body = rawBody ? JSON.parse(rawBody) : undefined;
       } catch {}
       throw new BossApiError(
-        `BOSS API request failed: ${response.status}`,
+        describeApiFailure(response.status, body),
         response.status,
         body,
       );
