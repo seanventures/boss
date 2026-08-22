@@ -78,3 +78,17 @@ def test_cancelling_a_job_closes_both_kinds_of_run():
     src = inspect.getsource(jobs.JobLeaseService.cancel_queued_job)
     assert "UPDATE code_task_runs" in src
     assert "UPDATE meeting_runs" in src
+
+
+def test_a_finished_run_is_closed_as_completed_not_cancelled():
+    """Eight runs sat at status='running' with phase='done'.
+
+    They had finished every stage and nothing moved the status. Closing those as `cancelled`
+    would replace one wrong answer with another and erase work that actually succeeded.
+    """
+    src = inspect.getsource(shepherd_service.sweep_abandoned_runs)
+    assert 'str(r["phase"] or "") == "done"' in src
+    assert "SET status = 'completed'" in src
+    assert "SET status = 'cancelled'" in src
+    # the phase must be selected, or the distinction cannot be made
+    assert "r.phase AS phase" in src

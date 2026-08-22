@@ -423,7 +423,7 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
         try:
             with begin(engine) as c:
                 rows = c.execute(
-                    sql(f"SELECT r.{id_col} AS id FROM {table} r "
+                    sql(f"SELECT r.{id_col} AS id, r.phase AS phase FROM {table} r "
                         f"WHERE r.project_id = :p AND r.status = ANY(:working) "
                         f"  AND r.updated_at < now() - (:m || ' minutes')::interval "
                         f"  AND NOT EXISTS (SELECT 1 FROM jobs j "
@@ -432,15 +432,30 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                         f"LIMIT 200"),
                     {"p": project_id, "working": list(working),
                      "m": ORPHAN_AFTER_MINUTES}).mappings().all()
-                ids = [r["id"] for r in rows]
-                if ids:
+                # THE PHASE SAYS WHICH TERMINAL STATE IS TRUE.
+                #
+                # Eight runs sat at status='running' with phase='done': they had finished
+                # every stage and nothing ever moved the status. Closing those as `cancelled`
+                # would replace one wrong answer with another and erase work that succeeded.
+                # A run that reached its last phase COMPLETED; one that never left the first
+                # was abandoned.
+                done = [r["id"] for r in rows if str(r["phase"] or "") == "done"]
+                stalled = [r["id"] for r in rows if str(r["phase"] or "") != "done"]
+                if done:
+                    c.execute(
+                        sql(f"UPDATE {table} SET status = 'completed', updated_at = now() "
+                            f"WHERE {id_col} = ANY(:ids)"), {"ids": done})
+                if stalled:
                     c.execute(
                         sql(f"UPDATE {table} SET status = 'cancelled', "
                             f"error = COALESCE(error, :e), updated_at = now() "
                             f"WHERE {id_col} = ANY(:ids)"),
-                        {"ids": ids,
+                        {"ids": stalled,
                          "e": "abandoned: no job remains that could advance this run"})
-                    closed.append({"table": table, "count": len(ids), "ids": ids[:10]})
+                if done or stalled:
+                    closed.append({"table": table, "completed": len(done),
+                                   "cancelled": len(stalled),
+                                   "count": len(done) + len(stalled)})
         except Exception as exc:  # noqa: BLE001 — one missing table must not stop the rest
             closed.append({"table": table, "error": f"{type(exc).__name__}"})
 
