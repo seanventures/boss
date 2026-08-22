@@ -9553,7 +9553,8 @@ def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
     with begin(engine) as c:
         result = jobs.cancel_queued_job(
             c, job_id, reason=str(body.get("reason") or "cancelled by operator"),
-            actor=str(body.get("actor") or "operator"))
+            actor=str(body.get("actor") or "operator"),
+            force=bool(body.get("force")))
     if not result.get("ok"):
         raise HTTPException(status_code=409, detail=result.get("error") or "cannot cancel")
     return result

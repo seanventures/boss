@@ -373,6 +373,7 @@ class JobLeaseService:
 
     def cancel_queued_job(
         self, connection: Connection, job_id: str, *, reason: str, actor: str = "operator",
+        force: bool = False,
     ) -> dict[str, Any]:
         """Cancel a job that has not started. Never touches one that is running.
 
@@ -382,27 +383,56 @@ class JobLeaseService:
 
         Deliberately refuses anything leased or running: killing work mid-flight leaves a
         half-written branch and a lease nobody owns, which is a worse problem than the queue.
+
+        `force=True` overrides that, and is for the case where a running job is the thing
+        BLOCKING an operator — a wedged benchmark holding the only worker slot while a meeting
+        waits. The half-written branch is real; it is chosen deliberately over an operator
+        waiting indefinitely, and the caller says so in `reason`.
         """
         row = connection.execute(
-            text("SELECT id, status, kind FROM jobs WHERE id = :id"),
+            text("SELECT id, status, kind, payload FROM jobs WHERE id = :id"),
             {"id": job_id}).mappings().first()
         if not row:
             return {"ok": False, "error": "no such job"}
         if row["status"] in ("succeeded", "cancelled", "deadlettered"):
             return {"ok": True, "job_id": job_id, "status": row["status"],
                     "note": "already terminal"}
-        if row["status"] not in ("queued", "failed_retryable"):
+        if row["status"] not in ("queued", "failed_retryable") and not force:
             return {"ok": False, "job_id": job_id, "status": row["status"],
                     "error": f"job is {row['status']}; only a job that has not started "
-                             "can be cancelled"}
+                             "can be cancelled (pass force=true to stop it anyway)"}
         connection.execute(
             text("UPDATE jobs SET status = 'cancelled', "
                  "last_error = CAST(:e AS JSONB), updated_at = :now WHERE id = :id "
-                 "AND status IN ('queued','failed_retryable')"),
+                 + ("" if force else "AND status IN ('queued','failed_retryable')")),
             {"id": job_id, "now": now_utc(),
              "e": json.dumps({"message": "cancelled before start", "reason": reason,
                               "actor": actor})})
-        return {"ok": True, "job_id": job_id, "kind": row["kind"], "status": "cancelled"}
+        # A CANCELLED JOB MUST CLOSE ITS RUN.
+        #
+        # Cancelling nine jobs left nineteen code_task_runs sitting at status='running',
+        # phase='queued' — work that will never start, reported forever as in flight. The job
+        # is the execution; the run is what the operator SEES, and closing one without the
+        # other is how a console comes to show nineteen running tasks and no worker busy.
+        run_id = None
+        payload = row["payload"] if "payload" in row.keys() else None
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = None
+        if isinstance(payload, dict):
+            run_id = payload.get("run_id")
+        if run_id:
+            connection.execute(
+                text("UPDATE code_task_runs SET status = 'cancelled', "
+                     "error = COALESCE(error, :e), updated_at = :now "
+                     "WHERE id = :r AND status NOT IN "
+                     "('completed','failed','cancelled')"),
+                {"r": run_id, "now": now_utc(),
+                 "e": f"cancelled with its job: {reason}"})
+        return {"ok": True, "job_id": job_id, "kind": row["kind"], "status": "cancelled",
+                "run_id": run_id}
 
     def claim_job(
         self,
