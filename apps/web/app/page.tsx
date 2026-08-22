@@ -659,7 +659,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchCapabilities(activeProjectId),
       fetchMeetingRooms(activeProjectId),
       fetchApprovalRules(activeProjectId),
-      fetchCodeTasksFeed(activeProjectId),
+      fetchCodeTasksFeed(activeProjectId, requestedArea),
       fetchDiscoveriesFeed(activeProjectId),
       fetchPreviews(activeProjectId),
       fetchQaBenchmarkApps(activeProjectId),

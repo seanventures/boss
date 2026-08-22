@@ -101,14 +101,36 @@ export function emptyCodeTaskFeed(reason?: string, projectId = PROJECT_ID): Code
   };
 }
 
-export async function fetchCodeTasksFeed(projectId = PROJECT_ID): Promise<CodeTaskFeed> {
+/** Areas that actually render the code-task list. Everywhere else needs a handful for counts. */
+const CODE_TASK_AREAS = new Set(["code_tasks", "delivery", "overview", undefined, ""]);
+
+/**
+ * How many runs this page needs.
+ *
+ * Measured on goldeneye: /v1/code-tasks?limit=200 returns **1.41 MB** while every other feed
+ * on the page combined is ~130 KB — 91% of the payload for one list. The page then renders it
+ * across ~30 area sections whatever area you asked for, and a single load took 111 seconds and
+ * starved the API's healthcheck twice, so Traefik evicted the container and the console showed
+ * "HTTP 404 / No hosts yet" about a host that was registered and verified.
+ *
+ * 200 stays where the list is actually shown — that limit exists because BOSS's own
+ * housekeeping runs once filled the first 50 and hid every app an operator had built.
+ */
+export function codeTaskLimitFor(area?: string): number {
+  return CODE_TASK_AREAS.has(area) ? 200 : 12;
+}
+
+export async function fetchCodeTasksFeed(
+  projectId = PROJECT_ID,
+  area?: string,
+): Promise<CodeTaskFeed> {
   const resolved = resolveProjectId(projectId);
   try {
     // 50 was the default, and BOSS's own housekeeping runs filled it: 46 of the most recent
     // 50 were "Captain: QUALITY IMPROVE PASS", so an operator's real work — sudoku, n-queens,
     // the calculator, every app they had actually built — never reached the page at all. The
     // list looked nearly empty while 103 real runs sat behind the limit.
-    const res = await client.getCodeTasks(resolved, 200);
+    const res = await client.getCodeTasks(resolved, codeTaskLimitFor(area));
     return { projectId: resolved, apiReachable: true, items: res.code_tasks ?? [] };
   } catch (error) {
     if (error instanceof BossApiError) {
