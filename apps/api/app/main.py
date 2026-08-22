@@ -8077,7 +8077,12 @@ def generate_deployment_host_key_endpoint(host_id: str, payload: Optional[dict] 
                 connection, settings, host_id=host_id,
                 backend=str((payload or {}).get("backend") or "platform_secret_store"),
                 actor=actor)
-        except (SecretUnavailable, ValueError) as exc:
+        except (SecretUnavailable, ValueError, RuntimeError) as exc:
+            # RuntimeError too: `generate_keypair` raises it when ssh-keygen fails or is not
+            # installed, and catching only the first two is what turned a missing binary into
+            # an opaque HTTP 500 on goldeneye. The message already names the cause; the only
+            # job here is to let it through.
+            #
             # 422 with the reason, not a bare 500. An unconfigured secret backend is an
             # ordinary local-run condition ("all secrets left BLANK = fully local"), and an
             # opaque 500 sent the operator to the server log to discover a settings problem.

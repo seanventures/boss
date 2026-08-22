@@ -862,6 +862,22 @@ class IntentRouter:
             r"^\s*(how|what|why|when|where|who|which|whose|explain|tell me|show me)\b", lowered))
         polite_imperative = bool(re.match(r"^\s*(can|could|would|will|please)\b", lowered))
         lead_question = starts_discussion or (message.strip().endswith("?") and not polite_imperative)
+
+        # A QUESTION IS A QUESTION, whichever verb it happens to contain.
+        #
+        # This guard existed but was applied to `create_code_task` ALONE, while every other
+        # work-spawning intent was matched above it — so "why did this take so long, can you
+        # investigate?" hit the `investigate` keyword, dispatched run_discovery, reserved
+        # budget, and came back as "I couldn't start that work: Burst cap exceeded ($/min)".
+        # The operator asked a question about an existing run and was told their spend limit
+        # was hit, which explains neither what happened nor what they asked.
+        #
+        # Returning None routes to `_answer`, which discusses and spends nothing beyond the
+        # conversational budget. The cost of being wrong here is asymmetric: a missed build
+        # order is one follow-up message, a spurious build is real money and a junk task.
+        if lead_question:
+            return None, {}
+
         # Process/workflow/handoff authoring and starts beat multi-phase and generic build.
         # "build a settings page" must stay create_code_task; a role-handoff process must not.
         if self._looks_process_start(lowered):

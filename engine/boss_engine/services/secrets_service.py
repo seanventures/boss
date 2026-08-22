@@ -140,7 +140,20 @@ def generate_keypair(connection, settings: Settings, *, project_id: str, name: s
                 "-C", comment or f"boss-deploy@{name}", "-q"]
         if algorithm == "rsa":
             args[2:2] = ["-b", "4096"]
-        out = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        try:
+            out = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        except FileNotFoundError as exc:
+            # A MISSING BINARY IS A DEPLOYMENT DEFECT, NOT A SERVER ERROR.
+            #
+            # python:3.11-slim ships no openssh-client, so this raised FileNotFoundError, went
+            # uncaught, and reached the operator as a bare HTTP 500 on "Generate key" — a
+            # message that points at nothing. The same absence would have failed every SSH
+            # deploy later, further from the cause. Name the missing tool.
+            raise RuntimeError(
+                "ssh-keygen is not installed in this environment, so BOSS cannot mint a host "
+                "key. Install openssh-client in the API image (or adopt an existing key "
+                "instead of generating one)."
+            ) from exc
         if out.returncode != 0:
             raise RuntimeError(f"ssh-keygen failed: {(out.stderr or '').strip()[:200]}")
 

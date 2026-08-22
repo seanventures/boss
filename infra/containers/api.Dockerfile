@@ -13,8 +13,15 @@ ENV HOME=/home/boss
 # git: the governed code pipeline shallow-clones the target repo into an ephemeral sandbox.
 # Node + Claude Code CLI: the claude_code agent shells out to `claude -p` (headless, authed via
 # the CLAUDE_CODE_OAUTH_TOKEN env var) for the builder roles. Early, cacheable layer.
+#
+# openssh-client is NOT optional: BOSS deploys to customer hosts by shelling out to `ssh`,
+# and mints host credentials with `ssh-keygen`. python:3.11-slim ships neither. Without it
+# every fleet operation fails at runtime — key generation returned an opaque HTTP 500 and
+# any SSH deploy would have died the same way. It worked in development purely because a
+# developer laptop has ssh; the container is the only place that truth was tested.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates nodejs npm \
+         openssh-client \
     && npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force \
     && apt-get clean && rm -rf /var/lib/apt/lists/*

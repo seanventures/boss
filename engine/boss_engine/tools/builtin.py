@@ -889,6 +889,101 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         }
 
     @reg.tool(
+        "explain_run",
+        "WHY a code-task run took as long as it did, cost what it cost, or ended how it "
+        "ended. Returns the wall-clock breakdown per phase (the phase that dominated is "
+        "almost always the answer), cost per stage, repair attempts, turns and the test "
+        "verdict. Use this for 'why did this take 152m', 'what went wrong', 'why so "
+        "expensive'.",
+        _obj({"run_id": {"type": "string"}}, ["run_id"]),
+    )
+    def explain_run(ctx, *, project_id, actor, args):
+        """The wall-clock answer, which `get_run_activity` cannot give.
+
+        `get_run_activity` reads `llm_calls` — per-call latency, tokens and cost. That is the
+        right source for "which model call was slow", but a run's DURATION is not the sum of
+        its LLM calls: it also contains sandbox provisioning, test execution, and retries of a
+        whole phase. The engine already records exactly this in `finalize_ctx.phase_timings`,
+        and nothing surfaced it — so an operator asking "why did this take 152 minutes" got
+        either a guess or a spend-cap error, while the run itself held the answer
+        (write_tests: 127.5 min, 84% of the total) the whole time.
+        """
+        run_id = args["run_id"]
+        with ctx.begin() as c:
+            row = c.execute(
+                _text("SELECT id, status, phase, title, error, state, finalize_ctx, "
+                      "       created_at, updated_at "
+                      "FROM code_task_runs WHERE id = :rid AND project_id = :p"),
+                {"rid": run_id, "p": project_id},
+            ).mappings().first()
+        if row is None:
+            return {"ok": False, "error": f"no code task run {run_id}"}
+
+        run = dict(row)
+        state = run.get("state") or {}
+        fctx = run.get("finalize_ctx") or {}
+        if isinstance(state, str):
+            state = json.loads(state or "{}")
+        if isinstance(fctx, str):
+            fctx = json.loads(fctx or "{}")
+
+        # Aggregate per phase: a phase that ran twice (a restart) is the thing worth seeing,
+        # so keep the run count rather than only the total.
+        timings = fctx.get("phase_timings") or []
+        by_phase: dict = {}
+        for item in timings:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("phase") or "unknown")
+            entry = by_phase.setdefault(name, {"ms": 0, "runs": 0})
+            entry["ms"] += int(item.get("ms") or 0)
+            entry["runs"] += 1
+        total_ms = sum(v["ms"] for v in by_phase.values())
+        phases = [
+            {"phase": k, "minutes": round(v["ms"] / 60000, 1), "runs": v["runs"],
+             "share_pct": round(100 * v["ms"] / total_ms, 1) if total_ms else 0.0}
+            for k, v in sorted(by_phase.items(), key=lambda kv: -kv[1]["ms"])
+        ]
+
+        stage_costs = state.get("stage_costs") or {}
+        costs = [{"stage": k, "usd": round(int(v or 0) / 1_000_000, 4)}
+                 for k, v in sorted(stage_costs.items(), key=lambda kv: -int(kv[1] or 0))]
+
+        tests = state.get("tests") or []
+        failed_tests = [t for t in tests if isinstance(t, dict) and not t.get("ok")]
+
+        # State the conclusion rather than leaving the reader to compute it from the table.
+        dominant = phases[0] if phases else None
+        headline = None
+        if dominant and total_ms:
+            headline = (f"{dominant['phase']} took {dominant['minutes']} min "
+                        f"({dominant['share_pct']}% of {round(total_ms/60000)} min total)"
+                        + (f", and ran {dominant['runs']} times" if dominant["runs"] > 1 else ""))
+
+        return {
+            "run_id": run_id,
+            "status": run.get("status"),
+            "phase": run.get("phase"),
+            "error": run.get("error"),
+            "headline": headline,
+            "total_minutes": round(total_ms / 60000, 1) if total_ms else None,
+            "phases": phases,
+            "total_cost_usd": round(int(state.get("cost_usd_micros") or 0) / 1_000_000, 4),
+            "cost_by_stage": costs,
+            "turns": state.get("turns"),
+            "repair_attempts": state.get("repair_attempts"),
+            "repair_log": state.get("repair_log") or [],
+            "steps_run": state.get("steps_run") or [],
+            "convergence_rounds": state.get("inrun_convergence_rounds"),
+            "tests_passed": state.get("tests_passed"),
+            "test_exit_code": state.get("test_exit_code"),
+            "failed_tests": failed_tests,
+            "note": ("Wall clock per phase, which is NOT the sum of LLM-call latency — it "
+                     "includes provisioning, test execution and whole-phase retries. Use "
+                     "get_run_activity for per-model-call detail."),
+        }
+
+    @reg.tool(
         "get_costs",
         "What BOSS has spent: total and per-run USD over a recent window, newest "
         "first. Use before launching expensive work, or to explain a spend spike.",

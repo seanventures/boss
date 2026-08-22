@@ -272,6 +272,14 @@ def _ssh(key_path: str, host: str, user: str, port: int, command: str, timeout: 
         # whole tree rather than just the process Python is holding.
         return subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
                               start_new_session=True)
+    except FileNotFoundError:
+        # No ssh binary at all. Returned as a RESULT because every caller here checks
+        # returncode — raising would surface as a 500 several layers up, naming nothing.
+        return subprocess.CompletedProcess(
+            argv, returncode=127,   # conventional "command not found"
+            stdout="",
+            stderr="the `ssh` client is not installed in this environment, so BOSS cannot "
+                   "reach any host. Install openssh-client in the image that runs deployments.")
     except subprocess.TimeoutExpired:
         # `subprocess.run` kills only the direct child, and an ssh that has forked or is stuck
         # in an uninterruptible wait survives it. Orphans then accumulate: polling a dead host
