@@ -1156,6 +1156,26 @@ def _warm_read_paths() -> None:
             ("events", lambda c: c.execute(text(
                 "SELECT id FROM events WHERE project_id=:p "
                 "ORDER BY created_at DESC LIMIT 50"), {"p": project_id}).all()),
+            # THE HEAVY ONES, because those are what an operator or a script hits first.
+            #
+            # The original list covered the paths I happened to be looking at, and cold-start
+            # eviction recurred TWICE more: a deploy, then an immediate /v1/jobs and
+            # /v1/code-tasks, and the container evicted itself before the warm-up it had just
+            # run was worth anything. /v1/code-tasks alone reads 1.41 MB across the widest
+            # table in the schema; leaving it out made the warm-up cosmetic.
+            ("jobs", lambda c: c.execute(text(
+                "SELECT id, status, priority, payload FROM jobs WHERE project_id=:p "
+                "ORDER BY created_at DESC LIMIT 100"), {"p": project_id}).all()),
+            ("code_task_rows", lambda c: c.execute(text(
+                "SELECT id, status, phase, title, spec, state, finalize_ctx "
+                "FROM code_task_runs WHERE project_id=:p "
+                "ORDER BY created_at DESC LIMIT 200"), {"p": project_id}).all()),
+            ("deployment_hosts", lambda c: c.execute(text(
+                "SELECT id, status FROM deployment_hosts WHERE project_id=:p"),
+                {"p": project_id}).all()),
+            ("meetings", lambda c: c.execute(text(
+                "SELECT id, status FROM meeting_runs WHERE project_id=:p "
+                "ORDER BY created_at DESC LIMIT 50"), {"p": project_id}).all()),
         ):
             try:
                 with begin(engine) as connection:
