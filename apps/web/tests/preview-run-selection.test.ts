@@ -169,3 +169,33 @@ describe("card renders a failed preview as failed", () => {
     expect(source).toMatch(/lastPreview=\{latestPreviewFor\(previews, builtRun\.id\)\}/);
   });
 });
+
+/**
+ * A request with no deadline is a spinner with no end.
+ *
+ * The Discovery "Send to PRD meeting" button sat on "Convening…" indefinitely. The action was
+ * written correctly — try/catch, returning {taskId} or {error} either way — but it was never
+ * reached, because the fetch underneath had no timeout. When the API went cold (a first query
+ * on goldeneye measured 28.9s) the await simply never returned and `pending` never cleared.
+ */
+describe("api client request deadline", () => {
+  const source = readFileSync(
+    resolve(__dirname, "../../../packages/api-client/src/index.ts"), "utf8");
+
+  it("every request carries an abort deadline", () => {
+    expect(source).toMatch(/signal:\s*AbortSignal\.timeout\(timeoutMs\)/);
+  });
+
+  it("the deadline is configurable but never unbounded by default", () => {
+    expect(source).toMatch(/config\.timeoutMs\s*\?\?\s*120_000/);
+  });
+
+  it("a timeout becomes a BossApiError the UI can render, not a hang", () => {
+    expect(source).toContain('cause.name === "TimeoutError"');
+    expect(source).toContain("did not answer within");
+  });
+
+  it("says the work may still be in flight rather than implying it failed", () => {
+    expect(source).toContain("It may still be working");
+  });
+});

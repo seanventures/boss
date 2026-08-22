@@ -5372,6 +5372,8 @@ export class BossApiError extends Error {
 export type BossApiClientConfig = {
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  /** Deadline for every request. Defaults to 120s; never unbounded. */
+  timeoutMs?: number;
   apiKey?: string;
 };
 
@@ -5416,6 +5418,9 @@ export function describeApiFailure(status: number, body: unknown): string {
 export function createBossApiClient(config: BossApiClientConfig) {
   const baseUrl = config.baseUrl.replace(/\/$/, "");
   const fetchImpl = config.fetchImpl ?? fetch;
+  // Generous: some control-plane calls legitimately take tens of seconds (a promote
+  // measured 8.4s on a warm API). The point is a bound, not a tight one.
+  const timeoutMs = config.timeoutMs ?? 120_000;
   const apiKey = config.apiKey?.trim();
 
   async function request<T>(
@@ -5426,16 +5431,38 @@ export function createBossApiClient(config: BossApiClientConfig) {
       body?: unknown;
     },
   ): Promise<T> {
-    const response = await fetchImpl(`${baseUrl}${withQuery(path, options?.query)}`, {
-      method,
-      cache: "no-store",
-      headers: {
-        Accept: "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        ...(options?.body ? { "Content-Type": "application/json" } : {}),
-      },
-      ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
-    });
+    // A REQUEST WITH NO DEADLINE IS A SPINNER WITH NO END.
+    //
+    // Nothing bounded these fetches. When the API went cold — a first query on goldeneye took
+    // 28.9 seconds — a server action simply never returned, so `pending` never cleared and the
+    // operator watched "Convening…" forever for a promote that was still in flight. The action
+    // itself was written correctly, with try/catch returning an error either way; it was never
+    // reached, because the await had no end. Every one of these buttons has the same shape, so
+    // the deadline belongs here rather than at each call site.
+    let response: Response;
+    try {
+      response = await fetchImpl(`${baseUrl}${withQuery(path, options?.query)}`, {
+        method,
+        cache: "no-store",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: {
+          Accept: "application/json",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          ...(options?.body ? { "Content-Type": "application/json" } : {}),
+        },
+        ...(options?.body ? { body: JSON.stringify(options.body) } : {}),
+      });
+    } catch (cause) {
+      const timedOut = cause instanceof DOMException && cause.name === "TimeoutError";
+      throw new BossApiError(
+        timedOut
+          ? `The control plane did not answer within ${Math.round(timeoutMs / 1000)}s. `
+            + "It may still be working — reload to see whether it completed."
+          : `Could not reach the control plane: ${cause instanceof Error ? cause.message : String(cause)}`,
+        0,
+        undefined,
+      );
+    }
 
     if (!response.ok) {
       const rawBody = await response.text();
