@@ -259,6 +259,8 @@ def _kill_stray_review_processes(*roots) -> int:
     import signal
     import subprocess as _sp
 
+    from .code_agent import is_protected as _is_protected_seat
+
     paths = [str(r).rstrip("/") for r in roots if r]
     paths = [p for p in paths if p and p not in ("/", "/tmp")]
     if not paths:
@@ -282,6 +284,15 @@ def _kill_stray_review_processes(*roots) -> int:
         except ValueError:
             continue
         if pid in mine:
+            continue
+        # OWNERSHIP BEATS PATTERN MATCHING.
+        #
+        # This reaps REVIEW seats, but a review seat and an implement agent are the same
+        # binary under the same sandbox root — indistinguishable in `ps`. It killed a build
+        # that was working ("claude code agent exited -9"), and the two guards above are the
+        # scar tissue from the two previous times it killed the wrong thing. A process is safe
+        # to kill because of who started it and why, which no command line can tell you.
+        if _is_protected_seat(pid):
             continue
         cmd = parts[1]
         toks = cmd.split()

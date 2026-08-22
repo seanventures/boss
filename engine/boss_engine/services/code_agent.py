@@ -19,6 +19,7 @@ import json
 import re
 from pathlib import Path
 import subprocess
+import threading
 import time
 from typing import Optional, Protocol
 
@@ -26,6 +27,7 @@ from ..config import Settings
 from ..schemas import FileChange
 from .llm_telemetry import record_llm_call
 from .model_rate_limiter import (
+
     NullRateLimiter,
     get_rate_limiter,
     is_rate_limit_error,
@@ -34,6 +36,47 @@ from .model_rate_limiter import (
 from . import repo_retriever
 from .redaction import redact as _redact_pii
 from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
+
+# --------------------------------------------------------------------------- #
+# Which agent subprocesses are OURS, and what seat each one occupies.
+# --------------------------------------------------------------------------- #
+# `_kill_stray_review_processes` reaps review seats that outlived their deadline by scanning
+# `ps` for a claude binary under a sandbox root. It cannot tell a review seat from an IMPLEMENT
+# agent — they are the same binary under the same root — so it killed a build that was working:
+#
+#     claude code agent exited -9: [substrate=local_subprocess]
+#
+# Its own docstring records the same bug twice before, each time patched by tightening the
+# pattern. The pattern was never the problem. A process is safe to kill because of WHO STARTED
+# IT AND WHY, which no amount of matching on a command line can establish.
+_ACTIVE_SEATS: dict[int, str] = {}
+_SEATS_LOCK = threading.Lock()
+
+
+def register_seat(pid: int, seat: str) -> None:
+    with _SEATS_LOCK:
+        _ACTIVE_SEATS[pid] = seat
+
+
+def release_seat(pid: int) -> None:
+    with _SEATS_LOCK:
+        _ACTIVE_SEATS.pop(pid, None)
+
+
+def seat_of(pid: int) -> Optional[str]:
+    """The seat this pid occupies, or None if we did not start it."""
+    with _SEATS_LOCK:
+        return _ACTIVE_SEATS.get(pid)
+
+
+def is_protected(pid: int) -> bool:
+    """True when killing this pid would abort work that is legitimately running.
+
+    Anything we started that is NOT a review seat — an implement agent above all.
+    """
+    seat = seat_of(pid)
+    return seat is not None and seat != "review"
+
 
 
 # Core Terraform module files (spec 05 §3.2 / T4 "module-aware context packer"): a
@@ -359,7 +402,7 @@ class ClaudeCodeAgent:
     def _invoke(
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
-        max_turns: Optional[int] = None,
+        max_turns: Optional[int] = None, seat: str = "agent",
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -414,14 +457,27 @@ class ClaudeCodeAgent:
         last_error = ""
         for attempt in range(3):
             try:
-                proc = subprocess.run(
+                # Popen rather than run(), so the pid is known and can be registered. A
+                # reaper that scans `ps` cannot tell which seat a claude process occupies;
+                # this is how it finds out.
+                child = subprocess.Popen(
                     cmd,
                     stdin=subprocess.DEVNULL,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
-                    timeout=timeout,
                     cwd=str(cwd),
                 )
+                register_seat(child.pid, seat)
+                try:
+                    out, err = child.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.communicate()
+                    raise
+                finally:
+                    release_seat(child.pid)
+                proc = subprocess.CompletedProcess(cmd, child.returncode, out, err)
             except FileNotFoundError as exc:
                 raise RuntimeError(
                     "claude CLI not found. Install Claude Code and ensure `claude` is on PATH."
@@ -515,8 +571,12 @@ class ClaudeCodeAgent:
             prompt = _redact_pii(prompt)[0]
         started = time.monotonic()
         try:
+            # A read-only role IS the review seat — it judges, it does not write. That is
+            # exactly the distinction the stray-process reaper needs and could not make from a
+            # command line: a writing agent must never be reaped as though it were a reviewer.
             data = self._invoke(prompt, cwd, read_only=read_only, model=model,
-                                resume_session_id=resume_session_id, max_turns=max_turns)
+                                resume_session_id=resume_session_id, max_turns=max_turns,
+                                seat=("review" if read_only else "agent"))
         except Exception as exc:
             failed_model = model or getattr(self.settings, "claude_cli_model", None) or ""
             record_llm_call(engine_name=self.engine, usage={"model": failed_model},
@@ -546,6 +606,7 @@ class ClaudeCodeAgent:
         data = self._invoke(
             prompt, work, read_only=True, model=model,
             allowed_tools="WebSearch,WebFetch,Read,Grep,Glob",
+            seat="research",
         )
         usage, cost_micros = self._usage(data, self.settings)
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
