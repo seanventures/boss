@@ -434,20 +434,30 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
     return (
       <div style={{ display: "grid", gap: 18 }} data-empty-state="no-targets">
         <section className="ct-block">
-          <div className="ct-block-title">No deployment targets</div>
+          <div className="ct-block-title">Nothing deploys yet</div>
           <p className="detail" style={{ marginTop: 0 }}>
-            No deployment target is registered for this project. Merged PRs deploy nowhere
-            and there is no deploy history to show. Register an app (host, credential,
-            environment) to unlock deploy controls.
+            Start with a machine: register a host, let BOSS onboard it, then point an app at
+            it. Merged PRs deploy nowhere until an app has a target.
           </p>
           <SandboxDeployFlagNotice enabled={data.sandbox_deploy_enabled} />
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center",
-                        marginTop: 12 }}>
-            <OnboardWizard secrets={secrets?.secrets ?? []} />
-          </div>
         </section>
-        {/* Credentials are part of setup, not "running deploy" chrome. */}
-        <SecretsPanel initial={secrets} />
+
+        {/* THE FLEET BELONGS HERE, and its absence was a deadlock rather than a cosmetic gap.
+            The Hosts wizard was added only to the CONFIGURED branch — so it appeared once a
+            deployment target already existed. But a target names the host it deploys to, so
+            the honest order is host first, app second: on a fresh install (exactly what a new
+            org or a new BOSS instance is) the wizard we built for onboarding a VM could not
+            be reached at all. An empty state must contain the thing that ends the empty
+            state. */}
+        <FleetPanel projectId={data.project_id} targets={(data.targets || []) as any} />
+
+        <details className="dm-advanced">
+          <summary className="detail">Advanced — credentials, per-app onboarding</summary>
+          <div style={{ display: "grid", gap: 18, marginTop: 12 }}>
+            <div><OnboardWizard secrets={secrets?.secrets ?? []} /></div>
+            <SecretsPanel initial={secrets} />
+          </div>
+        </details>
       </div>
     );
   }

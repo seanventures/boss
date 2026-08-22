@@ -126,8 +126,16 @@ describe("CI/CD empty-state honesty (BOSS-344)", () => {
       />,
     );
     expect(markup).toContain('data-empty-state="no-targets"');
-    expect(markup).toContain("No deployment targets");
+    // Renamed from "No deployment targets": the empty state now leads with the FLEET, because
+    // a target names the host it deploys to — so the honest first step is registering a
+    // machine, not registering an app.
+    expect(markup).toContain("Nothing deploys yet");
     expect(markup).toContain("Onboard an app");
+    // THE DEADLOCK THIS GUARDS: the Hosts wizard was added only to the configured branch, so
+    // it appeared once a deployment target already existed — unreachable on a fresh install,
+    // which is exactly when it is needed. An empty state must contain the thing that ends it.
+    expect(markup).toContain('data-testid="fleet-panel"');
+    expect(markup).toContain("Register a host");
     // Deploy wizard is a live-fleet control; must not appear when nothing is registered.
     expect(markup).not.toContain("Deploy an app");
     expect(markup).not.toContain("Recent deployments");
