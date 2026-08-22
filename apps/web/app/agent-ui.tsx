@@ -233,11 +233,30 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           </div>
         ) : null}
 
-        <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <input className="input" value={input} onChange={(e) => setInput(e.target.value)} disabled={busy}
+        {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones —
+            "why did this run take 152 minutes and what went wrong" plus the context that makes
+            it answerable — and a one-line field that scrolls sideways hides what you typed at
+            exactly the moment you want to re-read it. Enter still sends, so the common short
+            message is unchanged; Shift+Enter starts a new line. */}
+        <form onSubmit={(e) => { e.preventDefault(); send(); }}
+              style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-end" }}>
+          <textarea className="input agent-input" value={input} disabled={busy}
             aria-label="Message BOSS"
             placeholder={sel === GENERAL ? "Message BOSS (general)…" : "Message BOSS about this task…"}
-            style={{ flex: 1 }} />
+            rows={1}
+            onChange={(e) => {
+              setInput(e.target.value);
+              // Grow with the content up to a cap, then scroll. Reset first so deleting a
+              // line shrinks it back — without that it only ever gets taller.
+              const el = e.currentTarget;
+              el.style.height = "auto";
+              el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+            }}
+            style={{ flex: 1, resize: "none", overflowY: "auto", minHeight: 34, maxHeight: 160,
+                     lineHeight: 1.4, fontFamily: "inherit" }} />
           <button type="submit" className="button" disabled={busy || !input.trim()}>{busy ? "…" : "Send"}</button>
         </form>
       </section>
