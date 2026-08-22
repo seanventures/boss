@@ -398,6 +398,43 @@ _RUN_TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 ORPHAN_AFTER_MINUTES = 20
 
 
+#: A preview that has been 'starting' longer than this never came up. Previews are NOT
+#: job-driven — start_preview runs inline — so the no-live-job rule cannot see them, and a row
+#: left at 'starting' is what rendered "Starting preview…" forever. Generous: a cold npm
+#: install plus a build legitimately takes minutes.
+PREVIEW_STARTING_STALE_MINUTES = 25
+
+
+def sweep_stale_previews(engine, settings: Settings, project_id: str, *,
+                         actor: str = SHEPHERD_ACTOR,
+                         dry_run: bool = False) -> dict[str, Any]:
+    """Fail a preview stuck at 'starting'.
+
+    The gap in sweep_abandoned_runs, and the same mistake in miniature: that sweeper
+    enumerated the tables I had been looking at, and previews are governed by a different rule
+    entirely. A preview has no job — start_preview builds and boots inline — so "no live job"
+    is trivially true for EVERY preview and the no-job rule would have failed them all. Time is
+    the only signal there is.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        rows = c.execute(
+            sql("SELECT id FROM app_previews WHERE project_id = :p AND status = 'starting' "
+                "  AND created_at < now() - (:m || ' minutes')::interval LIMIT 200"),
+            {"p": project_id, "m": PREVIEW_STARTING_STALE_MINUTES}).mappings().all()
+        ids = [r["id"] for r in rows]
+        if ids and not dry_run:
+            c.execute(
+                sql("UPDATE app_previews SET status = 'failed', "
+                    "error = COALESCE(error, :e), failure_kind = "
+                    "COALESCE(failure_kind, 'never_started') WHERE id = ANY(:ids)"),
+                {"ids": ids,
+                 "e": (f"never left 'starting' after {PREVIEW_STARTING_STALE_MINUTES} minutes; "
+                       "the process that was building it is gone")})
+    return {"stale_previews": len(ids), "ids": ids[:10], "dry_run": dry_run}
+
+
 def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                          actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:
     """Close any run that claims to be working but has no job that could advance it.
@@ -602,6 +639,8 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     unstarved = sweep_starved_work(engine, settings, project_id, actor=actor)
     # A run that cannot move is not progress. Closing it is what stops a card sitting forever.
     abandoned = sweep_abandoned_runs(engine, settings, project_id, actor=actor)
+    # Previews need their own rule; see sweep_stale_previews.
+    stale_previews = sweep_stale_previews(engine, settings, project_id, actor=actor)
 
     with begin(engine) as c:
         queue_depth = int(c.execute(
@@ -610,7 +649,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     if queue_depth > QUEUE_DEPTH_PAUSE:
         return {"project_id": project_id, "considered": len(candidates), "applied": [],
                 "deferred": [], "escalated": [], "failed": [], "unstarved": unstarved,
-                "abandoned": abandoned,
+                "abandoned": abandoned, "stale_previews": stale_previews,
                 "paused_because": f"{queue_depth} jobs already queued or running; repair work "
                                   "must not push ahead of the operator's work"}
 
@@ -647,7 +686,8 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             failed.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"[:160]})
     return {"project_id": project_id, "considered": len(candidates),
             "applied": applied, "deferred": deferred, "escalated": escalated,
-            "failed": failed, "unstarved": unstarved, "abandoned": abandoned}
+            "failed": failed, "unstarved": unstarved, "abandoned": abandoned,
+            "stale_previews": stale_previews}
 
 
 def act(engine, settings: Settings, jobs, run_id: str, *,

@@ -92,3 +92,53 @@ def test_a_finished_run_is_closed_as_completed_not_cancelled():
     assert "SET status = 'cancelled'" in src
     # the phase must be selected, or the distinction cannot be made
     assert "r.phase AS phase" in src
+
+
+def test_previews_have_their_own_rule_because_they_have_no_job():
+    """The same miss in miniature: sweep_abandoned_runs enumerated the tables I was looking at.
+
+    A preview is built and booted INLINE by start_preview — there is no job. So "no live job"
+    is trivially true for every preview, and applying the no-job rule would have failed all of
+    them. Time is the only signal a preview has, which is why it needs a separate sweeper.
+    """
+    src = inspect.getsource(shepherd_service.sweep_stale_previews)
+    assert "app_previews" in src
+    assert "status = 'starting'" in src
+    assert "NOT EXISTS" not in src, "previews have no job to be absent"
+    assert shepherd_service.PREVIEW_STARTING_STALE_MINUTES >= 15, (
+        "a cold npm install plus a build legitimately takes minutes")
+
+
+def test_the_autopilot_runs_the_preview_sweep_too():
+    src = inspect.getsource(shepherd_service.autopilot)
+    assert "sweep_stale_previews" in src
+    assert '"stale_previews": stale_previews' in src
+
+
+def test_every_table_that_can_strand_a_run_is_swept_by_something():
+    """The whole-picture check: which tables can hold a row that claims to be in progress?
+
+    code_task_runs / meeting_runs / discovery_runs -> sweep_abandoned_runs (no live job)
+    app_previews                                   -> sweep_stale_previews (time)
+    deployment_runs                                -> fail_hung_deployments, on the
+                                                      deployment-health tick
+
+    If a new table joins that list, it needs a rule here or it will strand rows silently.
+    """
+    from boss_engine.services import delivery_pipeline
+
+    covered = {t for t, _, _ in shepherd_service._RUN_TABLES}
+    assert {"code_task_runs", "meeting_runs", "discovery_runs"} <= covered
+    assert callable(shepherd_service.sweep_stale_previews)
+    assert callable(delivery_pipeline.fail_hung_deployments)
+
+
+def test_consistency_report_covers_each_of_those_tables():
+    """The report must ask about every table that can strand a row, or it reads clean while
+    something is stuck — which is exactly how today went."""
+    from boss_engine.tools import builtin
+
+    src = inspect.getsource(builtin._register_operations_tools)
+    for table in ("code_task_runs", "meeting_runs", "discovery_runs", "app_previews", "jobs",
+                  "decisions"):
+        assert table in src, f"consistency_report never asks about {table}"

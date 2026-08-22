@@ -715,6 +715,62 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         }
 
     @reg.tool(
+        "consistency_report",
+        "Every 'this should never be true' check in one pass, read-only. Counts rows that "
+        "violate an invariant: runs claiming to work with no job that could advance them, "
+        "previews stuck starting, runs whose phase says done but whose status does not, jobs "
+        "queued far longer than anything is running, decisions pending past their deadline. "
+        "Use this to answer 'what is inconsistent right now' instead of waiting for someone "
+        "to notice a stuck card.",
+        _obj({}),
+    )
+    def consistency_report(ctx, *, project_id, actor, args):
+        from ..ports import sql as _s
+        live_job = ("NOT EXISTS (SELECT 1 FROM jobs j WHERE j.payload->>'run_id' = r.id "
+                    "AND j.status IN ('queued','running','leased'))")
+        checks = {
+            "code_task_runs_working_with_no_job": (
+                f"SELECT count(*) FROM code_task_runs r WHERE r.project_id = :p "
+                f"AND r.status IN ('running','repairing','queued') AND {live_job}"),
+            "meeting_runs_working_with_no_job": (
+                f"SELECT count(*) FROM meeting_runs r WHERE r.project_id = :p "
+                f"AND r.status IN ('running','queued') AND {live_job}"),
+            "discovery_runs_working_with_no_job": (
+                f"SELECT count(*) FROM discovery_runs r WHERE r.project_id = :p "
+                f"AND r.status = 'running' AND {live_job}"),
+            "previews_stuck_starting": (
+                "SELECT count(*) FROM app_previews WHERE project_id = :p "
+                "AND status = 'starting' AND created_at < now() - interval '25 minutes'"),
+            "runs_done_but_not_terminal": (
+                "SELECT count(*) FROM code_task_runs WHERE project_id = :p "
+                "AND phase = 'done' AND status NOT IN ('completed','failed','cancelled')"),
+            "jobs_queued_over_30_min": (
+                "SELECT count(*) FROM jobs WHERE project_id = :p AND status = 'queued' "
+                "AND run_after <= now() AND created_at < now() - interval '30 minutes'"),
+            "decisions_pending_past_deadline": (
+                "SELECT count(*) FROM decisions WHERE project_id = :p AND status = 'pending' "
+                "AND deadline_at IS NOT NULL AND deadline_at < now()"),
+            "jobs_with_a_priority_score_override": (
+                "SELECT count(*) FROM jobs WHERE project_id = :p "
+                "AND status IN ('queued','running','leased') AND priority_score IS NOT NULL"),
+        }
+        out, failing = {}, []
+        with ctx.begin() as c:
+            for name, q in checks.items():
+                try:
+                    n = int(c.execute(_s(q), {"p": project_id}).scalar() or 0)
+                except Exception as exc:  # noqa: BLE001 — a missing table is data, not a crash
+                    out[name] = f"unavailable ({type(exc).__name__})"
+                    continue
+                out[name] = n
+                if n:
+                    failing.append(name)
+        return {"violations": out, "failing_checks": failing, "clean": not failing,
+                "how_to_read": ("every count should be 0. A non-zero value is a row the system "
+                                "believes is in progress when nothing can advance it, which is "
+                                "what a stuck card in the console actually is.")}
+
+    @reg.tool(
         "close_orphaned_runs",
         "Close code-task runs that claim to be running but have no live job — work that will "
         "never start and is reported forever as in flight. Reports what it would close when "

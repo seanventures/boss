@@ -11,8 +11,8 @@ def test_default_registry_shape():
     reg = build_default_registry()
     # The governed catalog has expanded since the original Phase 1 tool layer;
     # keep this explicit so accidental tool removal is visible in OSS CI.
-    assert len(reg.names()) == 44
-    assert len(reg.specs(kind="read")) == 28
+    assert len(reg.names()) == 45
+    assert len(reg.specs(kind="read")) == 29
     assert len(reg.specs(kind="write")) == 16
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -28,6 +28,7 @@ def test_default_registry_shape():
         # Operations: BOSS running BOSS. Reading its own stuck queue and being unable to
         # touch it is not operating anything.
         "find_starved_work", "cancel_job", "set_job_priority", "close_orphaned_runs",
+        "consistency_report",
     ):
         assert name in reg.names()
 
@@ -119,7 +120,7 @@ def test_discuss_read_registry_exposes_everything_and_hides_project_override():
     assert "get_code_task" in reg.names()
     assert "get_costs" in reg.names()
     # Every read tool, nothing withheld.
-    assert len(reg.specs(kind="read")) == 28
+    assert len(reg.specs(kind="read")) == 29
     # …plus the operational writes. BOSS could describe its own stuck queue and not touch it;
     # an operator had to reach in from outside to cancel a job. The line is OPERATIONAL STATE
     # (a priority, a wedged job, an orphaned run) versus CREATING WORK that spends money.
