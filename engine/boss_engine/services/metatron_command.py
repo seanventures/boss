@@ -237,13 +237,22 @@ class MetatronCommand:
     def _reprioritize(self, connection: Any, project_id: str, actor: str) -> dict[str, Any]:
         from sqlalchemy import text
 
+        from .jobs import JOB_PRIORITY_BACKGROUND
+
         try:
             changed = connection.execute(
                 text(
                     """
+                    -- BOOST WITHIN THE BATCH BAND, NEVER ABOVE A PERSON.
+                    -- This set the priority field to five AND priority_score to nine thousand. claim_job orders by
+                    -- priority_score DESC first, so that put benchmark work ahead of every
+                    -- other job in the system, permanently and invisibly — an operator's PRD
+                    -- meeting sat behind two of these for over an hour. Promoting benchmark
+                    -- runs relative to OTHER benchmark runs is a reasonable thing to want;
+                    -- outranking interactive work is not, and priority_score was the lever
+                    -- that made it unanswerable.
                     UPDATE jobs
-                    SET priority = 5,
-                        priority_score = GREATEST(COALESCE(priority_score, 0), 9000),
+                    SET priority = :boosted,
                         updated_at = now()
                     WHERE project_id = :p
                       AND kind = 'code.task'
@@ -258,7 +267,7 @@ class MetatronCommand:
                       )
                     """
                 ),
-                {"p": project_id},
+                {"p": project_id, "boosted": JOB_PRIORITY_BACKGROUND},
             ).rowcount
         except Exception as exc:  # noqa: BLE001
             return {"status": "rejected", "error": f"reprioritize failed: {type(exc).__name__}"}

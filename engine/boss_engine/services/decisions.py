@@ -14,7 +14,7 @@ from .budget import BudgetGovernor
 from .core import create_artifact, emit_event, now_utc
 from .infrastructure import InfrastructureService
 from .intake import CommandIntakeService
-from .jobs import JobLeaseService
+from .jobs import JOB_PRIORITY_URGENT, JobLeaseService
 from .members import MemberDirectoryService
 from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
@@ -1431,7 +1431,7 @@ class DecisionService:
             project_id=row["project_id"],
             task_id=row["task_id"],
             kind="github.deployment.create",
-            priority=15,
+            priority=JOB_PRIORITY_URGENT,
             payload={
                 "project_id": row["project_id"],
                 "decision_id": row["id"],
@@ -1576,7 +1576,7 @@ class DecisionService:
             ttl_minutes=ttl_minutes,
             tags=tags if isinstance(tags, list) else [],
             actor=actor,
-            priority=15,
+            priority=JOB_PRIORITY_URGENT,
             max_attempts=1,
             data_boundary=data_boundary if isinstance(data_boundary, str) else None,
         )

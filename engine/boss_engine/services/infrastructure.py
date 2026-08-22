@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection
 
 from ..config import Settings
 from .budget import BudgetGovernor
+from .jobs import JOB_PRIORITY_URGENT
 from .core import (
     create_artifact,
     create_blocking_decision,
@@ -892,7 +893,7 @@ class InfrastructureService:
                 resource_id=resource_id,
                 dedupe_key=f"janitor-terminate-{resource_id}",
                 actor=actor,
-                priority=10,
+                priority=JOB_PRIORITY_URGENT,
                 max_attempts=1,
                 reason="ttl_expired",
             )

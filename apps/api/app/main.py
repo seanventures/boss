@@ -773,7 +773,7 @@ from .services.agent_service import (
     AgentThreadNotFoundError,
     AgentThreadOwnershipError,
 )
-from .services.jobs import JobLeaseService, LeaseNotFoundError
+from .services.jobs import JOB_PRIORITY_BULK, JobLeaseService, LeaseNotFoundError
 from .services.model_gateway import (
     ModelCapacityDeniedError,
     ModelCredentialPolicyError,
@@ -6595,6 +6595,11 @@ def start_qa_benchmark_app_endpoint(benchmark_id: str, payload: dict):
                 base_branch=(payload or {}).get("base_branch") or "main",
                 finalize_ctx=finalize_ctx,
                 jobs=jobs,
+                # A benchmark is machine evaluation work: nobody is sitting in front of it.
+                # It used to be BOOSTED above everything (metatron reprioritize set
+                # priority=5/priority_score=9000), which is how a batch of QA runs came to sit
+                # in front of an operator's PRD meeting.
+                job_priority=JOB_PRIORITY_BULK,
                 # Benchmarks asked for `strict` — the most expensive setting BOSS has, and
                 # currently withdrawn while it is being fixed. They ask for `balanced` now:
                 # full review, findings captured, still always ships a PR. A caller may still

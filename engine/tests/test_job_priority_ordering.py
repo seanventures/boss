@@ -70,3 +70,60 @@ def test_priority_is_threaded_through_retry_so_provenance_survives():
     """Provenance decides, not kind: the same code.task is REQUESTED or BACKGROUND by caller."""
     assert "job_priority" in inspect.signature(retry_code_task).parameters
     assert "job_priority" in inspect.signature(start_code_task).parameters
+
+
+# --------------------------------------------------------------------------- #
+# The second bypass: an escalation path that outranked every class at once
+# --------------------------------------------------------------------------- #
+def test_qa_benchmarks_are_the_lowest_band_because_nobody_waits_on_them():
+    from boss_engine.services.jobs import JOB_PRIORITY_BULK
+    assert JOB_PRIORITY_BULK > JOB_PRIORITY_BACKGROUND > JOB_PRIORITY_REQUESTED \
+        > JOB_PRIORITY_INTERACTIVE
+
+
+def test_benchmark_runs_are_enqueued_at_bulk():
+    from apps.api.app import main
+    src = inspect.getsource(main)
+    assert "job_priority=JOB_PRIORITY_BULK" in src, (
+        "a benchmark must yield to everything; it used to outrank everything")
+
+
+def test_the_metatron_boost_cannot_outrank_interactive_work():
+    """It set priority=5 AND priority_score=9000.
+
+    claim_job orders by `priority_score DESC` FIRST, so that single UPDATE put benchmark work
+    ahead of every job in the system, permanently, past any priority the table assigns. An
+    operator's PRD meeting sat behind two of these for over an hour.
+    """
+    from boss_engine.services import metatron_command
+    src = inspect.getsource(metatron_command.MetatronCommand._reprioritize)
+    assert "priority = 5" not in src
+    assert "9000" not in src, "priority_score is the lever that bypasses the whole table"
+    assert "priority_score" not in src.split("UPDATE jobs")[1].split("WHERE")[0], (
+        "the boost must not touch priority_score at all")
+    assert "JOB_PRIORITY_BACKGROUND" in src
+
+
+def test_no_service_invents_a_bare_priority_above_interactive():
+    """A number below INTERACTIVE outranks a person, so it must be NAMED and justified.
+
+    Named constants are fine — JOB_PRIORITY_URGENT exists for work whose delay costs money
+    (the janitor terminating a paid droplet) or that the operator already approved. A bare
+    literal is how both of today's inversions got in: 46-vs-48, and metatron's 5/9000.
+    """
+    import pathlib
+    import re
+
+    services = pathlib.Path("engine/boss_engine/services")
+    offenders = []
+    for path in services.glob("*.py"):
+        for line in path.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith("--"):
+                continue  # prose about a past bug is not a call site
+            for m in re.finditer(r"priority\s*=\s*(\d+)", line):
+                if int(m.group(1)) < JOB_PRIORITY_INTERACTIVE:
+                    offenders.append(f"{path.name}: {stripped[:60]}")
+    assert not offenders, (
+        "these outrank interactive work with a bare literal; name the band instead:\n  "
+        + "\n  ".join(sorted(set(offenders))))

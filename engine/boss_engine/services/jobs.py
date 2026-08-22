@@ -220,9 +220,19 @@ def enqueue_job(
 #
 # A shepherd retry is BACKGROUND even though it is a code.task, and a meeting is INTERACTIVE
 # even though it is cheap: provenance decides, not kind.
+#: Above a person, and the only band that may be: work whose DELAY costs money or safety.
+#: The janitor terminating a paid droplet is the case — every minute it waits is spend — and a
+#: deployment the operator already approved. Nothing else belongs here; a bare literal below
+#: INTERACTIVE is a bug, which is what test_no_service_invents_a_priority_above_interactive
+#: exists to catch.
+JOB_PRIORITY_URGENT = 10
+
 JOB_PRIORITY_INTERACTIVE = 20
 JOB_PRIORITY_REQUESTED = 46
 JOB_PRIORITY_BACKGROUND = 90
+#: Machine evaluation work — QA benchmarks, canaries, bake-offs. Nobody is ever waiting on it,
+#: so it yields to everything, always. It ran ABOVE every other class until 2026-08-22.
+JOB_PRIORITY_BULK = 95
 
 
 class JobLeaseService:
