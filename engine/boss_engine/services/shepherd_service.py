@@ -414,6 +414,18 @@ _RUN_TABLES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 ORPHAN_AFTER_MINUTES = 20
 
 
+#: How many times a preview may fail for one run before the autopilot stops rebuilding it.
+#:
+#: `restart_preview` is the cheapest remedy, so it is tried FIRST — and the only thing that
+#: suppressed it was an open escalation, which a preview failure never created. So it fired on
+#: every 180s tick, forever: one run produced 28 consecutive failed previews over four hours,
+#: each a full clone + npm install + build, every one the identical rollup parse error, all on
+#: the single worker lane while the operator's real work queued behind them.
+#:
+#: Two is the limit because the SECOND identical failure is the evidence. The first can be a
+#: cold cache or a lost port; a third attempt has never told us anything the second did not.
+PREVIEW_MAX_ATTEMPTS = 2
+
 #: A preview that has been 'starting' longer than this never came up. Previews are NOT
 #: job-driven — start_preview runs inline — so the no-live-job rule cannot see them, and a row
 #: left at 'starting' is what rendered "Starting preview…" forever. Generous: a cold npm
@@ -651,17 +663,43 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     # case the operator was staring at, and the sweep could not see it.
     with begin(engine) as c:
         rows = c.execute(
-            sql("SELECT DISTINCT ON (p.run_id) p.run_id "
+            sql("SELECT p.run_id, count(*) AS failures, "
+                "       count(DISTINCT left(coalesce(p.error, ''), 120)) AS signatures "
                 "FROM app_previews p "
                 "JOIN code_task_runs r ON r.id = p.run_id "
                 "WHERE r.project_id = :p AND p.status = 'failed' "
                 "  AND NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
                 "                  WHERE e.task_ref = p.run_id AND e.status = 'open') "
-                "ORDER BY p.run_id, p.created_at DESC LIMIT :l"),
+                "GROUP BY p.run_id ORDER BY max(p.created_at) DESC LIMIT :l"),
             {"p": project_id, "l": limit}).mappings().all()
-    for row in rows:
-        if row["run_id"] and row["run_id"] not in candidates:
-            candidates.append(row["run_id"])
+
+        for row in rows:
+            run_id = row["run_id"]
+            if not run_id:
+                continue
+            # A REPEATED FAILURE IS EVIDENCE, NOT A REASON TO TRY AGAIN.
+            #
+            # Rebuilding is cheap per attempt and ruinous in aggregate: unbounded, it spent four
+            # hours of the only worker lane re-proving one rollup error 28 times. Past the limit
+            # the run stops being a candidate and becomes an escalation, which also makes the
+            # NOT EXISTS clause above suppress it from here on — the loop closes itself.
+            if row["failures"] >= PREVIEW_MAX_ATTEMPTS:
+                c.execute(
+                    sql("INSERT INTO shepherd_escalations "
+                        "(id, project_id, task_ref, question, options, evidence) "
+                        "VALUES (:i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB))"),
+                    {"i": make_id("shesc"), "p": project_id, "t": run_id,
+                     "q": (f"This app failed to preview {row['failures']} times"
+                           + ("" if row["signatures"] > 1 else " with the same error")
+                           + ". Rebuilding it again will not change that. Fix the app, or stop "
+                             "previewing this run?"),
+                     "o": json.dumps(["open a fix task", "stop previewing"]),
+                     "e": json.dumps({"failed_previews": row["failures"],
+                                      "distinct_errors": row["signatures"],
+                                      "limit": PREVIEW_MAX_ATTEMPTS}, default=str)})
+                continue
+            if run_id not in candidates:
+                candidates.append(run_id)
 
     # AN AUTONOMOUS REPAIRER MUST NOT STARVE THE QUEUE IT SHARES.
     #
