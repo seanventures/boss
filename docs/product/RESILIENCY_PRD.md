@@ -14,8 +14,8 @@ end-to-end exercise of BOSS: Discovery → PRD panel → code task → preview �
 finish. Not because any single component is broken beyond repair, but because **the path had
 never been run end to end**, and every stage failed the first time it was executed for real.
 
-Twelve distinct defects surfaced. Individually each looks like a small bug. Collectively they
-share five root-cause shapes, and those shapes are the actual product problem:
+Eighteen distinct defects surfaced. Individually each looks like a small bug. Collectively they
+share eight root-cause shapes, and those shapes are the actual product problem:
 
 > Work stops, and nothing notices. The console keeps rendering the last thing it was told.
 > An operator is the only monitor the system has.
@@ -148,9 +148,72 @@ Each row: what the operator saw, what was actually true, and the defect undernea
   passed. A long run still calling models is working.
 * **Status:** shipped.
 
+### I13 — BOSS killed its own build
+* **Saw:** `claude code agent exited -9: [substrate=local_subprocess]`
+* **Cause:** `_kill_stray_review_processes` reaps review seats by scanning `ps` for a claude
+  binary under a sandbox root. A review seat and an IMPLEMENT agent are the same binary under
+  the same root. SIGTERM, then SIGKILL, to a build that was working. Its own docstring records
+  the same bug **twice before**, each time patched by tightening the pattern.
+* **Fix:** kill by OWNERSHIP. Each subprocess registers the seat it occupies; the reaper checks
+  that before signalling. The seat is decided by whether the role can write.
+* **Status:** shipped.
+
+### I14 — A sandbox command with no shell
+* **Saw:** `Executable is not allowlisted: [`
+* **Cause:** `[` is the shell's `test`. `sandbox.run` does `shlex.split` + `subprocess.run`
+  **without a shell**, so the first word became the executable. Worse, the check looked at
+  `argv[0]` only — so `npm run build && npm test` PASSES and runs only the first half: a verify
+  that reports success having never run the tests.
+* **Fix:** check the whole command, before `argv[0]`, and name shell syntax as the cause.
+* **Status:** shipped. (My first version scanned the raw string and rejected
+  `python3 -c 'print(42)'` — quotes matter; now tokenised with `posix=False`.)
+
+### I15 — A confirmation nobody could type
+* **Saw:** "Delete permanently" did nothing.
+* **Cause:** the guard requires typing the app name back. The name held an EN DASH (U+2013),
+  which is not on a keyboard, and the placeholder was truncated so the operator could not even
+  read the character they were failing to reproduce. The same docstring had already fixed this
+  for a stray SPACE.
+* **Fix:** normalise dashes, quotes, unicode spaces, repeated whitespace and case; still refuse
+  a genuinely different name.
+* **Status:** shipped.
+
+### I16 — "Never deployed" about an app serving traffic
+* **Saw:** NEVER DEPLOYED on a card whose URL returns 200.
+* **Cause:** the badge reads `stage.deploy_status`, and a stage exists only for a deployment
+  that came from a code task with a PR. An operator pressing Deploy creates a `deployment_run`
+  with `trigger='manual'` and no stage. The badge was answering *"does this have a merge-driven
+  stage?"* while showing the word "never". Stages also carried no `target_id`, and targets no
+  history of their own, so the UI could not recover.
+* **Fix:** stages name their target; every target carries its latest deployment.
+* **Status:** shipped.
+
+### I17 — Two runs of one app, and the guard that could not see it
+* **Saw:** two "Shorty" runs queued, neither progressing.
+* **Cause:** at 19:14 the autopilot retried a failed build; at 19:16 the operator restarted the
+  same build by hand. There IS a duplicate guard — `work_fingerprint` — but it hashes the title
+  and instructions **verbatim**, and every retry mutates both by design (`· retry N`, an
+  appended ITERATION FEEDBACK block). **A retry could never collide with its own original,
+  which is the exact case the guard exists for.**
+* **Fix:** the fingerprint identifies the WORK — retry suffix stripped, appended blocks
+  removed — plus a second, coarser guard: one in-flight build per (repo, app name), because the
+  fingerprint is exact by design and one reworded sentence must not buy a second pipeline.
+* **Status:** shipped.
+
+### I18 — An autonomous spender, on by default
+* **Saw:** an "Auto-repair: turn cap exhausted" run holding the only worker slot for 33 minutes
+  while the operator's work queued behind it.
+* **Cause:** I enabled the shepherd autopilot. Inside its own bounds it opened repair tasks for
+  historical failures nobody had asked about, duplicated a retry, and did both every 180s.
+  Nothing malfunctioned — **the default was wrong.**
+* **Fix:** `BOSS_SHEPHERD_AUTOPILOT_ENABLED`, default FALSE. The free half (closing rows that
+  claim to be working, unsticking a starved queue) still runs unconditionally.
+* **Status:** shipped.
+
+
 ---
 
-## 3. The five shapes
+## 3. The shapes
 
 The incidents are twelve; the shapes are five. Fixing shapes is what stops recurrence.
 
@@ -161,6 +224,9 @@ The incidents are twelve; the shapes are five. Fixing shapes is what stops recur
 | **S3** | **Fix one path, miss its twin.** The same defect in 2–8 places; fixed where it surfaced. | I2 (3×), I5 (7×), I8, I9 |
 | **S4** | **Only failure is watched.** Every sensor is error-triggered. Starvation and stalling produce no error, so nothing sees them. | I6, I8, I12 |
 | **S5** | **Internals leak to the operator.** Scratch space, store keys, raw prose, snake_case identifiers rendered as if they were product. | I1, I4, I11 |
+| **S6** | **A guard patched instead of fixed.** The check is wrong in kind; each failure tightens the heuristic rather than replacing it. Pattern-matching `ps`; an exact-match confirmation. | I13, I15 |
+| **S7** | **A label that answers a different question.** The field is computed correctly and measures something other than what its name claims. | I16, I12 |
+| **S8** | **Identity derived from text that legitimately varies.** Fingerprints over prose the engine itself rewrites. | I17, I5 |
 
 **The counter-measure to each is the same: a test that rejects the SHAPE, not the instance.**
 Three such tests now exist (dedupe anti-pattern, bare priority literals, artifact-consumer
@@ -248,6 +314,19 @@ Discovery → PRD → Build → Ship carry three unrelated names and nothing lin
 cannot tell that a completed panel started a build.
 * **Acceptance:** from any card, one click to the artefact of every completed upstream stage.
 
+### R6a — Monitoring events as a first-class subsystem *(requested)*
+Today a run sat dead for 53 minutes and **nothing emitted an event**. Status is polled by
+whoever happens to look.
+* **Work:** an append-only event stream for every state transition worth noticing (run stalls,
+  queue starves, invariant becomes non-zero, deploy health flips, a gate approaches expiry);
+  the console subscribes rather than polls; each event carries the mitigation the shepherd
+  would apply and whether it was applied.
+* **Boundary, and it must be explicit:** mitigation that costs nothing (reprioritise, close an
+  abandoned row, cancel a wedged job, restart a preview) fires automatically. Mitigation that
+  SPENDS (retry a code task, open a repair task) raises an event and waits — see I18.
+* **Acceptance:** every incident in §2 would have produced an event before an operator noticed;
+  no event results in unrequested spend.
+
 ### R6 — The invariant check runs itself
 `consistency_report` exists and is read-only. Every incident here was visible in the data for
 hours before it was reported.
@@ -277,5 +356,8 @@ hours before it was reported.
 * The consistency check's first live run reported 12 violations that were **not** violations —
   blocked runs counted as inconsistent. Corrected. A report with false positives is worse than no
   report, because zero has to mean something.
-* Roughly 22 commits landed during the session. The ones that matter are the three shape-tests;
+* I18 is the sharpest lesson in this document: **every individual bound I built was correct,
+  and the system still spent the operator's money on work they had not asked for.** Bounds make
+  autonomy safe to switch on; they do not make it right to switch on by default.
+* Roughly 30 commits landed during the session. The ones that matter are the three shape-tests;
   the rest are instances.

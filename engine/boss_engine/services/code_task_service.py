@@ -23,6 +23,7 @@ no-op (idempotent).
 from __future__ import annotations
 
 import json
+import re
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -147,6 +148,10 @@ def preflight_test_commands(settings, test_commands) -> list[str]:
     return rejected
 
 
+#: "· retry 2" describes the attempt, not the work.
+_RETRY_SUFFIX = re.compile(r"\s*·\s*retry\s*\d+\s*$", re.I)
+
+
 def work_fingerprint(*, project_id: str, owner: str, repo: str, base_branch: str,
                     title: str, instructions: str) -> str:
     """A stable identity for "this exact piece of work in this exact place".
@@ -157,9 +162,61 @@ def work_fingerprint(*, project_id: str, owner: str, repo: str, base_branch: str
     """
     import hashlib
 
-    parts = [project_id, owner, repo, base_branch, " ".join(title.split()),
-             " ".join(instructions.split())]
+    # IDENTIFY THE WORK, NOT THE REQUEST TEXT.
+    #
+    # This hashed the title and instructions verbatim, and every retry mutates BOTH by design:
+    # the title gains "· retry N" and the instructions gain an ITERATION FEEDBACK block. So a
+    # retry could never collide with its own original — the exact case the guard exists for.
+    #
+    # Observed: the autopilot retried a build at 19:14 while an operator restarted the same
+    # build at 19:16. Two full budgeted pipelines for one app, at two priorities, neither aware
+    # of the other, both queued behind an auto-repair nobody asked for.
+    stable_title = _RETRY_SUFFIX.sub("", " ".join(title.split()))
+    stable_instr = instructions
+    for marker in _APPENDED_BLOCKS:
+        stable_instr = stable_instr.split(marker)[0]
+    parts = [project_id, owner, repo, base_branch, stable_title,
+             " ".join(stable_instr.split())]
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:32]
+
+
+#: Blocks the engine APPENDS to a brief while a lineage runs. They describe the attempt, not
+#: the work, so they must not change the work's identity.
+_APPENDED_BLOCKS = (
+    "\n\n=== ITERATION FEEDBACK",
+    "\n\n=== OPERATOR STEERING",
+)
+
+
+def active_same_app(connection, project_id: str, repo: str, title: str) -> Optional[str]:
+    """An in-flight run building the SAME APP in the same repo, if there is one.
+
+    The fingerprint above is exact: change one sentence of the brief and it is, correctly, a
+    different fingerprint. That is too strict to be the only guard. Two runs building "Shorty"
+    in one repo at the same time is wrong however the briefs are worded — the second cannot
+    produce anything the first is not already producing, and both cost a full pipeline.
+
+    Compares the app NAME, so "Shorty — self-hosted URL shortener" and
+    "Shorty — self-hosted URL shortener · retry 2" are recognised as one app.
+    """
+    if not hasattr(connection, "execute"):
+        return None
+    from .naming import project_name
+
+    wanted, _blurb, _label = project_name(title)
+    if not wanted or wanted == "Untitled app":
+        return None
+    rows = connection.execute(
+        sql("SELECT id, title FROM code_task_runs "
+            "WHERE project_id = :p AND status IN ('running', 'queued') "
+            "  AND spec->>'repo' = :r "
+            "ORDER BY created_at ASC LIMIT 40"),
+        {"p": project_id, "r": repo}).mappings().all()
+    for row in rows:
+        other, _b, _l = project_name(str(row["title"] or ""))
+        if other.casefold() == wanted.casefold():
+            return row["id"]
+    return None
 
 
 def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[str]:
@@ -250,6 +307,12 @@ def start_code_task(
                                    instructions=instructions.replace(_DEPLOYABILITY_NOTE, ""))
     if not allow_duplicate:
         existing = active_duplicate(connection, project_id, fingerprint)
+        if not existing:
+            # Second, coarser guard. The fingerprint is exact by design — reword one sentence
+            # and it is correctly a different fingerprint — which makes it too strict to be the
+            # ONLY check. Two runs building the same app in one repo at the same time is wrong
+            # however the briefs are worded.
+            existing = active_same_app(connection, project_id, repo, title)
         if existing:
             # Idempotent, not an error: the caller wanted this work running, and it is.
             # Raising would make an impatient second click look like a broken button, which
