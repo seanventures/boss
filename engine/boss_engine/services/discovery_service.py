@@ -28,6 +28,36 @@ from .core import emit_event, make_id
 PHASES = ["queued", "signal_sweep", "synthesize", "vet", "shape", "gate", "done"]
 
 
+class DiscoveryResearchUnavailable(RuntimeError):
+    """The research agent ran but gathered nothing — a broken tool, not a weak idea."""
+
+
+def _record_stage(dossier: dict, stage: str, result: dict, *, parsed: dict) -> None:
+    """Keep enough of each research call to diagnose one that came back empty.
+
+    Every stage parsed the agent's reply and threw the reply away. When the sweep returned no
+    findings there was nothing left to say WHY: no turn count, no cost, not a single character
+    of what the agent actually said. The run looked like a considered "needs more research"
+    verdict, and the evidence that it was a tooling failure had already been discarded.
+
+    Cheap by design: counts and a short excerpt, only enough to tell "the agent never searched"
+    from "the agent searched and found nothing" from "the reply did not parse".
+    """
+    summary = str(result.get("summary") or "")
+    diagnostics = dossier.setdefault("_diagnostics", {})
+    diagnostics[stage] = {
+        "turns": result.get("turns"),
+        "cost_usd_micros": result.get("cost_usd_micros"),
+        "model": result.get("model"),
+        "reply_chars": len(summary),
+        "parsed_keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
+        "parse_ok": bool(parsed),
+        # The head, not the tail: an agent that could not search says so in its opening line,
+        # and a stack trace's closing frames are the least informative part of any failure.
+        "reply_head": summary[:1200],
+    }
+
+
 # --------------------------------------------------------------------------- #
 #  Public API                                                                 #
 # --------------------------------------------------------------------------- #
@@ -154,27 +184,48 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
             sweep = _extract_json(r["summary"])
             dossier["research_brief"] = sweep.get("brief", {})
             dossier["signal_findings"] = sweep.get("findings", [])
+            _record_stage(dossier, "signal_sweep", r, parsed=sweep)
         _save(engine, run_id, dossier, cost, model)
+
+        # A SWEEP THAT FOUND NOTHING IS A FAILED RUN, NOT A CAUTIOUS ONE.
+        #
+        # Discovery used to carry an empty sweep through synthesize -> vet -> shape and finish
+        # `completed`, having written a market analysis on top of zero evidence. The gate then
+        # said "needs_more_research", which reads as "the idea is unproven" when what actually
+        # happened is that research never ran. The operator is left to infer a broken tool from
+        # a verdict about their idea. Stop here and say which it is.
+        if not dossier.get("signal_findings"):
+            raise DiscoveryResearchUnavailable(
+                "Web research returned no findings, so there is nothing to analyse. This is a "
+                "TOOLING failure, not a verdict on the idea: the research agent completed "
+                "without gathering any cited source. Check that WebSearch/WebFetch work for "
+                "the agent in this environment. See state._diagnostics for what it returned.")
 
         # P2 — Synthesize
         _phase(engine, run_id, "synthesize")
         r = agent.run_research(_synth_prompt(seed, context, dossier["signal_findings"]))
         cost += r["cost_usd_micros"]
-        dossier["market_analysis"] = _extract_json(r["summary"]).get("analysis", {})
+        parsed = _extract_json(r["summary"])
+        dossier["market_analysis"] = parsed.get("analysis", {})
+        _record_stage(dossier, "synthesize", r, parsed=parsed)
         _save(engine, run_id, dossier, cost, model)
 
         # P3 — Adversarial vetting (web research for disconfirming evidence)
         _phase(engine, run_id, "vet")
         r = agent.run_research(_vet_prompt(seed, dossier))
         cost += r["cost_usd_micros"]
-        dossier["critique"] = _extract_json(r["summary"]).get("critique", {})
+        parsed = _extract_json(r["summary"])
+        dossier["critique"] = parsed.get("critique", {})
+        _record_stage(dossier, "vet", r, parsed=parsed)
         _save(engine, run_id, dossier, cost, model)
 
         # P4 — Shape outcomes
         _phase(engine, run_id, "shape")
         r = agent.run_research(_shape_prompt(seed, context, dossier))
         cost += r["cost_usd_micros"]
-        dossier["candidate_outcomes"] = _extract_json(r["summary"]).get("outcomes", [])
+        parsed = _extract_json(r["summary"])
+        dossier["candidate_outcomes"] = parsed.get("outcomes", [])
+        _record_stage(dossier, "shape", r, parsed=parsed)
         _save(engine, run_id, dossier, cost, model)
 
         # P5 — Evidence gate (deterministic, fail-closed)
