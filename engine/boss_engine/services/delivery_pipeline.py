@@ -439,6 +439,10 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
                    d.environment, d.app_name, d.target_kind, d.commit_ref,
                    d.started_at, d.finished_at, d.failure_reason,
                    d.health_check_results,
+                   -- WHICH target this stage belongs to. Without it the console cannot match a
+                   -- stage to the card it is drawing, so every card fell back to "never
+                   -- deployed" — including one whose app was answering 200 on the host.
+                   d.deployment_target_id AS target_id,
                    -- Where the thing actually IS. Without it the console can say a deployment
                    -- succeeded but not where to click, which is the state the operator hit.
                    t.domains AS target_domains
@@ -458,10 +462,30 @@ def pipeline_view(connection, project_id: str, *, limit: int = 25) -> dict[str, 
         sql("SELECT * FROM deployment_targets WHERE project_id = :p ORDER BY environment"),
         {"p": project_id}).mappings().all()
 
+    # A TARGET KNOWS ITS OWN DEPLOYMENT HISTORY.
+    #
+    # "Never deployed" was derived from the stages above, which start at a code task with a PR.
+    # A deployment made any other way — an operator pressing Deploy, trigger='manual' — creates
+    # a deployment_run and no stage, so the card reported "never deployed" about an app that
+    # was serving 200 on the host. The badge was answering a different question than the one it
+    # appeared to answer.
+    last = connection.execute(
+        sql("""
+            SELECT DISTINCT ON (deployment_target_id)
+                   deployment_target_id AS target_id, id AS deployment_run_id,
+                   status, finished_at, started_at, commit_ref, trigger,
+                   health_check_results
+            FROM deployment_runs
+            WHERE project_id = :p
+            ORDER BY deployment_target_id, COALESCE(finished_at, started_at, created_at) DESC
+        """), {"p": project_id}).mappings().all()
+    latest = {r["target_id"]: dict(r) for r in last}
+
     return {
         "project_id": project_id,
         "stages": [dict(r) for r in runs],
-        "targets": [_target_view(t) for t in targets],
+        "targets": [{**_target_view(t), "last_deployment": latest.get(t["id"])}
+                    for t in targets],
         # Stated plainly so the console can say "nothing is configured" rather than
         # rendering an empty table that looks like a failure.
         "configured": bool(targets),

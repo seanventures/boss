@@ -304,8 +304,15 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
   shipped: boolean;
   onChanged: () => void;
 }) {
-  const deploy = stage?.deploy_status ?? null;
-  const healthy = stage?.health_check_results?.healthy;
+  // A stage only exists for a deployment that came from a code task with a PR. An operator
+  // pressing Deploy creates a deployment_run and no stage, so this read null and the card
+  // said "never deployed" about an app answering 200 on the host. The target's own history is
+  // the truth about whether it has ever deployed; the stage is only richer when it exists.
+  const last = (target as { last_deployment?: {
+    status?: string; finished_at?: string; health_check_results?: { healthy?: boolean };
+  } | null }).last_deployment ?? null;
+  const deploy = stage?.deploy_status ?? last?.status ?? null;
+  const healthy = stage?.health_check_results?.healthy ?? last?.health_check_results?.healthy;
   const domain = (target.domains && target.domains[0]) || (stage?.target_domains || [])[0];
 
   const done = (ok: boolean, now = false): "done" | "now" | "todo" | "blocked" =>
@@ -372,7 +379,8 @@ function DeliveryTargetCard({ target, stage, shipped, onChanged }: {
             : deploy ? deploy : "never deployed"}
         </span>
         <span className="mr-meeting-date">
-          {stage?.finished_at ? sinceLabel(stage.finished_at) : target.status}
+          {stage?.finished_at ? sinceLabel(stage.finished_at)
+            : last?.finished_at ? sinceLabel(last.finished_at) : target.status}
         </span>
       </div>
       <span className="mr-meeting-title">{target.app_name}</span>
