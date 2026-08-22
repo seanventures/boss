@@ -9480,6 +9480,60 @@ def without_internal_bulk(run: dict) -> dict:
     return {**run, "finalize_ctx": {**fctx, "pending_diff": summarised}}
 
 
+#: No LIST row needs a string longer than this. Detail views fetch the whole run.
+#: Calibrated, not guessed — against the live 200-row response:
+#:   2000 -> 2.24 MB   1000 -> 1.79 MB   500 -> 1.47 MB   200 -> 1.19 MB
+#: Below 500 the curve flattens (the remainder is many short fields, not a few long ones)
+#: while the risk of clipping something an operator wants to read goes up. A list row shows
+#: titles and status lines; 500 characters is already generous for both.
+LIST_STRING_BUDGET = 500
+
+
+def trim_for_list(value: Any, _depth: int = 0) -> Any:
+    """Shrink a run to what a LIST can possibly render.
+
+    /v1/code-tasks returns 200 rows, each carrying the full row: design plans, written specs,
+    security and review narratives, and the ratchet's file snapshots. Measured on goldeneye
+    that was 3.75 MB from the endpoint and ~10 MB of HTML in the console, at 18-22s a page.
+
+    Deliberately a RULE, not a list of field names. Stripping `pending_diff` by name shaved
+    11.4 MB to 10.0 MB and left `ratchet.files[].content`, `spec.instructions`,
+    `state.design.plan` and five more narratives behind it — the same field-at-a-time chase
+    that made everything else here take so long. A list row simply has no use for a 2 KB
+    string, whatever it is called, so the bound is on SIZE and applies to fields nobody has
+    added yet.
+
+    Truncates rather than deletes: a consumer reading a field still gets a string, and the
+    marker says why it is short.
+    """
+    if isinstance(value, str):
+        if len(value) <= LIST_STRING_BUDGET:
+            return value
+        return value[:LIST_STRING_BUDGET] + f"… [{len(value)} chars; open the run for the rest]"
+    if isinstance(value, dict):
+        return {k: trim_for_list(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, list):
+        return [trim_for_list(v, _depth + 1) for v in value]
+    return value
+
+
+def summarise_run_for_list(run: dict) -> dict:
+    """A list row: engine scratch removed, then everything bounded by size."""
+    slim = without_internal_bulk(run)
+    fctx = slim.get("finalize_ctx")
+    if isinstance(fctx, dict) and "ratchet" in fctx:
+        # The verifier ratchet's own file snapshots — a second copy of the bodies
+        # `pending_diff` already held, and the largest single field in the response.
+        ratchet = fctx.get("ratchet")
+        if isinstance(ratchet, dict) and isinstance(ratchet.get("files"), list):
+            slim = {**slim, "finalize_ctx": {**fctx, "ratchet": {
+                **ratchet,
+                "files": [{"path": f.get("path"), "bytes": len(f.get("content") or "")}
+                          if isinstance(f, dict) else f for f in ratchet["files"]],
+            }}}
+    return trim_for_list(slim)
+
+
 @app.post("/v1/jobs/{job_id}/cancel")
 def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
     """Cancel a job that has not started yet.
@@ -9510,7 +9564,7 @@ def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
     with begin(engine) as c:
         return {
             "project_id": project_id,
-            "code_tasks": [without_internal_bulk(r)
+            "code_tasks": [summarise_run_for_list(r)
                            for r in list_code_task_runs(c, project_id, limit)],
         }
 

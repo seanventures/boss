@@ -84,5 +84,70 @@ def test_both_list_and_detail_endpoints_apply_it():
 
     list_src = inspect.getsource(main.list_code_tasks_endpoint)
     detail_src = inspect.getsource(main.get_code_task_endpoint)
-    assert "without_internal_bulk" in list_src
+    # The list goes through the summariser, which applies without_internal_bulk AND the size
+    # rule; the detail applies only the former, so opening one run still shows the narratives.
+    assert "summarise_run_for_list" in list_src
     assert "without_internal_bulk" in detail_src
+
+
+# --------------------------------------------------------------------------- #
+# The size rule, which is what stops the field-at-a-time chase
+# --------------------------------------------------------------------------- #
+from apps.api.app.main import (  # noqa: E402
+    LIST_STRING_BUDGET, summarise_run_for_list, trim_for_list,
+)
+
+
+def test_stripping_by_name_was_not_enough_which_is_why_the_rule_is_size():
+    """Naming `pending_diff` shaved 11.4 MB to 10.0 and left seven more fields behind it.
+
+    Measured on the live 200-row response, the bulk was spread across
+    ratchet.files[].content, spec.instructions, state.design.plan, state.design.spec,
+    state.security_summary, state.design.standards, state.design.plan_review and
+    state.review_summary. A rule about SIZE covers all of them — and the ones nobody has
+    added yet.
+    """
+    run = {
+        "id": "crun_x",
+        "spec": {"instructions": "i" * 50_000},
+        "state": {"design": {"plan": "p" * 40_000, "spec": "s" * 40_000},
+                  "security_summary": "sec" * 10_000},
+    }
+    out = summarise_run_for_list(run)
+    for value in (out["spec"]["instructions"], out["state"]["design"]["plan"],
+                  out["state"]["design"]["spec"], out["state"]["security_summary"]):
+        assert len(value) < LIST_STRING_BUDGET + 80
+
+
+def test_the_ratchets_second_copy_of_the_file_bodies_also_goes():
+    run = {"id": "c", "finalize_ctx": {"ratchet": {"files": [
+        {"path": "package-lock.json", "content": "x" * 176_100}]}}}
+    out = summarise_run_for_list(run)
+    assert out["finalize_ctx"]["ratchet"]["files"] == [
+        {"path": "package-lock.json", "bytes": 176_100}]
+
+
+def test_short_values_and_scalars_are_untouched():
+    """The console reads small scalars off a list row; none of them may change."""
+    run = {"id": "crun_x", "status": "completed", "title": "Build a todo app",
+           "state": {"files_changed": 3, "additions": 120, "url": "http://x/y",
+                     "error": None},
+           "spec": {"repo": "boss-sandbox", "owner": "paramg"}}
+    assert summarise_run_for_list(run) == run
+
+
+def test_truncation_says_why_it_is_short_rather_than_silently_clipping():
+    out = trim_for_list("z" * 5000)
+    assert out.startswith("z" * LIST_STRING_BUDGET)
+    assert "5000 chars" in out and "open the run" in out
+
+
+def test_the_detail_endpoint_is_not_trimmed():
+    """A list is bounded; opening ONE run must still give the whole thing."""
+    import inspect
+
+    from apps.api.app import main
+
+    detail = inspect.getsource(main.get_code_task_endpoint)
+    assert "summarise_run_for_list" not in detail, "detail must keep the narratives"
+    assert "without_internal_bulk" in detail, "…but still not ship file bodies"
