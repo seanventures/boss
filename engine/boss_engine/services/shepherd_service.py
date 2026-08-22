@@ -29,6 +29,15 @@ from .core import emit_event, make_id
 
 logger = logging.getLogger(__name__)
 
+#: Most repairs the autopilot will start in one tick. The first live run fired six at once
+#: into a worker that drains one job at a time, and the operator's meeting waited behind them.
+MAX_ACTIONS_PER_TICK = 2
+
+#: Above this many queued/running jobs the autopilot does nothing at all. Repair work is never
+#: more urgent than the work already in flight, and a backlog that grows every 180s is worse
+#: than a repair that waits.
+QUEUE_DEPTH_PAUSE = 3
+
 #: Who the audit trail credits for an automatic remedy. "shepherd" everywhere else in this
 #: module, kept as one constant so a reader grepping the events can find every automatic act.
 SHEPHERD_ACTOR = "shepherd"
@@ -401,8 +410,32 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
         if row["run_id"] and row["run_id"] not in candidates:
             candidates.append(row["run_id"])
 
+    # AN AUTONOMOUS REPAIRER MUST NOT STARVE THE QUEUE IT SHARES.
+    #
+    # The first live run fired six remedies at once. The worker drains ONE job at a time, so
+    # those six code-task retries went in front of the operator's PRD meeting and pushed it
+    # hours out — repair work crowding out the interactive work it exists to protect. Every
+    # 180s tick added more, so the backlog grew faster than it drained.
+    #
+    # Two bounds. Depth: if real work is already waiting, this tick does nothing. Width: at
+    # most MAX_ACTIONS_PER_TICK repairs even when the queue is clear, because a remedy that is
+    # worth doing is still worth doing three minutes from now.
+    with begin(engine) as c:
+        queue_depth = int(c.execute(
+            sql("SELECT count(*) FROM jobs WHERE project_id = :p "
+                "AND status IN ('queued','running')"), {"p": project_id}).scalar() or 0)
+    if queue_depth > QUEUE_DEPTH_PAUSE:
+        return {"project_id": project_id, "considered": len(candidates), "applied": [],
+                "deferred": [], "escalated": [], "failed": [],
+                "paused_because": f"{queue_depth} jobs already queued or running; repair work "
+                                  "must not push ahead of the operator's work"}
+
     applied, deferred, escalated, failed = [], [], [], []
     for run_id in candidates[:limit]:
+        if len(applied) >= MAX_ACTIONS_PER_TICK:
+            deferred.append({"run_id": run_id, "remedy": None,
+                             "reason": f"tick cap reached ({MAX_ACTIONS_PER_TICK})"})
+            continue
         try:
             proposal = propose(engine, settings, run_id)
         except Exception as exc:  # noqa: BLE001 — one bad run must not stop the sweep

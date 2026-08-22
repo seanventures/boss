@@ -144,3 +144,24 @@ def test_escalate_is_not_counted_as_a_repair():
     assert 'if not proposal.get("remedy_action"):' in src
     assert "escalated.append" in src
     assert '"escalated": escalated' in src
+
+
+def test_autopilot_will_not_starve_the_queue_it_shares():
+    """The first live run fired six remedies into a worker that drains one job at a time.
+
+    Those six code-task retries went in front of the operator's PRD meeting and pushed it hours
+    out — repair work crowding out the interactive work it exists to protect — and every 180s
+    tick added more, so the backlog grew faster than it drained.
+    """
+    from boss_engine.services.shepherd_service import (
+        MAX_ACTIONS_PER_TICK, QUEUE_DEPTH_PAUSE,
+    )
+    assert 1 <= MAX_ACTIONS_PER_TICK <= 3, "a tick that starts six repairs is a stampede"
+    assert QUEUE_DEPTH_PAUSE >= 1
+
+    src = inspect.getsource(shepherd_service.autopilot)
+    assert "paused_because" in src, "a paused tick must say WHY, not look like nothing to do"
+    assert "queue_depth" in src
+    assert "MAX_ACTIONS_PER_TICK" in src
+    # The depth check must happen before any acting, not after some repairs are already queued.
+    assert src.index("queue_depth") < src.index("act(engine, settings, jobs, run_id")
