@@ -565,7 +565,7 @@ function BenchmarkLaunch({ benchmark, projectId, actor, defaultOwner, defaultRep
  * Falls back to the newest attempt so the caller always has a run; when nothing has shipped
  * the card does not render the action at all.
  */
-export function pickPreviewRun<T extends { status?: string; pull_request_url?: string | null }>(
+export function pickBuiltRun<T extends { status?: string; pull_request_url?: string | null }>(
   membersNewestFirst: T[],
 ): T {
   return membersNewestFirst.find(
@@ -2227,7 +2227,7 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
               // completed run and then fired it at the blocked one, which 409s with
               // "has not opened a pull request yet". Members are newest-first, so this is the
               // most recent attempt that actually has something to show.
-              const previewRun = pickPreviewRun(members);
+              const builtRun = pickBuiltRun(members);
               const benchGroup = (fc(members[0]).qa_benchmark as { name?: string } | undefined);
               const name = benchGroup?.name
                 ? `${benchGroup.name} — QA benchmark`
@@ -2274,7 +2274,12 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       {appIdentity(members[0]).blurb}
                     </p>
                   ) : null}
-                  <JourneySpine run={members[0] as never} previewUrl={livePreviewFor(members[0].id)} large />
+                  {/* The spine describes the app, so it tracks the run that built it. On
+                      members[0] the card contradicted itself: the badge read SHIPPED while
+                      the spine underneath read "Build blocked · Ship not yet", because it was
+                      narrating a blocked follow-up instead of the completed run behind PR #83.
+                      "last one failed" in the header is what reports the newest attempt. */}
+                  <JourneySpine run={builtRun as never} previewUrl={livePreviewFor(builtRun.id)} large />
                   {/* ONE action row. These were two block-level children of a grid, so they
                       stacked full-width and the weaker of the two sat centred above the
                       stronger -- the change control read as a caption rather than a choice.
@@ -2286,10 +2291,10 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       slot. */}
                   <div className="ct-actions">
                     <AppPrimaryAction
-                      run={previewRun}
-                      previewUrl={livePreviewFor(previewRun.id)}
+                      run={builtRun}
+                      previewUrl={livePreviewFor(builtRun.id)}
                       previewStarting={previews.some(
-                        (x) => x.run_id === previewRun.id && x.status === "starting")}
+                        (x) => x.run_id === builtRun.id && x.status === "starting")}
                       shipped={anyShipped}
                       running={anyRunning}
                     />
@@ -2326,7 +2331,12 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     />
                     {/* The panel the menu opens. Controlled, so the menu owns the trigger. */}
                     {/* Shipped state, where the change was approved. */}
-                    <DeploymentLine run={members[0]} projectId={projectId}
+                    {/* Deploying ships a BUILT artifact, so it takes the same run preview
+                        does. Pointed at members[0] it offered to deploy a blocked follow-up
+                        that has no reviewed build, and "Set target" answered "this task is
+                        'blocked' — there is no reviewed build to deploy" for an app whose
+                        completed run was sitting right there under PR #83. */}
+                    <DeploymentLine run={builtRun} projectId={projectId}
                                     deployable={anyShipped && !anyRunning} />
                     {specPanel[members[0].id] ? (
                       <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor}
