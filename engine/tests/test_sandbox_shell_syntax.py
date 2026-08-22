@@ -63,3 +63,18 @@ def test_the_message_names_the_real_problem():
             type("S", (), {"_require_provisioned": lambda self: None})(),
             "[ -d node_modules ] && npm ci")
     assert "without a shell" in str(err.value).lower()
+
+
+@pytest.mark.parametrize("command", [
+    "python3 -c 'print(42)'",          # parens inside a QUOTED argument
+    'python -c "import sys; sys.exit(0)"',
+    "npm run test -- --grep 'a|b'",    # a pipe inside a quoted regex
+    "sh -c 'echo hi'",
+])
+def test_a_metacharacter_inside_a_quoted_argument_is_just_text(command):
+    """Scanning the raw string rejected `python3 -c 'print(42)'` and broke two suites.
+
+    shlex knows what is quoted. An operator that survives tokenising as its own word is a real
+    operator; one inside a quoted string is an argument.
+    """
+    assert _looks_like_shell(command) is False

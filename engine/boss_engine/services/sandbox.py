@@ -34,12 +34,42 @@ _SHELL_BUILTINS = frozenset({
     "cd", "export", "source", ".", "eval", "exec", "set", "unset",
 })
 
-#: Characters that only mean anything to a shell.
-_SHELL_METACHARS = frozenset("&|;<>()$`")
+#: Operators that are shell syntax when they stand ALONE as a word.
+#:
+#: Scanning the raw string for these characters was wrong: it rejected
+#: `python3 -c 'print(42)'`, where the parens are inside a quoted ARGUMENT and mean nothing to
+#: anyone. shlex already knows what is quoted, so ask it — an operator that survives tokenising
+#: as its own word is a real operator; one inside a quoted string is just text.
+_SHELL_OPERATORS = frozenset({"&&", "||", "|", ";", ";;", ">", ">>", "<", "&"})
+
+
+#: Characters that mean something to a shell when they are NOT inside quotes.
+_SHELL_METACHARS = "&|;<>`"
 
 
 def _looks_like_shell(command: str) -> bool:
-    return any(ch in _SHELL_METACHARS for ch in (command or ""))
+    import shlex as _shlex
+
+    try:
+        # posix=False KEEPS the quotes on each token, which is the whole point: it is the only
+        # way to tell `python3 -c 'print(42)'` (parens are an argument) from `echo $(date)`
+        # (substitution the shell would perform). posix=True strips quotes and makes them
+        # indistinguishable, which rejected legitimate commands and broke two suites.
+        tokens = _shlex.split(command or "", posix=False)
+    except ValueError:
+        return False  # unbalanced quotes — a different error, reported elsewhere
+    if not tokens:
+        return False
+    if tokens[0].strip("'\"") in _SHELL_BUILTINS:
+        return True
+    for token in tokens:
+        if token[:1] in ("'", '"'):
+            continue  # a quoted argument is text, whatever it contains
+        if token in _SHELL_OPERATORS:
+            return True
+        if any(ch in _SHELL_METACHARS for ch in token) or "$(" in token:
+            return True
+    return False
 
 
 class SandboxError(RuntimeError):
