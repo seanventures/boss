@@ -346,17 +346,37 @@ runs on one card, HookWatch 20, BugBox 12, ApproveIt 6 — and the Shorty card n
 * **Status:** open. Same family as I11; the grouping is correct and the label is not.
 
 
+### I30 — `npm start` runs an app; it does not compile one
+* **Saw:** Shorty finished, passed its own suite, opened PR #106 — 6,988 lines, routes, db,
+  metrics, Playwright specs — and then **could not be previewed**. The operator watched
+  "Starting preview…" for minutes and got a timeout.
+* **Cause:** its start script is `node dist/server.js`. The preview ran `npm install` then
+  `npm start`, never `npm run build`, so `dist/` never existed and node died instantly on
+  `MODULE_NOT_FOUND`. The error was three levels down a log the console does not surface.
+* **The shape, exactly (S3):** the requirement was already understood in three places — both
+  Vite branches build first, and so does the generated Dockerfile. `_detect_command_in` had
+  **four** command branches and one of them went straight from install to start. The rule was
+  expressed four times and satisfied three times.
+* **Fix:** the missed branch builds first, `--if-present` so apps without a build script are
+  unaffected, and `dev` excluded because a dev server compiles on the fly.
+* **Counter-measure:** the guard test reads the **whole module** rather than the one function
+  that was wrong — pinning it to `_detect_command_in` is how the fifth branch gets missed too.
+  It also verifies the `{build}` f-string hole can only ever hold a real build command, so the
+  interpolation cannot become the loophole.
+* **Status:** fixed, pending deploy.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are twenty-nine; the shapes are twelve. Fixing shapes is what stops recurrence.
+The incidents are thirty; the shapes are twelve. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
 | **S1** | **A state with no exit.** A pending flag, a spinner, a `running` row — set on the way in, with no path back on failure. | I8, I9, I10, I12 |
 | **S2** | **A mechanism neutered at its call sites.** The check exists, is correct, and every caller passes a value that defeats it. | I5 (7×), I6, I7 |
-| **S3** | **Fix one path, miss its twin.** The same defect in 2–8 places; fixed where it surfaced. | I2 (3×), I5 (7×), I8, I9 |
+| **S3** | **Fix one path, miss its twin.** The same defect in 2–8 places; fixed where it surfaced. | I2 (3×), I5 (7×), I8, I9, I30 |
 | **S4** | **Only failure is watched.** Every sensor is error-triggered. Starvation and stalling produce no error, so nothing sees them. | I6, I8, I12 |
 | **S5** | **Internals leak to the operator.** Scratch space, store keys, raw prose, snake_case identifiers rendered as if they were product. | I1, I4, I11 |
 | **S6** | **A guard patched instead of fixed.** The check is wrong in kind; each failure tightens the heuristic rather than replacing it. Pattern-matching `ps`; an exact-match confirmation. | I13, I15 |

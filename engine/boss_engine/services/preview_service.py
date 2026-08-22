@@ -671,10 +671,24 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
         script = "dev" if scripts.get("dev") else "start" if scripts.get("start") else None
         if script:
             suffix = " -- --host 0.0.0.0" if script == "dev" else ""
+            # `start` RUNS the app; it does not compile it. A TypeScript service whose start
+            # script is `node dist/server.js` needs `dist/` to exist first, and this branch went
+            # straight from install to start — so the app died on MODULE_NOT_FOUND and the
+            # operator watched "Starting preview…" for minutes before it timed out. Shorty, a
+            # complete and correct URL shortener, could not be previewed for exactly this reason.
+            #
+            # The build was already run on the two Vite branches above and in the Dockerfile
+            # path; this branch and no other was missed, which is the whole shape — the same
+            # requirement expressed in four places and satisfied in three.
+            #
+            # `dev` is excluded deliberately: a dev server compiles on the fly, and building
+            # first would only slow it down. `--if-present` makes this a no-op for an app that
+            # has no build script, so nothing that worked before changes.
+            build = "" if script == "dev" else "npm run build --if-present && "
             return [
                 "sh", "-lc",
                 "npm install --no-audit --no-fund --loglevel=error && "
-                f"npm run {script}{suffix}",
+                f"{build}npm run {script}{suffix}",
             ]
     procfile = workdir / "Procfile"
     if procfile.is_file():
