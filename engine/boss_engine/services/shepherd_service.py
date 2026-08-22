@@ -413,6 +413,24 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
                                   profile=("lean" if remedy.id == "reissue_lean" else None))
             new_run = res.get("run_id")
             outcome = "started"
+        elif remedy.action == "restart_preview":
+            # The cheap remedy, tried first: clone/install/boot are idempotent.
+            from .preview_service import start_preview
+            res = start_preview(engine, settings, run_id)
+            outcome = ("started" if str(res.get("status") or "") not in ("failed", "error")
+                       else f"failed: {str(res.get('error') or 'preview failed again')[:160]}")
+        elif remedy.action in ("redeploy_deployment", "preflight_target"):
+            outcome = _act_on_deployment(engine, settings, run_id, remedy.action, actor)
+        elif remedy.action == "create_code_task":
+            # A REMEDY THAT NAMES AN ACTION AND TAKES NONE IS NOT A REMEDY.
+            #
+            # Every non-retry action fell through to "no_action": the delivery classes
+            # (deploy, health check, canary) and the preview class all recorded a decision and
+            # did nothing about it. The shepherd looked like it was working — ledger rows,
+            # reasoning rows, predicted costs — while no fix was ever opened. Autonomy has to
+            # end in an action or it is only bookkeeping.
+            new_run = _open_fix_task(engine, settings, jobs, run_id, p, remedy, note)
+            outcome = "started" if new_run else "failed: could not open fix task"
         else:
             outcome = "no_action"
     except Exception as exc:  # noqa: BLE001 — a failed remedy is data, not a crash
@@ -433,6 +451,102 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
                     "successor_run": new_run, "predicted_usd": p["estimated_cost_usd"]})
     p.update({"acted": True, "outcome": outcome, "successor_run": new_run})
     return p
+
+
+def _act_on_deployment(engine, settings, run_id: str, action: str, actor: str) -> str:
+    """Carry out the two DEPLOY_FAILED remedies against this run's latest deployment.
+
+    Both were declared when the delivery classes were added and neither was ever wired, so a
+    failed deployment recorded a remedy and sat there. `redeploy_deployment` is safe to take
+    unattended because transfer and docker steps are idempotent; `preflight_target` only reads.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        row = c.execute(
+            sql("SELECT id, target_id FROM deployment_runs "
+                "WHERE release_packet->>'code_task_run_id' = :i "
+                "ORDER BY created_at DESC LIMIT 1"),
+            {"i": run_id}).mappings().first()
+    if not row:
+        return "no_action: no deployment run for this task"
+
+    if action == "redeploy_deployment":
+        from .delivery_pipeline import redeploy
+        res = redeploy(engine, settings, row["id"], actor=actor)
+        status = str(res.get("status") or "")
+        return "started" if status not in ("failed", "error") else f"failed: {status}"
+
+    # preflight_target — read-only: prove the host is reachable before shipping to it again.
+    from .deployment_fleet import verify_host
+    with begin(engine) as c:
+        host_id = c.execute(sql("SELECT host_id FROM deployment_targets WHERE id = :i"),
+                            {"i": row["target_id"]}).scalar()
+        if not host_id:
+            return "no_action: target has no host to preflight"
+        report = verify_host(c, settings, host_id=host_id)
+    problems = (report.get("last_preflight") or report).get("problems") or []
+    return "started" if not problems else f"failed: {'; '.join(str(x) for x in problems)[:160]}"
+
+
+def _open_fix_task(engine, settings, jobs, run_id: str, p: dict, remedy, note: str):
+    """Open a scoped repair task against the run that failed, carrying the EVIDENCE.
+
+    Not a retry of the original brief: that brief already succeeded on its own terms. What
+    failed is downstream — the preview would not boot, the health gate went red, the canary
+    regressed — so the task has to say what broke and hand over the log. A repair agent told
+    only "it does not work" guesses, and guessing is how a Vite preview script ended up in a
+    repo that has no Vite.
+    """
+    from ..db import begin
+    from .code_task_service import start_code_task
+
+    with begin(engine) as c:
+        run = c.execute(
+            sql("SELECT project_id, title, spec FROM code_task_runs WHERE id=:i"),
+            {"i": run_id}).mappings().first()
+    if not run:
+        return None
+    spec = run["spec"]
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError:
+            spec = {}
+    spec = spec or {}
+
+    evidence = str(p.get("evidence") or p.get("check") or "")[:4000]
+    instructions = (
+        f"{note}\n\n"
+        f"The change in run {run_id} merged or completed, but the step AFTER it failed: "
+        f"{p.get('class_name')}.\n\n"
+        f"EVIDENCE (the actual failure output):\n{evidence}\n\n"
+        "Fix the APPLICATION so this step passes. Constraints:\n"
+        "- Do NOT introduce a build system, framework or preview harness the repo does not "
+        "already use. If a tool is missing, that is a finding to report, not a dependency to "
+        "add.\n"
+        "- Keep the change as small as the failure requires; do not refactor around it.\n"
+        "- If the failure is environmental rather than a code defect, say so and change "
+        "nothing."
+    )
+    try:
+        with begin(engine) as c:
+            return start_code_task(
+                c, project_id=run["project_id"], task_id=None,
+                title=f"Auto-repair: {p.get('class_name')} — {str(run['title'])[:90]}",
+                instructions=instructions,
+                acceptance_criteria=[
+                    f"the {p.get('class_name')} that failed for {run_id} now passes",
+                    "no new build system or framework was added to the repo",
+                ],
+                test_commands=list(spec.get("test_commands") or []),
+                owner=spec.get("owner") or settings.target_github_owner,
+                repo=spec.get("repo") or settings.target_github_repo,
+                base_branch=spec.get("base_branch") or "main",
+                finalize_ctx=None, jobs=jobs, open_pr=True,
+            )
+    except Exception:  # noqa: BLE001 — a remedy that cannot start is data, not a crash
+        return None
 
 
 def _spent(engine, run_id: str) -> float:

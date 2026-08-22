@@ -572,12 +572,18 @@ export function pickBuiltRun<T extends { status?: string; pull_request_url?: str
     (m) => m.status === "completed" || m.pull_request_url) ?? membersNewestFirst[0];
 }
 
-function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }: {
+/** The most recent preview attempt for a run, or null. `previews` arrives newest-first. */
+export function latestPreviewFor(previews: PreviewRec[], runId: string): PreviewRec | null {
+  return previews.find((p) => p.run_id === runId) ?? null;
+}
+
+function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running, lastPreview }: {
   run: CodeTaskRun;
   previewUrl: string | null;
   previewStarting: boolean;
   shipped: boolean;
   running: boolean;
+  lastPreview?: PreviewRec | null;
 }) {
   const [state, action] = useActionState(startPreviewAction, null);
   const url = state?.url || previewUrl;
@@ -607,14 +613,29 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running }
     // button that can only fail.
     return null;
   }
+  // A PREVIEW THAT FAILED MUST NOT LOOK LIKE ONE THAT IS STARTING.
+  //
+  // There was no branch for `failed`, so five consecutive failures rendered as the pending
+  // label "Starting preview…" and the operator reported the preview as stuck. The button is
+  // still "Run preview" — retrying is the right next move — but the last attempt's reason has
+  // to be visible, or you retry blind.
+  const failed = !state?.url && lastPreview?.status === "failed" ? lastPreview : null;
+
   return (
     <form action={action} onClick={(e) => e.stopPropagation()}>
       <input type="hidden" name="run_id" value={run.id} />
       <SubmitButton className="cap-btn primary" pendingLabel="Starting preview…">
-        <PlayCircle size={15} weight="fill" aria-hidden /> Run preview
+        <PlayCircle size={15} weight="fill" aria-hidden />
+        {failed ? " Retry preview" : " Run preview"}
       </SubmitButton>
       {state?.error ? <span className="detail"> {state.error}</span> : null}
       {state?.note ? <span className="detail"> {state.note}</span> : null}
+      {failed && !state?.error ? (
+        <span className="detail" data-testid="preview-failed">
+          {" "}Last preview failed{failed.failure_kind ? ` (${failed.failure_kind})` : ""}
+          {failed.error ? `: ${failed.error.slice(0, 200)}` : ""}
+        </span>
+      ) : null}
     </form>
   );
 }
@@ -2295,6 +2316,7 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       previewUrl={livePreviewFor(builtRun.id)}
                       previewStarting={previews.some(
                         (x) => x.run_id === builtRun.id && x.status === "starting")}
+                      lastPreview={latestPreviewFor(previews, builtRun.id)}
                       shipped={anyShipped}
                       running={anyRunning}
                     />

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { pickBuiltRun } from "../app/code-tasks-ui";
+import { latestPreviewFor, pickBuiltRun } from "../app/code-tasks-ui";
 import { describeApiFailure } from "@boss/api-client";
 
 /**
@@ -119,5 +119,53 @@ describe("card wiring: artifact consumers use the built run", () => {
       const call = source.slice(open, source.indexOf("/>", open));
       expect(call, `${tag} must not act on members[0]`).not.toMatch(/run=\{members\[0\]/);
     }
+  });
+});
+
+/**
+ * A failed preview must not render as a starting one.
+ *
+ * Five consecutive preview failures on one run showed as the pending label "Starting
+ * preview…", so the operator reported the preview as stuck. AppPrimaryAction had branches for
+ * live / starting / building / nothing-built, and none for `failed`.
+ */
+describe("latestPreviewFor", () => {
+  const previews = [
+    { id: "prev_new", run_id: "crun_a", status: "failed", error: "app did not serve HTTP" },
+    { id: "prev_old", run_id: "crun_a", status: "expired" },
+    { id: "prev_other", run_id: "crun_b", status: "running" },
+  ] as any[];
+
+  it("returns the newest attempt for the run", () => {
+    expect(latestPreviewFor(previews, "crun_a")?.id).toBe("prev_new");
+  });
+
+  it("does not leak another run's preview", () => {
+    expect(latestPreviewFor(previews, "crun_b")?.id).toBe("prev_other");
+  });
+
+  it("returns null when the run has never been previewed", () => {
+    expect(latestPreviewFor(previews, "crun_none")).toBeNull();
+  });
+});
+
+describe("card renders a failed preview as failed", () => {
+  const source = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+
+  it("has a failed branch, not only starting/live/building", () => {
+    expect(source).toMatch(/lastPreview\?\.status === "failed"/);
+  });
+
+  it("offers a retry rather than a dead button", () => {
+    expect(source).toContain("Retry preview");
+  });
+
+  it("shows the failure reason so a retry is not blind", () => {
+    expect(source).toMatch(/data-testid="preview-failed"/);
+    expect(source).toMatch(/failed\.error/);
+  });
+
+  it("passes the newest preview into the action", () => {
+    expect(source).toMatch(/lastPreview=\{latestPreviewFor\(previews, builtRun\.id\)\}/);
   });
 });

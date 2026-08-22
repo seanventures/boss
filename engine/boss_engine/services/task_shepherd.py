@@ -46,6 +46,11 @@ DEPLOY_FAILED = 13
 HEALTH_CHECK_FAILED = 14
 CANARY_REGRESSED = 15
 PROMOTION_BLOCKED = 16
+# A preview is where an operator first SEES the thing BOSS built, so a preview that fails is a
+# delivery failure like any other. It had no class at all: five consecutive failures on one run
+# produced no classification, no remedy and no ledger entry, and the operator was left to
+# report it as "stuck".
+PREVIEW_FAILED = 17
 
 CLASS_NAMES = {
     SPEND_CAP: "provider spend/rate cap",
@@ -64,6 +69,7 @@ CLASS_NAMES = {
     HEALTH_CHECK_FAILED: "health check failed",
     CANARY_REGRESSED: "canary regressed",
     PROMOTION_BLOCKED: "promotion blocked",
+    PREVIEW_FAILED: "preview failed to start",
 }
 
 # Exact phrases the engine itself writes. Deliberately NOT loose tokens: a bare "timeout"
@@ -82,6 +88,10 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
                          "must reference a production target")),
     (DEPLOY_FAILED, ("deployment failed", "deploy failed", "docker run failed",
                      "rsync failed", "no connector for target_kind")),
+    # Before INFRASTRUCTURE: a preview that never served HTTP is a property of the BUILD, and
+    # filing it as infrastructure would prescribe a blind retry of a build that cannot succeed.
+    (PREVIEW_FAILED, ("did not serve http", "could not resolve entry",
+                      "preview failed to start", "boot_crash", "port_timeout")),
     (SPEND_CAP, ("spend limit", "usage limit", "rate limit exceeded", "quota exceeded",
                  "too many requests")),
     (TURN_CAP, ("error_max_turns", "max_turns_exhausted", "ran out of turns")),
@@ -194,6 +204,27 @@ REMEDIES: dict[int, tuple[Remedy, ...]] = {
     PROMOTION_BLOCKED: (
         # Usually configuration, not code: no production target registered for this app.
         # There is nothing to retry, so this escalates by design.
+        ESCALATE,
+    ),
+    PREVIEW_FAILED: (
+        # Retry FIRST and cheaply. A preview clones, installs and boots; a registry blip or a
+        # slow first install is a real and common cause, and re-running costs nothing but time.
+        Remedy("retry_preview",
+               "start the preview again — clone/install/boot are idempotent and a slow first "
+               "install is the commonest cause",
+               0.0, "restart_preview"),
+        # Then, and only then, treat it as a code defect. The evidence is the build log, which
+        # is why this remedy passes it to the task rather than restating the symptom.
+        #
+        # GUARD, learned the hard way: an agent told only "the preview will not start" invents a
+        # preview command to satisfy the harness. On a vanilla-JS + Python repo it added a Vite
+        # `preview` script and ten devDependencies, and rollup then failed on an entry module
+        # that had never existed — the tooling broke the repo trying to please the tooling. The
+        # task must say: fix the app, never invent a build system it does not have.
+        Remedy("open_preview_fix_task",
+               "open a task with the preview build log; fix the app, do not invent a build "
+               "system the repo does not use",
+               6.0, "create_code_task"),
         ESCALATE,
     ),
     SPEND_CAP: (
