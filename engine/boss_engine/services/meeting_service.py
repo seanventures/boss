@@ -29,7 +29,7 @@ from ..config import Settings
 from ..db import begin
 from .claude_cli_adapter import make_chat_adapter
 from .jobs import JOB_PRIORITY_INTERACTIVE
-from .core import create_artifact, create_blocking_decision, emit_event, make_id
+from .core import stable_dedupe_key, create_artifact, create_blocking_decision, emit_event, make_id
 from .mcp_client import MCPClient
 from .mcp_registry import list_mcp_servers
 from .openai_adapter import estimate_cost_usd_micros
@@ -607,7 +607,9 @@ def convene_prd_meeting_core(
             project_id=project_id,
             title=f"PRD meeting: {directive[:90]}",
             description=directive,
-            dedupe_key=make_id("mtg"),
+            # Same directive, same project, same meeting. make_id() here meant a retried or
+            # double-submitted convene spent for a second identical panel.
+            dedupe_key=stable_dedupe_key("prd-meeting", project_id, directive),
             priority="p1",
             risk_tier=2,
             inputs={"directive": directive, "url": url, "constraints": constraints},

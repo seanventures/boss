@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..config import Settings
 from .budget import BudgetGovernor
-from .core import create_artifact, emit_event, make_id, normalize_data_boundary
+from .core import stable_dedupe_key, create_artifact, emit_event, make_id, normalize_data_boundary
 from .jobs import JobLeaseService
 from .specpack import SpecPackService
 
@@ -283,7 +283,9 @@ class CommandIntakeService:
             project_id=project_id,
             title=f"CEO command: {command[:96]}",
             description=command,
-            dedupe_key=make_id("cmd"),
+            # The same CEO command issued twice is one command. Re-submitting a form or
+            # double-clicking must not open two tasks and plan the same work twice.
+            dedupe_key=stable_dedupe_key("ceo-command", project_id, command),
             priority="p1",
             risk_tier=2,
             inputs={

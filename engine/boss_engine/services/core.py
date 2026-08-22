@@ -19,6 +19,28 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def stable_dedupe_key(kind: str, *parts: Any) -> str:
+    """A dedupe key derived from WHAT the work is, so a repeat actually collides.
+
+    `tasks.dedupe_key` is checked before every INSERT and the check works. Seven call sites
+    passed `make_id(...)` — a fresh random id — so the value could never match an earlier row
+    and the whole mechanism silently did nothing. Clicking "Send to PRD meeting" twice made two
+    meetings, two tasks and two code tasks from one outcome.
+
+    A dedupe key is an IDENTITY, not an id. It must be a pure function of the inputs that make
+    two requests "the same request": the discovery run and the outcome index, or the directive
+    text. Anything freshly generated is by construction unique and therefore useless here.
+
+    Long or unstable parts are hashed so the key stays bounded and a directive's whitespace
+    does not create a second identity.
+    """
+    import hashlib
+
+    material = "\u241f".join(str(p or "").strip() for p in parts)
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+    return f"{kind}:{digest}"
+
+
 def make_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:20]}"
 

@@ -604,6 +604,149 @@ def _register_write_tools(reg: ToolRegistry) -> None:
 _DECISION_ACTIONS = ("approve", "reject", "revise", "delegate", "execute")
 
 
+def _register_operations_tools(reg: ToolRegistry) -> None:
+    """Operational writes: BOSS running BOSS.
+
+    Everything Ask BOSS could do was READ. So when a PRD meeting sat queued for two hours
+    behind benchmark jobs boosted to priority_score 9000, BOSS could describe the problem in
+    full detail and could not touch it — an operator had to reach in from outside and run the
+    fix by hand. A control plane that can only narrate its own queue is not operating anything.
+
+    The boundary is deliberate and narrow: these change OPERATIONAL STATE — job priority, a
+    wedged job, an orphaned run. They do not change BOSS's own code. That still goes through
+    the governed coding pipeline, with a PR and a review, because a system editing its own
+    source without a diff is a different and much larger promise.
+
+    Every one of these is a targeted UPDATE by id, and each records who asked and why.
+    """
+
+    @reg.tool(
+        "cancel_job",
+        "Cancel a queued job so the worker skips it. Pass force=true to stop one that is "
+        "already RUNNING — use that when a wedged job is holding a worker slot and blocking "
+        "work someone is waiting on. Cancelling a job also closes its code-task run, so "
+        "nothing is left reported as in-flight. Prefer set_job_priority when the job is not "
+        "wedged and only needs to yield.",
+        _obj({"job_id": {"type": "string"},
+              "reason": {"type": "string", "description": "why — recorded on the job"},
+              "force": {"type": "boolean", "description": "stop it even if running"}},
+             required=["job_id", "reason"]),
+        kind="write",
+    )
+    def cancel_job(ctx, *, project_id, actor, args):
+        from ..services.jobs import JobLeaseService
+        with ctx.begin() as c:
+            return JobLeaseService(ctx.settings).cancel_queued_job(
+                c, str(args["job_id"]), reason=str(args["reason"]),
+                actor=actor, force=bool(args.get("force")))
+
+    @reg.tool(
+        "set_job_priority",
+        "Move a job between priority bands. LOWER runs sooner. Bands: 'urgent' (delay costs "
+        "money or safety), 'interactive' (a person is watching), 'requested' (a person asked "
+        "and walked away), 'background' (the system decided this itself), 'bulk' (benchmarks "
+        "and canaries — yields to everything). Also clears priority_score, which overrides "
+        "the bands entirely and is how benchmark work once outranked every meeting in the "
+        "system.",
+        _obj({"job_id": {"type": "string"},
+              "band": {"type": "string",
+                       "enum": ["urgent", "interactive", "requested", "background", "bulk"]},
+              "reason": {"type": "string"}},
+             required=["job_id", "band", "reason"]),
+        kind="write",
+    )
+    def set_job_priority(ctx, *, project_id, actor, args):
+        from ..ports import sql as _s
+        from ..services.jobs import (
+            JOB_PRIORITY_BACKGROUND, JOB_PRIORITY_BULK, JOB_PRIORITY_INTERACTIVE,
+            JOB_PRIORITY_REQUESTED, JOB_PRIORITY_URGENT,
+        )
+        bands = {"urgent": JOB_PRIORITY_URGENT, "interactive": JOB_PRIORITY_INTERACTIVE,
+                 "requested": JOB_PRIORITY_REQUESTED, "background": JOB_PRIORITY_BACKGROUND,
+                 "bulk": JOB_PRIORITY_BULK}
+        band = str(args["band"])
+        with ctx.begin() as c:
+            n = c.execute(_s(
+                "UPDATE jobs SET priority = :p, priority_score = NULL, updated_at = now() "
+                "WHERE id = :i AND project_id = :proj"),
+                {"p": bands[band], "i": str(args["job_id"]), "proj": project_id}).rowcount
+        if not n:
+            return {"ok": False, "error": "no such job in this project"}
+        return {"ok": True, "job_id": args["job_id"], "band": band,
+                "priority": bands[band], "priority_score": None,
+                "reason": str(args["reason"]), "actor": actor}
+
+    @reg.tool(
+        "find_starved_work",
+        "Find work that is QUEUED and not progressing, and what is ahead of it. This is the "
+        "question no failure-triggered check can answer: starvation is the ABSENCE of "
+        "progress, not an error, so nothing shows up as failed. Returns each waiting job with "
+        "how long it has waited, plus whatever is currently holding a worker slot.",
+        _obj({"minutes": {"type": "integer",
+                          "description": "how long queued counts as starved (default 10)"}}),
+    )
+    def find_starved_work(ctx, *, project_id, actor, args):
+        from ..ports import sql as _s
+        threshold = int(args.get("minutes") or 10)
+        with ctx.begin() as c:
+            waiting = c.execute(_s(
+                "SELECT id, kind, priority, priority_score, task_id, "
+                "       EXTRACT(EPOCH FROM (now() - created_at))/60 AS waited_min "
+                "FROM jobs WHERE project_id = :p AND status = 'queued' "
+                "  AND run_after <= now() "
+                "  AND created_at < now() - (:m || ' minutes')::interval "
+                "ORDER BY priority ASC, created_at ASC LIMIT 25"),
+                {"p": project_id, "m": threshold}).mappings().all()
+            holding = c.execute(_s(
+                "SELECT id, kind, priority, priority_score, "
+                "       EXTRACT(EPOCH FROM (now() - updated_at))/60 AS running_min "
+                "FROM jobs WHERE project_id = :p AND status IN ('running','leased') "
+                "ORDER BY priority ASC LIMIT 25"), {"p": project_id}).mappings().all()
+        return {
+            "threshold_minutes": threshold,
+            "starved": [{**dict(r), "waited_min": round(float(r["waited_min"]), 1)}
+                        for r in waiting],
+            "holding_a_slot": [{**dict(r), "running_min": round(float(r["running_min"]), 1)}
+                               for r in holding],
+            "how_to_read": (
+                "claim_job orders by priority_score DESC, then priority ASC, then created_at. "
+                "A job with a priority_score outranks EVERY band. If something in "
+                "holding_a_slot outranks something in starved, that is the reason it waits."),
+        }
+
+    @reg.tool(
+        "close_orphaned_runs",
+        "Close code-task runs that claim to be running but have no live job — work that will "
+        "never start and is reported forever as in flight. Reports what it would close when "
+        "dry_run is true.",
+        _obj({"dry_run": {"type": "boolean", "description": "default true"}}),
+        kind="write",
+    )
+    def close_orphaned_runs(ctx, *, project_id, actor, args):
+        from ..ports import sql as _s
+        dry = args.get("dry_run")
+        dry = True if dry is None else bool(dry)
+        find = (
+            "SELECT r.id, r.title, r.phase FROM code_task_runs r "
+            "WHERE r.project_id = :p AND r.status IN ('running','repairing') "
+            "  AND NOT EXISTS (SELECT 1 FROM jobs j "
+            "                  WHERE j.payload->>'run_id' = r.id "
+            "                    AND j.status IN ('queued','running','leased')) "
+            "LIMIT 200")
+        with ctx.begin() as c:
+            rows = c.execute(_s(find), {"p": project_id}).mappings().all()
+            found = [dict(r) for r in rows]
+            if not dry and found:
+                c.execute(_s(
+                    "UPDATE code_task_runs SET status = 'cancelled', "
+                    "error = COALESCE(error, :e), updated_at = now() "
+                    "WHERE id = ANY(:ids)"),
+                    {"ids": [r["id"] for r in found],
+                     "e": f"closed as orphaned by {actor}: no live job"})
+        return {"dry_run": dry, "count": len(found), "runs": found[:50],
+                "closed": 0 if dry else len(found)}
+
+
 def _register_governance_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "list_decisions",
@@ -1717,20 +1860,44 @@ def build_default_registry() -> ToolRegistry:
     _register_read_tools(reg)
     _register_investigation_tools(reg)
     _register_write_tools(reg)
+    _register_operations_tools(reg)
     _register_governance_tools(reg)
     return reg
 
 
-def build_discuss_read_registry() -> ToolRegistry:
-    """Project-pinned read tools for IntentRouter's tool-grounded discuss path.
+#: Write tools Ask BOSS may call — BOSS operating BOSS.
+#:
+#: Ask BOSS could only READ. When a PRD meeting sat queued for two hours behind benchmark jobs
+#: boosted past every priority band, BOSS diagnosed it precisely and could not touch it; an
+#: operator had to reach in from outside and run the fix by hand. Describing your own stuck
+#: queue is not operating anything.
+#:
+#: An ALLOW-LIST, not `kind == "write"`. The distinction that matters is not read-vs-write, it
+#: is OPERATIONAL STATE vs CREATING WORK. These change the state of work that already exists —
+#: a job's priority, a wedged job, an orphaned run. `create_code_task` and `request_meeting`
+#: start new work and spend money, so they stay on the deliberate path where a human asks for
+#: them. Changing BOSS's own code stays in the governed pipeline behind a PR and a review.
+_DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
+    "cancel_job",
+    "set_job_priority",
+    "close_orphaned_runs",
+})
 
-    Excludes ``query_db`` (arbitrary SELECT across the whole DB) and strips
-    ``project_id`` from schemas/args so the model cannot override into another
-    tenant after the API already authorized a single project.
+
+def build_discuss_read_registry() -> ToolRegistry:
+    """Project-pinned tools for IntentRouter's tool-grounded discuss path.
+
+    Every read tool, plus the operational writes in ``_DISCUSS_OPERATIONS_TOOLS``.
+    ``project_id`` is stripped from schemas/args so the model cannot reach past the project
+    the API already authorised — which applies to the writes especially.
     """
     source = build_default_registry()
     reg = ToolRegistry()
-    for spec in source.specs(kind="read"):
+    admitted = [
+        spec for spec in source.specs()
+        if spec.kind == "read" or spec.name in _DISCUSS_OPERATIONS_TOOLS
+    ]
+    for spec in admitted:
         if spec.name in _DISCUSS_EXCLUDED_READ_TOOLS:
             continue
         properties = dict((spec.parameters or {}).get("properties") or {})
@@ -1760,7 +1927,10 @@ def build_discuss_read_registry() -> ToolRegistry:
                 description=spec.description,
                 parameters=parameters,
                 handler=_pin(),
-                kind="read",
+                # Preserve the real kind. Stamping every admitted spec "read" made the
+                # operational writes look like reads to anything that inspects the registry —
+                # an audit, a gate, a future policy. A tool that changes state must say so.
+                kind=spec.kind,
             )
         )
     return reg

@@ -374,6 +374,96 @@ from .task_shepherd import (  # noqa: E402
 AUTONOMOUS_CLASSES = frozenset({_SPEND, _TURN, _INFRA, _PRSTEP})
 
 
+#: A job queued longer than this, with other work being claimed, is starved.
+STARVED_AFTER_MINUTES = 12
+
+#: A job holding a worker slot longer than this is wedged, not busy. Deliberately generous —
+#: a real code task legitimately runs for over an hour.
+WEDGED_AFTER_MINUTES = 120
+
+
+def sweep_starved_work(engine, settings: Settings, project_id: str, *,
+                       actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:
+    """Find work that is queued and not progressing, and unblock it.
+
+    This is the sensor the taxonomy was missing. Every other check here is failure-triggered —
+    it needs an error, a failed gate, a red health check. A job that is simply never claimed
+    produces none of those, so a PRD meeting sat queued for two hours while every check in the
+    system reported green.
+
+    Works on the JOBS table, not on code_task_runs, and that is the point: jobs are where every
+    kind of work meets — meetings, code tasks, previews, deployments, discovery, agent briefs.
+    A sensor built on code_task_runs would have covered exactly the one kind that was not stuck.
+
+    Two remedies, both free and both reversible:
+      * the blockers are lower-value      -> demote them, and the queue drains in the order a
+                                             person would expect
+      * a blocker has held a slot for      -> cancel it; it is wedged, not busy
+        hours
+    """
+    from ..db import begin
+    from .jobs import JOB_PRIORITY_BACKGROUND, JobLeaseService
+
+    with begin(engine) as c:
+        starved = c.execute(
+            sql("SELECT id, kind, priority, priority_score, "
+                "       EXTRACT(EPOCH FROM (now() - created_at))/60 AS waited_min "
+                "FROM jobs WHERE project_id = :p AND status = 'queued' "
+                "  AND run_after <= now() "
+                "  AND created_at < now() - (:m || ' minutes')::interval "
+                "ORDER BY priority ASC, created_at ASC LIMIT 20"),
+            {"p": project_id, "m": STARVED_AFTER_MINUTES}).mappings().all()
+        holding = c.execute(
+            sql("SELECT id, kind, priority, priority_score, "
+                "       EXTRACT(EPOCH FROM (now() - updated_at))/60 AS running_min "
+                "FROM jobs WHERE project_id = :p AND status IN ('running','leased') "
+                "LIMIT 20"), {"p": project_id}).mappings().all()
+
+    if not starved:
+        return {"project_id": project_id, "starved": 0, "acted": [],
+                "note": "nothing has been waiting long enough to call starved"}
+
+    best_waiting = min(int(r["priority"] or 999) for r in starved)
+    acted: list[dict[str, Any]] = []
+    lease = JobLeaseService(settings)
+
+    for blocker in holding:
+        # A blocker only counts if it OUTRANKS the waiting work. Something more important
+        # running first is a queue working correctly, not a fault.
+        outranks = (blocker["priority_score"] is not None
+                    or int(blocker["priority"] or 999) <= best_waiting)
+        if not outranks:
+            continue
+        wedged = float(blocker["running_min"] or 0) > WEDGED_AFTER_MINUTES
+        if wedged:
+            with begin(engine) as c:
+                res = lease.cancel_queued_job(
+                    c, blocker["id"], force=True, actor=actor,
+                    reason=(f"held a worker slot for {int(blocker['running_min'])} min while "
+                            f"{len(starved)} job(s) waited"))
+            acted.append({"job_id": blocker["id"], "kind": blocker["kind"],
+                          "remedy": "cancel_wedged_blocker", "ok": res.get("ok")})
+        elif blocker["priority_score"] is not None:
+            # A priority_score overrides every band at once. Clearing it is the smallest
+            # change that restores the ordering the bands describe.
+            with begin(engine) as c:
+                c.execute(sql("UPDATE jobs SET priority_score = NULL, "
+                              "priority = GREATEST(priority, :b), updated_at = now() "
+                              "WHERE id = :i"),
+                          {"i": blocker["id"], "b": JOB_PRIORITY_BACKGROUND})
+            acted.append({"job_id": blocker["id"], "kind": blocker["kind"],
+                          "remedy": "demote_blockers", "ok": True})
+
+    if acted:
+        with begin(engine) as c:
+            emit_event(c, project_id, "shepherd.unstarved", actor, "project", project_id,
+                       {"starved": len(starved), "acted": acted})
+    return {"project_id": project_id, "starved": len(starved),
+            "waiting": [dict(r) | {"waited_min": round(float(r["waited_min"]), 1)}
+                        for r in starved[:5]],
+            "acted": acted}
+
+
 def autopilot(engine, settings: Settings, jobs, project_id: str, *,
               limit: int = 10, actor: str = "shepherd") -> dict[str, Any]:
     """Propose AND apply, for everything the confirmation gate says needs no human.
@@ -421,13 +511,18 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     # Two bounds. Depth: if real work is already waiting, this tick does nothing. Width: at
     # most MAX_ACTIONS_PER_TICK repairs even when the queue is clear, because a remedy that is
     # worth doing is still worth doing three minutes from now.
+    # Starvation FIRST, and deliberately before the depth guard below. A deep queue is exactly
+    # the condition in which something is starving, so skipping the check when the queue is
+    # deep would blind the sensor in the only situation it exists for.
+    unstarved = sweep_starved_work(engine, settings, project_id, actor=actor)
+
     with begin(engine) as c:
         queue_depth = int(c.execute(
             sql("SELECT count(*) FROM jobs WHERE project_id = :p "
                 "AND status IN ('queued','running')"), {"p": project_id}).scalar() or 0)
     if queue_depth > QUEUE_DEPTH_PAUSE:
         return {"project_id": project_id, "considered": len(candidates), "applied": [],
-                "deferred": [], "escalated": [], "failed": [],
+                "deferred": [], "escalated": [], "failed": [], "unstarved": unstarved,
                 "paused_because": f"{queue_depth} jobs already queued or running; repair work "
                                   "must not push ahead of the operator's work"}
 
@@ -464,7 +559,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             failed.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"[:160]})
     return {"project_id": project_id, "considered": len(candidates),
             "applied": applied, "deferred": deferred, "escalated": escalated,
-            "failed": failed}
+            "failed": failed, "unstarved": unstarved}
 
 
 def act(engine, settings: Settings, jobs, run_id: str, *,
@@ -526,6 +621,15 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
             res = start_preview(engine, settings, run_id)
             outcome = ("started" if str(res.get("status") or "") not in ("failed", "error")
                        else f"failed: {str(res.get('error') or 'preview failed again')[:160]}")
+        elif remedy.action in ("demote_blocking_jobs", "cancel_wedged_jobs"):
+            # Starvation is a property of the QUEUE, not of one run, so the remedy runs the
+            # sweep rather than acting on this run alone. Wired here too because a remedy that
+            # names an action and takes none is not a remedy — the guard that says so is what
+            # caught these.
+            result = sweep_starved_work(engine, settings,
+                                        p.get("project_id") or _project_of(engine, run_id),
+                                        actor=actor)
+            outcome = "started" if result.get("acted") else "no_action: nothing was starving"
         elif remedy.action in ("redeploy_deployment", "preflight_target"):
             outcome = _act_on_deployment(engine, settings, run_id, remedy.action, actor)
         elif remedy.action == "create_code_task":

@@ -16,7 +16,7 @@ from .canonical import CanonicalObjectService
 from .capability_manifest import CapabilityManifest
 from .claude_cli_adapter import make_chat_adapter
 from .code_task_service import start_code_task
-from .core import emit_event, make_id
+from .core import stable_dedupe_key, emit_event, make_id
 from .discovery_service import start_discovery
 from .intake import CommandIntakeService
 from .jobs import JobLeaseService
@@ -309,8 +309,8 @@ class IntentRouter:
         # keep looking until the answer is grounded.
         system = (
             "You are BOSS, the operator console for an autonomous software factory. You have "
-            "READ-ONLY but COMPLETE access to this system, and you are expected to use it like "
-            "an engineer with a terminal — not to answer from memory.\n\n"
+            "COMPLETE access to this system and you OPERATE it — you are expected to use it "
+            "like an engineer with a terminal and root, not to answer from memory.\n\n"
             "WHAT YOU CAN REACH:\n"
             "• query_db — arbitrary SELECT over EVERY table. describe_schema first if you do "
             "not know the table or columns; there are ~244 tables, including events (the full "
@@ -327,6 +327,25 @@ class IntentRouter:
             "• git_history — when something changed and why.\n"
             "• get_config / explain_run / get_run_activity — effective settings; where a run's "
             "wall clock and money went.\n\n"
+            "WHAT YOU CAN CHANGE — you are not limited to describing problems:\n"
+            "• find_starved_work — work that is QUEUED and not progressing, and what holds the "
+            "worker slot. Starvation is the ABSENCE of progress, so nothing appears as failed "
+            "and no error-driven check will show it. Reach for this whenever someone says "
+            "something is stuck, slow, or has not started.\n"
+            "• set_job_priority — move a job between bands (urgent / interactive / requested / "
+            "background / bulk). Also clears priority_score, which overrides the bands entirely.\n"
+            "• cancel_job — drop a queued job; force=true stops a RUNNING one that is wedged and "
+            "holding a slot. It closes the run too, so nothing is left reported as in flight.\n"
+            "• close_orphaned_runs — runs claiming to be running with no live job.\n\n"
+            "When an operator reports something stuck, DIAGNOSE AND THEN FIX IT. Do not hand "
+            "back an explanation and wait to be asked. Say what you changed and why. A real "
+            "case: a PRD meeting sat queued for two hours behind benchmark jobs boosted past "
+            "every priority band — one find_starved_work and one cancel_job would have ended it "
+            "in seconds, and instead a human had to reach in from outside.\n\n"
+            "The boundary: you change OPERATIONAL STATE — priorities, wedged jobs, orphaned "
+            "runs. You do NOT edit BOSS's own source; that goes through the governed coding "
+            "pipeline behind a PR. And starting NEW work that spends money stays a deliberate "
+            "request from the operator.\n\n"
             "HOW TO ANSWER:\n"
             "1. Investigate before answering. Chain tools — find the run, read its timings, "
             "then read the code or logs that explain them. Several calls is normal and correct.\n"
@@ -491,7 +510,7 @@ class IntentRouter:
                     project_id=project_id,
                     title=title,
                     description=instructions,
-                    dedupe_key=make_id("agent-code"),
+                    dedupe_key=stable_dedupe_key("agent-code", project_id, title, instructions),
                     priority="p1",
                     risk_tier=1,
                     inputs={"source": "orchestration_agent", "instructions": instructions},
@@ -560,7 +579,7 @@ class IntentRouter:
                 project_id=project_id,
                 title=f"PRD meeting: {directive[:90]}",
                 description=directive,
-                dedupe_key=make_id("agent-prd"),
+                dedupe_key=stable_dedupe_key("agent-prd", project_id, directive),
                 priority="p1",
                 risk_tier=2,
                 inputs={"directive": directive, "source": "orchestration_agent"},

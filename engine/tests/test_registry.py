@@ -11,9 +11,9 @@ def test_default_registry_shape():
     reg = build_default_registry()
     # The governed catalog has expanded since the original Phase 1 tool layer;
     # keep this explicit so accidental tool removal is visible in OSS CI.
-    assert len(reg.names()) == 40
-    assert len(reg.specs(kind="read")) == 27
-    assert len(reg.specs(kind="write")) == 13
+    assert len(reg.names()) == 44
+    assert len(reg.specs(kind="read")) == 28
+    assert len(reg.specs(kind="write")) == 16
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -25,6 +25,9 @@ def test_default_registry_shape():
         # and the customer's), logs, live hosts, live HTTP, history, config.
         "describe_schema", "search_code", "read_code", "read_logs", "explain_run",
         "inspect_host", "http_probe", "git_history", "get_config",
+        # Operations: BOSS running BOSS. Reading its own stuck queue and being unable to
+        # touch it is not operating anything.
+        "find_starved_work", "cancel_job", "set_job_priority", "close_orphaned_runs",
     ):
         assert name in reg.names()
 
@@ -116,7 +119,13 @@ def test_discuss_read_registry_exposes_everything_and_hides_project_override():
     assert "get_code_task" in reg.names()
     assert "get_costs" in reg.names()
     # Every read tool, nothing withheld.
-    assert len(reg.specs(kind="read")) == 27
+    assert len(reg.specs(kind="read")) == 28
+    # …plus the operational writes. BOSS could describe its own stuck queue and not touch it;
+    # an operator had to reach in from outside to cancel a job. The line is OPERATIONAL STATE
+    # (a priority, a wedged job, an orphaned run) versus CREATING WORK that spends money.
+    assert sorted(s.name for s in reg.specs(kind="write")) == [
+        "cancel_job", "close_orphaned_runs", "set_job_priority"]
+    assert "create_code_task" not in reg.names(), "starting new work stays a deliberate ask"
     for schema in reg.openai_schema():
         props = schema["function"]["parameters"].get("properties") or {}
         assert "project_id" not in props, schema["function"]["name"]

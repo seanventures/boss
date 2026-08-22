@@ -689,7 +689,7 @@ from .services.commercial import (
     CommercialService,
 )
 from boss_engine.services.cloud_product import CloudLinkRequiredError, CloudProductService
-from .services.core import emit_event, make_id
+from .services.core import stable_dedupe_key, emit_event, make_id
 from .services.deadletters import DeadletterRemediationService
 from .services.docs_agent import DocsUpdateService
 from .services.orchestrator_next_move import OrchestratorNextMoveService
@@ -4971,7 +4971,9 @@ def onboard_org_endpoint(payload: dict):
                 "• Capabilities → review the tools and skills your agents can use, and plug in your own MCP servers.\n"
                 "You can close this task once you're oriented."
             ),
-            dedupe_key=make_id("welcome"),
+            # ONE welcome task per project, ever. A random key here meant re-running org
+            # setup handed the operator another copy of the same onboarding card.
+            dedupe_key=stable_dedupe_key("welcome", project_id),
             priority="p3",
             risk_tier=0,
             data_boundary="internal",
@@ -5982,7 +5984,10 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
                 project_id=payload.project_id,
                 title=f"PRD meeting: {payload.directive[:90]}",
                 description=payload.directive,
-                dedupe_key=make_id("mtg"),
+                # Same directive in the same project is the same meeting. A double-submit or a
+                # retried request must not convene a second panel and spend twice.
+                dedupe_key=stable_dedupe_key("prd-meeting", payload.project_id,
+                                             payload.directive),
                 priority="p1",
                 risk_tier=2,
                 inputs={"directive": payload.directive, "url": payload.url, "constraints": payload.constraints},
@@ -9873,9 +9878,25 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
             raise HTTPException(status_code=400, detail="outcome_index out of range")
         directive, title = build_promote_directive(run, idx)
         project_id = run["project_id"]
+        # IDEMPOTENT BY IDENTITY. Promoting the SAME outcome of the SAME discovery is the same
+        # request, however many times the button is pressed. This passed make_id("mtg") — a
+        # fresh random id — so the dedupe check could never match and two presses produced two
+        # meetings, two tasks and two code tasks from one outcome.
+        already = connection.execute(
+            text("SELECT id FROM tasks WHERE project_id = :p AND dedupe_key = :k"),
+            {"p": project_id, "k": stable_dedupe_key("discovery-promote", run_id, idx)},
+        ).mappings().first()
+        if already:
+            existing = [pr for pr in ((run.get("state") or {}).get("promotions") or [])
+                        if pr.get("outcome_index") == idx]
+            return {"status": "already_convened", "task_id": already["id"],
+                    "meeting_run_id": (existing[0].get("meeting_run_id")
+                                       if existing else None),
+                    "note": "this outcome was already promoted; returning the existing meeting"}
         task = intake.create_task(
             connection, project_id=project_id,
-            title=title, description=directive, dedupe_key=make_id("mtg"),
+            title=title, description=directive,
+            dedupe_key=stable_dedupe_key("discovery-promote", run_id, idx),
             priority="p1", risk_tier=2,
             inputs={"directive": directive, "discovery_run_id": run_id, "outcome_index": idx},
             required_artifacts=["meeting_minutes"], data_boundary="internal",

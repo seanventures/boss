@@ -51,6 +51,12 @@ PROMOTION_BLOCKED = 16
 # produced no classification, no remedy and no ledger entry, and the operator was left to
 # report it as "stuck".
 PREVIEW_FAILED = 17
+# Starvation is not a failure — it is the ABSENCE of progress. Every other class here is
+# triggered by something going wrong: an error string, a failed gate, a red health check. A
+# job that is simply never claimed produces none of those, so nothing in this taxonomy could
+# see it. A PRD meeting sat queued for two hours behind benchmark work and every check in the
+# system reported green.
+WORK_STARVED = 18
 
 CLASS_NAMES = {
     SPEND_CAP: "provider spend/rate cap",
@@ -70,6 +76,7 @@ CLASS_NAMES = {
     CANARY_REGRESSED: "canary regressed",
     PROMOTION_BLOCKED: "promotion blocked",
     PREVIEW_FAILED: "preview failed to start",
+    WORK_STARVED: "work queued but never claimed",
 }
 
 # Exact phrases the engine itself writes. Deliberately NOT loose tokens: a bare "timeout"
@@ -204,6 +211,22 @@ REMEDIES: dict[int, tuple[Remedy, ...]] = {
     PROMOTION_BLOCKED: (
         # Usually configuration, not code: no production target registered for this app.
         # There is nothing to retry, so this escalates by design.
+        ESCALATE,
+    ),
+    WORK_STARVED: (
+        # Demote what is IN FRONT of it, rather than promoting the starved job. Promotion is
+        # an arms race — the next starved job needs to outrank this one — and it was exactly
+        # how the ranking got inverted in the first place: each caller nudged its own work up
+        # until benchmark jobs sat at priority_score 9000, above every band at once.
+        Remedy("demote_blockers",
+               "move the lower-value work ahead of it into a lower band, so the queue drains "
+               "in the order a person would expect",
+               0.0, "demote_blocking_jobs"),
+        # Only if it is not merely queued behind something, but behind something WEDGED.
+        Remedy("cancel_wedged_blocker",
+               "stop a job that has held a worker slot far past any plausible runtime and is "
+               "blocking work someone is waiting on",
+               0.0, "cancel_wedged_jobs"),
         ESCALATE,
     ),
     PREVIEW_FAILED: (
