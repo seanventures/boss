@@ -670,23 +670,59 @@ function SetupDeployment({ run, projectId, onDone }: {
   run: CodeTaskRun; projectId: string; onDone: () => void;
 }) {
   const [hosts, setHosts] = useState<any[]>([]);
+  // AN EMPTY LIST IS NOT AN ANSWER UNTIL SOMEONE HAS ASKED.
+  //
+  // `hosts` starts empty and `ready` was `hosts.length > 0`, so between first paint and the
+  // effect resolving, this component stated "No verified host yet" — a definitive claim of
+  // absence made before it had looked. There WAS a verified host the whole time. On a console
+  // page this size, hydration is slow enough that the false claim is what the operator reads.
+  //
+  // And `if (r.ok)` had no else: a failed lookup left `hosts` empty forever, so an
+  // infrastructure failure was reported as a missing host, silently.
+  //
+  // Three states, because there are three: haven't asked, asked and it broke, asked and there
+  // are none.
+  const [loadState, setLoadState] = useState<"loading" | "error" | "loaded">("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const app = appIdentity(run);
 
   useEffect(() => {
+    let live = true;
+    setLoadState("loading"); setLoadError(null);
     void listDeploymentHostsAction(projectId).then((r) => {
-      if (r.ok) setHosts((((r.data as any)?.hosts ?? []) as any[])
+      if (!live) return;
+      if (!r.ok) {
+        setLoadState("error");
+        setLoadError(r.error ?? "could not reach the host list");
+        return;
+      }
+      setHosts((((r.data as any)?.hosts ?? []) as any[])
         // Only VERIFIED hosts. Offering an unproven one produces a target that fails at
         // deploy time, far from the moment the choice was made.
         .filter((h) => h.status === "verified"));
+      setLoadState("loaded");
+    }).catch((e) => {
+      if (!live) return;
+      setLoadState("error"); setLoadError(String(e));
     });
+    return () => { live = false; };
   }, [projectId]);
 
-  const ready = hosts.length > 0;
+  const ready = loadState === "loaded" && hosts.length > 0;
   return (
     <div className="ct-deploy-setup" data-testid="app-setup-deployment">
-      {!ready ? (
+      {loadState === "loading" ? (
+        <span className="detail">Checking for a host&hellip;</span>
+      ) : loadState === "error" ? (
+        // Blaming a missing host for a failed lookup sends the operator to onboard a host
+        // they already have. Say which of the two actually happened.
+        <span className="detail">
+          Could not read the host list ({loadError}). The app may already have a host —
+          retry before onboarding a new one.
+        </span>
+      ) : !ready ? (
         // Naming the missing thing beats an empty picker: "no hosts" reads as a broken form.
         <span className="detail">
           No verified host yet. Onboard one in CI/CD → Hosts, then this app can be pointed at it.

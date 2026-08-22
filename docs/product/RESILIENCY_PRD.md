@@ -366,11 +366,42 @@ runs on one card, HookWatch 20, BugBox 12, ApproveIt 6 — and the Shorty card n
 * **Status:** fixed, pending deploy.
 
 
+### I31 — "No verified host yet", while a verified host existed
+* **Saw:** the operator reported no host available to "Set target" on the Shorty card.
+* **The data was fine.** `/v1/deployment-hosts` returned `dh_ff3948d78950` — `hetzner-ci-01`,
+  `2.29.2.202`, arch `amd64`, **status `verified`** — the whole time.
+* **Cause (two defects, one shape):**
+  1. `hosts` initialises to `[]` and `ready = hosts.length > 0`, so between first paint and the
+     `useEffect` resolving, the component stated **"No verified host yet"** — a definitive claim
+     of absence made before it had looked. On an 8 MB console page hydration is slow enough
+     that the false claim is what gets read.
+  2. `if (r.ok) setHosts(...)` had **no else**. A failed lookup left the list empty forever, so
+     an infrastructure failure rendered as a missing host — silently, and it sends the operator
+     to onboard a host they already own.
+* **Shape:** S7/I24 — a state asserting more than was verified. "Not asked yet", "asked and it
+  broke" and "asked, genuinely none" are three facts; one render served all three.
+* **Fix:** explicit `loadState`, a distinct render for each, cancellation on unmount, and
+  `.catch` so a thrown action is not mistaken for an empty list.
+* **Status:** fixed, pending deploy.
+
+### I32 — "Spec: none" is correct, and the e2e claim was overstated
+* **Saw:** the Shorty card shows `Spec: none`.
+* **Not a bug.** `journey-spine-ui.tsx` claims Spec only when the run RECORDS coming from a
+  panel (`origin.kind === "meeting"`). Shorty has `task_id: null` and no origin, and the
+  tooltip already says "No panel: this task was written directly".
+* **What it exposes is mine.** Shorty was created directly as a code task, bypassing
+  Discovery → PRD panel. So the "full end-to-end run verified" claim covered **Build → Ship**
+  only; Research and Spec were skipped and the spine was honestly reporting two hollow stages.
+* **Lesson:** the spine is the product telling the truth about coverage. Reading it as a defect
+  would have removed the one control that caught an overstated claim.
+* **Status:** no code change. The genuine four-stage run is the outstanding work.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are thirty; the shapes are twelve. Fixing shapes is what stops recurrence.
+The incidents are thirty-two; the shapes are twelve. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
