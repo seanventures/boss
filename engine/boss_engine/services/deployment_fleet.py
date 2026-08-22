@@ -658,6 +658,22 @@ def _classify(problems: list[str]) -> list[dict[str, str]]:
                            "in the environment (on a managed install, in the config store) and "
                            "restart. This is a global switch, not a problem with this host."),
             })
+        elif "bound but unusable" in low or "does not exist" in low:
+            # The host row still points at a secret the store cannot produce. Naming the
+            # internal store key here ("BOSS_DH_..._HOST_...") told the operator nothing and
+            # read like a live fault, when it is really just the reason the wizard is back at
+            # step 1. Say what happened and what to do instead.
+            findings.append({
+                "kind": "credential_lost",
+                "detail": text,
+                "remedy": ("The key this host was registered with is gone from the secret "
+                           "store, so BOSS cannot log in. Nothing is wrong with the machine. "
+                           "Start again at Credential: generate a new key (or lend an existing "
+                           "one) and push it to the host. Store it in `database` so it survives "
+                           "the next restart — keys kept in `file` live on the container's own "
+                           "disk and are destroyed on every redeploy, which is what happened "
+                           "here."),
+            })
         elif "docker" in low:
             findings.append({
                 "kind": "docker_missing",

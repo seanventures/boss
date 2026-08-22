@@ -114,3 +114,23 @@ def test_missing_key_raises_the_error_the_ui_matches_on(clean_env):
     """delivery-manage.tsx sends the host wizard back to the credential stage on this text."""
     with pytest.raises(SecretUnavailable, match="does not exist"):
         DatabaseBackend(engine=_engine()).get("hosts/ci-01/ssh_key")
+
+
+def test_lost_credential_is_classified_not_dumped_as_raw_internals():
+    """The operator saw `other: ... BOSS_DH_FF3948D78950_HOST_HETZNER_CI_01 does not exist`.
+
+    That is an internal store key with no remedy, rendered identically to a live fault, when
+    it actually just explains why the wizard is back at step 1.
+    """
+    from boss_engine.services.deployment_fleet import _classify
+
+    raw = ("secret 'ssh_key' is bound but unusable: "
+           "BOSS_DH_FF3948D78950_HOST_HETZNER_CI_01 does not exist")
+    finding = _classify([raw])[0]
+
+    assert finding["kind"] == "credential_lost"
+    assert finding["detail"] == raw
+    remedy = finding["remedy"]
+    assert remedy, "a finding with no remedy leaves the operator guessing"
+    assert "Nothing is wrong with the machine" in remedy
+    assert "database" in remedy and "redeploy" in remedy

@@ -1154,6 +1154,19 @@ const STAGES: Array<{ id: Stage; label: string }> = [
 ];
 
 /** Where this host actually is, read from its own state — never from what was last clicked. */
+/** Finding kinds are snake_case identifiers; operators should not have to read them as such. */
+export function findingLabel(kind: string): string {
+  const named: Record<string, string> = {
+    credential_lost: "Key no longer in the store",
+    key_not_installed: "Key not on the host yet",
+    expired_root_password: "Password expired on the host",
+    outward_ssh_disabled: "SSH deploys are switched off",
+    docker_missing: "Docker missing",
+    other: "Problem",
+  };
+  return named[kind] ?? kind.replace(/_/g, " ");
+}
+
 export function hostStage(h: FleetHost): Stage {
   const pf = h.last_preflight ?? {};
   const problems = pf.problems ?? [];
@@ -1522,11 +1535,19 @@ export function FleetPanel({ projectId, targets = [] }: {
                 </form>
               </details>
 
-              {/* Findings stay visible at every stage: they are the reason for the stage. */}
+              {/* Findings stay visible at every stage: they are the reason for the stage.
+                  Render the REMEDY as the sentence and keep the raw detail secondary — the
+                  bare detail for a lost credential was an internal store key, which read as a
+                  live fault rather than as the explanation for being back at step 1. */}
               {(pf.findings ?? []).length ? (
                 <ul className="detail" data-testid="fleet-findings" style={{ margin: 0 }}>
                   {(pf.findings ?? []).map((f, i) => (
-                    <li key={i}><strong>{f.kind}</strong>: {f.remedy || f.detail}</li>
+                    <li key={i}>
+                      <strong>{findingLabel(f.kind)}</strong>: {f.remedy || f.detail}
+                      {f.remedy && f.detail ? (
+                        <div className="detail" style={{ opacity: 0.6, marginTop: 2 }}>{f.detail}</div>
+                      ) : null}
+                    </li>
                   ))}
                 </ul>
               ) : null}
