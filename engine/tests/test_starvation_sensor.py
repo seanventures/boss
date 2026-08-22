@@ -92,3 +92,30 @@ def test_the_autopilot_reports_what_it_unstarved():
 def test_bands_make_the_starving_case_expressible():
     """The whole point: a meeting outranks a benchmark, so the sensor has a correct target."""
     assert JOB_PRIORITY_INTERACTIVE < JOB_PRIORITY_BULK
+
+
+def test_a_wedged_run_is_detected_by_no_progress_not_by_elapsed_time():
+    """The failure that wasted an hour: one llm_call, zero files, 53 minutes in run_tests.
+
+    The sandbox command timeout is 120 SECONDS, so nothing was executing — but by elapsed
+    time the job was young, and WEDGED_AFTER_MINUTES would not have touched it for two hours.
+    A long task that is still calling models is working; one that has gone quiet is not.
+    """
+    from boss_engine.services.shepherd_service import (
+        NO_PROGRESS_MINUTES, WEDGED_AFTER_MINUTES, _made_no_progress,
+    )
+    assert NO_PROGRESS_MINUTES < WEDGED_AFTER_MINUTES, (
+        "quiet must be caught long before the elapsed-time backstop")
+    assert 10 <= NO_PROGRESS_MINUTES <= 45, (
+        "short enough to catch a dead run, long enough that a slow stage is not killed")
+
+    src = inspect.getsource(_made_no_progress)
+    assert "llm_calls" in src, "progress means model calls, not wall clock"
+    assert "max(created_at)" in src
+
+
+def test_the_sweep_checks_progress_before_giving_up_on_elapsed_time():
+    src = inspect.getsource(shepherd_service.sweep_starved_work)
+    assert "_made_no_progress" in src
+    assert src.index("WEDGED_AFTER_MINUTES") < src.index("_made_no_progress"), (
+        "elapsed time first (cheap), then the progress query")

@@ -33,6 +33,15 @@ _WEB_APP_RE = re.compile(
     r"single-page|\bspa\b|\bui\b|dashboard)\b", re.I)
 
 
+
+def _titled(directive: str) -> str:
+    """A card title: the project's name, with its descriptor when there is one."""
+    from .naming import project_name
+
+    name, blurb, _label = project_name(directive)
+    return f"{name} — {blurb}"[:90].strip(" —") if blurb else name[:90]
+
+
 def _looks_like_web_app(text_v: str) -> bool:
     return bool(_WEB_APP_RE.search(text_v or ""))
 
@@ -249,7 +258,14 @@ def start_web_app_build(engine, settings: Settings, jobs, *, project_id: str,
     with begin(engine) as c:
         run_id = start_code_task(
             c, project_id=project_id, task_id=task_id,
-            title=("Web app — " + directive[:70]).strip(),
+            # NAME IT FROM WHAT THE DOCUMENT CALLS IT.
+            #
+            # This was ("Web app — " + directive[:70]), which produced
+            # "Web app — # Product Requirements Document (PRD)   **Project:** Lightweight Self-"
+            # for a PRD that names the project on its very next line: "Shorty". The title is
+            # how an operator tells one card from another, and truncated prose tells them
+            # nothing.
+            title=_titled(directive),
             instructions=instructions,
             acceptance_criteria=[
                 "npm run verify passes (typecheck, production build, and end-to-end tests).",

@@ -381,6 +381,14 @@ STARVED_AFTER_MINUTES = 12
 #: a real code task legitimately runs for over an hour.
 WEDGED_AFTER_MINUTES = 120
 
+#: NO PROGRESS is a better signal than elapsed time, and it is the one that was missing.
+#: A run made a single llm_call at 16:56, wrote zero files, and sat in run_tests for 53
+#: minutes — against a sandbox command timeout of 120 SECONDS, so nothing was actually
+#: executing. Elapsed-time detection would not have touched it for two hours; "nothing has
+#: happened since" caught it in twenty minutes. A long run that is still calling models or
+#: still writing files is working, however long it takes.
+NO_PROGRESS_MINUTES = 25
+
 
 #: Runs whose execution is a job. If the job is gone and the run still says it is working, the
 #: run is lying — nothing will ever move it. Every one of these produced the same symptom at
@@ -504,6 +512,28 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
     return {"project_id": project_id, "closed_total": total, "detail": closed}
 
 
+def _made_no_progress(engine, job_id: str) -> bool:
+    """Has this job's run done ANYTHING recently — a model call, or a file?
+
+    The failure this exists for: one llm_call, zero files, 53 minutes in a stage whose command
+    timeout is 120 seconds. By elapsed time it was young; by progress it had been dead for the
+    better part of an hour. A long-running task that is still calling models is working.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        row = c.execute(
+            sql("SELECT j.payload->>'run_id' AS run_id, "
+                "       EXTRACT(EPOCH FROM (now() - COALESCE(("
+                "         SELECT max(created_at) FROM llm_calls l "
+                "         WHERE l.code_task_run_id = j.payload->>'run_id'), j.updated_at)))/60 "
+                "       AS quiet_min "
+                "FROM jobs j WHERE j.id = :i"), {"i": job_id}).mappings().first()
+    if not row or not row["run_id"]:
+        return False
+    return float(row["quiet_min"] or 0) > NO_PROGRESS_MINUTES
+
+
 def sweep_starved_work(engine, settings: Settings, project_id: str, *,
                        actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:
     """Find work that is queued and not progressing, and unblock it.
@@ -557,6 +587,8 @@ def sweep_starved_work(engine, settings: Settings, project_id: str, *,
         if not outranks:
             continue
         wedged = float(blocker["running_min"] or 0) > WEDGED_AFTER_MINUTES
+        if not wedged:
+            wedged = _made_no_progress(engine, blocker["id"])
         if wedged:
             with begin(engine) as c:
                 res = lease.cancel_queued_job(
