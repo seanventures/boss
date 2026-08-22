@@ -334,11 +334,23 @@ Recorded because the *pattern* cost more time than either bug.
   with no observed failure attached to it; the right time is with the R7 work, not now.
 
 
+### I29 — Grouping fixed, naming still leaks *(residual, verified on live data)*
+After I21's fix, 60 live runs collapse from a fragmented board into 14 app cards — Shorty 5
+runs on one card, HookWatch 20, BugBox 12, ApproveIt 6 — and the Shorty card now contains its
+`running` run, so it reads RUNNING rather than BLOCKED. Three names are still wrong:
+* `Official BugBox` did not fold into `BugBox`. `LABELS` carries `^Official\s+` and should have
+  lifted it to a badge, so either the title does not start with it or an explicit
+  `**Project:**` line won first. Two cards for one app.
+* `/healthz endpoint before LinkNest` — a fragment of a sentence, not a name.
+* `Lightweight Self‐` — truncated mid-word, on a non-ASCII hyphen `_norm` does not fold.
+* **Status:** open. Same family as I11; the grouping is correct and the label is not.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are twenty-eight; the shapes are twelve. Fixing shapes is what stops recurrence.
+The incidents are twenty-nine; the shapes are twelve. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
