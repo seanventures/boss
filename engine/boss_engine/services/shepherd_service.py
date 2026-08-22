@@ -316,6 +316,7 @@ def propose(engine, settings: Settings, run_id: str, *,
         "hypothesis": hypothesis, "check": check_note, "confirmed": confirmed,
         "verdict": verdict.action, "stopped_because": verdict.stopped_because,
         "remedy": verdict.remedy.id if verdict.remedy else None,
+        "remedy_action": verdict.remedy.action if verdict.remedy else None,
         "would_do": verdict.remedy.describe if verdict.remedy else None,
         "estimated_cost_usd": est, "budget_usd": budget,
         "needs_confirmation": confirm_needed, "escalation_id": esc_id,
@@ -400,7 +401,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
         if row["run_id"] and row["run_id"] not in candidates:
             candidates.append(row["run_id"])
 
-    applied, deferred, failed = [], [], []
+    applied, deferred, escalated, failed = [], [], [], []
     for run_id in candidates[:limit]:
         try:
             proposal = propose(engine, settings, run_id)
@@ -409,7 +410,15 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
             continue
         if proposal.get("class") == NOT_A_FAILURE or not proposal.get("remedy"):
             continue
-        if proposal.get("confirm_needed"):
+        # ESCALATE IS A QUESTION, NOT A REPAIR. It is the remedy whose whole content is "ask a
+        # human", so running it through act() reports `applied` with a null outcome — a summary
+        # claiming five repairs when two were questions nobody has answered. A shepherd that
+        # overstates what it fixed is the same defect as one that fixes nothing quietly.
+        if not proposal.get("remedy_action"):
+            escalated.append({"run_id": run_id, "class": proposal.get("class_name"),
+                              "question": proposal.get("check")})
+            continue
+        if proposal.get("needs_confirmation"):
             deferred.append({"run_id": run_id, "remedy": proposal.get("remedy"),
                              "reason": "needs operator confirmation"})
             continue
@@ -420,7 +429,8 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
         except Exception as exc:  # noqa: BLE001
             failed.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"[:160]})
     return {"project_id": project_id, "considered": len(candidates),
-            "applied": applied, "deferred": deferred, "failed": failed}
+            "applied": applied, "deferred": deferred, "escalated": escalated,
+            "failed": failed}
 
 
 def act(engine, settings: Settings, jobs, run_id: str, *,

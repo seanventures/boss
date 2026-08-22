@@ -118,6 +118,29 @@ def test_the_shepherd_has_a_caller():
 
 def test_autopilot_defers_rather_than_spends_without_a_human():
     src = inspect.getsource(shepherd_service.autopilot)
-    defer = src.index('proposal.get("confirm_needed")')
+    defer = src.index('proposal.get("needs_confirmation")')
     action = src.index("act(engine, settings, jobs, run_id")
     assert defer < action, "the confirmation check must come before acting"
+
+
+def test_autopilot_reads_the_key_propose_actually_returns():
+    """`propose()` returns `needs_confirmation`; reading `confirm_needed` off the dict silently
+    yields None, so the operator gate would never fire and spend-incurring remedies would run
+    unattended. A gate that cannot say no is not a gate."""
+    src = inspect.getsource(shepherd_service.autopilot)
+    assert 'proposal.get("needs_confirmation")' in src
+    assert 'proposal.get("confirm_needed")' not in src
+
+    import inspect as _i
+    propose_src = _i.getsource(shepherd_service.propose)
+    assert '"needs_confirmation"' in propose_src
+    assert '"remedy_action"' in propose_src, "autopilot needs the action to tell repair from question"
+
+
+def test_escalate_is_not_counted_as_a_repair():
+    """`escalate` is the remedy whose content is 'ask a human'. Running it through act()
+    reported `applied` with a null outcome — a summary claiming repairs that were questions."""
+    src = inspect.getsource(shepherd_service.autopilot)
+    assert 'if not proposal.get("remedy_action"):' in src
+    assert "escalated.append" in src
+    assert '"escalated": escalated' in src
