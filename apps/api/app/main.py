@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import subprocess
+import threading
 from secrets import compare_digest
 import time
 from collections import defaultdict, deque
@@ -1124,6 +1125,51 @@ def _enforce_high_cost_rate_limit(
         )
 
 
+def _warm_read_paths() -> None:
+    """Pay the cold-cache cost at boot, in the background, instead of on someone's first click.
+
+    Measured on goldeneye, the SAME dashboard request three times in a row:
+    28.9s, then 4.9s, then 0.44s. Nothing is inherently slow — the first query reads the large
+    tables off disk and later ones hit Postgres' shared buffers.
+
+    That cold request is what took the console down. `def` endpoints run in a bounded worker
+    threadpool; a handful of 29-second queries saturate it, `/health` can no longer be
+    scheduled even though it is cheap and cached, Docker marks the container unhealthy, and
+    Traefik drops it from the pool. The operator then sees "API unreachable — start the control
+    plane" for an API that is running perfectly and simply cold. It recovers on its own once
+    something warms it, which is exactly why it kept coming back and looked intermittent.
+
+    Deliberately a daemon thread that swallows everything: warming is an optimisation, and an
+    optimisation must never be able to fail a boot or delay readiness.
+    """
+    def _warm() -> None:
+        try:
+            project_id = resolve_list_project_id(None)
+        except Exception:  # noqa: BLE001
+            project_id = "boss-dogfood"
+        started = time.monotonic()
+        for label, run in (
+            ("dashboard", lambda c: dashboard_service.snapshot(c, project_id)),
+            ("code_tasks", lambda c: c.execute(text(
+                "SELECT id FROM code_task_runs WHERE project_id=:p "
+                "ORDER BY created_at DESC LIMIT 50"), {"p": project_id}).all()),
+            ("events", lambda c: c.execute(text(
+                "SELECT id FROM events WHERE project_id=:p "
+                "ORDER BY created_at DESC LIMIT 50"), {"p": project_id}).all()),
+        ):
+            try:
+                with begin(engine) as connection:
+                    run(connection)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[lifespan] warm {label} skipped: {type(exc).__name__}")
+        print(f"[lifespan] read paths warmed in {time.monotonic() - started:.1f}s")
+
+    try:
+        threading.Thread(target=_warm, name="boss-warm-read-paths", daemon=True).start()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] warm-up not started: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.artifact_root.mkdir(parents=True, exist_ok=True)
@@ -1164,6 +1210,7 @@ async def lifespan(_: FastAPI):
         start_local_supervisor()
     except Exception as exc:  # noqa: BLE001 — never block startup on supervision
         print(f"[lifespan] local supervisor not started: {exc}")
+    _warm_read_paths()
     yield
 
 

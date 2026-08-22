@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import { formatDateTimeShort } from "../lib/datetime";
 import type { Meeting, MeetingRole } from "../lib/meeting-rooms";
@@ -115,16 +116,9 @@ function NewMeetingForm({
   tasks: { id: string; title: string }[];
   onCancel: () => void;
 }) {
-  // Convening runs a full agent panel for three to five minutes and costs real money. The
-  // button gave no feedback at all, so an operator pressed it six times and got six PRDs —
-  // three of them inside the same second — and six approvals with no way to tell them apart.
-  // The server now refuses a duplicate while one is running; this stops the clicks reaching
-  // it, and says what is happening either way.
-  const [convening, setConvening] = useState(false);
   const [meetingType, setMeetingType] = useState<"prd_panel" | "standup">("prd_panel");
   return (
-    <form action={conveneMeetingAction} className="mr-convene"
-          onSubmit={() => setConvening(true)}>
+    <form action={conveneMeetingAction} className="mr-convene">
       <input type="hidden" name="project_id" value={projectId} />
       <label className="mr-field-label" htmlFor="mr-type">Meeting type</label>
       <select
@@ -191,24 +185,48 @@ function NewMeetingForm({
           No live model is called.
         </span>
       )}
-      <div className="mr-form-actions">
-        <SubmitButton type="submit" className="cap-btn primary" disabled={convening}>
-          {convening
-            ? (meetingType === "standup" ? "Running standup fixture…" : "Convening the panel…")
-            : (meetingType === "standup" ? "Run standup fixture" : "Convene the panel")}
-        </SubmitButton>
-        <button type="button" className="cap-btn" onClick={onCancel} disabled={convening}>
-          Cancel
-        </button>
-        {convening ? (
-          <span className="detail">
-            {meetingType === "standup"
-              ? "standup fixture is completing — minutes and a Decision appear below"
-              : "the panel is being staffed — this takes 3–5 minutes and appears in the list below"}
-          </span>
-        ) : null}
-      </div>
+      <ConveneActions meetingType={meetingType} onCancel={onCancel} />
     </form>
+  );
+}
+
+/**
+ * Convene / Cancel, with the pending state taken from the FORM rather than tracked by hand.
+ *
+ * Convening runs a full agent panel for three to five minutes and costs real money, so the
+ * button has to say it is working — it once gave no feedback at all and an operator pressed it
+ * six times, producing six PRDs, three inside the same second.
+ *
+ * The fix for that was a `convening` flag set to true on submit — AND NEVER SET BACK. Nothing
+ * cleared it on success, on failure, or on a thrown action, so once the API was slow enough to
+ * fail the request the button read "Convening the panel…" forever and the operator reported the
+ * meeting as stuck. useFormStatus is derived from the form's own lifecycle and therefore clears
+ * itself however the action ends; a hand-rolled boolean only clears on paths someone remembered
+ * to write.
+ */
+function ConveneActions({ meetingType, onCancel }: {
+  meetingType: "prd_panel" | "standup";
+  onCancel: () => void;
+}) {
+  const { pending } = useFormStatus();
+  const idle = meetingType === "standup" ? "Run standup fixture" : "Convene the panel";
+  const busy = meetingType === "standup" ? "Running standup fixture…" : "Convening the panel…";
+  return (
+    <div className="mr-form-actions">
+      <SubmitButton type="submit" className="cap-btn primary" pendingLabel={busy}>
+        {idle}
+      </SubmitButton>
+      <button type="button" className="cap-btn" onClick={onCancel} disabled={pending}>
+        Cancel
+      </button>
+      {pending ? (
+        <span className="detail">
+          {meetingType === "standup"
+            ? "standup fixture is completing — minutes and a Decision appear below"
+            : "the panel is being staffed — this takes 3–5 minutes and appears in the list below"}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
