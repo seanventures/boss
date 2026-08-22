@@ -774,9 +774,17 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             "previews_stuck_starting": (
                 "SELECT count(*) FROM app_previews WHERE project_id = :p "
                 "AND status = 'starting' AND created_at < now() - interval '25 minutes'"),
-            "runs_done_but_not_terminal": (
+            # "not terminal" is too wide: a run at phase='done' with status='blocked' is
+            # waiting on a human decision, which is a legitimate resting state. Counting those
+            # as inconsistent reported 12 violations that were nothing wrong — and a report
+            # full of false positives is a report nobody reads. The real contradiction is a run
+            # that claims to be WORKING while its phases are finished.
+            "runs_done_but_still_claiming_to_work": (
                 "SELECT count(*) FROM code_task_runs WHERE project_id = :p "
-                "AND phase = 'done' AND status NOT IN ('completed','failed','cancelled')"),
+                "AND phase = 'done' AND status IN ('running','repairing','queued')"),
+            "runs_done_and_blocked_on_a_decision": (
+                "SELECT count(*) FROM code_task_runs WHERE project_id = :p "
+                "AND phase = 'done' AND status = 'blocked'"),
             "jobs_queued_over_30_min": (
                 "SELECT count(*) FROM jobs WHERE project_id = :p AND status = 'queued' "
                 "AND run_after <= now() AND created_at < now() - interval '30 minutes'"),
@@ -787,6 +795,8 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "SELECT count(*) FROM jobs WHERE project_id = :p "
                 "AND status IN ('queued','running','leased') AND priority_score IS NOT NULL"),
         }
+        # Informational counts are reported but never mark the system unhealthy.
+        informational = {"runs_done_and_blocked_on_a_decision"}
         out, failing = {}, []
         with ctx.begin() as c:
             for name, q in checks.items():
@@ -796,7 +806,7 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     out[name] = f"unavailable ({type(exc).__name__})"
                     continue
                 out[name] = n
-                if n:
+                if n and name not in informational:
                     failing.append(name)
         return {"violations": out, "failing_checks": failing, "clean": not failing,
                 "how_to_read": ("every count should be 0. A non-zero value is a row the system "
