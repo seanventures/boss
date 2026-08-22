@@ -201,6 +201,20 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def shepherd_autopilot(self, project_id: str, limit: int = 10) -> dict[str, Any]:
+        """Apply the remedies the shepherd already decided on.
+
+        /shepherd/watch and /shepherd/sweep only ever PROPOSED. `act()` had no caller in the
+        codebase, so every diagnosis sat in the ledger unapplied. This is what makes the
+        shepherd act; the confirmation gate still holds back anything that spends.
+        """
+        response = self._client.post(
+            "/v1/shepherd/autopilot",
+            json={"project_id": project_id, "limit": limit, "actor": "shepherd"},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def tick_metatron_watch(self, project_id: str, actor: str = "executive_console") -> dict[str, Any]:
         """Legacy observe-only tick. Prefer tick_metatron_overwatch."""
         response = self._client.post(

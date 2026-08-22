@@ -97,3 +97,27 @@ def test_fix_task_carries_the_evidence_and_the_no_new_build_system_constraint():
     assert "EVIDENCE" in source, "a repair agent told only 'it does not work' guesses"
     assert "build system" in source
     assert "acceptance_criteria" in source
+
+
+def test_the_shepherd_has_a_caller():
+    """The defect under everything: act() existed and nothing in the codebase invoked it.
+
+    sweep() and propose() only WROTE proposals, so BOSS could diagnose every failure in the
+    project and never fix one. The remedy table, cost estimates and the confirmation gate were
+    all already built — only the loop was missing.
+    """
+    source = inspect.getsource(shepherd_service)
+    autopilot_src = inspect.getsource(shepherd_service.autopilot)
+    assert "act(engine, settings, jobs, run_id" in autopilot_src, "autopilot must call act()"
+    assert "confirm_needed" in autopilot_src, "the operator gate must still be honoured"
+    assert "app_previews" in autopilot_src, (
+        "sweep() only sees failed/blocked runs with no PR; a preview failure happens on a run "
+        "that SUCCEEDED, so autopilot must look for those separately")
+    assert "def autopilot" in source
+
+
+def test_autopilot_defers_rather_than_spends_without_a_human():
+    src = inspect.getsource(shepherd_service.autopilot)
+    defer = src.index('proposal.get("confirm_needed")')
+    action = src.index("act(engine, settings, jobs, run_id")
+    assert defer < action, "the confirmation check must come before acting"

@@ -8706,6 +8706,22 @@ def shepherd_sweep_endpoint(payload: dict):
                                limit=int(payload.get("limit") or 20))}
 
 
+@app.post("/v1/shepherd/autopilot")
+def shepherd_autopilot_endpoint(payload: dict):
+    """Propose AND apply every remedy the confirmation gate says needs no human.
+
+    `/sweep` and `/propose` only ever wrote proposals — `act()` had no caller anywhere, so the
+    shepherd diagnosed failures and never fixed one. This is the loop that closes it. Spend-
+    incurring or already-spent remedies still stop at `confirm_needed`, unchanged.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from .services.shepherd_service import autopilot
+    return autopilot(engine, settings, jobs, payload["project_id"],
+                     limit=int(payload.get("limit") or 10),
+                     actor=str(payload.get("actor") or "shepherd"))
+
+
 @app.post("/v1/shepherd/escalations/{escalation_id}/answer")
 def shepherd_answer_endpoint(escalation_id: str, payload: dict):
     """Answer a shepherd's question. The answer is provenance, not just a state change."""

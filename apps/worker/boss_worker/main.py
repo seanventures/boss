@@ -14,12 +14,14 @@ QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
 # The shepherd watches in-flight work. Often enough that a duplicate is killed before it
 # costs anything real, rare enough that it is never the busiest thing on the box.
 SHEPHERD_WATCH_INTERVAL_SECONDS = 120
+SHEPHERD_AUTOPILOT_INTERVAL_SECONDS = 180
 METATRON_WATCH_INTERVAL_SECONDS = 60
 FOCUSED_AGENT_INTERVAL_SECONDS = 60
 AGENT_PROCESS_INTERVAL_SECONDS = 30
 PROCESS_MANAGER_INTERVAL_SECONDS = 60
 FACTORY_FLOW_INTERVAL_SECONDS = 45
 _last_shepherd_watch_monotonic = 0.0
+_last_shepherd_autopilot_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
 _last_focused_agent_monotonic = 0.0
@@ -54,6 +56,37 @@ def _sweep_deployment_health(client: ControlPlaneClient) -> None:
         client.sweep_deployment_health()
     except Exception:  # noqa: BLE001
         LOGGER.debug("health_sweep_failed", exc_info=True)
+
+
+def _run_shepherd_autopilot(client: ControlPlaneClient, settings) -> None:
+    """Apply what the shepherd has already decided, on the idle path.
+
+    Watching and proposing were wired long ago; applying never was. Without this tick the whole
+    remedy ledger is bookkeeping — an operator still has to notice the failure and press the
+    button, which is the opposite of what it exists for.
+
+    Swallowed like the other sweeps: a shepherd that kills the worker is worse than one that
+    misses a repair.
+    """
+    global _last_shepherd_autopilot_monotonic
+    now = time.monotonic()
+    if now - _last_shepherd_autopilot_monotonic < SHEPHERD_AUTOPILOT_INTERVAL_SECONDS:
+        return
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        result = client.shepherd_autopilot(str(project_id))
+        _last_shepherd_autopilot_monotonic = now
+        applied = (result or {}).get("applied") or []
+        if applied:
+            LOGGER.info("shepherd_autopilot applied=%s deferred=%s",
+                        len(applied), len((result or {}).get("deferred") or []))
+    except Exception:  # noqa: BLE001
+        _last_shepherd_autopilot_monotonic = now
+        LOGGER.debug("shepherd_autopilot skipped", exc_info=True)
 
 
 def _watch_running_tasks(client: ControlPlaneClient) -> None:
@@ -278,6 +311,7 @@ def main() -> None:
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)
+                _run_shepherd_autopilot(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
                 time.sleep(settings.poll_interval_seconds)
     finally:

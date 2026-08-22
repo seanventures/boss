@@ -363,6 +363,66 @@ from .task_shepherd import (  # noqa: E402
 AUTONOMOUS_CLASSES = frozenset({_SPEND, _TURN, _INFRA, _PRSTEP})
 
 
+def autopilot(engine, settings: Settings, jobs, project_id: str, *,
+              limit: int = 10, actor: str = "shepherd") -> dict[str, Any]:
+    """Propose AND apply, for everything the confirmation gate says needs no human.
+
+    `act()` had no caller anywhere in the codebase. `sweep` and `propose` only WROTE proposals,
+    so the shepherd could diagnose every failure in the project and never once fix one — which
+    is why nothing here has ever repaired itself. The remedy table, the cost estimates and
+    `needs_operator_confirmation` were all already built; the loop that turns a decision into an
+    action was the missing piece.
+
+    Safety is delegated, not reinvented: a proposal that `propose()` marked `confirm_needed`
+    (spend, or a remedy already spent on this run) is left for the operator exactly as before.
+    Only the free, idempotent remedies fire unattended.
+    """
+    from ..db import begin
+
+    candidates: list[str] = [p["run_id"] for p in sweep(engine, settings, project_id, limit=limit)
+                             if p.get("run_id")]
+
+    # Runs whose PREVIEW failed are invisible to `sweep`, which only looks at runs that are
+    # themselves failed/blocked with no PR. A preview failure happens on a run that SUCCEEDED —
+    # it built, it opened a PR, and the thing it produced will not boot. That is precisely the
+    # case the operator was staring at, and the sweep could not see it.
+    with begin(engine) as c:
+        rows = c.execute(
+            sql("SELECT DISTINCT ON (p.run_id) p.run_id "
+                "FROM app_previews p "
+                "JOIN code_task_runs r ON r.id = p.run_id "
+                "WHERE r.project_id = :p AND p.status = 'failed' "
+                "  AND NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
+                "                  WHERE e.task_ref = p.run_id AND e.status = 'open') "
+                "ORDER BY p.run_id, p.created_at DESC LIMIT :l"),
+            {"p": project_id, "l": limit}).mappings().all()
+    for row in rows:
+        if row["run_id"] and row["run_id"] not in candidates:
+            candidates.append(row["run_id"])
+
+    applied, deferred, failed = [], [], []
+    for run_id in candidates[:limit]:
+        try:
+            proposal = propose(engine, settings, run_id)
+        except Exception as exc:  # noqa: BLE001 — one bad run must not stop the sweep
+            failed.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"[:160]})
+            continue
+        if proposal.get("class") == NOT_A_FAILURE or not proposal.get("remedy"):
+            continue
+        if proposal.get("confirm_needed"):
+            deferred.append({"run_id": run_id, "remedy": proposal.get("remedy"),
+                             "reason": "needs operator confirmation"})
+            continue
+        try:
+            result = act(engine, settings, jobs, run_id, actor=actor)
+            applied.append({"run_id": run_id, "remedy": proposal.get("remedy"),
+                            "outcome": result.get("outcome")})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"[:160]})
+    return {"project_id": project_id, "considered": len(candidates),
+            "applied": applied, "deferred": deferred, "failed": failed}
+
+
 def act(engine, settings: Settings, jobs, run_id: str, *,
         actor: str = "shepherd", dry_run: bool = False) -> dict[str, Any]:
     """Propose, and then ACT only if every bound permits it.
