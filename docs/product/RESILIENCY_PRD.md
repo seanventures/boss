@@ -241,11 +241,76 @@ Each row: what the operator saw, what was actually true, and the defect undernea
 * **Status:** open. See R8.
 
 
+### I21 — Four cards for one app, and a building app that read BLOCKED
+* **Saw:** five runs of Shorty rendered as four separate cards; three showed `BLOCKED` while
+  the fifth was actively building. The operator reasonably read the board as "Shorty is stuck".
+* **Cause:** `finalize_ctx.app_id` was stamped on the two RETRY paths only. `start_code_task`
+  set nothing. Lineage answers *"what did this run come from"*, and the runs that most need
+  grouping are exactly the ones with no common ancestor — starting an app again after a failure
+  creates a root, not a child. The console had no fact tying the five together.
+* **Consequence:** the badge logic was correct on every card and the board was still wrong.
+  Status was never the defect; identity was.
+* **Fix:** `stable_app_id(project_id, repo, title)` derived from the same `project_name`
+  normalisation `active_same_app` already trusts to REFUSE to start a duplicate, stamped at
+  creation. The console derives the same token so runs created before the change group too.
+  *A definition good enough to block work is good enough to group a card.*
+* **Status:** fixed, pending deploy.
+
+### I22 — A blocked run whose job was cancelled sits blocked forever
+* **Saw:** `crun_1e60f170` at `blocked / awaiting_plan_approval` with no job, indefinitely.
+* **Cause:** `blocked` was deliberately excluded from the abandoned-run sweep, reasoning that
+  it means "waiting on a human" and is a legitimate resting state. That holds **only while a
+  job exists to resume**. Approving the decision on a run whose job is gone resumes nothing.
+* **Consequence:** a permanently dead run rendered identically to one genuinely awaiting the
+  operator, and sat next to the live build feeding I21.
+* **Fix:** `blocked` added to the sweep, kept safe by the existing no-live-job rule.
+* **Status:** fixed, pending deploy.
+
+### I23 — 28 identical preview failures, no circuit breaker
+* **Saw:** `crun_b6a1bf93` produced **28 consecutive failed previews** over six hours, every
+  ~3 minutes, every one the same rollup parse error, every one a full npm install and build.
+* **Cause:** nothing counts consecutive failures of the same kind against the same run. Retry
+  is unconditional.
+* **Consequence:** hours of compute on an outcome that was decided at attempt one, on the only
+  worker lane (I19), while the operator's real work queued behind it.
+* **Status:** open. See R9.
+
+### I24 — A preview is "running" because something answered on the port
+* **Saw:** the operator asked why `Open preview` was enabled for a preview showing no result.
+* **Cause:** `status='running'` is set when the port serves HTTP 200. A blank SPA — a JS crash,
+  an unmounted root, a bad base path — returns 200 with a full HTML shell.
+* **Consequence:** the button asserts more than was verified. *In this instance the preview was
+  genuinely healthy* (verified in a real browser: 200 with and without auth, CSS and JS both
+  fetched, no console errors, full page rendered) — but the check would not have caught it if
+  it had not been.
+* **Status:** open. See R10.
+
+### I25 — Preview routes serve unauthenticated under an authed prefix
+* **Saw:** `/v1/previews/<id>/web/` returns 200 with no `Authorization` header while the rest
+  of `/v1/` requires a Bearer key under `BOSS_REQUIRE_API_AUTH=true`.
+* **Consequence:** anything a preview builds is readable by anyone who can reach the host.
+  Tailnet-only limits the blast radius; it does not make it intended.
+* **Status:** open, needs a decision — previews may be deliberately shareable. See R11.
+
+### I26 — Two analyses in this session were wrong, and why
+Recorded because the *pattern* cost more time than either bug.
+* **Claimed:** 90+ console feeds are awaited in `Promise.all`, so one rejection blanks the page.
+  **Actually:** every loader fails soft — module-local `getJson` helpers catch and return
+  `null`, and `fetchAssuranceFeed` already uses `allSettled`. `Promise.all` cannot reject.
+  The detector matched on syntax inside one function body instead of following the call chain.
+* **Claimed:** `lib/area-data.ts` was half-wired. **Actually:** the file does not exist; the
+  test asserts a design never built (see R1).
+* **Shape:** a plausible mechanism, confirmed against the shape of the code rather than its
+  behaviour. Both would have produced a real-looking fix for a defect that was not there.
+* **Counter-measure:** for any claim about control flow, follow it to the primitive — the bare
+  `fetch`, the actual `os.kill` — before proposing a change.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are twelve; the shapes are five. Fixing shapes is what stops recurrence.
+The incidents are twenty-six; the shapes are twelve. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -258,6 +323,9 @@ The incidents are twelve; the shapes are five. Fixing shapes is what stops recur
 | **S7** | **A label that answers a different question.** The field is computed correctly and measures something other than what its name claims. | I16, I12 |
 | **S8** | **Identity derived from text that legitimately varies.** Fingerprints over prose the engine itself rewrites. | I17, I5 |
 | **S9** | **A fix at the wrong layer.** The diagnosis is right and the remedy addresses a different property of the system — ordering when the constraint is capacity. | I19 |
+| **S10** | **Identity assigned late.** The linking fact is written on the exceptional path (retry) and not on the ordinary one (create), so the common case has no identity at all. | I21 |
+| **S11** | **Unbounded retry of a decided outcome.** The same failure repeated N times because nothing counts. | I23 |
+| **S12** | **A conclusion checked against the shape of the code, not its behaviour.** | I26 |
 
 **The counter-measure to each is the same: a test that rejects the SHAPE, not the instance.**
 Three such tests now exist (dedupe anti-pattern, bare priority literals, artifact-consumer
@@ -373,6 +441,22 @@ whoever happens to look.
   SPENDS (retry a code task, open a repair task) raises an event and waits — see I18.
 * **Acceptance:** every incident in §2 would have produced an event before an operator noticed;
   no event results in unrequested spend.
+
+### R9 — A preview that fails the same way twice stops trying
+Count consecutive failures per `(run_id, error signature)`. At **2** identical signatures, stop
+and surface the error instead of rebuilding. I23 burned six hours of the single lane proving a
+rollup error was still a rollup error. Cheap: the signature is already stored on each row.
+
+### R10 — A preview is healthy when it RENDERS, not when it answers
+Promote `starting → running` only after the served HTML yields a non-empty mount — a root with
+children, or a title the app set. Until then it is `starting`, and `Open preview` stays disabled.
+Closes I24 and the same shape as S1/S7: a status asserting more than it verified.
+
+### R11 — Decide whether previews are public *(needs a product call)*
+I25. Either gate `/v1/previews/*` behind the same Bearer key as the rest of `/v1/`, or state
+explicitly that previews are shareable links and scope them with an unguessable id. Not a bug
+until decided — but it must be decided rather than inherited.
+
 
 ### R6 — The invariant check runs itself
 `consistency_report` exists and is read-only. Every incident here was visible in the data for

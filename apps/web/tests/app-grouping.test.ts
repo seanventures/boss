@@ -70,3 +70,48 @@ describe("runs of one app group together", () => {
     expect(groups.map((g) => g[0].id)).toEqual(["crun_x", "crun_a"]);
   });
 });
+
+
+/**
+ * The defect the operator hit: five runs of Shorty, four cards, three showing BLOCKED while
+ * the fifth was building. `app_id` was stamped only on retry paths, so runs started fresh
+ * shared no ancestor and nothing linked them.
+ */
+describe("runs of the same app group even with no lineage in common", () => {
+  const shorty = (id: string, title: string) =>
+    ({ id, title, spec: { base_branch: "main", repo: "boss-sandbox" } });
+
+  it("groups independently-started runs of one app into one card", () => {
+    const groups = groupRunsIntoApps([
+      shorty("crun_1", "Shorty — self-hosted URL shortener"),
+      shorty("crun_2", "Shorty — self-hosted URL shortener · retry 2"),
+      shorty("crun_3", "Web app — Shorty — self-hosted URL shortener"),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].map((r) => r.id)).toEqual(["crun_1", "crun_2", "crun_3"]);
+  });
+
+  it("keeps different apps apart", () => {
+    const groups = groupRunsIntoApps([
+      shorty("crun_1", "Shorty — self-hosted URL shortener"),
+      shorty("crun_2", "Ascend — coaching for new managers"),
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+
+  it("does not merge same-named apps built in different repos", () => {
+    const groups = groupRunsIntoApps([
+      { id: "crun_1", title: "Shorty", spec: { base_branch: "main", repo: "repo-a" } },
+      { id: "crun_2", title: "Shorty", spec: { base_branch: "main", repo: "repo-b" } },
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+
+  it("never folds unnamed runs into one 'Untitled app' heap", () => {
+    const groups = groupRunsIntoApps([
+      { id: "crun_1", title: "PRD", spec: { base_branch: "main", repo: "r" } },
+      { id: "crun_2", title: "Design", spec: { base_branch: "main", repo: "r" } },
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+});

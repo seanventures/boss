@@ -302,6 +302,17 @@ def start_code_task(
     # Hash the work, not the boilerplate. A relaunch passes back instructions that already
     # carry the deployability note while the original was hashed before it was added — so the
     # same work produced two different fingerprints and looked like two different tasks.
+    from .naming import stable_app_id
+
+    # Stamp the app identity NOW. Doing it only on retry is what split one app into four
+    # cards; a run started fresh is precisely the case lineage cannot cover.
+    fctx = dict(finalize_ctx or {})
+    if not fctx.get("app_id"):
+        derived = stable_app_id(project_id, repo, title)
+        if derived:
+            fctx["app_id"] = derived
+    finalize_ctx = fctx
+
     fingerprint = work_fingerprint(project_id=project_id, owner=owner, repo=repo,
                                    base_branch=base_branch, title=title,
                                    instructions=instructions.replace(_DEPLOYABILITY_NOTE, ""))

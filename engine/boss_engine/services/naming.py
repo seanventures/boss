@@ -96,3 +96,38 @@ def project_name(text: str) -> tuple[str, str, str]:
         words = [w for w in name.split() if w.lower() not in drop] or name.split()
         name = " ".join(w if w.isupper() else w.capitalize() for w in words[:4])
     return name[:42] or "Untitled app", blurb[:70], label
+
+
+def stable_app_id(project_id: str, repo: str, title: str) -> str:
+    """The identity of the APP, decided when the run is created rather than inferred later.
+
+    Five runs of Shorty rendered as four separate cards, three of them dead lineages, while
+    the live build sat in a card of its own. The console therefore showed "BLOCKED" for an app
+    that was building. `app_id` existed, but it was only ever stamped on the two RETRY paths —
+    a fresh `start_code_task` set nothing — so every independently-started run of one app was
+    an island, and the console had no fact tying them together.
+
+    Lineage cannot supply this. Lineage answers "what did this run come from", and the runs
+    that need grouping most are exactly the ones with no common ancestor: an operator starting
+    the app again after a failure creates a root, not a child.
+
+    So identity is derived from what makes two runs the same app — the same project, the same
+    repo, the same app name — and is written down at creation. It is NOT title matching in the
+    renderer: `project_name` is the same normalisation `active_same_app` already trusts to
+    REFUSE to start a duplicate. A definition good enough to block work is good enough to
+    group a card.
+
+    Returns "" when the title carries no usable name, so the caller stamps nothing and the run
+    keeps lineage-only identity rather than joining a bogus "Untitled app" group.
+    """
+    import hashlib
+
+    name, _blurb, _label = project_name(title or "")
+    if not name or name == "Untitled app":
+        return ""
+    material = "\u241f".join([
+        str(project_id or "").strip(),
+        str(repo or "").strip().casefold(),
+        name.casefold(),
+    ])
+    return "app_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]
