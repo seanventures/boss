@@ -447,10 +447,19 @@ Count consecutive failures per `(run_id, error signature)`. At **2** identical s
 and surface the error instead of rebuilding. I23 burned six hours of the single lane proving a
 rollup error was still a rollup error. Cheap: the signature is already stored on each row.
 
-### R10 — A preview is healthy when it RENDERS, not when it answers
-Promote `starting → running` only after the served HTML yields a non-empty mount — a root with
-children, or a title the app set. Until then it is `starting`, and `Open preview` stays disabled.
-Closes I24 and the same shape as S1/S7: a status asserting more than it verified.
+### R10 — Verify what is actually verifiable, and claim no more
+*Revised after writing it.* The first draft said "promote to `running` only once the HTML
+yields a non-empty mount". **That cannot be done server-side.** An SPA shell is
+`<div id="root"></div>` whether the app works or not; only a browser knows if it rendered.
+Shipping that check would have been I24 again — a status asserting more than it verified.
+
+What IS verifiable without a browser, and worth doing:
+* the root document returns 200 **and is HTML**, not an error page;
+* every same-origin `src`/`href` it references also returns 200.
+
+That catches the common blank-preview cause — a broken base path or a missing bundle — and it
+is honest about the one it cannot catch, a runtime JS exception. A real render check needs a
+headless browser in the preview path; worth costing separately, not worth faking.
 
 ### R11 — Decide whether previews are public *(needs a product call)*
 I25. Either gate `/v1/previews/*` behind the same Bearer key as the rest of `/v1/`, or state
