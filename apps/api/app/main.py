@@ -8941,14 +8941,38 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
         environment = str(payload.get("environment") or "staging")
 
         existing = connection.execute(
-            text("SELECT id FROM deployment_targets WHERE project_id = :p AND app_name = :a "
-                 "AND environment = :e"),
+            text("SELECT id, host_id FROM deployment_targets WHERE project_id = :p "
+                 "AND app_name = :a AND environment = :e"),
             {"p": run["project_id"], "a": app_name, "e": environment}).mappings().first()
         if existing:
+            # AN UNBOUND TARGET IS THE THING THIS ENDPOINT EXISTS TO BIND.
+            #
+            # Refusing outright stranded the exact case it was meant to serve: a target created
+            # by an earlier attempt that never got a host (host_id NULL) could not be bound by
+            # "Set target" — the only control that binds one — and the advice to "attach it from
+            # the Hosts panel" sent the operator to a panel that lists hosts, not orphaned
+            # targets. The app then had a destination it could never deploy to.
+            #
+            # The 409 is here to stop a SECOND target shadowing a working one. That is only a
+            # real conflict when the existing target is bound somewhere else.
+            if not existing["host_id"]:
+                attach_target(connection, target_id=existing["id"], host_id=host_id)
+                if payload.get("auto_deploy", True):
+                    connection.execute(
+                        text("UPDATE deployment_targets SET auto_deploy = true, "
+                             "updated_at = now() WHERE id = :i"), {"i": existing["id"]})
+                return {"target_id": existing["id"], "host_id": host_id,
+                        "adopted_existing_target": True,
+                        "message": f"Bound the existing {environment} target for {app_name!r} "
+                                   f"to {host['name']!r}."}
+            if existing["host_id"] == host_id:
+                return {"target_id": existing["id"], "host_id": host_id,
+                        "already_bound": True,
+                        "message": f"{app_name!r} is already deploying to {host['name']!r}."}
             raise HTTPException(
                 status_code=409,
-                detail=f"{app_name!r} already has a {environment} target. "
-                       "Attach it to this host from the Hosts panel instead.")
+                detail=f"{app_name!r} already has a {environment} target bound to a different "
+                       f"host ({existing['host_id']}). Retarget or retire that one first.")
 
     # DECLARE THE HEALTH CHECK, and its scheme.
     #

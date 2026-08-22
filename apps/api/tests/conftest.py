@@ -179,6 +179,11 @@ def clean_tables(engine):
             "goldeneye_nodes",
             "scale_plans",
             "worker_pools",
+            # Health samples hold an FK onto deployment_targets and were missing from this
+            # list, so a single test that observed a target left rows that made the
+            # `deployment_targets` delete below fail — poisoning every subsequent test in the
+            # session with a ForeignKeyViolation.
+            "deployment_health_samples",
             "deployment_runs",
             "changeset_operations",
             "changesets",
@@ -210,6 +215,11 @@ def clean_tables(engine):
             "github_connections",
             "model_gateway_invocations",
             "model_gateway_leases",
+            # Hosts reference their key via secret_refs, so they must go first. Added with the
+            # deployment-fleet work and never listed here, which is the same omission as
+            # deployment_health_samples above.
+            "deployment_hosts",
+            "secret_material",
             "secret_refs",
             "resource_policies",
             "capacity_receipts",
