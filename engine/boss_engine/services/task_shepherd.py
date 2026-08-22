@@ -115,7 +115,15 @@ _SIGNATURES: list[tuple[int, tuple[str, ...]]] = [
                       # SIGTERM. During the session this was a sibling run's process killer
                       # reaching outside its own sandbox; it is a platform fault, never the
                       # task's, and re-running the task unchanged is the correct remedy.
-                      "exited 143", "error_during_execution")),
+                      "exited 143",
+                      # SIGKILL — almost always the OOM killer. A web build runs npm install,
+                      # vite and playwright inside the agent's process tree, and the kernel
+                      # takes the whole thing. It was NOT matched here, so an OOM-killed run
+                      # fell through to UNKNOWN and escalated to a human instead of simply
+                      # being re-run. Same class as 143: the machine killed it, the task did
+                      # nothing wrong.
+                      "exited -9", "exited 137", "signal 9", "sigkill", "killed",
+                      "error_during_execution")),
     # The run did all the work and the PR CALL failed. Emphatically NOT a stale base: the
     # branch is mergeable and there is nothing to rebase. Prescribing a rebase here would send
     # an agent to resolve conflicts that do not exist. Two runs ended here.

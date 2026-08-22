@@ -119,3 +119,26 @@ def test_the_sweep_checks_progress_before_giving_up_on_elapsed_time():
     assert "_made_no_progress" in src
     assert src.index("WEDGED_AFTER_MINUTES") < src.index("_made_no_progress"), (
         "elapsed time first (cheap), then the progress query")
+
+
+def test_a_process_killed_by_the_os_is_infrastructure_not_a_mystery():
+    """`claude code agent exited -9` — SIGKILL, almost always the OOM killer.
+
+    A web build runs npm install, vite and playwright inside the agent's process tree and the
+    kernel takes the whole thing. The taxonomy matched `exited 143` (SIGTERM) but NOT `-9`, so
+    an OOM-killed run fell through to UNKNOWN, escalated to a human, and sat there. The machine
+    killed it; the task did nothing wrong; re-running is the correct remedy.
+    """
+    from boss_engine.services.task_shepherd import (
+        CLASS_NAMES, INFRASTRUCTURE, REMEDIES, UNKNOWN, classify,
+    )
+    real = "claude code agent exited -9: [substrate=local_subprocess]"
+    assert classify(real) == INFRASTRUCTURE, CLASS_NAMES[classify(real)]
+    assert classify(real) != UNKNOWN
+
+    for variant in ("exited 137", "process killed by signal 9", "SIGKILL", "exited 143"):
+        assert classify(variant) == INFRASTRUCTURE, variant
+
+    # …and the class must offer something automatic, or classifying it changes nothing.
+    assert [r.id for r in REMEDIES[INFRASTRUCTURE] if r.action], (
+        "infrastructure must have a remedy that acts, not only escalate")
