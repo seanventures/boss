@@ -27,6 +27,21 @@ from ..config import Settings
 from ..schemas import FileChange
 
 
+#: Words that are shells, not programs. Seeing one as argv[0] means the caller wrote a shell
+#: command and sandbox.run does not use a shell.
+_SHELL_BUILTINS = frozenset({
+    "[", "[[", "test", "if", "then", "else", "fi", "for", "while", "do", "done",
+    "cd", "export", "source", ".", "eval", "exec", "set", "unset",
+})
+
+#: Characters that only mean anything to a shell.
+_SHELL_METACHARS = frozenset("&|;<>()$`")
+
+
+def _looks_like_shell(command: str) -> bool:
+    return any(ch in _SHELL_METACHARS for ch in (command or ""))
+
+
 class SandboxError(RuntimeError):
     pass
 
@@ -199,6 +214,15 @@ class EphemeralSandbox:
         argv = shlex.split(command)
         if not argv:
             raise SandboxError("Empty command.")
+        # Check the WHOLE command first. "npm run build && npm test" has a perfectly good
+        # argv[0], so an argv[0]-only check passes it and then silently runs just the first
+        # half — a verify that reports success having skipped the tests.
+        if _looks_like_shell(command):
+            raise SandboxError(
+                f"{command!r} uses shell syntax, and sandbox commands run WITHOUT a shell. "
+                "Operators like && || | ; > $ ( ) are not interpreted — the command would "
+                "run only up to the first one. Give one plain command, or put the sequence "
+                "in a script the repo already has (e.g. an npm script).")
         self._assert_allowed_executable(argv[0])
         limit = timeout or self.settings.sandbox_validation_timeout_seconds
         started = time.monotonic()
@@ -355,7 +379,23 @@ class EphemeralSandbox:
             if item.strip()
         }
         if candidate not in allowed:
-            raise SandboxError(f"Executable is not allowlisted: {executable}")
+            # SAY WHAT IS ACTUALLY WRONG.
+            #
+            # A build died with `Executable is not allowlisted: [`, which tells an operator
+            # nothing. `[` is the shell's `test` builtin: the command was written as shell
+            # ("[ -d node_modules ] && npm ci"), and sandbox.run does shlex.split +
+            # subprocess.run WITHOUT a shell, so the first WORD became the executable. The
+            # allowlist was not the problem and neither was `[`.
+            if candidate in _SHELL_BUILTINS or _looks_like_shell(executable):
+                raise SandboxError(
+                    f"{executable!r} is shell syntax, and sandbox commands run WITHOUT a "
+                    "shell — the first word is executed directly, so operators like "
+                    "[ ] && || | ; > cannot work. Give one plain command "
+                    "(e.g. 'npm run verify') and put any conditional logic inside a script "
+                    "the repo already has.")
+            raise SandboxError(
+                f"Executable is not allowlisted: {executable}. Allowed: "
+                f"{', '.join(sorted(allowed)) or '(none configured)'}.")
 
     def _truncate(self, output: str | bytes) -> str:
         if isinstance(output, bytes):

@@ -7271,13 +7271,35 @@ def merge_target_resources(current: Any, updates: dict[str, Any]) -> list[dict]:
 
 
 def _same_name(typed: Any, stored: Any) -> bool:
-    """Is the confirmation the operator typed the app name, ignoring surrounding space?
+    """Is the confirmation the operator typed the app name?
 
-    Destroy is guarded by typing the name back. That guard is meant to stop an accidental
-    removal, not to be unpassable: a target registered with a stray space in its name could
-    never be confirmed, because the space is invisible in every place the name is shown.
+    Destroy is guarded by typing the name back. That guard is meant to stop an ACCIDENTAL
+    removal, not to be unpassable — and it was unpassable. An app named
+    "BugBox v1.0 – Product" carries an EN DASH, which is not on a keyboard: no matter what the
+    operator typed, an exact match could never succeed, and the placeholder was truncated so
+    they could not even read the character they were failing to reproduce.
+
+    The stray-space case was already fixed here for exactly this reason. The dash is the same
+    bug with a different invisible character, so this now normalises anything a person cannot
+    reasonably be expected to reproduce by eye: dash variants, quote variants, unicode spaces,
+    repeated whitespace, and case.
+
+    Typing a DIFFERENT name still fails, which is the whole point of the guard.
     """
-    return str(typed or "").strip() == str(stored or "").strip()
+    import unicodedata
+
+    def norm(value: Any) -> str:
+        text = unicodedata.normalize("NFKC", str(value or ""))
+        for dash in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212":
+            text = text.replace(dash, "-")
+        for quote in "\u2018\u2019\u201b":
+            text = text.replace(quote, "'")
+        for quote in "\u201c\u201d":
+            text = text.replace(quote, '"')
+        text = text.replace("\u00a0", " ").replace("\u202f", " ").replace("\u2007", " ")
+        return " ".join(text.split()).casefold()
+
+    return norm(typed) == norm(stored)
 
 
 @app.post("/v1/deployment-targets", status_code=201)
