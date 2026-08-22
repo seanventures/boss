@@ -602,6 +602,17 @@ class Settings(BaseSettings):
         ),
         alias="BOSS_SANDBOX_VALIDATION_ALLOWED_COMMANDS",
     )
+    #: The shepherd applies remedies on its own. OFF by default, and it must stay that way.
+    #:
+    #: Turned on for one afternoon it: opened repair tasks for historical failures nobody had
+    #: asked about, retried a build the operator was already retrying by hand (two runs of the
+    #: same app, neither aware of the other), and left a 33-minute auto-repair holding the only
+    #: worker slot while the operator's actual work waited behind it. Every one of those was
+    #: inside its bounds. Bounded autonomous spending is still autonomous spending, and the
+    #: person paying has to opt into it.
+    shepherd_autopilot_enabled: bool = Field(
+        default=False, alias="BOSS_SHEPHERD_AUTOPILOT_ENABLED"
+    )
     sandbox_validation_timeout_seconds: int = Field(
         default=120, alias="BOSS_SANDBOX_VALIDATION_TIMEOUT_SECONDS"
     )

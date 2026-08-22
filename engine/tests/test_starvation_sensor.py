@@ -142,3 +142,32 @@ def test_a_process_killed_by_the_os_is_infrastructure_not_a_mystery():
     # …and the class must offer something automatic, or classifying it changes nothing.
     assert [r.id for r in REMEDIES[INFRASTRUCTURE] if r.action], (
         "infrastructure must have a remedy that acts, not only escalate")
+
+
+def test_starting_work_is_opt_in_but_sensors_are_not():
+    """Bounded autonomous spending is still autonomous spending.
+
+    Turned on for one afternoon the autopilot opened repair tasks for historical failures
+    nobody had asked about, retried a build the operator was already retrying by hand — two
+    runs of the same app, neither aware of the other — and left a 33-minute auto-repair holding
+    the only worker slot while the operator's actual work queued behind it. All of it inside
+    its own bounds.
+
+    The free half must keep running: closing rows that claim to be working and unsticking a
+    starved queue cost nothing and are the whole point of watching.
+    """
+    from boss_engine.config import Settings
+
+    assert Settings().shepherd_autopilot_enabled is False, "must default to off"
+
+    src = inspect.getsource(shepherd_service.autopilot)
+    gate = src.index("shepherd_autopilot_enabled")
+    for free in ("sweep_starved_work", "sweep_abandoned_runs", "sweep_stale_previews"):
+        assert src.index(free) < gate, f"{free} costs nothing and must run regardless"
+    assert src.index("act(engine, settings, jobs, run_id") > gate, (
+        "starting work must be behind the gate")
+
+
+def test_a_gated_tick_says_why_rather_than_looking_idle():
+    src = inspect.getsource(shepherd_service.autopilot)
+    assert "BOSS_SHEPHERD_AUTOPILOT_ENABLED is false" in src

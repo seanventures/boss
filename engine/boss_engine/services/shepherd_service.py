@@ -668,6 +668,8 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     # Starvation FIRST, and deliberately before the depth guard below. A deep queue is exactly
     # the condition in which something is starving, so skipping the check when the queue is
     # deep would blind the sensor in the only situation it exists for.
+    # Sensors and cleanup are FREE and always run: they close rows that claim to be working,
+    # unstick a starved queue, and cost nothing. Only the part that STARTS WORK is gated.
     unstarved = sweep_starved_work(engine, settings, project_id, actor=actor)
     # A run that cannot move is not progress. Closing it is what stops a card sitting forever.
     abandoned = sweep_abandoned_runs(engine, settings, project_id, actor=actor)
@@ -684,6 +686,14 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
                 "abandoned": abandoned, "stale_previews": stale_previews,
                 "paused_because": f"{queue_depth} jobs already queued or running; repair work "
                                   "must not push ahead of the operator's work"}
+
+    if not getattr(settings, "shepherd_autopilot_enabled", False):
+        return {"project_id": project_id, "considered": len(candidates), "applied": [],
+                "deferred": [], "escalated": [], "failed": [], "unstarved": unstarved,
+                "abandoned": abandoned, "stale_previews": stale_previews,
+                "paused_because": "BOSS_SHEPHERD_AUTOPILOT_ENABLED is false — sensors and "
+                                  "cleanup ran, but no work was started. Remedies that spend "
+                                  "money are opt-in."}
 
     applied, deferred, escalated, failed = [], [], [], []
     for run_id in candidates[:limit]:
