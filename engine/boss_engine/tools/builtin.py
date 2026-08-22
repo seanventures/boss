@@ -715,6 +715,39 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         }
 
     @reg.tool(
+        "link_run_origin",
+        "Record where a run came from, so the console can show its Research/Spec history. A "
+        "run's origin is written when it is created and there was no way to repair it "
+        "afterwards — a build restarted by hand loses the PRD that specified it, and the card "
+        "then reports 'Spec: none' about work that has a spec sitting right there.",
+        _obj({"run_id": {"type": "string"},
+              "kind": {"type": "string", "enum": ["meeting", "discovery"]},
+              "meeting_run_id": {"type": "string", "description": "the mrun_/drun_ to link to"},
+              "task_id": {"type": "string"}},
+             required=["run_id", "kind"]),
+        kind="write",
+    )
+    def link_run_origin(ctx, *, project_id, actor, args):
+        import json as _json
+
+        from ..ports import sql as _s
+        origin = {"kind": str(args["kind"])}
+        for field in ("meeting_run_id", "task_id"):
+            if args.get(field):
+                origin[field] = str(args[field])
+        with ctx.begin() as c:
+            n = c.execute(_s(
+                "UPDATE code_task_runs "
+                "SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb) "
+                "    || jsonb_build_object('origin', CAST(:o AS JSONB)), "
+                "    updated_at = now() "
+                "WHERE id = :i AND project_id = :p"),
+                {"o": _json.dumps(origin), "i": str(args["run_id"]), "p": project_id}).rowcount
+        if not n:
+            return {"ok": False, "error": "no such run in this project"}
+        return {"ok": True, "run_id": args["run_id"], "origin": origin, "actor": actor}
+
+    @reg.tool(
         "consistency_report",
         "Every 'this should never be true' check in one pass, read-only. Counts rows that "
         "violate an invariant: runs claiming to work with no job that could advance them, "
@@ -1937,6 +1970,7 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "cancel_job",
     "set_job_priority",
     "close_orphaned_runs",
+    "link_run_origin",
 })
 
 

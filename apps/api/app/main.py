@@ -9565,6 +9565,33 @@ def cancel_job_endpoint(job_id: str, payload: Optional[dict] = None):
     return result
 
 
+@app.post("/v1/code-tasks/{run_id}/origin")
+def set_code_task_origin_endpoint(run_id: str, payload: dict):
+    """Record where a run came from, so the console can show its Research/Spec history.
+
+    Origin is written at creation and there was no way to repair it afterwards: a build
+    restarted by hand loses the PRD that specified it, and the card then reports "Spec: none"
+    about work whose spec is sitting right there in a completed panel.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    kind = str((payload or {}).get("kind") or "").strip()
+    if kind not in ("meeting", "discovery"):
+        raise HTTPException(status_code=422, detail="kind must be 'meeting' or 'discovery'")
+    origin = {"kind": kind}
+    for field in ("meeting_run_id", "task_id", "discovery_run_id"):
+        if (payload or {}).get(field):
+            origin[field] = str(payload[field])
+    with begin(engine) as c:
+        n = c.execute(text(
+            "UPDATE code_task_runs SET finalize_ctx = COALESCE(finalize_ctx,'{}'::jsonb) "
+            "|| jsonb_build_object('origin', CAST(:o AS JSONB)), updated_at = now() "
+            "WHERE id = :i"), {"o": json.dumps(origin), "i": run_id}).rowcount
+    if not n:
+        raise HTTPException(status_code=404, detail="code task not found")
+    return {"ok": True, "run_id": run_id, "origin": origin}
+
+
 @app.get("/v1/code-tasks")
 def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
     """List code-task runs for a project (newest first) for the Code Tasks view."""

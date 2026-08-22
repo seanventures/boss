@@ -11,9 +11,9 @@ def test_default_registry_shape():
     reg = build_default_registry()
     # The governed catalog has expanded since the original Phase 1 tool layer;
     # keep this explicit so accidental tool removal is visible in OSS CI.
-    assert len(reg.names()) == 45
+    assert len(reg.names()) == 46
     assert len(reg.specs(kind="read")) == 29
-    assert len(reg.specs(kind="write")) == 16
+    assert len(reg.specs(kind="write")) == 17
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -125,7 +125,7 @@ def test_discuss_read_registry_exposes_everything_and_hides_project_override():
     # an operator had to reach in from outside to cancel a job. The line is OPERATIONAL STATE
     # (a priority, a wedged job, an orphaned run) versus CREATING WORK that spends money.
     assert sorted(s.name for s in reg.specs(kind="write")) == [
-        "cancel_job", "close_orphaned_runs", "set_job_priority"]
+        "cancel_job", "close_orphaned_runs", "link_run_origin", "set_job_priority"]
     assert "create_code_task" not in reg.names(), "starting new work stays a deliberate ask"
     for schema in reg.openai_schema():
         props = schema["function"]["parameters"].get("properties") or {}
