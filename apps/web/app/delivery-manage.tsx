@@ -1140,6 +1140,9 @@ type FleetHost = {
   } | null;
 };
 
+/** A global setting that stops the whole wizard working, whatever the operator does here. */
+type Blocker = { setting: string; message: string };
+
 type Stage = "credential" | "install" | "verify" | "provision" | "ready";
 
 const STAGES: Array<{ id: Stage; label: string }> = [
@@ -1197,10 +1200,14 @@ export function FleetPanel({ projectId, targets = [] }: {
   const [keyBackend, setKeyBackend] = React.useState("file");
   const [copied, setCopied] = React.useState<string | null>(null);
   const [route, setRoute] = React.useState<Record<string, string>>({});
+  const [blocker, setBlocker] = React.useState<Blocker | null>(null);
 
   const reload = React.useCallback(async () => {
     const r = await listDeploymentHostsAction(projectId);
-    if (r.ok) setHosts((((r.data as any)?.hosts ?? []) as FleetHost[]));
+    if (r.ok) {
+      setHosts((((r.data as any)?.hosts ?? []) as FleetHost[]));
+      setBlocker(((r.data as any)?.preconditions?.blocker ?? null) as Blocker | null);
+    }
     else setErr(r.error ?? "could not load hosts");
   }, [projectId]);
 
@@ -1224,6 +1231,16 @@ export function FleetPanel({ projectId, targets = [] }: {
         The machines apps deploy to. One key per host — rotating it never touches the apps
         riding on it.
       </p>
+
+      {/* Before anything else. This was discoverable only by walking four steps and being
+          told at Verify that BOSS was never going to connect — after a key had been minted
+          and pasted onto a real machine. */}
+      {blocker ? (
+        <div className="fleet-blocker" data-testid="fleet-blocker">
+          <strong>{blocker.message}</strong>
+          <span className="detail"> Setting: <code>{blocker.setting}</code></span>
+        </div>
+      ) : null}
 
       {err ? <div className="cap-badge tone-red" data-testid="fleet-error">{err}</div> : null}
 

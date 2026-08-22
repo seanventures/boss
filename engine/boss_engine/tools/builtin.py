@@ -12,8 +12,10 @@ They call engine helpers through `EngineContext`; they never touch HTTP.
 from __future__ import annotations
 
 import json
+import os as _os
 import re
-from typing import Any
+import subprocess as _subprocess
+from typing import Any, Optional as _Optional
 
 from .._compat import services_module
 from .registry import ToolRegistry, ToolSpec
@@ -1271,13 +1273,449 @@ def _http_probe(url: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Unrestricted SQL is fine for a trusted local MCP/CLI operator; it is NOT safe
 # on the multi-tenant chat discuss path where the model chooses the query.
-_DISCUSS_EXCLUDED_READ_TOOLS = frozenset({"query_db"})
+# ── Investigation: read the source and the logs, not just the database ────────
+#
+# Ask BOSS is meant to work like an operator with console access, not a menu of
+# canned reports. A fixed tool list can only answer questions somebody predicted:
+# every gap becomes a new tool, and the list never catches up with what an
+# operator actually wants to ask. These three plus `query_db` are the primitives
+# that make the difference — read the schema-free truth, read the code, read what
+# the process actually logged.
+#
+# SCOPE: single-tenant. `query_db` is unrestricted SELECT and these read the
+# deployed source tree. If BOSS ever serves more than one tenant from one
+# process, all four need a fence (Postgres RLS keyed on the authorised project is
+# the mechanism the schema is already shaped for — 233 of 244 tables carry
+# project_id). Stated here so that decision is made deliberately rather than
+# discovered.
+
+# Where the deployed source lives. /app in the container, the repo root in
+# development — resolved once so a tool cannot wander outside it.
+_SOURCE_ROOT = _os.environ.get("BOSS_SOURCE_ROOT") or (
+    "/app" if _os.path.isdir("/app/engine") else
+    _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", ".."))
+)
+# Never worth reading, always huge, and they bury the answer.
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".next", ".venv", "dist",
+              "build", ".mypy_cache", ".pytest_cache", "browsers", "pw-browsers"}
+_MAX_FILE_BYTES = 400_000
+
+
+# Where cloned customer repos are cached. Read-only working copies, refreshed on
+# demand — BOSS already clones this repo to build and to deploy; this reuses the
+# same credential path rather than inventing a second way to reach the code.
+_REPO_CACHE = _os.environ.get("BOSS_REPO_CACHE") or "/tmp/boss-repo-cache"
+
+
+def _repo_root(settings: Any, repo: str) -> tuple[_Optional[str], _Optional[str]]:
+    """The local path for `repo`, cloning it if we do not have it yet.
+
+    `repo` is "boss" for BOSS's own source, or "owner/name" (or bare "name", which
+    resolves against the configured target owner) for a customer's application. The
+    honest answer to "why does my app do X" is in the app's code, and until now no
+    tool could open it — Ask BOSS could describe BOSS and only guess about the thing
+    BOSS had built.
+    """
+    name = (repo or "boss").strip()
+    if name in ("boss", "self", "platform", ""):
+        return _SOURCE_ROOT, None
+
+    owner, _, short = name.rpartition("/")
+    owner = owner or (getattr(settings, "target_github_owner", "") or "")
+    short = short or (getattr(settings, "target_github_repo", "") or "")
+    if not owner or not short:
+        return None, f"cannot resolve repo {repo!r} — no owner configured"
+
+    dest = _os.path.join(_REPO_CACHE, f"{owner}__{short}")
+    try:
+        _os.makedirs(_REPO_CACHE, exist_ok=True)
+        from ..services.repo_host import clone_url_for
+
+        url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                            owner, short, getattr(settings, "github_token", "") or "")
+        if _os.path.isdir(_os.path.join(dest, ".git")):
+            # Refresh, but never fail the read because the network is down — a slightly
+            # stale checkout answers most questions; no checkout answers none.
+            _subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin"],
+                            capture_output=True, timeout=120)
+            _subprocess.run(["git", "-C", dest, "reset", "--hard", "origin/HEAD"],
+                            capture_output=True, timeout=60)
+        else:
+            out = _subprocess.run(["git", "clone", "--depth", "1", url, dest],
+                                  capture_output=True, text=True, timeout=300)
+            if out.returncode != 0:
+                return None, f"clone failed: {(out.stderr or '')[-200:]}"
+        return dest, None
+    except FileNotFoundError:
+        return None, "git is not installed in this environment"
+    except Exception as exc:  # noqa: BLE001 — a read tool must not raise
+        return None, f"{type(exc).__name__}: {exc}"[:200]
+
+
+def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
+    """Resolve `rel` under `root` (default: BOSS's own source), or None if it escapes.
+
+    Escape check is on the RESOLVED path, so `../../etc/passwd` and a symlink out
+    are both caught — a prefix check on the raw string is not the same test.
+    """
+    base = root or _SOURCE_ROOT
+    candidate = _os.path.realpath(_os.path.join(base, (rel or "").lstrip("/")))
+    real = _os.path.realpath(base)
+    return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
+
+
+def _register_investigation_tools(reg: ToolRegistry) -> None:
+    @reg.tool(
+        "search_code",
+        "Search SOURCE for a regex — BOSS's own platform code (repo='boss', the default, "
+        "including infra/) or a customer application (repo='owner/name', or a bare repo "
+        "name for the configured target). Answers 'where is this implemented', 'what "
+        "raises this error', 'why does my app do that'. Returns file:line. Prefer this "
+        "over guessing at behaviour.",
+        _obj({"pattern": {"type": "string", "description": "python regex"},
+              "repo": {"type": "string",
+                       "description": "'boss' for the platform, or 'owner/name' for an app"},
+              "path": {"type": "string", "description": "optional subdir, e.g. engine/"},
+              "glob": {"type": "string", "description": "optional filename filter, e.g. *.py"},
+              "limit": _LIMIT},
+             ["pattern"]),
+    )
+    def search_code(ctx, *, project_id, actor, args):
+        import fnmatch as _fn
+
+        try:
+            rx = re.compile(args["pattern"])
+        except re.error as exc:
+            return {"ok": False, "error": f"bad regex: {exc}"}
+        root, err = _repo_root(ctx.settings, args.get("repo") or "boss")
+        if root is None:
+            return {"ok": False, "error": err}
+        base = _safe_path(args.get("path") or "", root)
+        if base is None:
+            return {"ok": False, "error": "path escapes the source root"}
+        glob = args.get("glob")
+        limit = int(args.get("limit") or 40)
+
+        hits: list[dict] = []
+        for dirpath, dirnames, filenames in _os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+            for fname in filenames:
+                if glob and not _fn.fnmatch(fname, glob):
+                    continue
+                full = _os.path.join(dirpath, fname)
+                try:
+                    if _os.path.getsize(full) > _MAX_FILE_BYTES:
+                        continue
+                    with open(full, "r", encoding="utf-8", errors="ignore") as fh:
+                        for n, line in enumerate(fh, 1):
+                            if rx.search(line):
+                                hits.append({
+                                    "file": _os.path.relpath(full, root),
+                                    "line": n, "text": line.rstrip()[:300],
+                                })
+                                if len(hits) >= limit:
+                                    return {"matches": hits, "truncated": True, "root": root}
+                except (OSError, UnicodeDecodeError):
+                    continue
+        return {"matches": hits, "truncated": False, "root": root}
+
+    @reg.tool(
+        "read_code",
+        "Read a file from source — BOSS's platform code (repo='boss', default) or a "
+        "customer app (repo='owner/name'), optionally a line range. Use after "
+        "search_code to read the actual implementation instead of describing what it "
+        "probably does.",
+        _obj({"file": {"type": "string", "description": "path relative to the repo root"},
+              "repo": {"type": "string", "description": "'boss', or 'owner/name' for an app"},
+              "start": {"type": "integer", "minimum": 1},
+              "end": {"type": "integer", "minimum": 1}},
+             ["file"]),
+    )
+    def read_code(ctx, *, project_id, actor, args):
+        root, err = _repo_root(ctx.settings, args.get("repo") or "boss")
+        if root is None:
+            return {"ok": False, "error": err}
+        path = _safe_path(args["file"], root)
+        if path is None or not _os.path.isfile(path):
+            return {"ok": False, "error": f"no such file under the source root: {args['file']}"}
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                lines = fh.readlines()
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        total = len(lines)
+        start = max(1, int(args.get("start") or 1))
+        end = min(total, int(args.get("end") or min(total, start + 399)))
+        body = "".join(lines[start - 1:end])
+        return {"file": args["file"], "total_lines": total, "start": start, "end": end,
+                "truncated": end < total, "content": body[:_MAX_FILE_BYTES]}
+
+    @reg.tool(
+        "read_logs",
+        "Recent log lines from a BOSS service (api | worker | web), newest last, "
+        "optionally filtered by a regex. The answer to 'what actually happened' when "
+        "the database only records the outcome.",
+        _obj({"service": {"type": "string", "enum": ["api", "worker", "web"]},
+              "pattern": {"type": "string", "description": "optional regex filter"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}),
+    )
+    def read_logs(ctx, *, project_id, actor, args):
+        service = (args.get("service") or "api").lower()
+        limit = int(args.get("limit") or 120)
+        rx = None
+        if args.get("pattern"):
+            try:
+                rx = re.compile(args["pattern"])
+            except re.error as exc:
+                return {"ok": False, "error": f"bad regex: {exc}"}
+
+        # Docker keeps container stdout on disk; a local run writes .local-logs/.
+        # Try both rather than assuming one deployment shape.
+        candidates = [
+            _os.environ.get(f"BOSS_{service.upper()}_LOG"),
+            _os.path.join(_SOURCE_ROOT, ".local-logs", f"{service}.log"),
+            f"/var/log/boss/{service}.log",
+        ]
+        for path in [c for c in candidates if c]:
+            if not _os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    lines = fh.readlines()
+            except OSError:
+                continue
+            if rx is not None:
+                lines = [ln for ln in lines if rx.search(ln)]
+            tail = [ln.rstrip()[:500] for ln in lines[-limit:]]
+            return {"service": service, "source": path, "lines": len(tail), "log": tail}
+        return {"ok": False, "service": service,
+                "error": ("no log file readable from this process. In a container the service "
+                          "logs to stdout — read them with `docker logs`, or set "
+                          f"BOSS_{service.upper()}_LOG to a path.")}
+
+
+    @reg.tool(
+        "describe_schema",
+        "The database's own shape: tables, columns and types. query_db can read ANY "
+        "table, but only if you know it exists — 244 tables and 68k events are useless "
+        "to someone guessing names. Call this first when a question has no dedicated "
+        "tool, then write the SELECT.",
+        _obj({"table": {"type": "string", "description": "optional: one table's columns"},
+              "like": {"type": "string", "description": "optional name filter, e.g. deployment"}}),
+    )
+    def describe_schema(ctx, *, project_id, actor, args):
+        table = (args.get("table") or "").strip()
+        like = (args.get("like") or "").strip()
+        with ctx.begin() as c:
+            if table:
+                rows = c.execute(_text(
+                    "SELECT column_name, data_type, is_nullable "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema='public' AND table_name = :t "
+                    "ORDER BY ordinal_position"), {"t": table}).mappings().all()
+                if not rows:
+                    return {"ok": False, "error": f"no table {table!r}"}
+                return {"table": table,
+                        "columns": [f"{r['column_name']} {r['data_type']}"
+                                    f"{'' if r['is_nullable'] == 'YES' else ' NOT NULL'}"
+                                    for r in rows]}
+            clause = " AND table_name ILIKE :like" if like else ""
+            rows = c.execute(_text(
+                "SELECT t.table_name, "
+                "  (SELECT count(*) FROM information_schema.columns c "
+                "     WHERE c.table_schema='public' AND c.table_name=t.table_name) AS cols "
+                "FROM information_schema.tables t "
+                "WHERE t.table_schema='public' AND t.table_type='BASE TABLE'" + clause + " "
+                "ORDER BY t.table_name"),
+                ({"like": f"%{like}%"} if like else {})).mappings().all()
+        return {"tables": [f"{r['table_name']} ({r['cols']} cols)" for r in rows],
+                "count": len(rows),
+                "hint": "call describe_schema with table=<name> for columns, then query_db"}
+
+    @reg.tool(
+        "inspect_host",
+        "Run a READ-ONLY command on a registered deployment host over SSH — what is "
+        "running there, disk, a deployed app's own container logs. The database records "
+        "what BOSS INTENDED; this shows what the machine is actually doing. Refuses "
+        "anything that could change the host.",
+        _obj({"host": {"type": "string", "description": "host name or id from the fleet"},
+              "command": {"type": "string",
+                          "description": "e.g. 'docker ps', 'df -h', 'docker logs --tail 50 app'"}},
+             ["host", "command"]),
+    )
+    def inspect_host(ctx, *, project_id, actor, args):
+        # An allow-list, not a deny-list. A deny-list on shell input is a promise nobody
+        # can keep: `docker` alone can start, stop and delete. Naming the safe verbs is
+        # the only version of this that stays true as the tool is used in ways nobody
+        # anticipated.
+        raw = (args.get("command") or "").strip()
+        allowed = ("docker ps", "docker logs", "docker inspect", "docker stats --no-stream",
+                   "docker images", "df", "free", "uptime", "uname", "ls", "cat /etc/os-release",
+                   "systemctl status", "journalctl", "ss -", "netstat", "ps aux", "whoami")
+        if not any(raw.startswith(a) for a in allowed):
+            return {"ok": False,
+                    "error": f"only read-only commands are allowed here: {', '.join(allowed)}",
+                    "note": "this tool inspects; it never changes a host."}
+        if any(ch in raw for ch in (";", "&&", "||", "|", "`", "$(", ">")):
+            return {"ok": False, "error": "shell chaining/redirection is not permitted"}
+
+        from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,
+                                               _ssh_key_file)
+        from ..services.secret_backends import resolve_target_secret
+
+        want = (args.get("host") or "").strip()
+        with ctx.begin() as c:
+            row = c.execute(_text(
+                "SELECT * FROM deployment_hosts "
+                "WHERE project_id = :p AND (id = :h OR name = :h)"),
+                {"p": project_id, "h": want}).mappings().first()
+            if row is None:
+                return {"ok": False, "error": f"no registered host {want!r}"}
+            host = dict(row)
+            probe = {"secret_refs": ([{"name": "ssh_key",
+                                       "secret_ref_id": host["key_secret_ref"]}]
+                                     if host.get("key_secret_ref") else []),
+                     "host_id": host["id"]}
+            ephemeral = None
+            try:
+                material = resolve_target_secret(c, probe, "ssh_key", ctx.settings)
+                key = ephemeral = (_materialise_key(material) if material
+                                   else _ssh_key_file(ctx.settings))
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"no usable credential for this host: {exc}"[:200]}
+        try:
+            res = _ssh(key, host["address"], (host.get("ssh_user") or "root"),
+                       int(host.get("ssh_port") or 22), raw, timeout=45)
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
+        return {"host": host["name"], "command": raw, "exit_code": res.returncode,
+                "stdout": (res.stdout or "")[-6000:], "stderr": (res.stderr or "")[-2000:]}
+
+    @reg.tool(
+        "http_probe",
+        "GET a URL and report status, timing and a body excerpt. Answers 'is the app "
+        "actually up RIGHT NOW' — health samples say what was true when last sampled, "
+        "which is not the same question.",
+        _obj({"url": {"type": "string"},
+              "timeout_s": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10}},
+             ["url"]),
+    )
+    def http_probe(ctx, *, project_id, actor, args):
+        import time as _time
+        import urllib.error as _uerr
+        import urllib.request as _ureq
+
+        url = (args.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return {"ok": False, "error": "url must start with http:// or https://"}
+        started = _time.time()
+        try:
+            with _ureq.urlopen(url, timeout=int(args.get("timeout_s") or 10)) as resp:
+                body = resp.read(4000).decode("utf-8", errors="replace")
+                return {"url": url, "status": resp.status,
+                        "ms": round((_time.time() - started) * 1000),
+                        "content_type": resp.headers.get("content-type"),
+                        "body_excerpt": body}
+        except _uerr.HTTPError as exc:
+            return {"url": url, "status": exc.code,
+                    "ms": round((_time.time() - started) * 1000),
+                    "body_excerpt": exc.read(2000).decode("utf-8", errors="replace")}
+        except Exception as exc:  # noqa: BLE001 — unreachable is a RESULT, not an error
+            return {"url": url, "status": None,
+                    "ms": round((_time.time() - started) * 1000),
+                    "error": f"{type(exc).__name__}: {exc}"[:300]}
+
+    @reg.tool(
+        "git_history",
+        "Recent commits for a repo or a single file — when something changed, who "
+        "changed it, and the message explaining why. Answers 'when did this break' and "
+        "'was this deliberate', which no amount of reading the CURRENT code can.",
+        _obj({"repo": {"type": "string", "description": "'boss' (default) or 'owner/name'"},
+              "file": {"type": "string", "description": "optional path to scope the log"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+              "search": {"type": "string",
+                         "description": "optional: commits touching this string"}}),
+    )
+    def git_history(ctx, *, project_id, actor, args):
+        root, err = _repo_root(ctx.settings, args.get("repo") or "boss")
+        if root is None:
+            return {"ok": False, "error": err}
+        cmd = ["git", "-C", root, "log", f"-{int(args.get('limit') or 20)}",
+               "--date=short", "--pretty=%h|%ad|%an|%s"]
+        if args.get("search"):
+            cmd += ["-S", str(args["search"])]
+        if args.get("file"):
+            safe = _safe_path(str(args["file"]), root)
+            if safe is None:
+                return {"ok": False, "error": "path escapes the repo root"}
+            cmd += ["--", safe]
+        try:
+            out = _subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        except FileNotFoundError:
+            return {"ok": False, "error": "git is not installed in this environment"}
+        if out.returncode != 0:
+            return {"ok": False, "error": (out.stderr or "")[-300:]}
+        commits = []
+        for line in (out.stdout or "").splitlines():
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                commits.append({"sha": parts[0], "date": parts[1],
+                                "author": parts[2], "subject": parts[3]})
+        return {"repo": args.get("repo") or "boss", "commits": commits}
+
+    @reg.tool(
+        "get_config",
+        "BOSS's EFFECTIVE runtime configuration — feature flags, model routing, engine "
+        "selection, limits. Answers 'why did it behave that way' when the code branches "
+        "on a setting. Secret VALUES are never returned, only whether each is set.",
+        _obj({"like": {"type": "string", "description": "optional name filter, e.g. sandbox"}}),
+    )
+    def get_config(ctx, *, project_id, actor, args):
+        like = (args.get("like") or "").lower().strip()
+        # A name-based rule, so a setting added later is redacted BY DEFAULT rather than
+        # leaking until someone remembers to add it to a list.
+        secretish = ("token", "key", "secret", "password", "credential", "dsn", "url")
+        out: dict = {}
+        settings = ctx.settings
+        for name in sorted(dir(settings)):
+            if name.startswith("_"):
+                continue
+            if like and like not in name.lower():
+                continue
+            try:
+                value = getattr(settings, name)
+            except Exception:  # noqa: BLE001
+                continue
+            if callable(value):
+                continue
+            if any(mark in name.lower() for mark in secretish):
+                out[name] = "<set>" if value else "<unset>"
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                out[name] = value
+        return {"settings": out, "count": len(out),
+                "note": "secret-shaped names report only whether a value is present"}
+
+
+# NOTHING is withheld from the discuss path.
+#
+# This held `query_db` back, so Ask BOSS answered from ~17 canned reports while the
+# capability to answer anything sat one registry away. That is the wrong trade for a
+# single-tenant, self-hosted product: every unanswerable question became a request for
+# another tool, and the list never catches up with what an operator wants to ask.
+#
+# The exclusion existed for cross-tenant isolation. There is one tenant in this version,
+# so the fence it bought is not currently buying anything — and when multi-tenant
+# arrives, the fence belongs in the DATABASE (Postgres RLS on the authorised project),
+# not in a hand-maintained deny-list that also has to be right about 20 other tools.
+_DISCUSS_EXCLUDED_READ_TOOLS: frozenset[str] = frozenset()
 
 
 def build_default_registry() -> ToolRegistry:
     """The full BOSS engine tool set (read + write)."""
     reg = ToolRegistry()
     _register_read_tools(reg)
+    _register_investigation_tools(reg)
     _register_write_tools(reg)
     _register_governance_tools(reg)
     return reg

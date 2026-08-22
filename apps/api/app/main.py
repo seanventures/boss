@@ -8004,8 +8004,69 @@ def list_deployment_hosts_endpoint(project_id: str, include_retired: bool = Fals
     from boss_engine.services.deployment_fleet import list_hosts
 
     with begin(engine) as connection:
-        return {"hosts": list_hosts(connection, project_id,
-                                    include_retired=include_retired)}
+        hosts = list_hosts(connection, project_id, include_retired=include_retired)
+
+    # PRECONDITIONS, STATED UP FRONT.
+    #
+    # `BOSS_SSH_HOST_DEPLOY_ALLOWED` is a global fail-closed switch, and it was only
+    # discovered at the Verify step: an operator could register a host, mint a key, paste
+    # an install command onto a real machine, and only then be told BOSS was never going
+    # to connect to anything. A precondition that can invalidate the whole wizard belongs
+    # at the top of it, not four steps in.
+    outward_ssh = bool(getattr(settings, "ssh_host_deploy_allowed", False))
+    return {
+        "hosts": hosts,
+        "preconditions": {
+            "outward_ssh_allowed": outward_ssh,
+            "blocker": None if outward_ssh else {
+                "setting": "BOSS_SSH_HOST_DEPLOY_ALLOWED",
+                "message": ("BOSS is configured not to reach out over SSH, so no host can be "
+                            "verified, provisioned or deployed to. Set "
+                            "BOSS_SSH_HOST_DEPLOY_ALLOWED=true and restart."),
+            },
+        },
+    }
+
+
+@app.patch("/v1/deployment-hosts/{host_id}")
+def update_deployment_host_endpoint(host_id: str, payload: dict):
+    """Change a registered host's connection details after the fact.
+
+    `admin_identity_file` above all: BOSS renders the key-install command with the
+    operator's own `-i`, and that path can only be supplied by a human. Accepting it ONLY
+    at registration meant a host registered without it could never be corrected — the
+    console printed a command that failed with "Permission denied (publickey)" and the only
+    remedy was to delete the host and start over. A field you cannot fix is a field you
+    have to get right first time, which nobody does.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    from boss_engine.services.deployment_fleet import get_host, install_command_for
+
+    fields = {
+        "address": "address", "ssh_user": "ssh_user", "ssh_port": "ssh_port",
+        "arch": "arch", "notes": "notes", "admin_identity_file": "admin_identity_file",
+        "max_apps": "max_apps",
+    }
+    sets, params = [], {"i": host_id}
+    for key, column in fields.items():
+        if key in payload:
+            sets.append(f"{column} = :{key}")
+            params[key] = payload[key]
+    if not sets:
+        raise HTTPException(status_code=422,
+                            detail=f"nothing to update; accepted fields: {', '.join(fields)}")
+
+    with begin(engine) as connection:
+        if not get_host(connection, host_id):
+            raise HTTPException(status_code=404, detail="no such deployment host")
+        connection.execute(
+            text(f"UPDATE deployment_hosts SET {', '.join(sets)}, updated_at = now() "
+                 f"WHERE id = :i"), params)
+        host = get_host(connection, host_id)
+        # Re-render, so the operator sees the corrected command immediately rather than
+        # discovering on the next attempt whether the fix took.
+        return {**host, "install_command": install_command_for(host)}
 
 
 @app.post("/v1/deployment-hosts")

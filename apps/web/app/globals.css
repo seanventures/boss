@@ -5106,6 +5106,16 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dm-advanced > summary { cursor: pointer; opacity: .75; }
 .dm-advanced > summary:hover { opacity: 1; }
 
+/* A precondition that invalidates the whole wizard. Loud, at the top, before the steps —
+   the failure it replaces was discovered only after a key had been put on a real machine. */
+.fleet-blocker {
+  display: grid; gap: 2px; padding: 10px 12px; margin-bottom: 4px;
+  border-radius: var(--r, 8px);
+  background: rgba(245, 181, 68, .10);
+  border: 1px solid rgba(245, 181, 68, .45);
+  color: var(--ink, #EEF3FB); font-size: .78rem;
+}
+
 /* Retire: reachable at every stage, but never the thing your eye lands on first. */
 .fleet-retire { margin-top: 2px; }
 .fleet-retire > summary { cursor: pointer; opacity: .75; }

@@ -11,8 +11,8 @@ def test_default_registry_shape():
     reg = build_default_registry()
     # The governed catalog has expanded since the original Phase 1 tool layer;
     # keep this explicit so accidental tool removal is visible in OSS CI.
-    assert len(reg.names()) == 31
-    assert len(reg.specs(kind="read")) == 18
+    assert len(reg.names()) == 40
+    assert len(reg.specs(kind="read")) == 27
     assert len(reg.specs(kind="write")) == 13
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -20,6 +20,11 @@ def test_default_registry_shape():
         "microvm_status", "query_db", "create_code_task", "retry_code_task",
         "extend_code_task", "cancel_code_task", "waive_gates", "decide", "get_costs",
         "steer_code_task", "watch_code_task",
+        # Investigation: the console is meant to answer any question about the running
+        # system, not only the ones somebody wrote a report for. Data, code (BOSS's own
+        # and the customer's), logs, live hosts, live HTTP, history, config.
+        "describe_schema", "search_code", "read_code", "read_logs", "explain_run",
+        "inspect_host", "http_probe", "git_history", "get_config",
     ):
         assert name in reg.names()
 
@@ -92,15 +97,26 @@ def test_duplicate_registration_rejected():
         reg.register(ToolSpec("t", "d", {"type": "object"}, lambda ctx, **k: {}))
 
 
-def test_discuss_read_registry_excludes_query_db_and_hides_project_override():
-    """Chat discuss path must not expose unrestricted SQL or cross-project overrides."""
+def test_discuss_read_registry_exposes_everything_and_hides_project_override():
+    """The discuss path is an operator console: it withholds no READ capability.
+
+    This previously asserted the opposite — that `query_db` was hidden from chat. That
+    fence existed for cross-tenant isolation, and in a single-tenant product it bought
+    nothing while costing the console its ability to answer any question nobody had
+    written a report for. When multi-tenant arrives the fence belongs in the database
+    (Postgres RLS on the authorised project), not in a hand-maintained deny-list that
+    would also have to stay right about two dozen other tools.
+
+    What still holds, and is the real invariant here: no tool takes `project_id` from the
+    model, so it cannot reach outside the project the API already authorised.
+    """
     reg = build_discuss_read_registry()
-    assert "query_db" not in reg.names()
+    assert "query_db" in reg.names()
     assert "project_status" in reg.names()
     assert "get_code_task" in reg.names()
     assert "get_costs" in reg.names()
-    # All read tools except query_db (18 - 1).
-    assert len(reg.specs(kind="read")) == 17
+    # Every read tool, nothing withheld.
+    assert len(reg.specs(kind="read")) == 27
     for schema in reg.openai_schema():
         props = schema["function"]["parameters"].get("properties") or {}
         assert "project_id" not in props, schema["function"]["name"]

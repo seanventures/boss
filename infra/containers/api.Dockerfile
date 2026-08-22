@@ -54,6 +54,10 @@ COPY scripts ./scripts
 # (set to /app:/app/engine above). Its deps are a subset of the api's — no extra
 # pip install needed.
 COPY engine ./engine
+# infra/ too: Ask BOSS can read BOSS's own source to answer "how does this work", and
+# the deployment/compose/Dockerfile definitions are part of that answer. Omitting them
+# left every infrastructure question unanswerable from inside the running system.
+COPY infra ./infra
 
 RUN mkdir -p /var/lib/boss/artifacts \
     && chown -R boss:boss /app /var/lib/boss

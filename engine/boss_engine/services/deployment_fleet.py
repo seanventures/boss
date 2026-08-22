@@ -649,6 +649,15 @@ def _classify(problems: list[str]) -> list[dict[str, str]]:
                            "row. Do NOT press Generate key again: that mints a new key "
                            "and invalidates the command you already have."),
             })
+        elif "ssh_host_deploy_allowed" in low or "outward ssh" in low:
+            findings.append({
+                "kind": "outward_ssh_disabled",
+                "detail": text,
+                "remedy": ("BOSS is configured not to reach out over SSH at all, so no host "
+                           "can be verified or deployed to. Set BOSS_SSH_HOST_DEPLOY_ALLOWED=true "
+                           "in the environment (on a managed install, in the config store) and "
+                           "restart. This is a global switch, not a problem with this host."),
+            })
         elif "docker" in low:
             findings.append({
                 "kind": "docker_missing",
