@@ -1,5 +1,6 @@
 import argparse
 import logging
+import signal
 import time
 
 from apps.api.app.db import database_is_reachable, get_engine
@@ -10,6 +11,35 @@ from .runner import run_worker_cycle
 
 
 LOGGER = logging.getLogger("boss.worker")
+
+#: Set when the container is asked to stop. A deploy recreates the worker, and Docker sends
+#: SIGTERM then SIGKILLs after its grace period — with no handler at all, Python's default
+#: terminated the process instantly, mid-job, with nothing logged about what was interrupted.
+#:
+#: This does NOT try to finish or hand back the running job. The lease reclaimer already covers
+#: that: the lease expires within one TTL and the job is claimed again. Releasing it faster
+#: from a signal handler means reaching into a main thread that is blocked deep inside
+#: execute_job, and getting that wrong costs more than the minutes it saves. See R12.
+#:
+#: What it does buy: an idle worker stops immediately instead of sleeping out its poll
+#: interval, and a busy one says exactly which job the deploy interrupted rather than
+#: vanishing silently.
+_STOPPING = False
+
+
+def _request_stop(signum, _frame) -> None:
+    global _STOPPING
+    _STOPPING = True
+    LOGGER.info("worker_stop_requested signal=%s", signum)
+
+
+def _install_signal_handlers() -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _request_stop)
+        except (ValueError, OSError):
+            # Not the main thread, or a platform without the signal — never fatal.
+            LOGGER.debug("signal_handler_unavailable signal=%s", sig, exc_info=True)
 QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
 # The shepherd watches in-flight work. Often enough that a duplicate is killed before it
 # costs anything real, rare enough that it is never the busiest thing on the box.
@@ -286,13 +316,14 @@ def main() -> None:
     if args.once:
         return
 
+    _install_signal_handlers()
     client = ControlPlaneClient(settings.control_plane_url, api_key=settings.api_key)
     try:
         if args.drain_once:
             run_worker_cycle(client, settings)
             return
 
-        while True:
+        while not _STOPPING:
             try:
                 ran_job = run_worker_cycle(client, settings)
             except Exception:
@@ -308,12 +339,20 @@ def main() -> None:
             _tick_agent_processes(client, settings)
             _tick_process_manager(client, settings)
             _tick_factory_flow(client, settings)
+            if _STOPPING:
+                break
             if not ran_job:
                 _sweep_deployment_health(client)
                 _watch_running_tasks(client)
                 _run_shepherd_autopilot(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
-                time.sleep(settings.poll_interval_seconds)
+                # Interruptible sleep: an idle worker that is asked to stop should not hold the
+                # deploy open for a full poll interval doing nothing.
+                for _ in range(max(1, int(settings.poll_interval_seconds))):
+                    if _STOPPING:
+                        break
+                    time.sleep(1)
+        LOGGER.info("worker_stopped worker_id=%s", settings.worker_id)
     finally:
         client.close()
 

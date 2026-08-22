@@ -306,11 +306,27 @@ Recorded because the *pattern* cost more time than either bug.
   `fetch`, the actual `os.kill` — before proposing a change.
 
 
+### I27 — The worker had no shutdown, so every deploy was a gamble
+* **Saw:** every deploy in this session had to be held until nothing was running, because a
+  container recreate SIGKILLs an in-flight agent — the cause of Shorty attempt 1's `exited -9`.
+* **Cause:** `apps/worker/boss_worker/main.py` installed **no signal handler at all**. Docker
+  sends SIGTERM then SIGKILLs after its grace period; Python's default terminated the process
+  instantly, mid-job, logging nothing about what was interrupted.
+* **Mitigating fact, found while fixing it:** the lease reclaimer already recovers the job —
+  the lease expires within one TTL and it is claimed again. So a deploy cost a restarted phase
+  and up to a 5-minute delay, not lost work. That is materially less bad than it appeared, and
+  it is why R12 below is deliberately *not* being rushed.
+* **Fix:** SIGTERM/SIGINT set a stop flag; the loop exits between cycles; the idle sleep is
+  interruptible so a quiet worker does not hold a deploy open for a whole poll interval; the
+  interrupted job id is logged.
+* **Status:** fixed, pending deploy.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are twenty-six; the shapes are twelve. Fixing shapes is what stops recurrence.
+The incidents are twenty-seven; the shapes are twelve. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -465,6 +481,20 @@ headless browser in the preview path; worth costing separately, not worth faking
 I25. Either gate `/v1/previews/*` behind the same Bearer key as the rest of `/v1/`, or state
 explicitly that previews are shareable links and scope them with an unguessable id. Not a bug
 until decided — but it must be decided rather than inherited.
+
+
+### R12 — Hand the job back on shutdown *(deliberately deferred)*
+On SIGTERM the worker could report its in-flight job retryable-failed, requeuing it in seconds
+instead of waiting out a lease TTL. It is **not** done, and the reason is worth recording: the
+main thread is blocked deep inside `execute_job`, so releasing the lease means either raising
+an exception into arbitrary in-progress code or completing the job from a second thread while
+the first may be completing it too. Both are real double-completion and torn-state risks, and
+the reclaimer already makes the outcome correct — just slower.
+
+Cost of not doing it: up to one lease TTL (default 300s) and a restarted phase per deploy.
+Cost of doing it wrong: a job marked failed while it is still running. Not a good trade under
+time pressure; revisit with a proper cooperative-cancellation point between phases, which is
+where it belongs anyway.
 
 
 ### R6 — The invariant check runs itself
