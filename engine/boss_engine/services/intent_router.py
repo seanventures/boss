@@ -212,6 +212,88 @@ def _boss_cannot_call_you_back(reply: str) -> str:
     )
 
 
+# A table is not a button.
+#
+# Told five separate times, in the system prompt, to give a described option a button, the model
+# keeps writing "Proposed action | Button label | Tool | Arguments" as MARKDOWN and calling
+# nothing. The operator reads "Please click the button above" and there is no button.
+#
+# Five ignored instructions is a design answer, not a prompting problem. But the model has
+# already emitted everything a button needs -- the tool name and the exact JSON arguments -- so
+# the offer is recovered from its own table rather than asking it again.
+#
+# Recovery is deliberately strict. Anything uncertain produces NO button, which is the current
+# behaviour, rather than a wrong one: a button is an authorisation, and a wrong button spends
+# the operator's money on a click they thought meant something else.
+_TABLE_ROW = re.compile(r"^\s*\|(?P<cells>.+)\|\s*$")
+
+
+def _recover_described_actions(reply: str, known_tools, existing) -> list:
+    """Turn a proposal TABLE the model wrote into real, validated offers.
+
+    Every one of these must hold or the row is dropped:
+      * the Tool cell names a tool that actually exists;
+      * the Arguments cell is valid JSON object syntax;
+      * no argument is a placeholder (the crun_placeholder / owner-name guard);
+      * the tool is not already offered for real.
+    """
+    if existing or not reply or "|" not in reply:
+        return []
+    from ..tools.builtin import _placeholder_argument
+
+    rows = []
+    header: list[str] = []
+    for line in reply.splitlines():
+        m = _TABLE_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in m.group("cells").split("|")]
+        low = [c.lower() for c in cells]
+        if "tool" in low and any("argument" in c for c in low):
+            header = low
+            continue
+        if not header or set("".join(cells)) <= set("-: "):
+            continue
+        row = dict(zip(header, cells))
+        tool = _strip_md(row.get("tool", ""))
+        if tool not in known_tools:
+            continue
+        raw = _strip_md(row.get("arguments", "") or row.get("argument", ""))
+        args = _loads_object(raw)
+        if args is None or _placeholder_argument(args):
+            continue
+        label = _strip_md(row.get("button label", "") or row.get("action", "")) or tool
+        why = _strip_md(row.get("what it does (cost)", "") or row.get("what it does", ""))
+        rows.append({"id": make_id("act"), "tool": tool, "args": args,
+                     "label": label[:80], "why": why[:240] or None})
+    seen, out = set(), []
+    for r in rows:
+        key = (r["tool"], json.dumps(r["args"], sort_keys=True))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def _strip_md(text: str) -> str:
+    """Cells arrive as **bold**, `code`, or both."""
+    return re.sub(r"[*`]", "", text or "").strip()
+
+
+def _loads_object(raw: str):
+    """Parse the Arguments cell, tolerating the smart quotes a model emits in prose."""
+    text = _strip_md(raw)
+    if not text.startswith("{"):
+        return None
+    text = text.replace("\u201c", '"').replace("\u201d", '"').replace("\u2019", "'")
+    try:
+        value = json.loads(text)
+    except Exception:  # noqa: BLE001 — an unparseable cell is simply not an offer
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _no_button_was_promised(reply: str, proposed: list) -> str:
     """Strip a promise of buttons when no button was actually produced.
 
@@ -224,11 +306,14 @@ def _no_button_was_promised(reply: str, proposed: list) -> str:
     out = "\n".join(kept).rstrip()
     if out.strip() == reply.strip() or not out.strip():
         return reply
+    # State ONLY what is known here: that no button was produced. The first version of this
+    # named a cause -- "BOSS has no tool that deploys an app for the first time" -- which was
+    # true of the reply it was written for and false of the next one, where BOSS had described
+    # a perfectly available retry button. It then contradicted the model's own "click the button
+    # above". A reconciler that invents a reason is just a second way to be wrong.
     return out + (
-        "\n\nI cannot offer these as buttons — BOSS has no tool that deploys an app for the "
-        "first time, only one that re-ships an existing deployment. That is a gap in the BOSS "
-        "framework rather than something wrong with this app; tell me to proceed and I will "
-        "say exactly what a human needs to add."
+        "\n\n(No button was attached to this answer, so there is nothing to click. Tell me to "
+        "go ahead and I will run the action directly, or ask me why it could not be offered.)"
     )
 
 
@@ -488,6 +573,28 @@ class IntentRouter:
             "operator decides whether to spend. Substituting silently is worse than refusing, "
             "because they cannot see it happen.\n"
             "Describe what you did in the words of the tool you actually called.\n\n"
+            "WHEN THE OPERATOR CORRECTS YOU, THE CORRECTION WINS.\n"
+            "Told 'no, use the latest working one — the preview works fine, why are you only "
+            "checking the last run', BOSS checked the newest run again and repeated that there "
+            "was no build. The operator had just given the answer and been ignored twice.\n"
+            "A correction is EVIDENCE, and usually better evidence than what you looked at "
+            "first — they can see the console. Treat it as a fact to act on: widen the search, "
+            "query for the run they described, and say what you found. If a preview is serving, "
+            "a build EXISTS; 'there is no build' is then wrong, whatever the newest run says.\n"
+            "NEVER return the same conclusion twice in one conversation. If you are about to "
+            "repeat yourself, you have not done the extra lookup they asked for — do it. If you "
+            "genuinely cannot find what they describe, say exactly where you looked and what "
+            "you searched for, so they can point you at the right place.\n\n"
+            "ANSWER THE QUESTION THEY ASKED, AT THE LENGTH IT DESERVES.\n"
+            "Most answers are one to three sentences. Lead with the answer, not with what you "
+            "checked to find it. Do not narrate your tool calls, do not restate the question, "
+            "do not list what you ruled out, and do not add next steps nobody asked for.\n"
+            "NEVER write a table of 'Proposed action | Button label | Tool | Arguments'. That "
+            "table is not a button — the operator reads 'click the button above' and there is "
+            "nothing to click. To offer an action you CALL the tool; the console turns it into "
+            "a button. Prose about a tool is not an offer.\n"
+            "Use a table only for real evidence with more than two rows. One fact is a "
+            "sentence.\n\n"
             "OFFER, DO NOT ASSUME, WHEN THE FIX HAS A CHOICE IN IT.\n"
             "Call propose_action to put an action behind a BUTTON when it COSTS money or is "
             "hard to undo and they did not ask for that exact thing — and especially when a "
@@ -695,6 +802,13 @@ class IntentRouter:
             else:
                 reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
                          "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
+        # The model described buttons instead of calling the tool -- again. Recover them.
+        try:
+            from ..tools import build_discuss_read_registry
+            _known = set(build_discuss_read_registry().names())
+        except Exception:  # noqa: BLE001 — recovery is a bonus, never a new failure mode
+            _known = set()
+        proposed.extend(_recover_described_actions(reply, _known, proposed))
         reply = _no_button_was_promised(reply, proposed)
         reply = _boss_cannot_call_you_back(reply)
         return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls,

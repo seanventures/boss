@@ -19,6 +19,8 @@ end-to-end pass belongs in a separate, slower suite; this one runs in CI on ever
 would have caught four of the five above.
 """
 
+import pathlib
+
 import pytest
 
 from boss_engine.agent.engine_agent import EngineAgent, _propose_label
@@ -160,7 +162,7 @@ Please choose the appropriate button."""
 def test_the_reply_that_shipped_promising_absent_buttons():
     out = _no_button_was_promised(_LIVE_REPLY, [])
     assert "choose the appropriate button" not in out.lower()
-    assert "no tool that deploys an app for the first time" in out
+    assert "nothing to click" in out
     assert "Create a deployment" in out, "the useful explanation must survive"
 
 
@@ -293,3 +295,88 @@ def test_the_window_is_stated_so_it_cannot_be_called_a_month():
     body = src[i:i + 4200]
     assert "window_description" in body
     assert "not a calendar month" in body
+
+
+# --------------------------------------------------------------------------- #
+# A table is not a button — recover the one the model described
+# --------------------------------------------------------------------------- #
+from boss_engine.services.intent_router import _recover_described_actions  # noqa: E402
+
+_TOOLS = set(build_discuss_read_registry().names())
+
+# Verbatim shape from production, 2026-08-24. BOSS wrote this and called nothing, then said
+# "Please click the button above."
+_DESCRIBED = """I can't deploy: the run was cancelled and never produced a build.
+
+**Proposed action**
+
+| Button label | Tool | Arguments | What it does (cost) |
+|---|---|---|---|
+| **Retry Build for Living Colors** | `retry_code_task` | { "run_id": "crun_a796fafaddd74427a0b8", "reason": "Retry after cancellation" } | Re-runs the cancelled task. This will spend compute (charged). |
+
+Please click the button above to start the retry."""
+
+
+def test_the_described_button_becomes_a_real_one():
+    out = _recover_described_actions(_DESCRIBED, _TOOLS, [])
+    assert len(out) == 1, out
+    a = out[0]
+    assert a["tool"] == "retry_code_task"
+    assert a["args"] == {"run_id": "crun_a796fafaddd74427a0b8",
+                         "reason": "Retry after cancellation"}
+    assert a["label"] == "Retry Build for Living Colors"
+
+
+def test_recovery_never_overrides_a_real_offer():
+    existing = [{"id": "act_1", "tool": "redeploy", "args": {}}]
+    assert _recover_described_actions(_DESCRIBED, _TOOLS, existing) == []
+
+
+@pytest.mark.parametrize("bad", [
+    # invented argument — the exact failure the placeholder guard exists for
+    _DESCRIBED.replace("crun_a796fafaddd74427a0b8", "crun_placeholder"),
+    # a tool that does not exist
+    _DESCRIBED.replace("retry_code_task", "deploy_to_production_now"),
+    # arguments that are not parseable
+    _DESCRIBED.replace('{ "run_id": "crun_a796fafaddd74427a0b8", "reason": "Retry after cancellation" }',
+                       "the run id of the cancelled task"),
+])
+def test_an_uncertain_row_produces_no_button_rather_than_a_wrong_one(bad):
+    """A button is an authorisation. Wrong is worse than absent."""
+    assert _recover_described_actions(bad, _TOOLS, []) == []
+
+
+def test_ordinary_tables_are_not_mistaken_for_offers():
+    """BOSS answers with evidence tables constantly; none of them are proposals."""
+    evidence = """| run | status | cost |\n|---|---|---|\n| crun_a | failed | $1.20 |"""
+    assert _recover_described_actions(evidence, _TOOLS, []) == []
+
+
+def test_the_prompt_forbids_the_table_that_pretends_to_be_a_button():
+    """The recovery above is a safety net, not the plan: the model should call the tool."""
+    from engine.tests._source import prompt_text
+    from boss_engine.services import intent_router
+    text = prompt_text(intent_router).lower()
+    assert "that table is not a button" in text
+    assert "most answers are one to three sentences" in text
+
+
+def test_the_operator_correction_outranks_the_pinned_run():
+    """"No, use the latest working one — the preview works fine" was ignored twice: the app
+    context block ended with "use your tools with run_id X", which reads as a restriction."""
+    from engine.tests._source import prompt_text
+    from boss_engine.services import intent_router
+    text = prompt_text(intent_router).lower()
+    assert "the correction wins" in text
+    assert "never return the same conclusion twice" in text
+    assert "a preview is serving, a build exists" in text
+
+
+def test_the_console_context_block_does_not_pin_the_run():
+    """The block is built in the web app, so the rule has to hold there too."""
+    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    i = src.index("[app context]")
+    block = src[i:i + 3000]
+    assert "STARTING POINT, not a restriction" in block
+    assert "correction outranks this block" in block
+    assert "latest_successful_run" in src

@@ -1958,7 +1958,42 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
    * became a menu. The facts matter: the console renders them inches away, so the agent should
    * not have to rediscover the repo, branch or preview it is being asked about.
    */
-  const askBossAbout = useCallback((m: CodeTaskRun) => {
+  /**
+   * The run BOSS should actually deploy, and the preview that proves one exists.
+   *
+   * The context block named ONE run -- whichever card was clicked. Asked to "deploy Living
+   * Colors to live", BOSS saw status "cancelled (implement)", concluded there was no build, and
+   * offered to re-run it. Told "the Open preview works fine, why don't you check the last
+   * successful", it looked at the newest run again and reported an infra failure. Both answers
+   * were faithful to the one run it was given.
+   *
+   * An app is a LINEAGE, not a run. The card already knows every run in that lineage and
+   * whether a preview is serving, so the deployable one is stated here rather than left for the
+   * agent to go and infer.
+   */
+  const deployableFacts = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]): string[] => {
+    const group = (lineage?.length ? lineage : [m]).filter(Boolean);
+    const done = (r: CodeTaskRun) => ["completed", "succeeded", "passed"].includes(String(r.status ?? ""));
+    // Newest first: the card list is already ordered, but do not depend on it.
+    const shipped = group.filter(done).sort((a, b) =>
+      String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+    const live = group.map((r) => livePreviewFor(r.id)).find(Boolean) ?? null;
+    const facts: string[] = [];
+    if (group.length > 1) facts.push(`runs_in_this_app: ${group.length} (this app is a lineage, not one run)`);
+    if (shipped.length) {
+      facts.push(
+        `latest_successful_run: ${shipped[0].id} (status ${shipped[0].status})`,
+        "DEPLOY THIS ONE. Do not judge deployability from the run named above if it failed or " +
+        "was cancelled — a later or earlier run in the same app may have succeeded.",
+      );
+    } else {
+      facts.push("latest_successful_run: none in this app");
+    }
+    if (live) facts.push(`live_preview: ${live} (a preview is serving, so a build exists)`);
+    return facts;
+  }, [previews]);
+
+  const askBossAbout = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]) => {
     const rootRunId = (m.finalize_ctx as Record<string, unknown> | undefined)?.root_run_id;
     const pr = (m as unknown as { pull_request_url?: string }).pull_request_url;
     const facts = [
@@ -1969,7 +2004,15 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
       `branch: ${rootRunId ? `boss/code/${rootRunId}` : `boss/code/${m.id}`}`,
       `status: ${m.status ?? "?"}${m.phase ? ` (${m.phase})` : ""}`,
       pr ? `pull_request: ${pr}` : "pull_request: none",
-      `Use your tools (inspect_app, diagnose_preview, diagnose_deployment) with run_id ${m.id} when you need more.`,
+      ...deployableFacts(m, lineage),
+      // This line used to end "...with run_id X when you need more", which reads as an
+      // instruction to STAY on that run. It is why "no, use the latest working one" changed
+      // nothing: the block outranked the operator. The run is now a starting point, and the
+      // operator's correction is explicitly above it.
+      `Start from run_id ${m.id} (inspect_app, diagnose_preview, diagnose_deployment), but it is`
+      + ` a STARTING POINT, not a restriction — the other runs above are part of the same app.`,
+      `If the operator points you somewhere else ("use the last successful one"), DO THAT. Their`
+      + ` correction outranks this block. Never repeat a conclusion they have just rejected.`,
     ].join("\n");
     try {
       window.sessionStorage.setItem(`boss.agent.facts.${m.id}`, facts);
@@ -2404,7 +2447,7 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                           label: "Ask BOSS",
                           hint: "reads the run, repo and preview",
                           icon: <ChatCircleDots size={15} weight="fill" />,
-                          onSelect: () => askBossAbout(members[0]),
+                          onSelect: () => askBossAbout(members[0], members),
                         },
                         {
                           id: "feature",
