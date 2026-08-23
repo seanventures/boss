@@ -159,7 +159,24 @@ class AgentService:
                 SELECT id, role, content, tool_calls, actions, created_at
                 FROM agent_messages
                 WHERE thread_id = :thread_id
-                ORDER BY created_at, id
+                -- A TURN'S ROWS SHARE ONE TIMESTAMP, SO THE TIEBREAK DECIDES THE TRANSCRIPT.
+                --
+                -- The question and its answer are written in the same transaction, and
+                -- Postgres now() is TRANSACTION START time — so created_at is identical for
+                -- both, every time. The tiebreak was `id`, a random hex, which meant the order
+                -- of a chat was decided by chance: in a real thread, four of five answers
+                -- sorted ABOVE the question they answered, so the operator saw their follow-up
+                -- appear before the previous reply.
+                --
+                -- Ordering by role within a timestamp is deterministic and matches how a turn
+                -- actually happens: the question, then any tool work, then the reply. This
+                -- also repairs threads already stored.
+                ORDER BY created_at,
+                         CASE role WHEN 'user' THEN 0
+                                   WHEN 'tool' THEN 1
+                                   WHEN 'assistant' THEN 2
+                                   ELSE 3 END,
+                         id
                 """
             ),
             {"thread_id": thread_id},
