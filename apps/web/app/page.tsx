@@ -728,8 +728,14 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchAgentStudioFeed(activeProjectId),
       fetchWorkOrchestrationFeed(activeProjectId),
     ]);
-  const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
-  const aiSreFeed = await fetchAiSreCapabilities(activeProjectId);
+  // These were two sequential awaits in the middle of an otherwise parallel render, so the
+  // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
+  // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
+  // calls, so serialising it was pure waste on every single render.
+  const [reliabilityFeed, aiSreFeed] = await Promise.all([
+    fetchReliabilityFeed(activeProjectId),
+    fetchAiSreCapabilities(activeProjectId),
+  ]);
   const [costInsights, llmSpend] = await Promise.all([
     Promise.resolve(budgetArea.costInsights),
     Promise.resolve(budgetArea.llmSpend),
