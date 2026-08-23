@@ -380,3 +380,16 @@ def test_the_console_context_block_does_not_pin_the_run():
     assert "STARTING POINT, not a restriction" in block
     assert "correction outranks this block" in block
     assert "latest_successful_run" in src
+
+
+@pytest.mark.parametrize("reply", [
+    # Each of these is verbatim from production, in the order the model invented them as the
+    # previous one was blocked. The rule is the ACT of promising a control, not one wording.
+    "Here are your options.\n\nPlease choose the appropriate button.",
+    "Deploying is not possible yet.\n\n**[Start deployment build]** (click to create a new build)",
+    "You can proceed.\n\nClick to start the retry when you are ready.",
+])
+def test_every_shape_of_fake_button_is_caught(reply):
+    out = _no_button_was_promised(reply, [])
+    assert "nothing to click" in out, f"still promising a control: {out!r}"
+    assert out.splitlines()[0] == reply.splitlines()[0], "the real answer must survive"

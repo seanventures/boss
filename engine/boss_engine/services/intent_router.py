@@ -169,9 +169,19 @@ _TOOL_SCHEMAS = [
 #
 # Promising a control is only truthful if the control exists, and whether it exists is known
 # HERE, after the turn — not by the model while it is writing. So it is checked here.
+# Each time one phrasing was blocked the model invented another. Verbatim, in order:
+#   "Please choose the appropriate button."
+#   "| Button label | Tool | Arguments |"          (a markdown table)
+#   "**[Start deployment build]** (click to create a new build)"   (a bracket pseudo-button)
+# So this matches the ACT of promising a control, not one wording: any instruction to click or
+# choose, and any bracketed label sold as clickable.
 _BUTTON_PROMISE = re.compile(
-    r"(choose|click|select|press|use)\s+(the\s+)?(appropriate\s+|relevant\s+|one\s+)?"
-    r"(button|option)s?\b|below\s+are\s+the\s+(two|three|following)\s+possible",
+    r"(choose|click|select|press|tap|use)\s+(the\s+)?(appropriate\s+|relevant\s+|one\s+|"
+    r"below\s+|above\s+)?(button|option)s?\b"
+    r"|below\s+are\s+the\s+(two|three|following)\s+possible"
+    r"|\bclick\s+(to|here|below|above)\b"
+    r"|\*\*\[[^\]]+\]\*\*"          # **[Start deployment build]**
+    r"|\[\s*(start|retry|create|deploy|run|cancel)[^\]]{0,40}\]\s*\(click",
     re.I,
 )
 
