@@ -252,6 +252,7 @@ import { KnowledgeGraphPanel } from "./knowledge-graph-ui";
 import { fetchCICDCatalog, fetchCICDStatus } from "../lib/cicd-pipelines";
 import { CICDPipelinesPanel } from "./cicd-pipelines-ui";
 
+import { AskBossHero } from "./ask-boss-hero";
 function formatMicros(amount: unknown): string {
   if (typeof amount !== "number") {
     return "n/a";
@@ -924,6 +925,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           />
         </section>
 
+        {/* FIRST, NOT BURIED. The old entry point was a Metatron "Status Query" form far
+            below the fold that could only answer. This is the agent, and it can act. */}
+        <section data-area="overview" aria-label="Ask BOSS">
+          <AskBossHero projectId={activeProjectId} actor={activeActorId} orgId={activeOrgId} />
+        </section>
+
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           <form action={submitCommandAction} className="cc-composer">
             <input type="hidden" name="project_id" value={activeProjectId} />
@@ -1080,52 +1087,21 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <div className="section-head">
               <div>
                 <span className="eyebrow">Metatron</span>
-                <h2>Status Query</h2>
+                <h2>Scoped status query</h2>
               </div>
               <AreaLink className="ov-action" area="metatron" orgId={activeOrgId}>
                 Open captain
               </AreaLink>
             </div>
-            <form method="get" className="composer">
-              <input type="hidden" name="project_id" value={activeProjectId} />
-              <input type="hidden" name="actor" value={activeActorId} />
-              <label className="field">
-                <span>Question</span>
-                <input
-                  className="input"
-                  name="q"
-                  defaultValue={metatronQuestion}
-                  placeholder="What changed, what is blocked, and what should I do next?"
-                />
-              </label>
-              <div className="input-grid">
-                <label className="field">
-                  <span>Task scope</span>
-                  <input
-                    className="input"
-                    name="task_id"
-                    defaultValue={metatronTaskId}
-                    placeholder="Optional task id"
-                  />
-                </label>
-                <label className="field">
-                  <span>Decision scope</span>
-                  <input
-                    className="input"
-                    name="decision_id"
-                    defaultValue={metatronDecisionId}
-                    placeholder="Optional decision id"
-                  />
-                </label>
-              </div>
-              <button className="button" type="submit">
-                Ask Metatron
-              </button>
-              <p className="detail">
-                Answers are generated from live control-plane state, include
-                freshness, and return explicit references.
-              </p>
-            </form>
+            {/* The composer that stood here asked for a question plus two optional ids and
+                posted to a read-only endpoint. Ask BOSS, at the top of this page, answers the
+                same question from the same live state AND can act on it, so keeping a second
+                weaker entry point only split the operator's attention. The rendering below
+                stays: the captain page still links here with q/task_id/decision_id set. */}
+            <p className="detail">
+              Ask a scoped question from <strong>Ask BOSS</strong> at the top of this page —
+              it reads the same live control-plane state and can act on the answer.
+            </p>
             {metatron ? (
               <div className="decision-grid">
                 <div>

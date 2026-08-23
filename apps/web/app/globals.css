@@ -5478,3 +5478,194 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .agent-md .md-table-wrap { max-width: 100%; }
 .agent-md .md-table { font-size: 0.82em; }
 .agent-md .md-table th, .agent-md .md-table td { padding: 4px 7px; }
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   ASK BOSS — the Command Center's first move.
+
+   Replaces the "Status Query" form (three inputs, two of which asked the operator
+   for ids they'd have to go look up, posting to a read-only endpoint below the
+   fold). One line of plain language, at the top.
+
+   The motion is state, not decoration: the aura is calm when idle, quickens while a
+   turn runs, and turns amber past what is normal — so the operator can read progress
+   from the corner of their eye. Everything here collapses under reduced-motion.
+   ───────────────────────────────────────────────────────────────────────────── */
+.askboss {
+  position: relative;
+  margin: 0 0 18px;
+  border-radius: 18px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--border, #1C2740);
+  background: linear-gradient(180deg, var(--surface-2, #0F1830) 0%, var(--surface, #0B1226) 100%);
+}
+.askboss-inner { position: relative; z-index: 1; padding: 26px 26px 22px; }
+
+/* Slow-drifting conic wash. Sits BEHIND the content via z-index and is masked to a
+   soft ring so text never sits on a moving gradient (a readability problem, not a
+   taste one). */
+.askboss-aura {
+  position: absolute; inset: -40%;
+  z-index: 0;
+  background: conic-gradient(from 0deg,
+    rgba(76, 141, 246, .00) 0deg,
+    rgba(76, 141, 246, .22) 70deg,
+    rgba(46, 209, 195, .20) 150deg,
+    rgba(139, 106, 245, .20) 240deg,
+    rgba(76, 141, 246, .00) 360deg);
+  filter: blur(46px);
+  opacity: .55;
+  animation: askbossDrift 26s linear infinite;
+  pointer-events: none;
+}
+.askboss[data-state="thinking"] .askboss-aura { opacity: .95; animation-duration: 7s; }
+.askboss[data-state="slow"] .askboss-aura {
+  opacity: 1; animation-duration: 4s;
+  background: conic-gradient(from 0deg,
+    rgba(224, 163, 62, .00) 0deg, rgba(224, 163, 62, .30) 90deg,
+    rgba(224, 120, 62, .24) 200deg, rgba(224, 163, 62, .00) 360deg);
+}
+@keyframes askbossDrift { to { transform: rotate(1turn); } }
+
+.askboss-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
+.askboss-title { margin: 0; font-size: 1.5rem; letter-spacing: -.01em; }
+.askboss-sub { margin: 4px 0 0; max-width: 62ch; opacity: .78; font-size: .92rem; line-height: 1.5; }
+
+/* The mark breathes only while BOSS is actually working — an idle pulse trains the
+   operator to ignore it, which costs the signal exactly when it matters. */
+.askboss-mark {
+  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 12px;
+  display: grid; place-items: center;
+  background: var(--brand-grad-2, linear-gradient(135deg, #2ED1C3, #4C8DF6));
+  box-shadow: 0 0 22px rgba(76, 141, 246, .38);
+}
+.askboss-mark-core {
+  width: 13px; height: 13px; border-radius: 4px; background: #fff; opacity: .95;
+  transition: transform 200ms ease;
+}
+.askboss[data-state="thinking"] .askboss-mark-core,
+.askboss[data-state="slow"] .askboss-mark-core { animation: askbossBreathe 1.15s ease-in-out infinite; }
+@keyframes askbossBreathe {
+  0%, 100% { transform: scale(.72) rotate(0deg); border-radius: 4px; }
+  50%      { transform: scale(1.05) rotate(45deg); border-radius: 7px; }
+}
+
+/* Composer */
+.askboss-box {
+  display: flex; align-items: flex-end; gap: 10px;
+  padding: 10px 10px 10px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border, #1C2740);
+  background: rgba(4, 9, 22, .62);
+  backdrop-filter: blur(6px);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.askboss-box:focus-within {
+  border-color: var(--accent, #4C8DF6);
+  box-shadow: 0 0 0 4px rgba(76, 141, 246, .16);
+}
+.askboss-input {
+  flex: 1 1 auto; min-width: 0;
+  background: transparent; border: 0; outline: none; resize: none;
+  color: var(--ink, #E8EEFC); font: inherit; font-size: 1rem; line-height: 1.5;
+  padding: 8px 0; max-height: 180px;
+}
+.askboss-input::placeholder { color: var(--ink-dim, #7C8CB0); }
+.askboss-send {
+  flex: 0 0 auto; min-width: 76px; height: 42px;
+  border: 0; border-radius: 10px; cursor: pointer;
+  background: var(--brand-grad-2, linear-gradient(135deg, #2ED1C3, #4C8DF6));
+  color: #fff; font: inherit; font-weight: 700; font-size: .92rem;
+  display: grid; place-items: center;
+  transition: filter 160ms ease, transform 120ms ease;
+  box-shadow: 0 6px 18px rgba(47, 111, 224, .34);
+}
+.askboss-send:hover:not(:disabled) { filter: brightness(1.09); transform: translateY(-1px); }
+.askboss-send:disabled { opacity: .45; cursor: not-allowed; }
+.askboss-spinner {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .32); border-top-color: #fff;
+  animation: askbossSpin .7s linear infinite;
+}
+@keyframes askbossSpin { to { transform: rotate(1turn); } }
+
+/* Openers. Real requests, chosen to show the range (read / diagnose / act) rather
+   than to fill the row. They disappear once there is an answer — a suggestion the
+   operator has moved past is clutter. */
+.askboss-openers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.askboss-opener {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 13px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border, #1C2740);
+  background: rgba(255, 255, 255, .035);
+  color: var(--ink-dim, #9FB0D0); font: inherit; font-size: .84rem;
+  text-align: left;
+  transition: background 150ms ease, color 150ms ease, border-color 150ms ease, transform 120ms ease;
+}
+.askboss-opener:hover {
+  background: rgba(76, 141, 246, .16);
+  border-color: var(--accent, #4C8DF6);
+  color: var(--ink, #E8EEFC);
+  transform: translateY(-1px);
+}
+.askboss-opener-icon { opacity: .75; font-size: .78em; }
+
+/* Progress + result */
+.askboss-status {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin: 14px 0 0; font-size: .88rem; opacity: .9;
+}
+.askboss-status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent, #4C8DF6);
+  animation: agentWorkingPulse 1.1s ease-in-out infinite;
+}
+.askboss-status[data-slow="true"] .askboss-status-dot { background: var(--warn, #E0A33E); }
+.askboss-status[data-slow="true"] { color: var(--warn, #E0A33E); }
+.askboss-elapsed { font-variant-numeric: tabular-nums; opacity: .7; margin-left: 2px; }
+
+.askboss-error { margin: 14px 0 0; color: var(--warn, #E0A33E); font-size: .9rem; }
+
+.askboss-answer {
+  margin-top: 16px; padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border, #1C2740);
+  border-left: 3px solid var(--accent, #4C8DF6);
+  background: rgba(4, 9, 22, .5);
+  animation: askbossRise 260ms cubic-bezier(.2, .8, .3, 1) both;
+  overflow-x: auto;                 /* wide evidence tables scroll here, not the page */
+}
+.askboss-answer > :first-child { margin-top: 0; }
+.askboss-answer > :last-child { margin-bottom: 0; }
+@keyframes askbossRise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+
+.askboss-actions { margin-top: 14px; }
+.askboss-actions-head { margin: 0 0 9px; font-size: .86rem; font-weight: 600; opacity: .85; }
+.askboss-actions-row { display: flex; flex-wrap: wrap; gap: 10px; }
+
+.askboss-foot { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; }
+.askboss-reset {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  color: var(--accent, #4C8DF6); font: inherit; font-size: .86rem; text-decoration: none;
+}
+.askboss-reset:hover { text-decoration: underline; }
+
+@media (max-width: 720px) {
+  .askboss-inner { padding: 20px 16px 18px; }
+  .askboss-title { font-size: 1.28rem; }
+  .askboss-openers { flex-direction: column; }
+  .askboss-opener { width: 100%; }
+}
+
+/* Motion here is informative, so it degrades to a static equivalent rather than
+   vanishing: the aura holds a colour, the mark stops moving, the spinner stops. */
+@media (prefers-reduced-motion: reduce) {
+  .askboss-aura,
+  .askboss-mark-core,
+  .askboss-status-dot,
+  .askboss-spinner { animation: none !important; }
+  .askboss-answer { animation: none; }
+  .askboss-opener:hover, .askboss-send:hover:not(:disabled) { transform: none; }
+  .askboss-spinner { border-top-color: rgba(255, 255, 255, .7); }
+}
