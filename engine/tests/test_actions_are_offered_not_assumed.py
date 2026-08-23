@@ -209,12 +209,17 @@ def test_the_prompt_requires_honest_reporting_of_what_ran():
 def test_redeploys_refusal_carries_the_instruction_itself():
     """A distant rule in the system prompt did not prevent it three times. The correction has
     to be where the model is standing when it decides — in the result it just received."""
-    import inspect
-    from boss_engine.services import shepherd_service
-
-    src = inspect.getsource(shepherd_service._act_on_deployment)
-    assert "DO NOT substitute a build for a deploy" in src
-    assert "propose_action" in src, "say what to do instead, not only what not to do"
+    # The rule now lives in describe_undeployable(), which _act_on_deployment returns, so that
+    # every failure state could be driven from a table instead of only from production. What
+    # matters is unchanged and is asserted where it is now true: on the message the model
+    # actually receives.
+    # Asserted on OUTPUT: this wording moved into describe_undeployable() so every failure
+    # state could be exercised from a table, and a source-slice assertion cannot follow it.
+    from boss_engine.services.shepherd_service import describe_undeployable
+    out = describe_undeployable(status="cancelled", repo="r/r",
+                                targets=[{"environment": "staging", "status": "active"}])
+    assert "DO NOT substitute a build for a deploy" in out
+    assert "propose_action" in out, "say what to do instead, not only what not to do"
 
 
 def test_the_refusal_explains_why_rather_than_just_refusing():
@@ -226,6 +231,9 @@ def test_the_refusal_explains_why_rather_than_just_refusing():
     src = inspect.getsource(shepherd_service._act_on_deployment)
     # Reworded when the refusal grew from one sentence into the actual state (which
     # environments exist, which are missing). The requirement is unchanged: say WHY.
-    assert "there is no deployment run for this app yet" in src
-    assert "This app HAS deployment targets" in src
+    from boss_engine.services.shepherd_service import describe_undeployable
+    out = describe_undeployable(status="completed", repo="r/r",
+                                targets=[{"environment": "staging", "status": "active"}])
+    assert "there is no deployment run for this app yet" in out
+    assert "This app HAS deployment targets" in out
     assert "no build to re-ship" in src

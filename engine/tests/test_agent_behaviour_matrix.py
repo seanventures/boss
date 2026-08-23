@@ -400,29 +400,27 @@ def test_every_shape_of_fake_button_is_caught(reply):
 # --------------------------------------------------------------------------- #
 def test_the_cannot_deploy_message_states_what_exists_and_what_is_missing():
     """"I know there's only a staging target — I'm expecting the BOSS agent to communicate that
-    to me." BOSS had found it a turn earlier and dropped it, because the tool result it was
-    relaying said only "never deployed, no build to re-ship". The result now carries the state,
-    so the agent has something to have a conversation about."""
-    import inspect
-    from boss_engine.services import shepherd_service
-    src = inspect.getsource(shepherd_service)
-    i = src.index("no_action: there is no deployment run")
-    body = src[i - 2000:i + 1600]
-    # the concrete state
-    assert "deployment_targets" in body, "does not look up what targets exist"
-    assert "This app HAS deployment targets" in body
-    assert "no production/live target" in body
-    assert "NO deployment targets configured at all" in body
-    # and the instruction to relay it as options, not a wall
-    assert "TELL THE OPERATOR THIS STATE PLAINLY" in body
-    assert "lay out the real options" in body
-    assert "let them choose" in body
+    to me." Asserted on the OUTPUT, not on where the text lives: the first version of this
+    matched a byte range inside _act_on_deployment and broke the moment the wording moved into
+    a function, which tells you it was pinning a location rather than a behaviour.
+
+    The exhaustive per-state coverage is in test_deployment_scenarios; this keeps the one case
+    that actually reached an operator."""
+    from boss_engine.services.shepherd_service import describe_undeployable
+    out = describe_undeployable(
+        status="completed", repo="paramg/boss-sandbox",
+        targets=[{"environment": "staging", "status": "active"}])
+    assert "staging" in out                                  # what exists
+    assert "no production/live target" in out                # what is missing
+    assert "create the missing production target" in out     # what they can do
+    assert "TELL THE OPERATOR THIS STATE PLAINLY" in out
+    assert "propose_action" in out, "an option in prose is not an option they can take"
 
 
 def test_it_still_refuses_to_turn_a_deploy_into_a_build():
-    """The guardrail that started this must survive the rewrite."""
-    import inspect
-    from boss_engine.services import shepherd_service
-    src = inspect.getsource(shepherd_service)
-    i = src.index("no_action: there is no deployment run")
-    assert "DO NOT substitute a build for a deploy" in src[i:i + 1600]
+    """The guardrail that started this must survive the rewrite — in every state."""
+    from boss_engine.services.shepherd_service import describe_undeployable
+    for targets in ([], [{"environment": "staging", "status": "active"}],
+                    [{"environment": "production", "status": "paused"}]):
+        out = describe_undeployable(status="cancelled", repo="r/r", targets=targets)
+        assert "DO NOT substitute a build for a deploy" in out
