@@ -641,6 +641,22 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 actor=actor, force=bool(args.get("force")))
 
     @reg.tool(
+        "inspect_self",
+        "Look at the container BOSS is running in: CPU load and throttling, memory use and "
+        "OOM-kill count, free disk, how much space preview workdirs are holding, and the "
+        "heaviest processes. Use this FIRST whenever a process died without an explanation "
+        "(`exited -9`, `exited 137`, `SIGKILL`) — the OOM count settles in one number what "
+        "otherwise takes an hour of guessing — and whenever the API is slow while a build is "
+        "running, because load-per-core says whether anything is actually contending. "
+        "Read-only; it touches no docker socket.",
+        _obj({}),
+        kind="read",
+    )
+    def inspect_self(ctx, *, project_id, actor, args):
+        from ..services.self_observability import self_snapshot
+        return self_snapshot()
+
+    @reg.tool(
         "set_job_priority",
         "Move a job between priority bands. LOWER runs sooner. Bands: 'urgent' (delay costs "
         "money or safety), 'interactive' (a person is watching), 'requested' (a person asked "

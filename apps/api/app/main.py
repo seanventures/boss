@@ -11600,6 +11600,23 @@ def refresh_health_snapshot(
         return health_snapshot_summary_from_row(row)
 
 
+@app.get("/v1/self/diagnostics")
+def self_diagnostics(preview_root: Optional[str] = None) -> dict:
+    """What BOSS can see about the container it is itself running in.
+
+    BOSS can interrogate its own database in detail and can inspect the hosts it DEPLOYS to, and
+    had nothing for the machine it runs on. `claude code agent exited -9` therefore cost about an
+    hour of hypothesis-testing — OOM killer, deploy restart, or something internal — and was
+    settled by reading code rather than data. One number (an OOM count of zero) answers it.
+
+    Needs no docker socket: /proc and the container's own cgroup files are enough, and the
+    socket is not something an application container should be given.
+    """
+    from boss_engine.services.self_observability import self_snapshot
+
+    return self_snapshot(preview_root)
+
+
 @app.get("/v1/ops/queue", response_model=OpsQueueInspectionResponse)
 def inspect_ops_queue(
     project_id: str,

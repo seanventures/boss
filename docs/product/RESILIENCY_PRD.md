@@ -788,11 +788,24 @@ this document is downstream of it, and no amount of priority tuning changes it.
 * **Acceptance:** a PRD meeting starts within a minute while a code task is building; one hung
   job cannot stall unrelated work.
 
-### R8 — BOSS can see its own machine
-`exited -9` cost an hour of guessing because nothing reports memory, CPU or restart history for
-BOSS's own containers. `inspect_host` exists for deployment hosts and has no equivalent here.
-* **Acceptance:** "why did this process die?" is answerable from BOSS, with evidence, in one
-  question.
+### R8 — BOSS can see its own machine — **SHIPPED**
+`exited -9` cost an hour of guessing because nothing reported memory, CPU or restart history for
+BOSS's own containers. `inspect_host` existed for deployment hosts and had no equivalent here.
+
+* **Built:** `services/self_observability.py` — CPU load and load-per-core, cgroup CPU quota and
+  throttling, memory use against the container ceiling, **OOM-kill count**, free disk, preview
+  workdir size, and the heaviest processes with their CPU seconds.
+* **No docker socket required**, and deliberately so: `/proc` plus the container's own cgroup
+  files are sufficient, and the socket is not something an application container should hold.
+* **Surface:** `GET /v1/self/diagnostics` and the read-only Ask BOSS tool `inspect_self`.
+* **It answers in one number what took an hour.** `oom_kills: 0` does not merely fail to
+  accuse the kernel — it actively redirects the search, which is what I20 needed and did not have.
+* **It also makes E1 provable.** Load-per-core turns "the API was starved of CPU" from an
+  inference into a measurement, and `nr_throttled` separates *hit our own quota* from *had too
+  much to do* — two faults with different fixes.
+* **Degrades rather than raises.** On macOS none of these files exist; every reader returns
+  `None` and the snapshot says so plainly. A diagnostic that can fail the request it is
+  diagnosing is worse than no diagnostic.
 
 ### R6a — Monitoring events as a first-class subsystem *(requested)*
 Today a run sat dead for 53 minutes and **nothing emitted an event**. Status is polled by
