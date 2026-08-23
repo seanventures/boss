@@ -7,6 +7,7 @@ import {
 } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
+import { editionOptionalList } from "./edition-gating";
 
 export type AgentModuleFeedItem = {
   moduleId: string;
@@ -192,11 +193,14 @@ export async function fetchAgentModuleFeed(
 ): Promise<AgentModuleFeed> {
   const resolvedProjectId = resolveProjectId(projectId);
   try {
+    // The marketplace routes are hosted/paid; on Community they 404. A bare Promise.all threw
+    // away `listAgentModules` and `listAgentModuleInstallRecords` — both of which return 200 —
+    // which is why "Available agent modules" reported an API error while its endpoint was fine.
     const [payload, installRecords, hostedListings, syncRuns] = await Promise.all([
       client.listAgentModules(resolvedProjectId),
       client.listAgentModuleInstallRecords(resolvedProjectId),
-      client.listHostedMarketplaceListings(resolvedProjectId),
-      client.listHostedMarketplaceSyncRuns(resolvedProjectId),
+      editionOptionalList(client.listHostedMarketplaceListings(resolvedProjectId)),
+      editionOptionalList(client.listHostedMarketplaceSyncRuns(resolvedProjectId)),
     ]);
     return {
       projectId: payload.project_id,

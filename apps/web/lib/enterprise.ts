@@ -10,6 +10,7 @@ import {
 } from "@boss/api-client";
 
 import { client, PROJECT_ID, resolveProjectId } from "./client";
+import { editionOptionalList } from "./edition-gating";
 
 export type EnterpriseClusterItem = {
   id: string;
@@ -316,13 +317,18 @@ export async function fetchEnterpriseFeed(
       scimUsers,
       supportCases,
     ] = await Promise.all([
-      client.listEnterpriseClusters(resolvedProjectId),
-      client.listEnterpriseClusterValidationRuns(resolvedProjectId),
-      client.listEnterpriseIdentityProviders(resolvedProjectId),
-      client.listEnterpriseIdentityRolloutPolicies(resolvedProjectId),
-      client.listEnterpriseScimGroups(resolvedProjectId),
-      client.listEnterpriseScimUsers(resolvedProjectId),
-      client.listEnterpriseSupportCases(resolvedProjectId),
+      // Each call carries its OWN fallback. A bare Promise.all rejects on the first rejection,
+      // so one enterprise-only route 404ing on Community discarded all seven results — three
+      // SSO cards rendered "API returned 404" with their data already loaded, one of them
+      // badged "included in Community". Genuine failures (5xx, network) still propagate to the
+      // catch below, so `apiReachable: false` continues to mean a real outage.
+      editionOptionalList(client.listEnterpriseClusters(resolvedProjectId)),
+      editionOptionalList(client.listEnterpriseClusterValidationRuns(resolvedProjectId)),
+      editionOptionalList(client.listEnterpriseIdentityProviders(resolvedProjectId)),
+      editionOptionalList(client.listEnterpriseIdentityRolloutPolicies(resolvedProjectId)),
+      editionOptionalList(client.listEnterpriseScimGroups(resolvedProjectId)),
+      editionOptionalList(client.listEnterpriseScimUsers(resolvedProjectId)),
+      editionOptionalList(client.listEnterpriseSupportCases(resolvedProjectId)),
     ]);
     const clusterItems = clusters.items.map(mapCluster);
     const validationItems = clusterValidationRuns.items.map(
