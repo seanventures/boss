@@ -7,13 +7,77 @@ from boss_engine.tools import build_default_registry, build_discuss_read_registr
 from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 
 
+#: Every tool the default registry is expected to carry. Present so a count mismatch can name
+#: what changed instead of reporting two integers.
+_EXPECTED_TOOLS: set[str] = {
+    "cancel_code_task",
+    "cancel_job",
+    "close_orphaned_runs",
+    "consistency_report",
+    "create_code_task",
+    "create_discovery",
+    "decide",
+    "describe_schema",
+    "explain_run",
+    "extend_code_task",
+    "find_starved_work",
+    "get_code_task",
+    "get_config",
+    "get_costs",
+    "get_meeting",
+    "get_run_activity",
+    "get_task_preview",
+    "git_history",
+    "http_probe",
+    "inspect_host",
+    "inspect_self",
+    "link_run_origin",
+    "list_code_tasks",
+    "list_decisions",
+    "list_discovery",
+    "list_github_connections",
+    "list_meetings",
+    "list_previews",
+    "list_repositories",
+    "list_running_work",
+    "microvm_status",
+    "project_status",
+    "query_db",
+    "read_code",
+    "read_logs",
+    "register_repository",
+    "repo_activity",
+    "request_meeting",
+    "retry_code_task",
+    "search_code",
+    "send_feedback",
+    "set_job_priority",
+    "start_preview",
+    "steer_code_task",
+    "stop_preview",
+    "waive_gates",
+    "watch_code_task",
+}
+
+
 def test_default_registry_shape():
     reg = build_default_registry()
     # The governed catalog has expanded since the original Phase 1 tool layer;
     # keep this explicit so accidental tool removal is visible in OSS CI.
-    assert len(reg.names()) == 46
-    assert len(reg.specs(kind="read")) == 29
-    assert len(reg.specs(kind="write")) == 17
+    #
+    # Counts are a tripwire, not a specification — and a bare `== 46` fails saying only
+    # "47 == 46", which does not name the tool that appeared or vanished. Adding
+    # `inspect_self` broke this and the message pointed at neither the tool nor the change.
+    # The set difference below does say, so a legitimate addition is a one-line edit and an
+    # accidental REMOVAL still fails loudly, which is what the tripwire is for.
+    read = {s.name for s in reg.specs(kind="read")}
+    write = {s.name for s in reg.specs(kind="write")}
+    assert read | write == set(reg.names())
+    assert len(reg.names()) == 47, (
+        f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
+        f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
+    assert len(read) == 30
+    assert len(write) == 17
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -119,8 +183,16 @@ def test_discuss_read_registry_exposes_everything_and_hides_project_override():
     assert "project_status" in reg.names()
     assert "get_code_task" in reg.names()
     assert "get_costs" in reg.names()
-    # Every read tool, nothing withheld.
-    assert len(reg.specs(kind="read")) == 29
+    # Every read tool, nothing withheld — asserted as "the same set the default registry has"
+    # rather than a count, so adding a read tool cannot silently fail to reach a question.
+    # That is the actual invariant: `inspect_self` was built for exactly this path, and a bare
+    # count would have failed here while proving nothing about reachability.
+    default_reads = {s.name for s in build_default_registry().specs(kind="read")}
+    discuss_reads = {s.name for s in reg.specs(kind="read")}
+    assert default_reads - discuss_reads == set(), (
+        f"these read tools cannot be reached from a question: "
+        f"{sorted(default_reads - discuss_reads)}")
+    assert "inspect_self" in discuss_reads
     # …plus the operational writes. BOSS could describe its own stuck queue and not touch it;
     # an operator had to reach in from outside to cancel a job. The line is OPERATIONAL STATE
     # (a priority, a wedged job, an orphaned run) versus CREATING WORK that spends money.
