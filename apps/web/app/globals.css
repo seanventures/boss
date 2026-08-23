@@ -1647,10 +1647,16 @@ details.wf-turn[open] > summary { border-bottom: 1px solid var(--border); margin
 .mr-home-count { font-size: 0.82rem; color: var(--muted); }
 .mr-home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .mr-meeting-card {
+  /* A grid ITEM defaults to min-width:auto, so it cannot shrink below its content's intrinsic
+     width and a single unbreakable child pushes the whole card past its track. The identical
+     fix is already written three lines into .ct-deploy-line for the row INSIDE this card —
+     applied there, missed on the card itself. */
+  min-width: 0;
   display: grid; gap: 10px; padding: 16px; text-align: left; cursor: pointer;
   border-radius: var(--r); background: var(--surface); border: 1px solid var(--border);
   color: var(--ink); transition: border-color 0.14s ease, transform 0.14s ease, background 0.14s ease;
 }
+.mr-meeting-card > * { min-width: 0; }
 .mr-meeting-card:hover { border-color: var(--border-strong); transform: translateY(-2px); background: var(--surface-2); }
 .mr-meeting-card-head { display: flex; align-items: center; justify-content: space-between; }
 .mr-meeting-date { font-size: 0.72rem; color: var(--muted); }
@@ -5010,7 +5016,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    at 320px the spine labels crowd and the title clamps after four words. Doubling the minimum
    gives the spine room to read as a sequence. Scoped to the task list; the meetings keep
    their own density. */
-.mr-grid.ct-tiles { grid-template-columns: repeat(auto-fit, minmax(560px, 1fr)); }
+/* minmax(560px, …) has a HARD 560px floor: when the panel is narrower than one track — a
+   narrow window, the agent dock open, a phone — the track still cannot shrink below 560px and
+   the grid overflows its container, clipping the card. `min(560px, 100%)` keeps the 560px
+   preference and lets the track collapse to the container when there is less room than that. */
+.mr-grid.ct-tiles { grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr)); }
 .mr-grid.ct-tiles > .mr-meeting-card { padding: 20px 22px; gap: 12px; }
 .mr-grid.ct-tiles .mr-meeting-title { font-size: 1rem; }
 /* With the extra width the spine can breathe again. */
@@ -5063,7 +5073,13 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ct-deploy-line > * { min-width: 0; }
 /* The reason is context, not the headline. Full text stays in the tooltip. */
 .ct-deploy-reason {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 26ch;
+  /* 26ch on one line cut "health check returned 000; rolled back" to
+     "health check returned 000; rolle…" — losing the OUTCOME, which is the half that tells the
+     operator whether they still have a running app. Two clamped lines keep the whole of a
+     typical reason while still bounding a pathological one. Full text remains in the tooltip. */
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; text-overflow: ellipsis;
+  max-width: 46ch; min-width: 0;
 }
 /* Progress lives under the status row, inside the card. A deployment that reports nothing
    until it ends is the thing the live stepper was built to fix; not surfacing it here would
