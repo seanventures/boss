@@ -643,7 +643,7 @@ dangerous one.
 
 ## 3. The shapes
 
-The incidents are forty-three; the shapes are fifteen. Fixing shapes is what stops recurrence.
+The incidents are forty-four; the shapes are fifteen. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -830,7 +830,41 @@ are the same payload.
   never connected — this is the abandoned BOSS-13 refactor its own test still asserts.
 * **Acceptance:** any single area < 1.5 MB and < 3s server render; `area-data.test.ts` passes.
 
-### R1b — Render only the active area *(needs a product decision)*
+### R1b — Render only the active area — **SHIPPED (option a, operator-approved)**
+
+| area | payload before | after | change | render before | after |
+|---|---|---|---|---|---|
+| code_tasks | 8.23 MB | **3.90 MB** | −53% | 20.1s | 18.1s |
+| meetings | 6.47 MB | **2.09 MB** | −68% | 18.3s | 18.6s |
+| budget | 6.48 MB | **0.12 MB** | −98% | 17.3s | 17.8s |
+| infra | 6.59 MB | **0.29 MB** | −96% | 19.0s | 18.1s |
+| assurance | 6.48 MB | **0.11 MB** | −98% | 18.0s | 17.5s |
+
+Content verified present after the cut, not merely smaller: `Shorty` renders on code_tasks,
+`ProviderOps` on infra, `Assurance` on assurance, and each page carries its own section.
+
+**Payload acceptance met for three of five areas (< 1.5 MB); render time NOT met, and barely
+moved.** That is the honest headline, and the explanation is specific: **rendering is now gated,
+fetching still is not.** R1's first slice gated three data packs (12 calls); the other ~58 feeds
+are still fetched on every request whatever the area. Time is therefore fetch-bound, which is
+consistent with it being nearly constant (17.5–18.6s) across areas whose payloads now differ by
+35×.
+
+* **Next, to reach < 3s:** extend the `area-data` pack pattern to the remaining ~58 feeds. Purely
+  mechanical now — the wiring is proven and `shouldRenderSection` already states which area each
+  section belongs to.
+* **`code_tasks` at 3.90 MB** is the largest remaining area and is dominated by its own 200-row
+  feed (`codeTaskLimitFor`), not by other areas.
+
+### I44 — Two areas the console could never show *(pre-existing, surfaced by the R1b guard)*
+* **`ai-sre`** — a `<section>` with no CSS rule. `globals.css` hides every section by default and
+  reveals only the 31 listed areas, so this one has **never been visible**, while being rendered
+  and serialised into every page load.
+* **`github`** — a CSS rule with no matching section, so `?area=github` renders an empty area.
+* Both confirmed against `main` and pinned in `only-the-active-area-renders.test.ts` rather than
+  excused: if either is fixed, or a third appears, the test fails and names it.
+
+### R1b (original framing) — *needed a product decision*
 The measurement above says the console's weight is **rendered markup for 66 areas**, not data.
 Two options, and the choice is a UX trade rather than an engineering one:
 
