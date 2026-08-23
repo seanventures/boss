@@ -810,9 +810,28 @@ safe default was applied"* and the event reported `safe_default_applied: hold`. 
   than destructive, which is why it drops down the list).
 * **Acceptance:** no run reaches a terminal state solely because nobody answered.
 
-### R5 — Lineage visible end to end
-Discovery → PRD → Build → Ship carry three unrelated names and nothing links them, so an operator
-cannot tell that a completed panel started a build.
+### R5 — Lineage visible end to end — **PARTLY SHIPPED**
+*Re-measured before changing anything: the mechanism already worked better than this item
+claimed.* A run spawned from an approved PRD DOES carry
+`finalize_ctx.origin = {kind, task_id, meeting_run_id, decision_id, title}`, and retries carry
+it forward. Meeting → build was never the broken link.
+
+**The actual defect: origin recorded one hop, not the chain.** The real path is
+Discovery → task → PRD meeting → build. Promoting a discovery outcome stores `discovery_run_id`
+in the TASK's inputs; the origin dict is assembled at the last hop and dropped it. So a build
+that genuinely began with research arrived at the spine with `kind === "meeting"` and rendered
+**"Research: none"** — the operator could not see that the panel they approved came from
+anything.
+
+* **Shipped:** origin reads one level further (the task is the join, and is already in hand) and
+  carries `discovery_run_id` when there was research. The spine now claims Research from the
+  FIELD rather than from `kind` — because `kind` names the nearest hop and can only ever
+  describe one of them — and links to that dossier.
+* **Deliberately preserved:** the spine still renders a hollow stage when a stage genuinely did
+  not happen. That honesty is what caught I32, and a spine that claims every stage is worthless.
+* **Still open:** the discovery area does not yet read a `?discovery=<id>` param, so the link
+  lands on the area rather than selecting the dossier — the same gap `?meeting=` already fixed
+  for panels. And the origin `title` is still the raw directive (I11's family).
 * **Acceptance:** from any card, one click to the artefact of every completed upstream stage.
 
 ### R7 — More than one lane *(the constraint behind most of §2)*

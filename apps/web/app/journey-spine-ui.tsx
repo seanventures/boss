@@ -38,7 +38,15 @@ type Run = {
   phase?: string;
   pull_request_url?: string | null;
   finalize_ctx?: {
-    origin?: { kind?: string; task_id?: string; meeting_run_id?: string; title?: string } | null;
+    origin?: {
+      kind?: string;
+      task_id?: string;
+      meeting_run_id?: string;
+      /** Present only when the chain really began with research. `kind` names the nearest hop
+       *  and cannot describe the rest of it. */
+      discovery_run_id?: string;
+      title?: string;
+    } | null;
     root_run_id?: string;
     is_followup?: boolean;
   } | null;
@@ -89,7 +97,16 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
   // started directly has neither, and says so by leaving them hollow — better than implying a
   // panel that never met.
   const fromMeeting = origin?.kind === "meeting";
-  const fromDiscovery = origin?.kind === "discovery";
+  // LINEAGE IS A CHAIN, AND `kind` NAMES ONLY THE NEAREST HOP.
+  //
+  // The real path is Discovery -> task -> PRD meeting -> build, so a build that genuinely
+  // started from a dossier arrives here with kind === "meeting" and rendered "Research: none".
+  // The operator had no way to see that the panel they approved came from anything at all.
+  // Read the FIELD: it is present only when research actually happened, whatever the last hop
+  // was called.
+  const discoveryRunId =
+    typeof origin?.discovery_run_id === "string" ? origin.discovery_run_id : undefined;
+  const fromDiscovery = Boolean(discoveryRunId) || origin?.kind === "discovery";
   // A meeting's own id, so Spec lands on THAT panel rather than the meetings list. Falls back
   // to the area when only the origin kind is known.
   // ?meeting= is what the meetings area reads. Passing the task id sent every Spec click to
@@ -104,7 +121,12 @@ export function JourneySpine({ run, previewUrl, large = false }: { run: Run; pre
       label: "Research",
       sub: fromDiscovery ? "open dossier ↗" : "none",
       state: fromDiscovery ? "done" : "todo",
-      href: fromDiscovery ? consoleHref({ area: "discovery" }, search) : undefined,
+      href: fromDiscovery
+        ? consoleHref(
+            { area: "discovery", ...(discoveryRunId ? { discovery: discoveryRunId } : {}) },
+            search,
+          )
+        : undefined,
       title: fromDiscovery
         ? "Started from a research dossier — open Discovery"
         : "No research phase: this work did not start from a dossier",

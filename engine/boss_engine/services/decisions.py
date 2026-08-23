@@ -925,12 +925,39 @@ class DecisionService:
         except Exception:  # noqa: BLE001 — a missing back-link must not stop the build
             meeting_run_id = None
 
+        # LINEAGE IS A CHAIN; ORIGIN RECORDED ONE HOP.
+        #
+        # The real path is Discovery -> task -> PRD meeting -> code task. Promoting a discovery
+        # outcome stores `discovery_run_id` in the TASK's inputs, and this dict — built at the
+        # last hop — dropped it. So a build that genuinely started from a research dossier
+        # rendered "Research: none" on the journey spine, and the operator had no way to see
+        # that the panel they approved came from anything.
+        #
+        # The task is the join, and it is already in hand. Read one more level.
+        discovery_run_id = None
+        try:
+            from sqlalchemy import text as _text
+            raw_inputs = connection.execute(_text(
+                "SELECT inputs FROM tasks WHERE id = :t"
+            ), {"t": task_id}).scalar()
+            if isinstance(raw_inputs, str):
+                import json as _json
+                raw_inputs = _json.loads(raw_inputs)
+            if isinstance(raw_inputs, dict):
+                discovery_run_id = raw_inputs.get("discovery_run_id")
+        except Exception:  # noqa: BLE001 — a missing back-link must not stop the build
+            discovery_run_id = None
+
         origin = {
             "kind": "meeting",
             "task_id": task_id,
             "meeting_run_id": meeting_run_id,
             "decision_id": row["id"],
             "title": title,
+            # Present only when this work really did start from research. The spine reads the
+            # FIELD rather than `kind`, because kind names the nearest hop and can only ever
+            # describe one of them.
+            **({"discovery_run_id": discovery_run_id} if discovery_run_id else {}),
         }
 
         # SPEC A FEATURE FOR AN APP THAT ALREADY EXISTS.
