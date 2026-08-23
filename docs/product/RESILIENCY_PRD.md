@@ -491,11 +491,39 @@ here was verified against the running system, not inferred.
   spend continuing after an operator said stop.
 * **Status:** open. The fix is a status check at enqueue time, not a better cancel.
 
+### I40 — Running a job degrades the control plane, because the agent lives inside it
+*Measured 2026-08-23 while a code task was in `check_tests`.*
+
+| Probe | While a job runs | Between phases |
+|---|---|---|
+| `/health` (15s-cached) | 0.6–2.5s | 0.2s |
+| `/v1/code-tasks?limit=5` | **47.1s, then 39.5s** | 0.86–1.1s |
+| next call after those | **404 in 0.3s — Traefik's plain-text 404** | 200 |
+| console page | 79.5s, then a 200s timeout | — |
+
+* **Cause:** the code agent runs **inside the API container** — the worker POSTs to the control
+  plane and the API executes the pipeline. `check_tests` runs the app's own suite (npm install,
+  build, Playwright) in that process's container. The API's threadpool and CPU are the agent's
+  threadpool and CPU.
+* **Why the I3 fix does not cover it:** boot warm-up addresses a COLD cache. This is live
+  contention, recurring, on a warm process. Same symptom, different cause.
+* **Consequence:** the control plane becomes unreliable exactly when there is something worth
+  watching. Every "the console is down" report today happened while a run was in flight, and the
+  poller watching that very run failed with JSON parse errors because it was handed Traefik's
+  plain-text 404 instead of a response.
+* **This changes what R7 means.** The obvious reading of "one lane" is *add lanes*. Adding lanes
+  **inside the same container makes this worse** — N agents contending with the API instead of
+  one. The first move is ISOLATION (get the agent out of the API process), and only then
+  concurrency. A fix at the wrong layer here would be S9 again, and this time I would have
+  measured the evidence for it myself.
+* **Status:** open. Reframes R7; see 6.0 Phase 1.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are thirty-nine; the shapes are fourteen. Fixing shapes is what stops recurrence.
+The incidents are forty; the shapes are fourteen. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -588,7 +616,8 @@ prevented only by luck or by a feature flag.
 
 | # | Item | Why here |
 |---|---|---|
-| 1.1 | **R7 — more than one lane** | I19 is upstream of most of §2. One worker, one job, inline, 90-minute ceiling. Priority bands order a queue with one server; they cannot make work overlap. Do this before any further queue tuning, or the tuning is wasted again. |
+| 1.1a | **Isolate the agent from the API process** (I40) | Measured: while a code task runs, `/v1/code-tasks?limit=5` takes **40+ seconds** and the route is then **evicted from Traefik**. The agent executes inside the API container, so its test suite competes with every console read. This must come FIRST — adding lanes inside the same container multiplies the contention rather than relieving it. |
+| 1.1b | **R7 — more than one lane** | I19 is upstream of most of §2. One worker, one job, inline, 90-minute ceiling. Priority bands order a queue with one server; they cannot make work overlap. Only useful once 1.1a has removed the shared-process contention. |
 | 1.2 | **R12 — cooperative cancellation between phases** | Deliberately after 1.1: a phase boundary is the natural place to hand a job back, and multi-lane makes losing one lane cheap. Doing it now, into a single blocked thread, is the risky version. |
 
 **Phase 2 — make the system observable before making it more autonomous.**
