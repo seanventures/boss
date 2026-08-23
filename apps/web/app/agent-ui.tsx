@@ -140,7 +140,23 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
       if (r.ok && r.data) {
         const d = r.data as Record<string, unknown>;
         if (typeof d.thread_id === "string") setThreadId(d.thread_id);
-        if (Array.isArray(d.messages)) setMessages(d.messages as Msg[]);
+        // NEVER DROP WHAT THE OPERATOR JUST TYPED.
+        //
+        // `send` appends the message optimistically and this replaced the whole list with the
+        // server's. When the server's copy is missing that turn — a thread_id that moved, a
+        // truncated history — the message the operator was looking at disappeared, which is
+        // indistinguishable from "it was never sent".
+        if (Array.isArray(d.messages)) {
+          const server = d.messages as Msg[];
+          setMessages((local) => {
+            const lastLocal = local[local.length - 1];
+            const serverHasIt =
+              !lastLocal ||
+              lastLocal.role !== "user" ||
+              server.some((m) => m.role === "user" && (m.content ?? "").includes(lastLocal.content ?? ""));
+            return serverHasIt ? server : [...server, lastLocal];
+          });
+        }
         setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
         refreshThreads();
       } else {
@@ -241,6 +257,21 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
               ) : null}
             </article>
           ))}
+          {/* THINKING IS NOT NOTHING.
+              A turn takes 5-30 seconds while the agent chains tools, and the only feedback was
+              the Send button changing to "…" at the far bottom of the panel. From the reading
+              position — the bottom of the log — the operator saw their message and then dead
+              air, and reasonably concluded the request had been lost. */}
+          {busy ? (
+            <article className="agent-message assistant" data-testid="agent-working">
+              <span>BOSS</span>
+              <p className="detail agent-working">
+                <span className="agent-working-dot" aria-hidden />
+                Working — reading the system and choosing tools. This usually takes a few
+                seconds.
+              </p>
+            </article>
+          ) : null}
         </div>
 
         {pendingPlan ? (

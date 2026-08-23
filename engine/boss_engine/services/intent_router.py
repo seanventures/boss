@@ -30,6 +30,17 @@ from .openai_adapter import estimate_cost_usd_micros
 from .receipts import ReceiptService
 
 
+#: Tools whose use CHANGED something, as opposed to reading. Surfaced to the console as
+#: `actions` so an operator can see what BOSS did to their system without reading prose — and
+#: so "it says it fixed it" is falsifiable.
+_ACTING_TOOLS = frozenset({
+    "redeploy", "retry_code_task", "extend_code_task", "steer_code_task", "cancel_code_task",
+    "create_code_task", "create_discovery", "request_meeting", "register_repository",
+    "start_preview", "stop_preview", "cancel_job", "set_job_priority", "close_orphaned_runs",
+    "link_run_origin", "decide", "waive_gates", "send_feedback", "write_db",
+})
+
+
 @dataclass
 class RouterTurn:
     reply: str
@@ -254,13 +265,34 @@ class IntentRouter:
                 )
             return RouterTurn(reply=reply)
 
+        # THE MODEL ROUTES. THE REGEX IS WHAT HAPPENS WHEN THERE IS NO MODEL.
+        #
+        # This used to run in the opposite order: a keyword matcher decided first, a classifier
+        # second, and the AGENT — the only component holding the fifty tools and the run's
+        # actual state — was the last resort, reached only when both abstained.
+        #
+        # Every misroute in this file's history comes from that inversion. Two occurrences of
+        # the word "and" became a multi-phase plan. A pasted WHERE clause became a plan. The
+        # bare word "fix" became a governed code task, so "the deployment failed, fix it and
+        # retry" spawned a build — real money — when the answer was one redeploy call. Each was
+        # patched by narrowing the pattern, which is the wrong repair: a regex cannot know that
+        # "fix" means redeploy HERE and create_code_task THERE, because the difference is the
+        # state of the run, and the regex has never seen it.
+        #
+        # The agent can. It holds every capability the deterministic branches below actuate —
+        # create_code_task, request_meeting, create_discovery — plus the reads to decide
+        # between them. Handing it the sentence IS the routing decision, and it is the same
+        # design every competent coding agent uses: tools, a model, and no keyword layer in
+        # front deciding what the model is allowed to consider.
+        #
+        # `_deterministic_intent` stays for two callers that genuinely need it: this method
+        # when no model is configured, and `classify_message`, which community-facing surfaces
+        # use so an untrusted GitHub issue cannot create work merely by being classified.
+        if self.settings.agent_router_llm_enabled:
+            return self._answer(connection, project_id, messages)
+
+        # No model available — fall back to keywords rather than doing nothing.
         name, arguments = self._deterministic_intent(latest)
-        if name is None and self.settings.agent_router_llm_enabled:
-            selected = self._model_intent(
-                connection, project_id, messages, manifest
-            )
-            if selected:
-                name, arguments = selected
         if name is None:
             # DISCUSS BY DEFAULT: an unclassified message is a question / discussion, NOT a build
             # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
@@ -422,6 +454,10 @@ class IntentRouter:
         # identical from the outside, and the operator's reasonable conclusion was that the
         # agent is useless rather than that something failed. Say which it was.
         failure: Optional[str] = None
+        # What BOSS DID this turn, not just what it said. Surfaced on the RouterTurn so the
+        # console can render it and an operator can audit it.
+        actions: list[dict[str, Any]] = []
+        tool_calls: list[dict[str, Any]] = []
         try:
             reservation = self.budget.reserve(
                 connection, project_id, "model",
@@ -458,15 +494,32 @@ class IntentRouter:
                         # to" has not been kept safe; they have been ignored by a system whose
                         # entire premise is that it acts.
                         #
-                        # The boundary is the REGISTRY, not this flag. build_discuss_read_
-                        # registry exposes every read tool plus five operational writes -
-                        # cancel a job, reprioritise it, close an orphaned run, link a run's
-                        # origin, re-ship an existing build. create_code_task and everything
-                        # else that spends money is deliberately absent, so the money boundary
-                        # holds without disarming the tools that fix things.
+                        # The boundary is the REGISTRY, not this flag — and it is now
+                        # customer-world vs BOSS-foundation, not spend vs no-spend. Every write
+                        # is reachable, create_code_task included, because a bug in a customer
+                        # app is repaired by writing code. What BOSS does not do is patch its
+                        # own engine; that is a different subject, not a withheld permission.
                         allow_writes=True, max_steps=12,
                     )
                     reply = str(turn.reply or "").strip()
+                    # WHAT IT DID, NOT JUST WHAT IT SAID.
+                    #
+                    # `turn.trace` was discarded, so when BOSS redeployed an app the console
+                    # showed `actions: []` and the operator had only prose to go on. Now that
+                    # BOSS actually changes things, every write it performed has to be visible
+                    # and auditable — otherwise "it says it fixed it" is unfalsifiable.
+                    # getattr, not turn.trace: an answerer without a trace (a stub, an older
+                    # adapter) must not turn a perfectly good reply into "I could not answer
+                    # that" via the outer except. Reporting the work is secondary to delivering
+                    # the answer.
+                    for step in (getattr(turn, "trace", None) or []):
+                        tool_calls.append({"tool": step.get("tool"),
+                                           "args": step.get("args"),
+                                           "ok": bool((step.get("result") or {}).get("ok", True))})
+                        if step.get("tool") in _ACTING_TOOLS:
+                            actions.append({"kind": str(step.get("tool")),
+                                            "args": step.get("args"),
+                                            "result": step.get("result")})
                     if not reply:
                         failure = "the model returned an empty answer"
                 finally:
@@ -499,7 +552,7 @@ class IntentRouter:
             else:
                 reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
                          "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
-        return RouterTurn(reply=reply)
+        return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls)
 
     def _existing_app_for_task(self, connection: Connection, project_id: str,
                                task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
