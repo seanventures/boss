@@ -7,6 +7,7 @@ import {
   loadAgentWorkspaceAction,
   loadTaskContextAction,
   loadThreadMessagesAction,
+  runAgentActionAction,
 } from "./actions";
 
 type Msg = { role: string; content: string; actions?: Array<{ kind: string }>; created_at?: string };
@@ -49,6 +50,15 @@ export function stripAppFacts(content: string): string {
   return stripped || text;
 }
 
+/** An action BOSS is offering. `tool` + `args` are executed verbatim on click. */
+type ProposedAction = {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  label: string;
+  why?: string;
+};
+
 export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** What BOSS already knows about the app this conversation is about. */
@@ -62,6 +72,9 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
   const [context, setContext] = useState<{ task?: Record<string, unknown>; code_tasks?: CodeTask[] } | null>(null);
   const [input, setInput] = useState("");
   const [pendingPlan, setPendingPlan] = useState<Record<string, unknown> | null>(null);
+  /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
+  const [proposed, setProposed] = useState<ProposedAction[]>([]);
+  const [ranAction, setRanAction] = useState<string | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
 
@@ -82,6 +95,7 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           const d = r.data as Record<string, unknown>;
           setMessages((d.messages as Msg[]) ?? []);
           setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
+        setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
         }
       }));
     }
@@ -173,6 +187,25 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
     const fd = new FormData(); fd.set("message", msg);
     runTurn(fd);
   }, [input, busy, runTurn]);
+
+  const acceptAction = useCallback((action: ProposedAction) => {
+    startTransition(async () => {
+      const r = await runAgentActionAction(projectId, actor, action.tool, action.args, threadId ?? undefined);
+      const ok = r.ok && (r.data as Record<string, unknown> | undefined)?.ok !== false;
+      const detail = ok
+        ? `✓ ${action.label}`
+        : `⚠ ${action.label} failed: ${
+            (r.data as Record<string, unknown> | undefined)?.error ?? r.error ?? "unknown error"
+          }`;
+      setRanAction(action.id);
+      // Report the outcome in the log. A button that changes nothing visible is a button the
+      // operator will press twice.
+      setMessages((m) => [...m, { role: "assistant", content: detail }]);
+      // The offer is spent either way: succeeded, or failed and needs a different approach.
+      setProposed((list) => list.filter((a) => a.id !== action.id));
+      refreshThreads();
+    });
+  }, [projectId, actor, threadId, refreshThreads]);
 
   const confirmPlan = useCallback(() => {
     const planId = String(pendingPlan?.plan_id ?? pendingPlan?.id ?? "");
@@ -273,6 +306,32 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             </article>
           ) : null}
         </div>
+
+        {/* OFFERS, NOT DEEDS. Each is a tool + arguments BOSS chose but did not run; the click
+            is what executes it, verbatim, with no model in between. Cheapest first, because
+            "this link is wrong" does not say whether you want it cleared or the app redeployed —
+            and one of those costs minutes and money. */}
+        {proposed.length > 0 ? (
+          <div className="agent-proposals" data-testid="agent-proposals">
+            <p className="detail agent-proposals-head">
+              BOSS can do this for you — nothing runs until you choose:
+            </p>
+            {proposed.map((a) => (
+              <div className="agent-proposal" key={a.id}>
+                <button
+                  type="button"
+                  className="button agent-proposal-btn"
+                  disabled={busy}
+                  data-testid={`agent-proposal-${a.tool}`}
+                  onClick={() => acceptAction(a)}
+                >
+                  {busy && ranAction === a.id ? "…" : a.label}
+                </button>
+                {a.why ? <span className="detail agent-proposal-why">{a.why}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {pendingPlan ? (
           <div className="ct-block" style={{ margin: "8px 0" }}>

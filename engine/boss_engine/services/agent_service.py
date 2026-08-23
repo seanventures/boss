@@ -342,6 +342,8 @@ class AgentService:
             "reply": turn.reply,
             "actions": turn.actions,
             "pending_confirmation": pending,
+            # Offers the operator can accept with one click. Nothing here has run yet.
+            "proposed_actions": getattr(turn, "proposed_actions", []) or [],
             "messages": [*messages, assistant],
         }
 

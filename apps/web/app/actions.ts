@@ -135,6 +135,31 @@ async function postJsonReturn(path: string, body: Record<string, unknown>): Prom
   }
 }
 
+/**
+ * Run one action the operator accepted by clicking its button.
+ *
+ * Goes straight to the tool with the arguments they were shown — no model in between. Re-asking
+ * a model to interpret a click would let it drift into doing something adjacent, which is the
+ * opposite of what a confirmation button is for.
+ */
+export async function runAgentActionAction(
+  projectId: string,
+  actor: string,
+  tool: string,
+  args: Record<string, unknown>,
+  threadId?: string,
+): Promise<ActionResult> {
+  const result = await postJsonReturn("/v1/engine/agent/action", {
+    project_id: projectId,
+    actor,
+    tool,
+    args: args ?? {},
+    thread_id: threadId || undefined,
+  });
+  revalidatePath("/");
+  return result;
+}
+
 export async function agentChatAction(
   _prev: ActionResult | null,
   formData: FormData,

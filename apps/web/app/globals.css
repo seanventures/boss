@@ -5386,3 +5386,20 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   .agent-working-dot { animation: none; opacity: .7; }
 }
+
+
+/* Actions BOSS is offering. Distinct from the transcript so an offer never reads as something
+   that already happened. */
+.agent-proposals {
+  display: grid; gap: 8px;
+  margin: 8px 0; padding: 12px 14px;
+  border: 1px solid var(--border, #1C2740);
+  border-left: 3px solid var(--accent, #4C8DF6);
+  border-radius: var(--r, 8px);
+  background: var(--surface-2, #0F1830);
+  min-width: 0;
+}
+.agent-proposals-head { margin: 0 0 2px; font-weight: 600; }
+.agent-proposal { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.agent-proposal-btn { flex: 0 0 auto; }
+.agent-proposal-why { min-width: 0; overflow-wrap: anywhere; }

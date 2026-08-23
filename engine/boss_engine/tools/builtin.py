@@ -747,6 +747,41 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                     ctx.engine, ctx.settings, str(args["run_id"]), "preflight_target", actor)}
 
     @reg.tool(
+        "propose_action",
+        "Offer the operator an action as a BUTTON instead of performing it. Nothing runs until "
+        "they click. "
+        "Use this when the next step COSTS something or is hard to undo — deploying, starting a "
+        "build, writing to the database — and they have not explicitly asked for that exact "
+        "thing. Use it ALSO to offer a cheaper alternative beside an expensive one: 'redeploy' "
+        "and 'just clear the stale URL' are both valid answers to 'this link is wrong', and the "
+        "operator should get to pick rather than be handed the expensive one. "
+        "Do NOT use it to avoid work they DID ask for: 'redeploy it' means call redeploy. "
+        "Propose several when several are reasonable; each becomes its own button.",
+        _obj({"tool": {"type": "string",
+                       "description": "the tool to run when they click, e.g. 'redeploy'"},
+              "args": {"type": "object",
+                       "description": "exact arguments for that tool"},
+              "label": {"type": "string",
+                        "description": "the button text, imperative and short, e.g. "
+                                       "'Redeploy Living Colors'"},
+              "why": {"type": "string",
+                      "description": "one line: what it will do and what it costs"}},
+             required=["tool", "label"]),
+        kind="read",
+    )
+    def propose_action(ctx, *, project_id, actor, args):
+        """Records an offer. Executing it is the operator's click, not this call."""
+        name = ToolRegistry.canonical_tool_name(str(args.get("tool") or ""))
+        if name not in _DISCUSS_OPERATIONS_TOOLS:
+            return {"ok": False,
+                    "error": f"cannot propose {name!r}: not an action BOSS can run",
+                    "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
+        return {"ok": True, "proposed": True, "tool": name,
+                "args": args.get("args") or {}, "label": str(args.get("label") or name),
+                "why": str(args.get("why") or ""),
+                "note": "Offered to the operator as a button. NOT executed."}
+
+    @reg.tool(
         "inspect_self",
         "Look at the container BOSS is running in: CPU load and throttling, memory use and "
         "OOM-kill count, free disk, how much space preview workdirs are holding, and the "

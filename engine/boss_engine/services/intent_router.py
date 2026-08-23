@@ -47,6 +47,8 @@ class RouterTurn:
     actions: list[dict[str, Any]] = field(default_factory=list)
     pending_confirmation: Optional[dict[str, Any]] = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    #: Offers the operator can accept with one click. Nothing here has run.
+    proposed_actions: list[dict[str, Any]] = field(default_factory=list)
 
 
 _TOOL_SCHEMAS = [
@@ -402,6 +404,18 @@ class IntentRouter:
             "describe what a fix would look like and offer to do it. Never end a reply with "
             "\"let me know if you would like me to\" for something you can already do; do it "
             "and report the result.\n\n"
+            "OFFER, DO NOT ASSUME, WHEN THE FIX HAS A CHOICE IN IT.\n"
+            "Call propose_action to put an action behind a BUTTON when it COSTS money or is "
+            "hard to undo and they did not ask for that exact thing — and especially when a "
+            "CHEAPER repair exists. A real case: told a deployment card showed a stale, wrong "
+            "URL, the right answer was two buttons — 'Clear the stale URL' (free, instant) and "
+            "'Redeploy the app' (minutes, real money) — because 'this link is wrong' does not "
+            "say which one they want. Instead one expensive path was assumed and a made-up "
+            "domain was written to the database.\n"
+            "Lead with the CHEAPEST action that could satisfy the request. Propose several when "
+            "several are reasonable; each becomes its own button.\n"
+            "This is NOT licence to stop acting. If they said 'redeploy it', call redeploy. A "
+            "button for something they already asked for is the same stalling as advice.\n\n"
             "TWO SUBJECTS, ONE RULE EACH:\n"
             "• THE CUSTOMER'S WORLD — their app, its code, deployment, preview, environment, "
             "observability, and the queue their work sits in. FIX IT. Completely, without "
@@ -419,6 +433,15 @@ class IntentRouter:
             "Telling the two apart is usually easy: if the defect is in the repo the run "
             "targets, it is theirs. If it is in how BOSS built, previewed, deployed or watched "
             "that repo, it is ours.\n\n"
+            "NEVER INVENT A VALUE YOU WRITE. Every value that lands in the database must come "
+            "from somewhere you READ — a row, a config, a log, the operator's own words. Asked "
+            "to fix an incorrect deployment URL, a previous answer wrote "
+            "`living-colors.example.com` into deployment_targets with the reason \"Fix domain\". "
+            "That domain exists nowhere in the system: one wrong URL was replaced with a "
+            "different wrong URL, and it became persisted state. If you do not KNOW the correct "
+            "value, the honest repairs are to CLEAR the field, or to ask which value is right — "
+            "both are better than a plausible invention, because a wrong value that looks real "
+            "is harder to find later than an empty one.\n\n"
             "NEVER INVENT EVIDENCE. Asked why a deployment failed, a previous answer stated the "
             "app hard-coded `app.listen(3000, \"127.0.0.1\")` in `src/server.ts`. That file did "
             "not exist and the real server read $PORT/$HOST correctly — acting on it would have "
@@ -470,6 +493,7 @@ class IntentRouter:
         # console can render it and an operator can audit it.
         actions: list[dict[str, Any]] = []
         tool_calls: list[dict[str, Any]] = []
+        proposed: list[dict[str, Any]] = []
         try:
             reservation = self.budget.reserve(
                 connection, project_id, "model",
@@ -525,13 +549,24 @@ class IntentRouter:
                     # that" via the outer except. Reporting the work is secondary to delivering
                     # the answer.
                     for step in (getattr(turn, "trace", None) or []):
+                        result = step.get("result") or {}
                         tool_calls.append({"tool": step.get("tool"),
                                            "args": step.get("args"),
-                                           "ok": bool((step.get("result") or {}).get("ok", True))})
+                                           "ok": bool(result.get("ok", True))})
                         if step.get("tool") in _ACTING_TOOLS:
                             actions.append({"kind": str(step.get("tool")),
                                             "args": step.get("args"),
-                                            "result": step.get("result")})
+                                            "result": result})
+                        # An OFFER, not a deed. propose_action runs nothing; it returns the
+                        # tool and arguments the operator can accept with one click.
+                        if step.get("tool") == "propose_action" and result.get("proposed"):
+                            proposed.append({
+                                "id": make_id("act"),
+                                "tool": result.get("tool"),
+                                "args": result.get("args") or {},
+                                "label": result.get("label"),
+                                "why": result.get("why"),
+                            })
                     if not reply:
                         failure = "the model returned an empty answer"
                 finally:
@@ -564,7 +599,8 @@ class IntentRouter:
             else:
                 reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
                          "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
-        return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls)
+        return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls,
+                          proposed_actions=proposed)
 
     def _existing_app_for_task(self, connection: Connection, project_id: str,
                                task_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:

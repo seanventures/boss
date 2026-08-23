@@ -1162,11 +1162,45 @@ class AgentChatRequest(BaseModel):
         return self
 
 
+class ProposedAction(BaseModel):
+    """An action BOSS is OFFERING, not one it took.
+
+    The console renders each as a button. Nothing here has run: the operator's click is what
+    executes it, which is the point — deploying an app or starting a build costs real money and
+    is not always what "this link is wrong" means.
+    """
+
+    id: str
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    label: str
+    why: str = ""
+
+
+class AgentActionRunRequest(BaseModel):
+    """Execute one action the operator accepted by clicking its button."""
+
+    project_id: str
+    actor: str
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    thread_id: Optional[str] = None
+
+
+class AgentActionRunResponse(BaseModel):
+    ok: bool
+    tool: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+
 class AgentChatResponse(BaseModel):
     thread_id: str
     reply: str
     actions: list[AgentAction] = Field(default_factory=list)
     pending_confirmation: Optional[AgentPendingConfirmation] = None
+    #: Offers awaiting a click. Distinct from `actions`, which already happened.
+    proposed_actions: list[ProposedAction] = Field(default_factory=list)
     messages: list[AgentMessageSummary] = Field(default_factory=list)
 
 

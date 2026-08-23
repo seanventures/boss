@@ -131,6 +131,8 @@ from .schemas import (
     ChangeJournalDetail,
     ChangeJournalResponse,
     AgentChatRequest,
+    AgentActionRunRequest,
+    AgentActionRunResponse,
     AgentChatResponse,
     CommandProposeRequest,
     CommandProposeResponse,
@@ -10498,6 +10500,55 @@ def _run_agent_chat(payload: AgentChatRequest, request: Request, *, endpoint: st
         except AgentThreadOwnershipError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         return AgentChatResponse(**result)
+
+
+@app.post("/v1/engine/agent/action", response_model=AgentActionRunResponse)
+def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentActionRunResponse:
+    """Execute one action the operator ACCEPTED by clicking its button.
+
+    Deliberately does NOT go through the model. The operator saw a specific tool and specific
+    arguments and clicked that; re-asking a model to interpret the click would let it drift into
+    doing something adjacent, which is the opposite of what a confirmation button is for.
+
+    The tool must be one BOSS is allowed to run from chat — the same set the agent itself may
+    call — so a crafted request cannot reach a capability the conversation never had.
+    """
+    from boss_engine.context import EngineContext
+    from boss_engine.tools import build_discuss_read_registry
+    from boss_engine.tools.registry import ToolError
+
+    _enforce_high_cost_rate_limit(
+        request, payload.project_id, payload.actor, endpoint="/v1/engine/agent/action"
+    )
+    registry = build_discuss_read_registry()
+    try:
+        spec = registry.get(payload.tool)
+    except ToolError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if spec.kind != "write":
+        raise HTTPException(
+            status_code=400,
+            detail=f"{spec.name!r} changes nothing; a button that runs a read is a no-op.",
+        )
+
+    with begin(engine) as connection:
+        require_project_actor(connection, payload.project_id, payload.actor, "agent_chat")
+
+    ctx = EngineContext(settings=settings, engine=engine)
+    result = registry.invoke(
+        spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
+        args=dict(payload.args or {}),
+    )
+    with begin(engine) as connection:
+        emit_event(connection, payload.project_id, "agent.action_accepted", payload.actor,
+                   "agent_action", spec.name,
+                   {"tool": spec.name, "args": payload.args,
+                    "ok": bool(result.get("ok", True)),
+                    "thread_id": payload.thread_id})
+    return AgentActionRunResponse(
+        ok=bool(result.get("ok", True)), tool=spec.name, result=result,
+        error=(None if result.get("ok", True) else str(result.get("error") or "")),
+    )
 
 
 @app.post("/v1/engine/agent/chat", response_model=AgentChatResponse)
