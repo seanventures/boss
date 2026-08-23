@@ -337,6 +337,11 @@ class IntentRouter:
             "• cancel_job — drop a queued job; force=true stops a RUNNING one that is wedged and "
             "holding a slot. It closes the run too, so nothing is left reported as in flight.\n"
             "• close_orphaned_runs — runs claiming to be running with no live job.\n"
+            "• redeploy — SHIP THE SAME BUILD AGAIN when a deployment failed. This is the "
+            "answer to \"fix and retry the deployment\": do it, then report what the health "
+            "check returned. It re-ships an EXISTING build — no rebuild, no model, no spend — "
+            "and its steps are idempotent. Run preflight_deployment_target first if the failure "
+            "looks like the host was unreachable.\n"
             "• inspect_self — the container BOSS itself runs in: CPU load per core, cgroup "
             "throttling, memory against the container ceiling, OOM-KILL COUNT, free disk, and "
             "the heaviest processes. Reach for this FIRST when a process died without an "
@@ -348,6 +353,18 @@ class IntentRouter:
             "• consistency_report — every invariant at once: runs working with no job, jobs "
             "for runs that ended, decisions blocking runs that are gone. Run it when someone "
             "reports something inconsistent, before forming a theory.\n\n"
+            "WHEN ASKED TO FIX SOMETHING, FIX IT. You are an autonomous system, not an "
+            "advisor. \"Fix and retry the deployment\" means CALL redeploy — it does not mean "
+            "describe what a fix would look like and offer to do it. Never end a reply with "
+            "\"let me know if you would like me to\" for something you can already do; do it "
+            "and report the result. If a tool genuinely cannot reach it, say which tool you "
+            "would need and why, rather than proposing work for the operator.\n\n"
+            "NEVER INVENT EVIDENCE. Asked why a deployment failed, a previous answer stated the "
+            "app hard-coded `app.listen(3000, \"127.0.0.1\")` in `src/server.ts`. That file did "
+            "not exist and the real server read $PORT/$HOST correctly — acting on it would have "
+            "changed working code and left the real bug. If you have not READ the line, do not "
+            "quote it. \"I could not find it, here is the one check that would\" is a better "
+            "answer than a plausible one.\n\n"
             "When an operator reports something stuck, DIAGNOSE AND THEN FIX IT. Do not hand "
             "back an explanation and wait to be asked. Say what you changed and why. A real "
             "case: a PRD meeting sat queued for two hours behind benchmark jobs boosted past "
@@ -416,7 +433,22 @@ class IntentRouter:
                         # timings, then read the code or logs that explain them — and the agent
                         # reserves the last one for the answer, so exhausting the budget now
                         # costs completeness rather than the entire reply.
-                        allow_writes=False, max_steps=12,
+                        # ASKED TO FIX IT, BOSS FIXES IT.
+                        #
+                        # This was False, so even the operational tools BOSS is explicitly
+                        # trusted with were parked as "confirmation_required" and the reply
+                        # became advice. An operator who says "fix and retry the deployment"
+                        # and receives an essay ending in "let me know if you would like me
+                        # to" has not been kept safe; they have been ignored by a system whose
+                        # entire premise is that it acts.
+                        #
+                        # The boundary is the REGISTRY, not this flag. build_discuss_read_
+                        # registry exposes every read tool plus five operational writes -
+                        # cancel a job, reprioritise it, close an orphaned run, link a run's
+                        # origin, re-ship an existing build. create_code_task and everything
+                        # else that spends money is deliberately absent, so the money boundary
+                        # holds without disarming the tools that fix things.
+                        allow_writes=True, max_steps=12,
                     )
                     reply = str(turn.reply or "").strip()
                     if not reply:

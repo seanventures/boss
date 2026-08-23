@@ -73,11 +73,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 47, (
+    assert len(reg.names()) == 49, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 30
-    assert len(write) == 17
+    assert len(read) == 31
+    assert len(write) == 18
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -196,8 +196,11 @@ def test_discuss_read_registry_exposes_everything_and_hides_project_override():
     # …plus the operational writes. BOSS could describe its own stuck queue and not touch it;
     # an operator had to reach in from outside to cancel a job. The line is OPERATIONAL STATE
     # (a priority, a wedged job, an orphaned run) versus CREATING WORK that spends money.
-    assert sorted(s.name for s in reg.specs(kind="write")) == [
-        "cancel_job", "close_orphaned_runs", "link_run_origin", "set_job_priority"]
+    # Compared against the CONSTANT, not a copy of it: a hardcoded list here meant that
+    # widening what BOSS may do required editing the policy in two places, and the test would
+    # fail describing a difference it was itself creating.
+    from boss_engine.tools.builtin import _DISCUSS_OPERATIONS_TOOLS
+    assert {s.name for s in reg.specs(kind="write")} == set(_DISCUSS_OPERATIONS_TOOLS)
     assert "create_code_task" not in reg.names(), "starting new work stays a deliberate ask"
     for schema in reg.openai_schema():
         props = schema["function"]["parameters"].get("properties") or {}

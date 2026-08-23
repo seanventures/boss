@@ -641,6 +641,41 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 actor=actor, force=bool(args.get("force")))
 
     @reg.tool(
+        "redeploy",
+        "Ship the SAME build to its target again, for an app whose deployment failed. Use this "
+        "when the operator says fix/retry the deployment: transfer and docker steps are "
+        "idempotent, so re-running is safe. Takes the code-task run id (crun_...). Reports what "
+        "the health check returned and how long it waited, so a second failure is diagnosable "
+        "rather than a repeat of the same sentence. This does NOT rebuild the app or spend "
+        "model budget — it re-ships a build that already exists.",
+        _obj({"run_id": {"type": "string", "description": "the crun_... whose deployment failed"},
+              "reason": {"type": "string", "description": "why — recorded on the deployment"}},
+             required=["run_id"]),
+        kind="write",
+    )
+    def redeploy(ctx, *, project_id, actor, args):
+        from ..services.shepherd_service import _act_on_deployment
+        outcome = _act_on_deployment(
+            ctx.engine, ctx.settings, str(args["run_id"]), "redeploy_deployment", actor)
+        return {"ok": not outcome.startswith(("no_action", "failed")),
+                "run_id": args["run_id"], "outcome": outcome,
+                "reason": args.get("reason") or "operator asked BOSS to retry the deployment"}
+
+    @reg.tool(
+        "preflight_deployment_target",
+        "Check the machine an app deploys to is reachable and healthy, WITHOUT shipping "
+        "anything. Read-only. Run this first when a deployment failed with a connection or "
+        "health error, so a redeploy is not aimed at a host that is down.",
+        _obj({"run_id": {"type": "string"}}, required=["run_id"]),
+        kind="read",
+    )
+    def preflight_deployment_target(ctx, *, project_id, actor, args):
+        from ..services.shepherd_service import _act_on_deployment
+        return {"run_id": args["run_id"],
+                "result": _act_on_deployment(
+                    ctx.engine, ctx.settings, str(args["run_id"]), "preflight_target", actor)}
+
+    @reg.tool(
         "inspect_self",
         "Look at the container BOSS is running in: CPU load and throttling, memory use and "
         "OOM-kill count, free disk, how much space preview workdirs are holding, and the "
@@ -1992,11 +2027,45 @@ def build_default_registry() -> ToolRegistry:
 #: a job's priority, a wedged job, an orphaned run. `create_code_task` and `request_meeting`
 #: start new work and spend money, so they stay on the deliberate path where a human asks for
 #: them. Changing BOSS's own code stays in the governed pipeline behind a PR and a review.
+# ASKED TO FIX IT, BOSS FIXES IT.
+#
+# This held FIVE tools while the registry carried EIGHTEEN, so every request an operator
+# actually makes — "retry the run", "cancel this stuck task", "start the preview", "approve that
+# gate", "fix and retry the deployment" — reached a tool BOSS owned and was forbidden to call.
+# It replied with advice because advice was all that remained, and the operator reasonably
+# concluded the agent could not do anything. That is not a guardrail; it is the product failing
+# at its entire premise.
+#
+# THE LINE IS NOT "does it spend money". Spending is frequently the point: a retry that costs
+# model budget is exactly what "retry it" asks for. The line is:
+#
+#   RECOVER work that already exists   -> BOSS does it, on request. This is what "fix it" means.
+#   CREATE work that does not exist    -> still an explicit ask. Not for safety, but because
+#                                         "build me a URL shortener" is a different sentence
+#                                         from "fix it", and route_turn already actuates that
+#                                         on an explicit build intent — so nothing is lost by
+#                                         keeping an ANSWER from silently scaffolding an app.
+#
+# Changing BOSS's own source stays in the governed pipeline behind a PR and a review.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
+    # Queue and run state
     "cancel_job",
     "set_job_priority",
     "close_orphaned_runs",
     "link_run_origin",
+    # Recovering work that exists — the actual meaning of "fix it"
+    "retry_code_task",
+    "extend_code_task",
+    "steer_code_task",
+    "cancel_code_task",
+    # Delivery
+    "redeploy",
+    "start_preview",
+    "stop_preview",
+    # The operator's own authority, exercised on their instruction
+    "decide",
+    "waive_gates",
+    "send_feedback",
 })
 
 
