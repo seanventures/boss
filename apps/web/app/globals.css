@@ -5406,8 +5406,48 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .agent-proposals-head { margin: 0 0 2px; font-weight: 600; }
 .agent-proposal { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.agent-proposal-btn { flex: 0 0 auto; }
 .agent-proposal-why { min-width: 0; overflow-wrap: anywhere; }
+
+/* These read as pale suggestions rather than controls, so operators did not press them. An
+   offer the operator does not recognise as pressable is the same as no offer at all — the
+   whole point of propose-only is that the click is the authorisation. */
+.agent-proposal-btn {
+  flex: 0 0 auto;
+  padding: 11px 20px;
+  border-radius: 10px;
+  letter-spacing: .01em;
+  border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .12) inset,
+              0 6px 18px rgba(47, 111, 224, .34);
+}
+.agent-proposal-btn::before { content: "▶"; margin-right: 9px; font-size: .78em; opacity: .9; }
+.agent-proposal-btn:hover:not(:disabled) { filter: brightness(1.09); transform: translateY(-1px); }
+.agent-proposal-btn:active:not(:disabled) { transform: translateY(0); filter: brightness(.96); }
+.agent-proposal-btn:focus-visible {
+  outline: 2px solid var(--accent, #4C8DF6);
+  outline-offset: 3px;
+}
+/* Waiting on ANOTHER action must not grey this one into looking broken: keep it legible and
+   say why it cannot be pressed. */
+.agent-proposal-btn:disabled { opacity: .72; filter: grayscale(.25); }
+.agent-proposal-btn[data-running="true"] {
+  opacity: 1; filter: none;
+  box-shadow: 0 0 0 2px var(--accent, #4C8DF6) inset;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-proposal-btn:hover:not(:disabled) { transform: none; }
+}
+
+/* How long BOSS has been working, and what happens if it never answers. "It just quits and I
+   don't know when it will come back" — so the elapsed time is always on screen, the message
+   escalates as it passes what is normal, and a stall ends in a stated outcome, not silence. */
+.agent-working-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: .75;
+  margin-left: 2px;
+}
+.agent-working[data-slow="true"] .agent-working-dot { background: var(--warn, #E0A33E); }
+.agent-working[data-slow="true"] .agent-working-elapsed { opacity: 1; color: var(--warn, #E0A33E); }
 
 
 /* BOSS answers in markdown: headings, GFM evidence tables, bullets, `run_id` in backticks.

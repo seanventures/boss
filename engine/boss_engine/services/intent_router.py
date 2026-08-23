@@ -162,6 +162,76 @@ _TOOL_SCHEMAS = [
 ]
 
 
+# Asked to deploy an app that had never been deployed, the model wrote a neat table of
+# choices and ended with "Please choose the appropriate button" — and emitted no
+# propose_action, so the console rendered no buttons. The operator is then stuck reading an
+# instruction they cannot follow, which is worse than a plain refusal.
+#
+# Promising a control is only truthful if the control exists, and whether it exists is known
+# HERE, after the turn — not by the model while it is writing. So it is checked here.
+_BUTTON_PROMISE = re.compile(
+    r"(choose|click|select|press|use)\s+(the\s+)?(appropriate\s+|relevant\s+|one\s+)?"
+    r"(button|option)s?\b|below\s+are\s+the\s+(two|three|following)\s+possible",
+    re.I,
+)
+
+
+# "I'll monitor the deployment and update you when it completes." BOSS has no way to speak
+# again on its own — a turn ends when it replies, and nothing wakes it. So this promise is
+# always false, and it is the most damaging kind of false: the operator waits instead of acting.
+_WILL_COME_BACK = re.compile(
+    r"\b(i(?:'| a)?m going to |i(?:'ll| will) )?(keep (an eye|watching)|monitor|watch|track|"
+    r"check back|follow up|report back|keep you (posted|updated)|update you|let you know)\b"
+    r"[^.\n]*\b(and|as soon as|once|when|then|until)?[^.\n]*",
+    re.I,
+)
+_HAS_STATUS_PATH = re.compile(r"\b(watch_code_task|the (run|deployment) page|refresh|ask me again)\b", re.I)
+
+
+def _boss_cannot_call_you_back(reply: str) -> str:
+    """Replace a promise of future contact with the way to actually find out.
+
+    BOSS is turn-scoped: it answers when asked and is then not running. Saying it will "monitor
+    and update you" describes a capability that does not exist, so the sentence is rewritten
+    rather than trimmed — the operator still needs to know how to learn the outcome.
+    """
+    if not reply or not _WILL_COME_BACK.search(reply):
+        return reply
+    kept, dropped = [], False
+    for line in reply.splitlines():
+        if _WILL_COME_BACK.search(line) and not _HAS_STATUS_PATH.search(line):
+            dropped = True
+            continue
+        kept.append(line)
+    if not dropped or not "\n".join(kept).strip():
+        return reply
+    return "\n".join(kept).rstrip() + (
+        "\n\nI cannot watch this in the background or message you when it changes — I only run "
+        "while answering you. To see where it got to, ask me again (\u201cwhat happened to that "
+        "deployment?\u201d) and I will read the current state."
+    )
+
+
+def _no_button_was_promised(reply: str, proposed: list) -> str:
+    """Strip a promise of buttons when no button was actually produced.
+
+    Deliberately narrow: it only removes the SENTENCE making the promise, leaving the
+    explanation and the options table intact — the content is useful, the instruction is not.
+    """
+    if proposed or not reply or not _BUTTON_PROMISE.search(reply):
+        return reply
+    kept = [ln for ln in reply.splitlines() if not _BUTTON_PROMISE.search(ln)]
+    out = "\n".join(kept).rstrip()
+    if out.strip() == reply.strip() or not out.strip():
+        return reply
+    return out + (
+        "\n\nI cannot offer these as buttons — BOSS has no tool that deploys an app for the "
+        "first time, only one that re-ships an existing deployment. That is a gap in the BOSS "
+        "framework rather than something wrong with this app; tell me to proceed and I will "
+        "say exactly what a human needs to add."
+    )
+
+
 class IntentRouter:
     """Transport-free intent router and thin tool adapters.
 
@@ -625,6 +695,8 @@ class IntentRouter:
             else:
                 reply = ("I can help discuss this. When you want me to act, tell me explicitly — e.g. "
                          "“build it”, “add a currency picker”, or “deploy it” — and I’ll start the governed flow.")
+        reply = _no_button_was_promised(reply, proposed)
+        reply = _boss_cannot_call_you_back(reply)
         return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls,
                           proposed_actions=proposed)
 

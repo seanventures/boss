@@ -17,6 +17,13 @@ type Task = { id?: string; task_id?: string; title?: string; status?: string };
 type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string };
 type CodeTask = { id?: string; status?: string; phase?: string; pull_request_url?: string; pull_request_number?: number; task_id?: string };
 
+// A turn is normally single-digit seconds; past NORMAL the operator is told it is running
+// long, and past STALL they are told what to do instead of being left to guess. STALL is a
+// REPORTING bound, not a cancellation: the turn may still land server-side, so the wording
+// must not claim the work was stopped.
+const AGENT_NORMAL_SECONDS = 20;
+const AGENT_STALL_SECONDS = 120;
+
 const GENERAL = "__general__";
 const tid = (t: Task): string => String(t.id ?? t.task_id ?? "");
 
@@ -79,6 +86,19 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
   const [ranAction, setRanAction] = useState<string | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
+  // HOW LONG, AND WHAT IF IT NEVER ANSWERS.
+  // "It says it will monitor and update and I don't see any waiting signal — it just quits and
+  // I don't know when it will come back." A spinner with no clock and no end state is why:
+  // there was no way to tell 8 seconds of work from a turn that had already died. So the
+  // elapsed time is always visible, and a turn that outlives NORMAL/STALL says so in the log
+  // rather than leaving the operator watching a dot forever.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!busy) { setElapsed(0); return; }
+    const t0 = Date.now();
+    const id = window.setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [busy]);
 
   const threadFor = useCallback(
     (id: string, list: Thread[]): Thread | undefined =>
@@ -152,7 +172,23 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     startTransition(async () => {
-      const r = await agentChatAction(null, fd);
+      // Bound the WAIT, not the work. If the server has not answered by STALL we stop pretending
+      // it is imminent and say so in the transcript; whatever the turn did still stands, and
+      // reopening the thread shows it.
+      const stalled = Symbol("stalled");
+      const r = await Promise.race([
+        agentChatAction(null, fd),
+        new Promise<typeof stalled>((res) =>
+          window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
+      ]);
+      if (r === stalled) {
+        setMessages((m) => [...m, { role: "assistant", content:
+          `⚠ No answer after ${AGENT_STALL_SECONDS}s. The turn may still be running on the ` +
+          "server — nothing was cancelled. Reopen this thread in a moment to see whether it " +
+          "landed, or send the message again." }]);
+        refreshThreads();
+        return;
+      }
       if (r.ok && r.data) {
         const d = r.data as Record<string, unknown>;
         if (typeof d.thread_id === "string") setThreadId(d.thread_id);
@@ -312,10 +348,17 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           {busy ? (
             <article className="agent-message assistant" data-testid="agent-working">
               <span>BOSS</span>
-              <p className="detail agent-working">
+              <p className="detail agent-working" data-slow={elapsed >= AGENT_NORMAL_SECONDS}
+                 data-testid="agent-working-line" aria-live="polite">
                 <span className="agent-working-dot" aria-hidden />
-                Working — reading the system and choosing tools. This usually takes a few
-                seconds.
+                <span>
+                  {elapsed >= AGENT_NORMAL_SECONDS
+                    ? "Still working — this turn is running long. It has not been dropped; BOSS is chaining tools."
+                    : "Working — reading the system and choosing tools."}
+                </span>
+                <span className="agent-working-elapsed" data-testid="agent-elapsed">
+                  {elapsed}s{elapsed >= AGENT_NORMAL_SECONDS ? ` / ~${AGENT_STALL_SECONDS}s` : ""}
+                </span>
               </p>
             </article>
           ) : null}

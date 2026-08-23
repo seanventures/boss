@@ -137,3 +137,71 @@ def test_the_ability_to_act_is_not_narrowed_again():
     for tool in ("redeploy", "write_db", "start_preview", "cancel_job", "decide"):
         assert tool in allowed, f"BOSS can no longer {tool} — it will go back to giving advice"
     assert len(allowed) >= 15, f"write surface shrank to {len(allowed)} tools"
+
+
+# --------------------------------------------------------------------------- #
+# A promise of a control the operator cannot see
+# --------------------------------------------------------------------------- #
+from boss_engine.services.intent_router import _no_button_was_promised  # noqa: E402
+
+# Verbatim from production, 2026-08-24, "deploy living colors to live". BOSS declined to
+# substitute a rebuild (correct) and then told the operator to click buttons that did not exist.
+_LIVE_REPLY = """The **redeploy** tool could not run because the "Living Colors" app has never \
+been deployed before.
+
+| Action | What it does |
+|--------|--------------|
+| **Create a deployment** | Ships the existing successful build. |
+| **Cancel** | Do nothing right now. |
+
+Please choose the appropriate button."""
+
+
+def test_the_reply_that_shipped_promising_absent_buttons():
+    out = _no_button_was_promised(_LIVE_REPLY, [])
+    assert "choose the appropriate button" not in out.lower()
+    assert "no tool that deploys an app for the first time" in out
+    assert "Create a deployment" in out, "the useful explanation must survive"
+
+
+def test_the_promise_stands_when_buttons_are_real():
+    proposed = [{"id": "act_1", "tool": "redeploy", "args": {"run_id": "crun_x"}}]
+    assert _no_button_was_promised(_LIVE_REPLY, proposed) == _LIVE_REPLY
+
+
+@pytest.mark.parametrize("reply", [
+    "I redeployed it; the health check passed.",
+    "Living Colors has no deployment yet.",
+    "",
+])
+def test_ordinary_replies_are_untouched(reply):
+    assert _no_button_was_promised(reply, []) == reply
+
+
+# --------------------------------------------------------------------------- #
+# A promise to come back, from something that cannot come back
+# --------------------------------------------------------------------------- #
+from boss_engine.services.intent_router import _boss_cannot_call_you_back  # noqa: E402
+
+
+@pytest.mark.parametrize("reply", [
+    "I've started the redeploy.\nI'll monitor the deployment and update you when it completes.",
+    "Retrying now.\nI will keep an eye on it and let you know how it goes.",
+    "Kicked off.\nI'm going to watch the health check and report back.",
+])
+def test_boss_does_not_promise_to_message_you_later(reply):
+    """BOSS is turn-scoped: nothing wakes it after it replies. Promising to "update you" makes
+    the operator WAIT instead of asking again — the most expensive possible false statement."""
+    out = _boss_cannot_call_you_back(reply)
+    assert "update you" not in out.lower() or "cannot watch this" in out
+    assert "ask me again" in out.lower()
+    assert out.splitlines()[0] == reply.splitlines()[0], "the real action must survive"
+
+
+@pytest.mark.parametrize("reply", [
+    "The deployment failed the health check after 120s.",
+    "Ask me again and I'll check the run page for the current status.",
+    "",
+])
+def test_replies_that_promise_nothing_are_untouched(reply):
+    assert _boss_cannot_call_you_back(reply) == reply
