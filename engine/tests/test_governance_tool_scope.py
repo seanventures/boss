@@ -187,10 +187,19 @@ def test_get_costs_always_filters_by_session_project():
     )
     assert out["ok"] is True
     assert out["project_id"] == "project-a"
-    cost_sql, params = next(
-        (sql, p) for sql, p in conn.executed if "from llm_calls" in sql.lower()
-    )
-    assert "l.project_id = :p" in cost_sql.replace("  ", " ") or "l.project_id = :p" in cost_sql
+    # EVERY query against the spend ledger, not just the first, and regardless of whether the
+    # table is aliased. get_costs grew a second (unaliased) aggregate for the window total, and
+    # this assertion passed it over silently while still reporting green -- a tenant-isolation
+    # guard that only inspects query #1 stops being a guard the moment a query #2 is added.
+    cost_queries = [(sql, p) for sql, p in conn.executed if "from llm_calls" in sql.lower()]
+    assert cost_queries, "get_costs ran no query against llm_calls"
+    for sql, p in cost_queries:
+        flat = " ".join(sql.split())
+        assert ("l.project_id = :p" in flat or "project_id = :p" in flat), (
+            f"llm_calls query without a project filter: {flat[:160]}")
+        assert p.get("p") == "project-a", (
+            f"llm_calls query bound to {p.get('p')!r}, not the session project")
+    cost_sql, params = cost_queries[0]
     assert params["p"] == "project-a"
 
 

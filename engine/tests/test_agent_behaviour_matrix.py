@@ -261,3 +261,35 @@ def test_an_unknown_object_degrades_instead_of_raising():
     class Odd:
         def __str__(self): return "odd-value"
     assert _json.loads(_json.dumps({"x": Odd()}, default=_jsonable))["x"] == "odd-value"
+
+
+# --------------------------------------------------------------------------- #
+# A money figure has to be reproducible
+# --------------------------------------------------------------------------- #
+
+
+def test_the_spend_total_is_not_the_sum_of_one_page():
+    """Asked "what is my spend this month" five times, BOSS answered $258.44, $19.56, 0.9141 and
+    40.2165. total_cost_usd was sum(runs) and `runs` is LIMIT-ed to the 25 most recent, so the
+    "total" was the total of a PAGE. The aggregate must not depend on the page size."""
+    import inspect
+    from boss_engine.tools import builtin
+    src = inspect.getsource(builtin)
+    i = src.index('"get_costs"')
+    body = src[i:i + 4200]
+    assert 'sum(r["cost_usd"] for r in runs)' not in body, (
+        "the total is being summed from the truncated page again")
+    assert "COALESCE(sum(cost_usd_micros), 0)" in body, "no window-wide aggregate"
+    assert "runs_truncated" in body, "a truncated list must say so"
+
+
+def test_the_window_is_stated_so_it_cannot_be_called_a_month():
+    """It reported a `days`-windowed figure as "this month (last 30 days)". Those differ, and the
+    operator is reading it as a bill."""
+    import inspect
+    from boss_engine.tools import builtin
+    src = inspect.getsource(builtin)
+    i = src.index('"get_costs"')
+    body = src[i:i + 4200]
+    assert "window_description" in body
+    assert "not a calendar month" in body

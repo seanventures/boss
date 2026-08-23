@@ -1441,6 +1441,27 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         days = int(args.get("days") or 7)
         limit = int(args.get("limit") or 25)
         with ctx.begin() as c:
+            # THE TOTAL IS NOT THE SUM OF THE PAGE.
+            #
+            # total_cost_usd used to be sum(runs), and runs is LIMIT-ed to the most recent 25.
+            # So a project with more than 25 recent runs reported "total spend" that was really
+            # "spend of the last 25 runs" -- silently, with no marker. Asked five times in a row
+            # this answered $258.44, $19.56, 0.9141 and 40.2165, because the model also picks
+            # `days` freely. A money figure that is not reproducible is worse than no figure.
+            #
+            # The total is now its own aggregate over the whole window, independent of limit.
+            totals = c.execute(
+                _text(
+                    "SELECT COALESCE(sum(cost_usd_micros), 0) AS micros, "
+                    "       COALESCE(sum(total_tokens), 0)   AS tokens, "
+                    "       count(*)                          AS calls, "
+                    "       count(DISTINCT code_task_run_id)  AS runs "
+                    "FROM llm_calls "
+                    "WHERE project_id = :p "
+                    "  AND created_at > now() - make_interval(days => :d)"
+                ),
+                {"p": pid, "d": days},
+            ).mappings().first() or {}
             rows = c.execute(
                 _text(
                     "SELECT l.code_task_run_id AS run_id, r.title, r.status, "
@@ -1460,10 +1481,25 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
             d["cost_usd"] = round(int(r["micros"] or 0) / 1_000_000, 4)
             d.pop("micros", None)
             runs.append(d)
+        total_runs = int(totals.get("runs") or 0)
         return {
             "project_id": pid,
             "window_days": days,
-            "total_cost_usd": round(sum(r["cost_usd"] for r in runs), 4),
+            # Say the window in words too: the model was labelling a 7-day figure "this month".
+            "window_description": f"the last {days} days (not a calendar month)",
+            "total_cost_usd": round(int(totals.get("micros") or 0) / 1_000_000, 4),
+            "total_tokens": int(totals.get("tokens") or 0),
+            "total_llm_calls": int(totals.get("calls") or 0),
+            "runs_in_window": total_runs,
+            # Explicit, so a truncated list cannot be mistaken for the whole ledger.
+            "runs_shown": len(runs),
+            "runs_truncated": total_runs > len(runs),
+            "note": (
+                "total_cost_usd is the WHOLE window and is authoritative. `runs` is only the "
+                f"{len(runs)} most recent of {total_runs} — never sum `runs` and call it the "
+                "total. Report the window: this is the last "
+                f"{days} days, which is not the same as a calendar month."
+            ),
             "runs": runs,
         }
 
