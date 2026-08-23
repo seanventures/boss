@@ -85,3 +85,24 @@ def _without_docstrings(src: str) -> str:
     return "\n".join(
         line for i, line in enumerate(src.splitlines(), 1) if i not in drop
     )
+
+
+def prompt_text(obj: Any) -> str:
+    """Source with adjacent string literals JOINED, as the interpreter would.
+
+    A long system prompt is written as concatenated literals, so a phrase the model plainly
+    reads — "this is a BOSS framework bug" — is split across two source lines as
+    `"this is a BOSS "` and `"framework bug"` and never appears contiguously in the file. An
+    assertion about the PROMPT must therefore be made against the prompt, not the source.
+
+    This is the same mistake as matching a comment (see `code_only`), one level subtler: the
+    text is real, the code is right, and the test is reading a representation that never
+    reaches the model.
+    """
+    import re
+
+    src = obj if isinstance(obj, str) else inspect.getsource(obj)
+    # `"...."  \n   "...."`  ->  `"........"`  (join implicit concatenation)
+    joined = re.sub(r'"\s*\n\s*"', "", src)
+    # unescape the quoting used inside those literals
+    return joined.replace('\\"', '"').replace("\\n", "\n")

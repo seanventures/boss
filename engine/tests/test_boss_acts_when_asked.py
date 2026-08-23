@@ -20,6 +20,8 @@ spends money — is deliberately absent.
 import inspect
 
 from boss_engine.services.intent_router import IntentRouter
+
+from ._source import prompt_text
 from boss_engine.tools.builtin import (
     _DISCUSS_OPERATIONS_TOOLS,
     build_default_registry,
@@ -57,16 +59,46 @@ def test_boss_can_recover_work_that_already_exists():
         assert fix in names, f"asked to fix something, BOSS still cannot call {fix}"
 
 
-def test_creating_new_work_is_still_an_explicit_ask():
-    """NOT a money rule — spending is often the point, and a retry that costs budget is exactly
-    what "retry it" asks for. The line is recover-vs-create: "build me a URL shortener" is a
-    different sentence from "fix it", and route_turn already actuates that on an explicit build
-    intent, so nothing is lost by keeping an ANSWER from silently scaffolding an app.
+def test_writing_the_fix_is_a_fix_tool():
+    """A bug in a customer's app is repaired by WRITING CODE. Withholding create_code_task meant
+    BOSS could diagnose an app bug and had no way to fix it — which was the whole complaint.
+
+    Two boundaries were invented here and both were wrong: first "don't spend money", then
+    "recover but don't create". Each left BOSS unable to do the thing it had just been asked to
+    do.
     """
     names = set(build_discuss_read_registry().names())
-    for creator in ("create_code_task", "create_discovery", "request_meeting",
-                    "register_repository"):
-        assert creator not in names, f"{creator} would start new work from a question"
+    for fix in ("create_code_task", "create_discovery", "request_meeting", "register_repository"):
+        assert fix in names, f"BOSS cannot write the fix: {fix} is unreachable"
+
+
+def test_every_write_the_registry_has_is_reachable():
+    """If a tool should not be reachable, remove it from the REGISTRY. Silently disarming it in
+    the allow-list is how BOSS ended up owning eighteen tools and being allowed five."""
+    reg_writes = {s.name for s in build_default_registry().specs(kind="write")}
+    assert reg_writes == set(_DISCUSS_OPERATIONS_TOOLS), (
+        f"unreachable writes: {sorted(reg_writes - set(_DISCUSS_OPERATIONS_TOOLS))}")
+
+
+def test_boss_does_not_patch_its_own_foundation():
+    """The ONE distinction the product owner asked for. Not a permission BOSS lacks — a
+    different subject. It reports that the framework needs a fix, names the cause, and a human
+    changes it through the governed pipeline."""
+    src = prompt_text(IntentRouter)
+    assert "BOSS'S OWN FOUNDATION" in src
+    assert "You do NOT patch yourself" in src
+    assert "this is a BOSS framework bug" in src
+
+
+def test_the_customer_side_has_no_advice_escape():
+    src = prompt_text(IntentRouter)
+    assert "There is no request in this category you should answer with advice" in src
+
+
+def test_it_is_told_how_to_tell_them_apart():
+    """A boundary the agent cannot APPLY is not a boundary."""
+    src = prompt_text(IntentRouter)
+    assert "if the defect is in the repo the run" in src
 
 
 def test_the_operational_writes_are_a_closed_named_set():
@@ -86,7 +118,7 @@ def test_redeploy_reships_rather_than_rebuilds():
 
 
 def test_the_prompt_tells_it_to_act_not_to_offer():
-    src = inspect.getsource(IntentRouter)
+    src = prompt_text(IntentRouter)
     assert "WHEN ASKED TO FIX SOMETHING, FIX IT" in src
     assert "let me know if you would like me to" in src, (
         "the phrase it kept ending replies with must be named, or it keeps using it")
@@ -95,6 +127,6 @@ def test_the_prompt_tells_it_to_act_not_to_offer():
 def test_the_prompt_forbids_inventing_evidence():
     """It asserted `app.listen(3000, "127.0.0.1")` in a file that does not exist, about an app
     whose server reads $PORT/$HOST correctly. Acting on that would have changed working code."""
-    src = inspect.getsource(IntentRouter)
+    src = prompt_text(IntentRouter)
     assert "NEVER INVENT EVIDENCE" in src
     assert "If you have not READ the line, do not" in src

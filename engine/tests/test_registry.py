@@ -42,6 +42,7 @@ _EXPECTED_TOOLS: set[str] = {
     "list_running_work",
     "microvm_status",
     "project_status",
+    "write_db",
     "query_db",
     "read_code",
     "read_logs",
@@ -73,11 +74,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 49, (
+    assert len(reg.names()) == 50, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 31
-    assert len(write) == 18
+    assert len(write) == 19
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",
@@ -201,7 +202,12 @@ def test_discuss_read_registry_exposes_everything_and_hides_project_override():
     # fail describing a difference it was itself creating.
     from boss_engine.tools.builtin import _DISCUSS_OPERATIONS_TOOLS
     assert {s.name for s in reg.specs(kind="write")} == set(_DISCUSS_OPERATIONS_TOOLS)
-    assert "create_code_task" not in reg.names(), "starting new work stays a deliberate ask"
+    # create_code_task IS reachable now, deliberately: a bug in a customer's app is repaired by
+    # writing code, so withholding it meant BOSS could diagnose an app bug and had no way to fix
+    # it. The only thing BOSS does not do is patch its OWN foundation, and that is enforced by
+    # there being no tool for it plus an explicit instruction in the prompt — not by disarming
+    # the tools that fix customer work.
+    assert "create_code_task" in reg.names(), "BOSS must be able to write the fix"
     for schema in reg.openai_schema():
         props = schema["function"]["parameters"].get("properties") or {}
         assert "project_id" not in props, schema["function"]["name"]

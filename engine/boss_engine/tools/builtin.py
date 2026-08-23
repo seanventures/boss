@@ -603,6 +603,41 @@ def _register_write_tools(reg: ToolRegistry) -> None:
 # ===========================================================================
 _DECISION_ACTIONS = ("approve", "reject", "revise", "delegate", "execute")
 
+#: Statement kinds that are CRUD on ROWS. DDL is not CRUD: dropping or altering a table is a
+#: migration — not reversible from a chat turn — and no operator asking BOSS to "fix the stuck
+#: row" means "restructure the schema".
+_WRITE_VERBS = ("insert", "update", "delete")
+_DDL_VERBS = ("drop", "alter", "truncate", "create", "grant", "revoke")
+
+
+def _is_single_write(statement: str, *, whole_table: bool = False) -> tuple[bool, str]:
+    """Validate a single DML statement.
+
+    The WHERE requirement is NOT a permission boundary — BOSS is trusted with the database. It
+    is a foot-gun guard: `UPDATE code_task_runs SET status='failed'` is valid SQL that silently
+    rewrites every row in the table, and a model that omits a WHERE has made a typing mistake,
+    not a decision. `whole_table=true` is how it says the omission was deliberate.
+    """
+    text = " ".join((statement or "").split())
+    lowered = text.lower()
+    if not lowered:
+        return False, "empty statement"
+    if ";" in text.rstrip(";"):
+        return False, "multiple statements are not allowed; send one at a time"
+    verb = lowered.split(" ", 1)[0]
+    if verb in _DDL_VERBS:
+        return False, (
+            f"{verb.upper()} is a schema change, not CRUD. Schema changes belong in a migration "
+            "so they are reviewed and reversible.")
+    if verb not in _WRITE_VERBS:
+        return False, (
+            f"expected INSERT, UPDATE or DELETE; got {verb.upper()}. Use query_db for reads.")
+    if verb in ("update", "delete") and " where " not in lowered and not whole_table:
+        return False, (
+            f"{verb.upper()} without a WHERE clause would change EVERY row. Add a WHERE, or "
+            "pass whole_table=true if that is genuinely intended.")
+    return True, ""
+
 
 def _register_operations_tools(reg: ToolRegistry) -> None:
     """Operational writes: BOSS running BOSS.
@@ -639,6 +674,42 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             return JobLeaseService(ctx.settings).cancel_queued_job(
                 c, str(args["job_id"]), reason=str(args["reason"]),
                 actor=actor, force=bool(args.get("force")))
+
+    @reg.tool(
+        "write_db",
+        "Run a WRITE statement (INSERT / UPDATE / DELETE) against the engine's Postgres and "
+        "report how many rows changed. The escape hatch for state no structured tool covers: a "
+        "stuck flag, a mislinked row, a status the pipeline left wrong. "
+        "PREFER a structured tool when one exists (cancel_job, decide, close_orphaned_runs) — "
+        "they emit events and keep related rows consistent, and raw SQL does neither. "
+        "UPDATE/DELETE require a WHERE unless whole_table=true, since an unqualified one "
+        "rewrites the entire table. Schema changes (DROP/ALTER/TRUNCATE) are refused: those are "
+        "migrations, not CRUD.",
+        _obj({"sql": {"type": "string",
+                      "description": "a single INSERT, UPDATE or DELETE statement"},
+              "reason": {"type": "string", "description": "why — recorded in the event stream"},
+              "whole_table": {"type": "boolean",
+                              "description": "confirm an intentionally unqualified UPDATE/DELETE"}},
+             required=["sql", "reason"]),
+        kind="write",
+    )
+    def write_db(ctx, *, project_id, actor, args):
+        from ..ports import sql as _s
+        from ..services.core import emit_event
+
+        statement = (args.get("sql") or "").strip().rstrip(";")
+        ok, why = _is_single_write(statement, whole_table=bool(args.get("whole_table")))
+        if not ok:
+            return {"ok": False, "error": f"rejected: {why}"}
+        with ctx.begin() as c:
+            result = c.execute(_s(statement))
+            changed = getattr(result, "rowcount", None)
+            emit_event(c, project_id, "db.write", actor, "database", "sql",
+                       {"sql": statement[:2000], "rows": changed,
+                        "reason": str(args.get("reason") or "")[:500]})
+        return {"ok": True, "rows_affected": changed, "sql": statement[:2000],
+                "note": ("A raw write emits no domain events and updates no related rows. "
+                         "Check whether this change needs a companion update.")}
 
     @reg.tool(
         "redeploy",
@@ -2036,36 +2107,54 @@ def build_default_registry() -> ToolRegistry:
 # concluded the agent could not do anything. That is not a guardrail; it is the product failing
 # at its entire premise.
 #
-# THE LINE IS NOT "does it spend money". Spending is frequently the point: a retry that costs
-# model budget is exactly what "retry it" asks for. The line is:
+# THERE IS EXACTLY ONE LINE, AND IT IS NOT ABOUT MONEY OR RISK.
 #
-#   RECOVER work that already exists   -> BOSS does it, on request. This is what "fix it" means.
-#   CREATE work that does not exist    -> still an explicit ask. Not for safety, but because
-#                                         "build me a URL shortener" is a different sentence
-#                                         from "fix it", and route_turn already actuates that
-#                                         on an explicit build intent — so nothing is lost by
-#                                         keeping an ANSWER from silently scaffolding an app.
+# I drew two boundaries the product owner never asked for — first "don't spend money", then
+# "recover but don't create" — and each one left BOSS unable to do the thing it had just been
+# asked to do. Both were wrong, and the reason is the same: a control plane that answers
+# "shall I?" is not autonomous, it is a chatbot with a database.
 #
-# Changing BOSS's own source stays in the governed pipeline behind a PR and a review.
+#   A CUSTOMER'S app, deployment, preview, observability, queue -> BOSS FIXES IT. Including
+#   when the fix is new work: a bug in a customer app is repaired by writing code, so
+#   create_code_task IS a fix tool, not a spending risk. No excuses, no "let me know if".
+#
+#   BOSS'S OWN FOUNDATION (this engine, the API, the console) -> BOSS does NOT patch itself.
+#   It says plainly that the BOSS framework needs the fix, names the file and the cause, and a
+#   human changes it through the governed pipeline and redeploys. That is not a permission
+#   BOSS lacks; it is a different SUBJECT, and pretending otherwise is how an agent edits the
+#   floor it is standing on.
+#
+# So this list is every write the registry has. If a tool should not be reachable, remove it
+# from the registry — do not silently disarm it here, which is how BOSS spent this session
+# owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # Queue and run state
     "cancel_job",
     "set_job_priority",
     "close_orphaned_runs",
     "link_run_origin",
-    # Recovering work that exists — the actual meaning of "fix it"
+    # Recovering work that exists
     "retry_code_task",
     "extend_code_task",
     "steer_code_task",
     "cancel_code_task",
-    # Delivery
+    # Writing the fix. A customer's bug is repaired with code.
+    "create_code_task",
+    "create_discovery",
+    "request_meeting",
+    # Delivery and environment
     "redeploy",
     "start_preview",
     "stop_preview",
+    "register_repository",
     # The operator's own authority, exercised on their instruction
     "decide",
     "waive_gates",
     "send_feedback",
+    # Full CRUD. `query_db` already reads every table; state that no structured tool models
+    # still has to be fixable, or "BOSS can see the problem and cannot touch it" comes back in
+    # a narrower form.
+    "write_db",
 })
 
 
