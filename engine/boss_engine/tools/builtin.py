@@ -645,6 +645,8 @@ def _is_single_write(statement: str, *, whole_table: bool = False) -> tuple[bool
 _PLACEHOLDER_MARKERS = (
     "placeholder", "example.com", "your-", "todo", "tbd", "xxx", "<", "...",
     "changeme", "some-", "my-app", "foo", "bar", "abc123",
+    # Seen live in a proposal's args: repository="owner/name".
+    "owner/name", "owner/repo", "user/repo", "org/repo",
 )
 
 

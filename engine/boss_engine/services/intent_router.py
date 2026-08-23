@@ -575,16 +575,20 @@ class IntentRouter:
                         tool_calls.append({"tool": step.get("tool"),
                                            "args": step.get("args"),
                                            "ok": bool(result.get("ok", True))})
-                        if step.get("tool") in _ACTING_TOOLS:
+                        if step.get("tool") in _ACTING_TOOLS and not result.get("proposed"):
                             actions.append({"kind": str(step.get("tool")),
                                             "args": step.get("args"),
                                             "result": result})
-                        # An OFFER, not a deed. propose_action runs nothing; it returns the
-                        # tool and arguments the operator can accept with one click.
-                        if step.get("tool") == "propose_action" and result.get("proposed"):
+                        # An OFFER, not a deed. Two sources, one shape:
+                        #   * propose_action — the agent CHOSE to offer rather than act;
+                        #   * a PROPOSE_ONLY tool — the agent tried to act and the agent loop
+                        #     turned it into an offer, because that tool starts expensive work.
+                        # Keying on the RESULT rather than the tool name covers both, and
+                        # covers the next tool added to either set.
+                        if result.get("proposed"):
                             proposed.append({
                                 "id": make_id("act"),
-                                "tool": result.get("tool"),
+                                "tool": result.get("tool") or step.get("tool"),
                                 "args": result.get("args") or {},
                                 "label": result.get("label"),
                                 "why": result.get("why"),

@@ -63,6 +63,23 @@ class AgentTurn:
         }
 
 
+
+def _propose_label(tool: str, args: dict) -> str:
+    """Button text a person can act on without reading the arguments."""
+    title = str((args or {}).get("title") or "").strip()
+    run_id = str((args or {}).get("run_id") or "").strip()
+    if tool == "create_code_task":
+        return f"Build: {title}"[:70] if title else "Start a new build"
+    if tool == "retry_code_task":
+        return f"Retry {run_id[:20]}" if run_id else "Retry the run"
+    if tool == "extend_code_task":
+        return f"Keep working on {run_id[:20]}" if run_id else "Continue the run"
+    if tool == "create_discovery":
+        return f"Research: {title}"[:70] if title else "Start research"
+    if tool == "request_meeting":
+        return "Convene a PRD panel"
+    return tool.replace("_", " ")
+
 class EngineAgent:
     def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None):
         self.ctx = ctx
@@ -167,6 +184,24 @@ class EngineAgent:
 
         return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps)
 
+    #: Tools that START EXPENSIVE, LONG-RUNNING WORK. From chat these are OFFERED, never taken.
+    #:
+    #: Asked to "deploy Living Colors to live", the agent tried redeploy, found the app had
+    #: never deployed, and silently called retry_code_task instead — a fresh build worth
+    #: minutes and real money, reported as "I've retried the failed task, which will redeploy".
+    #: Told not to substitute, in the system prompt AND in redeploy's own failure message, it
+    #: did it again on the very next attempt.
+    #:
+    #: Four instructions ignored is a design answer, not a prompting problem: an action whose
+    #: cost the operator would want to authorise must not be reachable by the model deciding it
+    #: is a good idea. These come back as buttons; one click runs them unchanged. Everything
+    #: else — redeploy, previews, priorities, cancels, decisions, write_db — still executes
+    #: directly, because those are cheap, reversible, or exactly what "fix it" means.
+    PROPOSE_ONLY = frozenset({
+        "create_code_task", "create_discovery", "request_meeting",
+        "retry_code_task", "extend_code_task",
+    })
+
     def _run_tool(
         self, name: str, args: dict, *, project_id: str, actor: str,
         allow_writes: bool, pending: list[dict],
@@ -179,6 +214,17 @@ class EngineAgent:
             name = spec.name
         except ToolError as exc:
             return {"ok": False, "error": str(exc)}
+        if name in self.PROPOSE_ONLY:
+            pending.append({"tool": name, "args": args})
+            return {
+                "ok": True, "proposed": True, "tool": name, "args": args,
+                "label": _propose_label(name, args),
+                "why": "starts new work and spends model budget",
+                "note": (f"NOT run. {name} starts expensive work, so it is offered to the "
+                         "operator as a button and executes only if they click it. Tell them "
+                         "plainly that this is what you are offering and why — do not describe "
+                         "it as something you have already done."),
+            }
         if spec.kind == "write" and not allow_writes:
             proposal = {"tool": name, "args": args}
             pending.append(proposal)

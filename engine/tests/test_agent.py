@@ -39,6 +39,12 @@ def _registry(calls):
         calls.append(k["args"])
         return {"run_id": "crun_x"}
 
+    # "redeploy" is the write used to test the allow_writes GATE: it is an ordinary write, so
+    # allow_writes alone decides whether it runs. "create_code_task" is deliberately also
+    # registered because it is PROPOSE_ONLY — it must NOT run even when writes are allowed, and
+    # the test below pins that difference. Using one tool for both properties hid the
+    # distinction and is why these tests broke when propose-only landed.
+    reg.register(ToolSpec("redeploy", "w", {"type": "object"}, do_write, kind="write"))
     reg.register(ToolSpec("create_code_task", "w", {"type": "object"}, do_write, kind="write"))
     return reg
 
@@ -61,22 +67,34 @@ def test_read_tool_flow():
 
 def test_write_gated_by_default():
     calls = []
-    ag = _agent([_tool_call_msg("create_code_task", '{"title":"x"}'),
-                 _final_msg("I drafted a build; confirm to run.")], calls)
-    turn = ag.chat(project_id="p", actor="u", message="build x", allow_writes=False)
+    ag = _agent([_tool_call_msg("redeploy", '{"app":"x"}'),
+                 _final_msg("I drafted a redeploy; confirm to run.")], calls)
+    turn = ag.chat(project_id="p", actor="u", message="redeploy x", allow_writes=False)
     assert calls == []  # the write handler NEVER ran
-    assert turn.pending_writes and turn.pending_writes[0]["tool"] == "create_code_task"
+    assert turn.pending_writes and turn.pending_writes[0]["tool"] == "redeploy"
     assert turn.trace[0]["result"]["status"] == "confirmation_required"
 
 
 def test_write_runs_when_allowed():
     calls = []
-    ag = _agent([_tool_call_msg("create_code_task", '{"title":"x"}'),
-                 _final_msg("Started crun_x.")], calls)
-    turn = ag.chat(project_id="p", actor="u", message="build x", allow_writes=True)
-    assert calls == [{"title": "x"}]  # the write handler ran once
+    ag = _agent([_tool_call_msg("redeploy", '{"app":"x"}'),
+                 _final_msg("Redeployed.")], calls)
+    turn = ag.chat(project_id="p", actor="u", message="redeploy x", allow_writes=True)
+    assert calls == [{"app": "x"}]  # the write handler ran once
     assert turn.trace[0]["result"]["run_id"] == "crun_x"
     assert turn.pending_writes == []
+
+
+def test_expensive_write_is_offered_even_when_writes_are_allowed():
+    """The deploy-became-a-rebuild bug: allow_writes=True was enough to start a build. Starting
+    expensive work is now an offer regardless, so allow_writes governs ordinary writes only."""
+    calls = []
+    ag = _agent([_tool_call_msg("create_code_task", '{"title":"x"}'),
+                 _final_msg("I can start that build if you want it.")], calls)
+    turn = ag.chat(project_id="p", actor="u", message="build x", allow_writes=True)
+    assert calls == []  # NOT started, despite writes being allowed
+    assert turn.trace[0]["result"]["proposed"] is True
+    assert turn.pending_writes and turn.pending_writes[0]["tool"] == "create_code_task"
 
 
 def test_unknown_tool_is_handled():

@@ -1002,7 +1002,7 @@ class Settings(BaseSettings):
     # Shallow-clone depth for the ephemeral sandbox.
     sandbox_clone_depth: int = Field(default=1, alias="BOSS_SANDBOX_CLONE_DEPTH")
     # Absolute operator-facing origin for preview View URLs (e.g.
-    # https://boss-api.local.sean.network). When set, publicize_preview rewrites
+    # https://boss-api.example.com). When set, publicize_preview rewrites
     # loopback binds to {base}/v1/previews/{id}/web/ and rejects a loopback base.
     # Relative gateway paths are used when empty. See docs/product/PREVIEW_GA_CHECKLIST.md.
     preview_public_base: str = Field(
