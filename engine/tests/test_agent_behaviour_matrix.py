@@ -451,3 +451,39 @@ def test_the_page_still_accepts_org_id_from_old_links():
     """Bookmarks and already-sent links carrying org_id must not eject anyone."""
     src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
     assert "resolvedSearchParams?.org_id" in src, "org_id alias not honoured"
+
+
+# --------------------------------------------------------------------------- #
+# A blip must not tell the operator their workspace is gone
+# --------------------------------------------------------------------------- #
+def test_an_empty_org_list_retries_instead_of_offering_onboarding():
+    """The picker appeared mid-session with the BOSS org MISSING and the "Onboard a new
+    organization" form open. fetchOrgs reports apiReachable:true whenever the call returns at
+    all, so a degraded read yielding zero orgs is indistinguishable from an empty account —
+    and OrgGate opens onboarding when the list is empty. It reads as data loss."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    assert "orgs.items.length === 0" in src, "an empty list is still treated as fact"
+    i = src.index("orgs.items.length === 0")
+    assert "OrgReconnect" in src[i:i + 900], "empty list does not route to the retrying view"
+
+
+def test_a_bad_org_link_still_reaches_the_picker():
+    """The retry must not become a trap: a list that DID load and simply lacks this org is a
+    real mismatch, not a blip, and has to fall through rather than retry forever."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    assert "OrgGate orgs={orgs.items}" in src
+
+
+def test_the_agent_page_lists_conversations_not_tasks():
+    """Tasks have their own Ask BOSS panel on the card; listing them here too split one
+    conversation across two entry points and left a single reusable "General chat" slot."""
+    import re
+    src = pathlib.Path("apps/web/app/agent-ui.tsx").read_text(encoding="utf-8")
+    # Assert on CODE, not on the comment explaining what was removed — the first version of
+    # this matched the word in its own rationale, which is the same mistake as asserting on a
+    # docstring.
+    code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    assert "New chat" in code and "generalThreads" in code
+    assert "General chat" not in code, "the single shared general slot is still rendered"
+    assert "!t.external_ref" in code, "task threads are not excluded from the chat list"

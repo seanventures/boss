@@ -5669,3 +5669,20 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .askboss-opener:hover, .askboss-send:hover:not(:disabled) { transform: none; }
   .askboss-spinner { border-top-color: rgba(255, 255, 255, .7); }
 }
+
+
+/* New chat — the primary action in the agent rail, so it reads as one. */
+.agent-newchat {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 10px 12px; margin-bottom: 4px;
+  border-radius: 10px; cursor: pointer;
+  border: 1px dashed var(--border, #1C2740);
+  background: rgba(76, 141, 246, .10);
+  color: var(--ink, #E8EEFC); font: inherit; font-weight: 600; font-size: .9rem;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.agent-newchat:hover {
+  background: rgba(76, 141, 246, .20);
+  border-color: var(--accent, #4C8DF6);
+  border-style: solid;
+}

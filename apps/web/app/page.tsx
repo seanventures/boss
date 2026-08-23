@@ -528,10 +528,24 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     // A transient API failure must NOT dump an in-session operator back to the org
     // picker (it destroys their console state mid-work). URL names an org + the org
     // list didn't load => hold the session and retry, don't re-gate.
-    if (requestedOrgId && !orgs.apiReachable) {
+    // AN EMPTY ORG LIST IS NOT NEWS THAT YOUR ORG IS GONE.
+    //
+    // fetchOrgs reports apiReachable:true whenever the call returns at all, so a degraded read
+    // that yields zero orgs looks identical to a genuinely empty account. OrgGate then opens
+    // the ONBOARDING form, and an operator working mid-session is shown "Onboard a new
+    // organization" where their workspace used to be. That is the screenshot, and it reads as
+    // data loss rather than as a blip.
+    //
+    // If the URL names an org and the list came back EMPTY, the list is wrong, not the URL:
+    // hold the session and retry. A non-empty list that simply lacks this org is a real
+    // mismatch and still falls through to the picker, so a bad link cannot retry forever.
+    if (requestedOrgId && (!orgs.apiReachable || orgs.items.length === 0)) {
       return (
         <Suspense fallback={null}>
-          <OrgReconnect orgId={requestedOrgId} reason={orgs.blockedReason} />
+          <OrgReconnect
+            orgId={requestedOrgId}
+            reason={orgs.blockedReason ?? (orgs.items.length === 0 ? "the org list came back empty" : undefined)}
+          />
         </Suspense>
       );
     }

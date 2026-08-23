@@ -14,7 +14,7 @@ import {
 
 type Msg = { role: string; content: string; actions?: Array<{ kind: string }>; created_at?: string };
 type Task = { id?: string; task_id?: string; title?: string; status?: string };
-type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string };
+type Thread = { thread_id: string; external_ref?: string | null; updated_at?: string; title?: string | null; message_count?: number };
 type CodeTask = { id?: string; status?: string; phase?: string; pull_request_url?: string; pull_request_number?: number; task_id?: string };
 
 // A turn is normally single-digit seconds; past NORMAL the operator is told it is running
@@ -26,6 +26,32 @@ const AGENT_STALL_SECONDS = 120;
 
 const GENERAL = "__general__";
 const tid = (t: Task): string => String(t.id ?? t.task_id ?? "");
+
+/** A readable name for a conversation in the rail. */
+function sessionTitle(t: Thread): string {
+  const raw = (t.title ?? "").trim();
+  // Task threads carry the machine context block as their title; strip it rather than showing
+  // "[app context] You are talking about ONE app in BOSS." as a chat name.
+  const cleaned = raw.startsWith("[app context]")
+    ? (raw.split("\n\n").slice(1).join(" ").trim() || raw.replace("[app context]", "").trim())
+    : raw;
+  if (!cleaned) return "New conversation";
+  return cleaned.length > 52 ? cleaned.slice(0, 52).trimEnd() + "…" : cleaned;
+}
+
+/** "3m ago" / "2h ago" / "5d ago" — a chat list is read by recency, not by timestamp. */
+function relativeWhen(iso?: string): string {
+  if (!iso) return "";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 function railBtn(active: boolean) {
   return {
@@ -105,6 +131,32 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
       list.find((t) => (t.external_ref ?? null) === (id === GENERAL ? null : id)),
     [],
   );
+
+  /**
+   * Open one conversation by its thread id, or start a fresh one.
+   *
+   * The rail used to be a list of TASKS with a single "General chat" pinned on top, so the only
+   * way back into a past conversation was to remember which task it hung off — and a
+   * cross-cutting chat had exactly one slot, permanently reused. Tasks now have their own Ask
+   * BOSS panel on the card, which is where task-scoped work belongs; this page is the general
+   * one, so it is organised the way a chat app is: sessions, newest first, and a New chat
+   * button that does not overwrite the last one.
+   */
+  const openSession = useCallback((threadId: string | null) => {
+    setSel(GENERAL);
+    setMessages([]); setContext(null); setPendingPlan(null); setProposed([]);
+    setThreadId(threadId);
+    if (!threadId) { setLoadingThread(false); return; }   // New chat: nothing to fetch
+    setLoadingThread(true);
+    loadThreadMessagesAction(threadId, projectId, actor).then((r) => {
+      if (r.ok && r.data) {
+        const d = r.data as Record<string, unknown>;
+        setMessages((d.messages as Msg[]) ?? []);
+        setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
+        setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
+      }
+    }).finally(() => setLoadingThread(false));
+  }, [projectId, actor]);
 
   const openThreadAndContext = useCallback((id: string, list: Thread[]) => {
     setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setLoadingThread(true);
@@ -255,36 +307,59 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
 
   const task = context?.task as Record<string, unknown> | undefined;
 
+  // Only cross-cutting conversations belong on this page. A thread with an external_ref is a
+  // TASK thread and is reachable from that task's own panel; showing it here too is what made
+  // the rail read as a duplicate task list.
+  const generalThreads = threads
+    .filter((t) => !t.external_ref)
+    .slice()
+    .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
+
   return (
     <div className="agent-chat-shell" style={{ display: "grid", gridTemplateColumns: "clamp(220px,24%,300px) 1fr", gap: 14, minHeight: 540 }}>
       {/* RAIL — General + one entry per task (💬 if it already has a conversation) */}
       <aside style={{ borderRight: "1px solid var(--border)", paddingRight: 12, overflowY: "auto", maxHeight: "72vh" }}>
-        <div className="eyebrow" style={{ marginBottom: 8 }}>Conversations · last 10 days</div>
-        <button type="button" onClick={() => openThreadAndContext(GENERAL, threads)} style={railBtn(sel === GENERAL)}>
-          <span style={{ fontWeight: 700 }}>💬 General chat</span>
-          <span className="detail" style={{ display: "block", fontSize: 11 }}>Cross-cutting — not tied to a task</span>
+        {/* SESSIONS, NOT TASKS.
+            The task rail is gone: every task card now has its own Ask BOSS panel, which is the
+            right place for task-scoped work and carries the app context with it. Listing tasks
+            here as well split the same conversation across two entry points and left "General
+            chat" as a single slot that every cross-cutting question overwrote. */}
+        <button type="button" className="agent-newchat" onClick={() => openSession(null)}>
+          <span aria-hidden>＋</span> New chat
         </button>
-        <div className="eyebrow" style={{ margin: "14px 0 6px" }}>Tasks</div>
-        {tasks.length === 0 ? (
-          <p className="detail">No tasks yet.</p>
-        ) : tasks.map((t) => {
-          const id = tid(t); const hasChat = !!threadFor(id, threads);
-          return (
-            <button type="button" key={id} onClick={() => openThreadAndContext(id, threads)} style={railBtn(sel === id)}>
-              <span style={{ fontWeight: 600, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title || id}</span>
-              <span className="detail" style={{ display: "block", fontSize: 11 }}>{t.status ?? "task"}{hasChat ? " · 💬 has chat" : ""}</span>
-            </button>
-          );
-        })}
+        <div className="eyebrow" style={{ margin: "14px 0 6px" }}>Chats</div>
+        {generalThreads.length === 0 ? (
+          <p className="detail">No conversations yet. Ask BOSS something to start one.</p>
+        ) : generalThreads.map((t) => (
+          <button
+            type="button"
+            key={t.thread_id}
+            onClick={() => openSession(t.thread_id)}
+            style={railBtn(threadId === t.thread_id)}
+            title={sessionTitle(t)}
+          >
+            <span style={{ fontWeight: 600, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {sessionTitle(t)}
+            </span>
+            <span className="detail" style={{ display: "block", fontSize: 11 }}>
+              {relativeWhen(t.updated_at)}
+            </span>
+          </button>
+        ))}
       </aside>
 
       {/* MAIN — context header + scoped history + input */}
       <section style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         {sel === GENERAL ? (
           <div className="agent-chat-intro">
-            <span className="eyebrow">BOSS Agent · General</span>
-            <h2>Describe the outcome. BOSS picks the governed path.</h2>
-            <p>Start code, research, a meeting, a PRD, or a program from one conversation — or pick a task on the left to work on it in context.</p>
+            <span className="eyebrow">BOSS Agent</span>
+            <h2>{threadId ? sessionTitle(threads.find((t) => t.thread_id === threadId) ?? { thread_id: threadId })
+                          : "What do you want to do?"}</h2>
+            {threadId ? null : (
+              <p>Ask anything, or tell BOSS to do it — code, research, a meeting, a PRD, a
+                 deployment. Work on one app from its card in Factory, where the app context
+                 comes with it.</p>
+            )}
           </div>
         ) : (
           <div className="ct-block" style={{ marginBottom: 10 }}>
@@ -309,7 +384,7 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             <p className="detail">Loading conversation…</p>
           ) : messages.length === 0 ? (
             <div className="agent-chat-empty">
-              <p>{sel === GENERAL ? "Try “Research auth providers, then build login.”" : "No messages yet for this task. Ask BOSS to improve the UI, add a feature, or deploy it — the whole task context is loaded."}</p>
+              <p>Try “What changed today?”, “Which runs failed and why?”, or “Deploy Shorty to staging.”</p>
             </div>
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>
@@ -412,7 +487,7 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
               style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-end" }}>
           <textarea className="input agent-input" value={input} disabled={busy}
             aria-label="Message BOSS"
-            placeholder={sel === GENERAL ? "Message BOSS (general)…" : "Message BOSS about this task…"}
+            placeholder="Message BOSS…"
             rows={1}
             onChange={(e) => {
               setInput(e.target.value);
