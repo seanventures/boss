@@ -569,6 +569,58 @@ behind a PR.
 
 ## 6. The plan
 
+### 6.0 Sequence — what to build, in what order, and why that order
+
+The plan below grew by accretion and lists twelve workstreams with no ordering. That is not
+executable. This is the order, and the reasoning is dependency and blast radius, not preference.
+
+**Phase 0 — stop the bleeding.** Small, isolated, no design required. Each one is currently
+prevented only by luck or by a feature flag.
+
+| # | Item | Why first |
+|---|---|---|
+| 0.1 | **Bound retry chains by lineage** (I38, R9 generalised) | The only unbounded *spend* path in the system. Today it is held by `autopilot_enabled=false` — a flag, not a limit. If that flag is ever flipped, this bills money in a loop. |
+| 0.2 | **Delete preview workdirs** (I39) | Unbounded disk growth on the container the agent also works in. Disk exhaustion presents as unrelated failures everywhere at once, which is the most expensive kind to diagnose. |
+| 0.3 | **Edition-aware feeds** (I33) | Five panels print "API returned 404" on every load. Cheap, and it removes the single loudest false signal an operator sees. |
+| 0.4 | **Status check at enqueue** (I37) | Cancel is currently a race, not an instruction. On a paid path that means spend continues after stop. |
+
+**Phase 1 — the constraint.** Nothing else in this document changes the queueing behaviour.
+
+| # | Item | Why here |
+|---|---|---|
+| 1.1 | **R7 — more than one lane** | I19 is upstream of most of §2. One worker, one job, inline, 90-minute ceiling. Priority bands order a queue with one server; they cannot make work overlap. Do this before any further queue tuning, or the tuning is wasted again. |
+| 1.2 | **R12 — cooperative cancellation between phases** | Deliberately after 1.1: a phase boundary is the natural place to hand a job back, and multi-lane makes losing one lane cheap. Doing it now, into a single blocked thread, is the risky version. |
+
+**Phase 2 — make the system observable before making it more autonomous.**
+
+| # | Item | Why here |
+|---|---|---|
+| 2.1 | **R1 — load only the active area** | 8 MB and 17–30s per load, measured. Every "API unreachable" report today traced back to console load, not API health. |
+| 2.2 | **R6 + R6a — invariants that run themselves, and an event stream** | Every incident here was visible in the data for hours. Note the ordering rule from I18: free mitigations fire, spending mitigations raise an event and wait. |
+| 2.3 | **R8 — BOSS can see its own machine** | I39 could not be *measured* from here, only bounded from below. That is this item's argument, made concrete. |
+| 2.4 | **R2 — measure before indexing** | Explicitly after 2.3, because the measurement needs the observability. |
+
+**Phase 3 — correctness of the human boundary.**
+
+| # | Item |
+|---|---|
+| 3.1 | **R4 — gates that cannot silently kill work** (127 expired vs 18 approved) |
+| 3.2 | **R5 — lineage visible end to end** (and I32: a run must record where it came from) |
+| 3.3 | **R3 — Ask BOSS as a reliable first responder** |
+| 3.4 | **R10 / R11 — preview verification honesty, and the preview-auth decision** |
+
+**Continuous, starting now — the S14 counter-measure.** Run the full pipeline end to end on a
+real app, on a schedule, and treat a failure as a release blocker. Every defect in §2 was found
+by an operator doing this by hand, once, at their own expense. That is the actual root cause and
+no individual fix addresses it.
+
+**Deliberately not scheduled:** I34 (deploy-window 404) and I36 (deploy client timeout) are
+operator-experience defects in the *deploy* path, not the product. They cost me hours today and
+they will cost the next person the same, but they do not affect a running BOSS. Fix them when
+touching deployment; do not let them displace Phase 0.
+
+---
+
 Ordered by operator hours recovered per unit of risk.
 
 ### R1 — Load only the active area *(largest remaining win)*
