@@ -498,9 +498,12 @@ here was verified against the running system, not inferred.
 |---|---|---|
 | `/health` (15s-cached) | 0.6–2.5s | 0.2s |
 | `/v1/code-tasks?limit=5` | **47.1s, then 39.5s** | 0.86–1.1s |
+| same, later on a fully quiet box (control, n=5) | — | **0.38 / 1.06 / 0.78 / 0.91 / 0.67 s** |
 | next call after those | **404 in 0.3s — Traefik's plain-text 404** | 200 |
 | console page | 79.5s, then a 200s timeout | — |
 
+* **Magnitude:** the same five-row read is **~40-100x slower** while a job runs. The control
+  was taken after the job finished, on the same deployment, same query, same client.
 * **Cause:** the code agent runs **inside the API container** — the worker POSTs to the control
   plane and the API executes the pipeline. `check_tests` runs the app's own suite (npm install,
   build, Playwright) in that process's container. The API's threadpool and CPU are the agent's
