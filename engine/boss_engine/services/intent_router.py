@@ -288,7 +288,19 @@ class IntentRouter:
         # `_deterministic_intent` stays for two callers that genuinely need it: this method
         # when no model is configured, and `classify_message`, which community-facing surfaces
         # use so an untrusted GitHub issue cannot create work merely by being classified.
-        if self.settings.agent_router_llm_enabled:
+        # Gated on whether a MODEL EXISTS, not on `agent_router_llm_enabled`.
+        #
+        # I first gated this on that flag, which defaults to False and is unset in production —
+        # so the inversion was dead code and the regex stayed in charge. Worse, my own
+        # verification passed: the sentences I tested contained no build verbs, the matcher
+        # abstained, and the turn reached the agent anyway. I read "the regex had no opinion"
+        # as "the agent is routing". The next message that did contain one — "list the tools
+        # you can call that CHANGE something" — spawned a governed code task.
+        #
+        # That flag governs the older LLM CLASSIFIER (`_model_intent`), a different mechanism
+        # from the tool-calling agent. The agent is the same one that answers every question in
+        # this console today; if a model is configured at all, it is available.
+        if self.settings.openai_api_key or self.settings.azure_openai_key:
             return self._answer(connection, project_id, messages)
 
         # No model available — fall back to keywords rather than doing nothing.
