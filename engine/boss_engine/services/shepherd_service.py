@@ -969,7 +969,13 @@ def _act_on_deployment(engine, settings, run_id: str, action: str, actor: str) -
 
     with begin(engine) as c:
         row = c.execute(
-            sql("SELECT id, target_id FROM deployment_runs "
+            # `deployment_target_id` is the column; `target_id` does not exist. Every caller of
+            # this path — the shepherd's DEPLOY_FAILED remedy since it was written, and now the
+            # redeploy tool — failed on it, silently, because the exception was swallowed into
+            # "no deployment run for this task". BOSS found this itself when an operator finally
+            # asked it to retry a deployment, and correctly reported it as a framework bug
+            # rather than an application one.
+            sql("SELECT id, deployment_target_id AS target_id FROM deployment_runs "
                 "WHERE release_packet->>'code_task_run_id' = :i "
                 "ORDER BY created_at DESC LIMIT 1"),
             {"i": run_id}).mappings().first()
