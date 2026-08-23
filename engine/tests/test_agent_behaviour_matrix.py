@@ -393,3 +393,36 @@ def test_every_shape_of_fake_button_is_caught(reply):
     out = _no_button_was_promised(reply, [])
     assert "nothing to click" in out, f"still promising a control: {out!r}"
     assert out.splitlines()[0] == reply.splitlines()[0], "the real answer must survive"
+
+
+# --------------------------------------------------------------------------- #
+# A refusal has to be a conversation, not a wall
+# --------------------------------------------------------------------------- #
+def test_the_cannot_deploy_message_states_what_exists_and_what_is_missing():
+    """"I know there's only a staging target — I'm expecting the BOSS agent to communicate that
+    to me." BOSS had found it a turn earlier and dropped it, because the tool result it was
+    relaying said only "never deployed, no build to re-ship". The result now carries the state,
+    so the agent has something to have a conversation about."""
+    import inspect
+    from boss_engine.services import shepherd_service
+    src = inspect.getsource(shepherd_service)
+    i = src.index("no_action: there is no deployment run")
+    body = src[i - 2000:i + 1600]
+    # the concrete state
+    assert "deployment_targets" in body, "does not look up what targets exist"
+    assert "This app HAS deployment targets" in body
+    assert "no production/live target" in body
+    assert "NO deployment targets configured at all" in body
+    # and the instruction to relay it as options, not a wall
+    assert "TELL THE OPERATOR THIS STATE PLAINLY" in body
+    assert "lay out the real options" in body
+    assert "let them choose" in body
+
+
+def test_it_still_refuses_to_turn_a_deploy_into_a_build():
+    """The guardrail that started this must survive the rewrite."""
+    import inspect
+    from boss_engine.services import shepherd_service
+    src = inspect.getsource(shepherd_service)
+    i = src.index("no_action: there is no deployment run")
+    assert "DO NOT substitute a build for a deploy" in src[i:i + 1600]

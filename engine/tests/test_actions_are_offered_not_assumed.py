@@ -224,5 +224,8 @@ def test_the_refusal_explains_why_rather_than_just_refusing():
     from boss_engine.services import shepherd_service
 
     src = inspect.getsource(shepherd_service._act_on_deployment)
-    assert "never been deployed" in src
+    # Reworded when the refusal grew from one sentence into the actual state (which
+    # environments exist, which are missing). The requirement is unchanged: say WHY.
+    assert "there is no deployment run for this app yet" in src
+    assert "This app HAS deployment targets" in src
     assert "no build to re-ship" in src

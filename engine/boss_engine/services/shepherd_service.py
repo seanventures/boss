@@ -958,6 +958,67 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
     return p
 
 
+# Deployment environments a request for "live" could mean.
+LIVE_ENVIRONMENTS = ("production", "prod", "live")
+
+
+def describe_undeployable(*, status: str, repo: str, targets: list) -> str:
+    """Explain why an app cannot be deployed, in terms the operator can act on.
+
+    Pure on purpose. This was inline inside a database branch, which meant the wording could
+    only be exercised by reaching production -- and it reached production saying "this app has
+    never been deployed, so there is no build to re-ship" to an operator who already knew the
+    app had a staging target and no production one. Two different problems, one sentence, no
+    options.
+
+    Split out so every failure state can be driven from a table in the tests: no targets at all,
+    staging but no production, a live target that exists but is not active, a build that never
+    completed. The agent's answer is only as good as the facts it is handed.
+    """
+    envs = [str(t.get("environment") or "?").lower() for t in targets]
+    live = [t for t in targets if str(t.get("environment") or "").lower() in LIVE_ENVIRONMENTS]
+
+    if not targets:
+        where = "This app has NO deployment targets configured at all."
+        options = ("The only way forward is to create a target for the environment they want, "
+                   "then deploy to it.")
+    else:
+        have = ", ".join(f"{t.get('environment')} ({t.get('status')})" for t in targets)
+        where = f"This app HAS deployment targets: {have}."
+        if not live:
+            others = ", ".join(sorted({str(t.get("environment")) for t in targets}))
+            where += (" There is no production/live target, so \"deploy to live\" has nowhere "
+                      "to go yet.")
+            options = (f"Real options: deploy to an environment that DOES have a target "
+                       f"({others}), or create the missing production target first.")
+        elif any(str(t.get("status") or "").lower() not in ("active", "ready") for t in live):
+            bad = ", ".join(f"{t.get('environment')}={t.get('status')}" for t in live)
+            where += f" The live target exists but is not usable ({bad})."
+            options = ("Real options: fix or re-activate that target, or deploy to another "
+                       "environment meanwhile.")
+        else:
+            options = ("A live target exists and looks usable, so the missing piece is the "
+                       "deployment run itself.")
+
+    build = ""
+    if status and status.lower() not in ("completed", "succeeded", "passed"):
+        build = (f" Note the build run is '{status}' — if no build ever completed, deploying "
+                 "cannot work until one does, and that is a REBUILD, which costs money.")
+
+    return (
+        "no_action: there is no deployment run for this app yet, so there is nothing to "
+        "re-ship" + (f" (its build run is {status})" if status else "")
+        + f". Repo: {repo}. {where}{build} {options}"
+        + " TELL THE OPERATOR THIS STATE PLAINLY — which environments exist, which do not, and "
+          "what that means for what they asked. They can see the console; a bare 'not possible' "
+          "reads as BOSS not knowing. Then lay out the real options and let them choose. Put "
+          "each option they can actually take behind a propose_action BUTTON — an option "
+          "described in prose is not an option they can take. "
+          "DO NOT substitute a build for a deploy — they are different actions and one costs "
+          "money."
+    )
+
+
 def _act_on_deployment(engine, settings, run_id: str, action: str, actor: str) -> str:
     """Carry out the two DEPLOY_FAILED remedies against this run's latest deployment.
 
@@ -989,21 +1050,36 @@ def _act_on_deployment(engine, settings, run_id: str, action: str, actor: str) -
         #
         # A distant instruction in the system prompt did not prevent it, so the correction goes
         # where the model is actually standing when it decides: in the result it just received.
-        status = ""
+        # SAY WHAT IS ACTUALLY THERE, NOT JUST WHAT IS MISSING.
+        #
+        # This returned one sentence -- "never deployed, no build to re-ship" -- and the agent
+        # relayed exactly that. The operator already knew more than BOSS was saying: the app has
+        # a STAGING target and no production one, which is a different problem with different
+        # options. BOSS had even found that a turn earlier and then dropped it.
+        #
+        # A refusal the operator cannot act on is a dead end. The tool result now carries the
+        # concrete state -- which environments exist, which are missing, what the build did --
+        # so the agent has something to have a conversation about instead of a wall.
+        status, repo, targets = "", "", []
         try:
             with begin(engine) as c:
-                status = str(c.execute(
-                    sql("SELECT status FROM code_task_runs WHERE id = :i"),
-                    {"i": run_id}).scalar() or "")
-        except Exception:  # noqa: BLE001
-            status = ""
-        return (
-            "no_action: this app has never been deployed, so there is no build to re-ship"
-            + (f" (its run is {status})" if status else "")
-            + ". DO NOT substitute a build for a deploy — they are different actions and one "
-              "costs money. Tell the operator that deploying is not possible yet and why, and "
-              "offer the next step with propose_action so THEY choose whether to spend."
-        )
+                r = c.execute(
+                    sql("SELECT status, project_id, spec->>'owner' AS owner, "
+                        "       spec->>'repo' AS repo "
+                        "FROM code_task_runs WHERE id = :i"),
+                    {"i": run_id}).mappings().first() or {}
+                status = str(r.get("status") or "")
+                repo = f"{r.get('owner') or '?'}/{r.get('repo') or '?'}"
+                if r.get("repo") and r.get("project_id"):
+                    targets = [dict(t) for t in c.execute(
+                        sql("SELECT environment, status, app_name FROM deployment_targets "
+                            "WHERE project_id = :p AND repo = :r "
+                            "ORDER BY environment"),
+                        {"p": r["project_id"], "r": r["repo"]}).mappings().all()]
+        except Exception:  # noqa: BLE001 — never let the explanation break the refusal
+            pass
+
+        return describe_undeployable(status=status, repo=repo, targets=targets)
 
     if action == "redeploy_deployment":
         from .delivery_pipeline import redeploy
