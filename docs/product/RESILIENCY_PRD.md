@@ -639,6 +639,40 @@ dangerous one.
 * **Shape:** S12 — a conclusion checked against the shape of the text rather than its behaviour.
 
 
+### E1 UPDATE — the machine's own numbers argue AGAINST my hypothesis
+`/v1/self/diagnostics` (R8) went live and reported goldeneye for the first time:
+
+```
+cores 64        load_1m 6.64      load_per_core 0.10
+cpu_limit_cores None            throttled_periods 0
+memory 465 MB used              oom_kills 0
+```
+
+**64 cores, no CPU quota, and zero throttling.** A build spawning even thirty processes has
+enormous headroom on a box like that, and the API needs a fraction of one core. So "the API
+could not get SCHEDULED" is a much weaker explanation than it looked when I had no way to see
+the machine — I inferred CPU starvation from a correlation and from a docstring describing a
+*different, smaller* container.
+
+`nice` is still correct and costs nothing under no contention, so it stays. But **E1 should now
+be expected to FAIL**, and the failure branch already written for it is the live one:
+
+* **FastAPI threadpool exhaustion** — `/v1/code-tasks/step` is a `def` endpoint, so it occupies
+  one AnyIO threadpool worker for the ENTIRE run (up to 90 minutes), and every sandbox
+  `subprocess.run` inside it blocks that thread too.
+* **Database pool contention** — the strongest remaining candidate. It explains 47-second reads
+  while the CPU is 90% idle, which CPU starvation does not: if the governed pipeline holds
+  connections or a long transaction, API reads simply queue for a connection.
+
+**Next measurement, and it is cheap:** capture `/v1/self/diagnostics` DURING a build. If
+`load_per_core` is still ~0.1 while reads take 40s, CPU is definitively exonerated and the pool
+is the place to look.
+
+*Recorded because it is the same lesson as I26 and I42: a plausible mechanism, asserted from
+correlation, before the instrument existed to test it. The difference this time is that the
+instrument now exists — and the first thing it did was contradict me.*
+
+
 ---
 
 ## 3. The shapes
