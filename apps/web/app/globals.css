@@ -5494,64 +5494,46 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss {
   position: relative;
   margin: 0 0 18px;
-  border-radius: 18px;
+  border-radius: 14px;
   overflow: hidden;
   isolation: isolate;
+  /* The console's panel treatment, not a bespoke card. This had its own radius, gradient and
+     type scale, which is why it read as a different product bolted onto the page. The colour
+     now comes from the same places the Meeting room takes it: an accent rule, cap-badges and
+     tone-* avatars. */
   border: 1px solid var(--border, #1C2740);
-  background: linear-gradient(180deg, var(--surface-2, #0F1830) 0%, var(--surface, #0B1226) 100%);
+  border-top: 2px solid var(--accent, #4C8DF6);
+  background: var(--surface-2, #0F1830);
 }
-.askboss-inner { position: relative; z-index: 1; padding: 26px 26px 22px; }
+.askboss-inner { position: relative; z-index: 1; padding: 20px 22px 18px; }
 
-/* Slow-drifting conic wash. Sits BEHIND the content via z-index and is masked to a
-   soft ring so text never sits on a moving gradient (a readability problem, not a
-   taste one). */
+/* A wash that carries STATE, kept far enough back that text never sits on moving colour. */
 .askboss-aura {
   position: absolute; inset: -40%;
   z-index: 0;
   background: conic-gradient(from 0deg,
     rgba(76, 141, 246, .00) 0deg,
-    rgba(76, 141, 246, .22) 70deg,
-    rgba(46, 209, 195, .20) 150deg,
-    rgba(139, 106, 245, .20) 240deg,
+    rgba(76, 141, 246, .16) 70deg,
+    rgba(46, 209, 195, .14) 150deg,
+    rgba(139, 106, 245, .14) 240deg,
     rgba(76, 141, 246, .00) 360deg);
-  filter: blur(46px);
-  opacity: .55;
+  filter: blur(52px);
+  opacity: .34;
   animation: askbossDrift 26s linear infinite;
   pointer-events: none;
 }
-.askboss[data-state="thinking"] .askboss-aura { opacity: .95; animation-duration: 7s; }
+.askboss[data-state="thinking"] .askboss-aura { opacity: .8; animation-duration: 7s; }
 .askboss[data-state="slow"] .askboss-aura {
-  opacity: 1; animation-duration: 4s;
+  opacity: .9; animation-duration: 4s;
   background: conic-gradient(from 0deg,
-    rgba(224, 163, 62, .00) 0deg, rgba(224, 163, 62, .30) 90deg,
-    rgba(224, 120, 62, .24) 200deg, rgba(224, 163, 62, .00) 360deg);
+    rgba(224, 163, 62, .00) 0deg, rgba(224, 163, 62, .26) 90deg,
+    rgba(224, 120, 62, .20) 200deg, rgba(224, 163, 62, .00) 360deg);
 }
 @keyframes askbossDrift { to { transform: rotate(1turn); } }
 
-.askboss-head { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
-.askboss-title { margin: 0; font-size: 1.5rem; letter-spacing: -.01em; }
-.askboss-sub { margin: 4px 0 0; max-width: 62ch; opacity: .78; font-size: .92rem; line-height: 1.5; }
+.askboss-head { margin-bottom: 14px; }
+.askboss-sub { margin: 6px 0 0; max-width: 62ch; color: var(--ink-soft, #9FB0D0); font-size: .9rem; line-height: 1.5; }
 
-/* The mark breathes only while BOSS is actually working — an idle pulse trains the
-   operator to ignore it, which costs the signal exactly when it matters. */
-.askboss-mark {
-  flex: 0 0 auto; width: 38px; height: 38px; border-radius: 12px;
-  display: grid; place-items: center;
-  background: var(--brand-grad-2, linear-gradient(135deg, #2ED1C3, #4C8DF6));
-  box-shadow: 0 0 22px rgba(76, 141, 246, .38);
-}
-.askboss-mark-core {
-  width: 13px; height: 13px; border-radius: 4px; background: #fff; opacity: .95;
-  transition: transform 200ms ease;
-}
-.askboss[data-state="thinking"] .askboss-mark-core,
-.askboss[data-state="slow"] .askboss-mark-core { animation: askbossBreathe 1.15s ease-in-out infinite; }
-@keyframes askbossBreathe {
-  0%, 100% { transform: scale(.72) rotate(0deg); border-radius: 4px; }
-  50%      { transform: scale(1.05) rotate(45deg); border-radius: 7px; }
-}
-
-/* Composer */
 .askboss-box {
   display: flex; align-items: flex-end; gap: 10px;
   padding: 10px 10px 10px 16px;
@@ -5595,8 +5577,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    operator has moved past is clutter. */
 .askboss-openers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .askboss-opener {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 13px; border-radius: 999px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 6px 14px 6px 6px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border, #1C2740);
   background: rgba(255, 255, 255, .035);
   color: var(--ink-dim, #9FB0D0); font: inherit; font-size: .84rem;
@@ -5609,7 +5591,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   color: var(--ink, #E8EEFC);
   transform: translateY(-1px);
 }
-.askboss-opener-icon { opacity: .75; font-size: .78em; }
+.askboss-opener .mr-avatar { width: 24px; height: 24px; font-size: .6rem; }
 
 /* Progress + result */
 .askboss-status {
@@ -5686,3 +5668,44 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border-color: var(--accent, #4C8DF6);
   border-style: solid;
 }
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   AGENT PAGE — brought in line with the Meeting room's treatment.
+
+   The transcript was two near-identical grey rounded boxes with a small grey label,
+   so at a glance you could not tell who said what, and the assistant's turns had no
+   accent anywhere on the page. The colour here is structural: the speaker is a tinted
+   rail on the bubble's edge, not decoration.
+   ───────────────────────────────────────────────────────────────────────────── */
+.agent-message { position: relative; transition: border-color 150ms ease; }
+
+/* BOSS: accent rail on the left, matching the panel rule used elsewhere. */
+.agent-message.assistant { border-left: 2px solid var(--accent, #4C8DF6); }
+.agent-message.assistant > span { color: var(--accent-text, #7FB0FF); }
+
+/* You: the mirrored rail, so the two are distinguishable with colour off too. */
+.agent-message.user { border-right: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); }
+.agent-message.user > span { color: var(--ink-soft, #9FB0D0); }
+
+.agent-chat-intro h2 { letter-spacing: -0.01em; }
+
+/* The rail reads as a list of sessions, so give the selected one the same accent the
+   rest of the console uses for "you are here". */
+.agent-chat-shell aside { padding-top: 2px; }
+.agent-chat-shell aside .eyebrow { color: var(--accent-text, #7FB0FF); }
+
+/* Composer: match the Ask BOSS box so the two chats feel like one product. */
+.agent-input {
+  border-radius: 12px;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.agent-input:focus {
+  border-color: var(--accent, #4C8DF6);
+  box-shadow: 0 0 0 4px rgba(76, 141, 246, .14);
+  outline: none;
+}
+
+/* Working bubble: same amber escalation as the hero, so "slow" means one thing
+   everywhere. */
+.agent-working[data-slow="true"] { color: var(--warn, #E0A33E); }

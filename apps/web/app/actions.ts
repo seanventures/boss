@@ -180,13 +180,18 @@ export async function askBossAction(
   formData: FormData,
 ): Promise<ActionResult> {
   const message = String(formData.get("message") ?? "").trim();
-  if (!message) return { ok: false, error: "Ask BOSS something first." };
+  const confirmPlanId = String(formData.get("confirm_plan_id") ?? "").trim();
+  if (!message && !confirmPlanId) {
+    return { ok: false, error: "Enter a message or confirm the pending plan." };
+  }
   return postJsonReturn("/v1/engine/agent/chat", {
     project_id: getProjectId(formData),
     actor: getActor(formData),
     thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
     message,
+    confirm_plan_id: String(formData.get("confirm_plan_id") ?? "").trim() || undefined,
     surface: "chat",
+    external_ref: String(formData.get("external_ref") ?? "").trim() || undefined,
   });
 }
 

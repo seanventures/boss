@@ -35,10 +35,10 @@ type ProposedAction = {
 
 /** Openers that demonstrate the range: read, diagnose, act. Each is a real request. */
 const OPENERS = [
-  { icon: "◈", text: "What changed, what is blocked, and what should I do next?" },
-  { icon: "◆", text: "Which runs failed today, and why?" },
-  { icon: "▲", text: "Is anything starving or stuck in a queue?" },
-  { icon: "●", text: "What is my spend so far this month?" },
+  { badge: "ST", tone: "accent", text: "What changed, what is blocked, and what should I do next?" },
+  { badge: "RN", tone: "blue",   text: "Which runs failed today, and why?" },
+  { badge: "QU", tone: "amber",  text: "Is anything starving or stuck in a queue?" },
+  { badge: "$$", tone: "green",  text: "What is my spend so far this month?" },
 ];
 
 export function AskBossHero({
@@ -155,16 +155,25 @@ export function AskBossHero({
     <section className="askboss" data-state={state} aria-label="Ask BOSS">
       <div className="askboss-aura" aria-hidden />
       <div className="askboss-inner">
-        <header className="askboss-head">
-          <span className="askboss-mark" aria-hidden>
-            <span className="askboss-mark-core" />
-          </span>
-          <div>
-            <h2 className="askboss-title">Ask BOSS</h2>
+        {/* The console's standard header shape — eyebrow, title, status pills on the right,
+            the same one the Meeting room uses. This was a bespoke card with its own type
+            scale, which is why it read as a different product bolted onto the page. */}
+        <header className="mr-header askboss-head">
+          <div className="mr-header-main">
+            <span className="eyebrow">BOSS Agent</span>
+            <h3 className="mr-title">Ask BOSS</h3>
             <p className="askboss-sub">
               Ask anything about your work — or tell BOSS to do it. It reads live
               control-plane state and acts with your approval.
             </p>
+          </div>
+          <div className="mr-header-meta">
+            <span className={`cap-badge tone-${busy ? "amber" : "green"}`}>
+              {busy ? (slow ? "working · slow" : "working") : "ready"}
+            </span>
+            <span className="mr-meta-item">reads live state</span>
+            <span className="mr-meta-item">acts on approval</span>
+            {busy ? <span className="mr-meta-item">⏱ {elapsed}s</span> : null}
           </div>
         </header>
 
@@ -208,7 +217,7 @@ export function AskBossHero({
                   className="askboss-opener"
                   onClick={() => { setInput(o.text); ask(o.text); }}
                 >
-                  <span className="askboss-opener-icon" aria-hidden>{o.icon}</span>
+                  <span className={`mr-avatar tone-${o.tone}`} aria-hidden>{o.badge}</span>
                   {o.text}
                 </button>
               ))}

@@ -487,3 +487,27 @@ def test_the_agent_page_lists_conversations_not_tasks():
     assert "New chat" in code and "generalThreads" in code
     assert "General chat" not in code, "the single shared general slot is still rendered"
     assert "!t.external_ref" in code, "task threads are not excluded from the chat list"
+
+
+def test_the_chat_does_not_revalidate_the_whole_console():
+    """"It showed the answer but why is it still working on it?" — the reply painted and the
+    Working bubble kept spinning for another 15s. agentChatAction calls revalidatePath("/"),
+    so the transition stays pending while the entire 8 MB console re-renders, and `busy` is
+    driven by that transition. Both chat surfaces use the non-revalidating action."""
+    import re
+    for name in ("agent-ui.tsx", "ask-boss-hero.tsx"):
+        src = pathlib.Path(f"apps/web/app/{name}").read_text(encoding="utf-8")
+        code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+        assert "askBossAction(" in code, f"{name} does not use the non-revalidating action"
+        assert "agentChatAction(" not in code, f"{name} still revalidates the world"
+
+
+def test_ask_boss_uses_the_consoles_standard_header():
+    """"This looks a little different from other formats on the page." It was a bespoke card
+    with its own radius, gradient and type scale; it now uses the same eyebrow/title/meta
+    header and cap-badge vocabulary as the Meeting room."""
+    src = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
+    for cls in ("mr-header", "mr-header-main", "mr-header-meta", "mr-title",
+                "eyebrow", "cap-badge tone-", "mr-meta-item", "mr-avatar tone-"):
+        assert cls in src, f"not using the shared primitive: {cls}"

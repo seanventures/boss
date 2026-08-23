@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import { Markdown } from "./markdown";
 
 import {
-  agentChatAction,
+  askBossAction,
   loadAgentWorkspaceAction,
   loadTaskContextAction,
   loadThreadMessagesAction,
@@ -229,7 +229,12 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
       // reopening the thread shows it.
       const stalled = Symbol("stalled");
       const r = await Promise.race([
-        agentChatAction(null, fd),
+        // NOT agentChatAction: that one calls revalidatePath("/"), so the transition stays
+        // pending while the entire 8 MB console re-renders. The answer painted and the
+        // "Working…" bubble kept spinning for another 15 seconds underneath it. Nothing on the
+        // page depends on a question having been asked; the thread list is refreshed
+        // explicitly below.
+        askBossAction(null, fd),
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
       ]);
