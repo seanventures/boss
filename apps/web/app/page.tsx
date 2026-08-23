@@ -97,7 +97,6 @@ import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
-import { shouldRenderSection } from "../lib/area-visibility";
 import {
   loadAssuranceAreaData,
   loadBudgetAreaData,
@@ -824,18 +823,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       initialArea={requestedArea}
     >
       <div className="frame">
-        {shouldRenderSection(requestedArea, ["agent"]) && (
         <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
           <AgentChat projectId={activeProjectId} actor={activeActorId} initialTaskId={requestedWorkTask || undefined} />
-        </section>)}
-        {shouldRenderSection(requestedArea, ["metatron"]) && (
+        </section>
         <section className="panel-stack" data-area="metatron" aria-label="Metatron captain">
           <MetatronCaptain
             projectId={activeProjectId}
             actor={activeActorId}
           />
-        </section>)}
-        {shouldRenderSection(requestedArea, ["dashboard"]) && (
+        </section>
         <section className="panel-stack" data-area="dashboard" aria-label="Live dashboard">
           <div className="section-head">
             <div>
@@ -844,14 +840,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <DashboardPanel feed={dashboardSnapshot} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["assurance"]) && (
         <section className="panel-stack" data-area="assurance" aria-label="Assurance Center">
           <AssuranceCenter feed={assuranceFeed} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["assurance"]) && (
         <section className="panel-stack" data-area="assurance" aria-label="Security scanning">
           <div className="section-head">
             <div>
@@ -868,7 +862,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             initialRun={latestSecurityScan}
             scanners={securityScanners}
           />
-        </section>)}
+        </section>
 
         <RepoActivityPanel repos={repoActivity} />
 
@@ -878,7 +872,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           canManage={canManageGitHub}
         />
 
-        {shouldRenderSection(requestedArea, ["org"]) && (
         <section className="panel-stack mission-roster-section" data-area="org" aria-label="Agent roster">
           <div className="section-head">
             <div>
@@ -893,9 +886,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </span>
           </div>
           <MissionAgentRoster roles={roles.items} tasks={tasks.items} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["studio"]) && (
         <section className="panel-stack" data-area="studio" aria-label="Agent Studio">
           <FocusedAgents
             projectId={activeProjectId}
@@ -906,17 +898,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             roles={roles.items}
             skills={skills.items}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["portfolio"]) && (
         <section className="panel-stack" data-area="portfolio" aria-label="Work allocation">
           <WorkOrchestration
             feed={workOrchestrationFeed}
             actor={activeActorId}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["portfolio"]) && (
         <section className="panel-stack" data-area="portfolio" aria-label="Release planning">
           <div className="section-head">
             <div>
@@ -932,9 +922,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             board={releaseBoard}
             plans={releasePlans}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["overview"]) && (
         <section className="ov-cc" data-area="overview" aria-label="Command center">
           <form action={submitCommandAction} className="cc-composer">
             <input type="hidden" name="project_id" value={activeProjectId} />
@@ -1080,14 +1069,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["overview"]) && (
         <section className="panel-stack" data-area="overview" aria-label="Design-partner setup">
           <OnboardingHelpCard />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["overview"]) && (
         <section className="stack-grid" data-area="overview">
           <article className="stack-card">
             <div className="section-head">
@@ -1188,9 +1175,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </p>
             )}
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["overview"]) && (
         <section className="grid" data-area="overview">
           <article>
             <h2>Project</h2>
@@ -1252,9 +1238,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               Leased or running jobs visible from the current control-plane state.
             </p>
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["overview"]) && (
         <section className="grid" data-area="overview">
           <article>
             <h2>Open Tasks</h2>
@@ -1294,9 +1279,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               Incidents must become visible deadletters or blocked states, never silent drops.
             </p>
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["overview"]) && (
         <section className="bx-overview" data-area="overview" aria-label="Overview summary">
           <div className="bx-overview-split">
             <article
@@ -1390,9 +1374,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["org"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1507,9 +1490,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["org"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1651,9 +1633,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["budget"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1744,9 +1725,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </>
             )}
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["budget"]) && (
         <section className="panel-stack" data-area="budget" aria-label="Cost governance">
           <div className="section-head">
             <div>
@@ -1762,7 +1742,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <LlmSpendCard feed={llmSpend} />
             <BudgetThresholdsCard status={budgetStatus} />
           </div>
-        </section>)}
+        </section>
 
         <TokenEfficiencyPanel
           scorecard={tokenScorecard}
@@ -1771,7 +1751,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           recommendations={tokenRecommendations}
         />
 
-        {shouldRenderSection(requestedArea, ["budget"]) && (
         <section className="panel-stack" data-area="budget" aria-label="FinOps reconciler">
           <div className="section-head">
             <div>
@@ -1789,9 +1768,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               summary={finopsSummary}
             />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["budget"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -1845,9 +1823,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             )}
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["infra"]) && (
         <section className="panel-stack" data-area="infra" aria-label="MCP servers">
           <div className="section-head">
             <div>
@@ -1882,9 +1859,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               ))}
             </div>
           )}
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["infra"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -2912,9 +2888,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             </>
           ) : null}
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["infra"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -2972,9 +2947,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             )}
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack" data-area="ops" aria-label="Workflow health">
           <div className="section-head">
             <div>
@@ -2994,9 +2968,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             openTasks={status.openTasks}
             pendingDecisions={status.pendingDecisions}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack" data-area="ops" aria-label="Reusable workflow registry">
           <div className="section-head">
             <div>
@@ -3015,9 +2988,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             runs={workflowFeed.runs}
             selectedRun={workflowFeed.selectedRun}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3164,9 +3136,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack" data-area="ops" aria-label="Safety & policy">
           <div className="section-head">
             <div>
@@ -3182,9 +3153,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <AnomalyScanCard projectId={activeProjectId} actor={activeActorId} />
             <RunTraceViewer trace={runTrace} initialRunId={traceRunId} />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack" data-area="ops" aria-label="Autonomy, router & skills">
           <div className="section-head">
             <div>
@@ -3204,9 +3174,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             />
             <SkillInvokeCard projectId={activeProjectId} invocations={skillInvocations} />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack" data-area="ops" aria-label="Resilience">
           <div className="section-head">
             <div>
@@ -3220,9 +3189,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <ChaosCard projectId={activeProjectId} runs={chaosRuns} />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3376,9 +3344,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ops"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3722,9 +3689,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </article>
           </div>
           )}
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["comms"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -3974,9 +3940,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["org"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -4118,9 +4083,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["enterprise"]) && (
         <section
           className="panel-stack"
           data-area="enterprise"
@@ -4143,9 +4107,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             feed={identityProvidersFeed}
             projectId={activeProjectId}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["enterprise"]) && (
         <section className="panel-stack" data-area="enterprise" aria-label="SOC2 evidence">
           <div className="section-head">
             <div>
@@ -4160,9 +4123,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid">
             <Soc2Card projectId={activeProjectId} />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["enterprise"]) && (
         <section className="panel-stack" data-area="enterprise" aria-label="Editions Community Cloud Enterprise">
           <div className="section-head">
             <div>
@@ -6022,9 +5984,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["org"]) && (
         <section className="panel-stack" data-area="org" aria-label="Agent marketplace">
           <div className="section-head">
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -6303,9 +6264,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             )}
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["infra"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -6757,9 +6717,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["reports"]) && (
         <section className="panel-stack" data-area="reports" aria-label="Reports">
           <div className="section-head">
             <div>
@@ -6918,9 +6877,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           })()}
           <QaScorecardIsland feed={qaScorecard} />
           <ReportsView report={report} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["capabilities"]) && (
         <section className="panel-stack" data-area="capabilities" aria-label="Capabilities">
           <div className="section-head">
             <div>
@@ -6937,9 +6895,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             engineLabel={capabilities.engineLabel}
             engineModel={capabilities.engineModel}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["meetings"]) && (
         <section className="panel-stack" data-area="meetings" aria-label="Meeting room">
           <div className="section-head">
             <div>
@@ -6963,15 +6920,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               meetings={meetingRooms.items.map((item) => ({ id: item.id, title: item.title }))}
             />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["processes"]) && (
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">
           <AgentProcesses projectId={activeProjectId} actor={activeActorId} />
           <ProcessManager projectId={activeProjectId} actor={activeActorId} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["delivery"]) && (
         <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
           <div className="section-head">
             <div>
@@ -6985,9 +6940,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <DeliveryPipeline initial={deliveryPipeline} secrets={deliverySecrets}
                             deployments={recentDeployments} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["delivery"]) && (
         <section className="panel-stack" data-area="delivery" aria-label="Pipeline generators">
           <div className="section-head">
             <div>
@@ -7004,12 +6958,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             status={cicdStatus}
             initialRuns={cicdStatus.recent_runs ?? []}
           />
-        </section>)}
+        </section>
 
         {/* Monitoring is its own area: "did it ship" and "is it working" are different
             questions asked at different times, and one page answering both buries whichever
             you did not come for. */}
-        {shouldRenderSection(requestedArea, ["monitoring"]) && (
         <section className="panel-stack" data-area="monitoring" aria-label="Observability">
           <div className="section-head">
             <div>
@@ -7023,9 +6976,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
           <MonitoringArea health={deploymentHealth} observability={observability}
                           hostTargetId={obsHost} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["monitoring"]) && (
         <section className="panel-stack" data-area="monitoring" aria-label="Observability suite">
           <div className="section-head">
             <div>
@@ -7037,9 +6989,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
           <ObservabilitySuitePanel feed={observabilitySuiteFeed} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["shepherd"]) && (
         <section className="panel-stack" data-area="shepherd" aria-label="Task Shepherd">
           <div className="section-head">
             <div>
@@ -7048,14 +6999,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ShepherdConsole initial={shepherdOverview} />
-        </section>)}
+        </section>
 
         {/* Apps — the object the console never had.
             A run is a job; an app is the thing a person has in mind. Its spec is under
             Meetings, its runs under Code Tasks, its preview under CI/CD and its health under
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
             hand. This groups the runs into apps and puts each one's life on a single row. */}
-        {shouldRenderSection(requestedArea, ["code_tasks"]) && (
         <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
           <div className="section-head">
             <div>
@@ -7100,19 +7050,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               actor={activeActorId}
             />
           </article>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["foundations"]) && (
         <section data-area="foundations" aria-label="Design foundations">
           <FoundationsScreen />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["components"]) && (
         <section data-area="components" aria-label="Component library">
           <ComponentsScreen />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["reliability"]) && (
         <section className="panel-stack" data-area="reliability" aria-label="On-call SRE">
           <div className="section-head">
             <div>
@@ -7124,9 +7071,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
           <OncallSreHome status={oncallSreStatus} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["reliability"]) && (
         <section className="panel-stack" data-area="reliability" aria-label="Reliability">
           <div className="section-head">
             <div>
@@ -7135,9 +7081,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ReliabilityHome feed={reliabilityFeed} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["ai-sre"]) && (
         <section className="panel-stack" data-area="ai-sre" aria-label="AI SRE">
           <div className="section-head">
             <div>
@@ -7149,9 +7094,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
           <AiSreHome feed={aiSreFeed} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["reliability"]) && (
         <section className="panel-stack" data-area="reliability" aria-label="Knowledge graph">
           <div className="section-head">
             <div>
@@ -7163,9 +7107,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </p>
           </div>
           <KnowledgeGraphPanel feed={knowledgeGraphFeed} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["discovery"]) && (
         <section className="panel-stack" data-area="discovery" aria-label="Discovery">
           <div className="section-head">
             <div>
@@ -7179,9 +7122,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             discoveries={discoveryFeed.items}
             apiReachable={discoveryFeed.apiReachable}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["pipeline"]) && (
         <section className="panel-stack" data-area="pipeline" aria-label="Coding pipeline">
           <div className="section-head">
             <div>
@@ -7193,9 +7135,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           <div className="stack-grid" style={{ marginTop: 14 }}>
             <FactoryScaleCard wip={wipStatus} />
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["sandboxes"]) && (
         <section className="panel-stack" data-area="sandboxes" aria-label="Sandboxes">
           <div className="section-head">
             <div>
@@ -7209,15 +7150,13 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             unavailable={sandboxFeed.unavailable}
             host={sandboxFeed.host}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["activity"]) && (
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
           <FactoryFlowBoard projectId={activeProjectId} actor={activeActorId} />
           <ActivityLog projectId={activeProjectId} actor={activeActorId} />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["work"]) && (
         <section className="panel-stack" data-area="work" aria-label="Task runs">
           <div className="section-head">
             <div>
@@ -7242,9 +7181,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             outputs={taskOutputs.items}
             initialTaskId={requestedWorkTask}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["work"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -7432,9 +7370,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["work"]) && (
         <section className="panel-stack">
           <div className="section-head">
             <div>
@@ -7646,9 +7583,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
           </div>
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["decisions"]) && (
         <section data-area="decisions" aria-label="Decision inbox">
           <DecisionInbox
             feed={decisions}
@@ -7659,9 +7595,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             initialFilter={requestedDecisionFilter}
           />
-        </section>)}
+        </section>
 
-        {shouldRenderSection(requestedArea, ["decisions"]) && (
         <section className="panel-stack approval-rules-section" aria-label="Approval rules">
           <div className="section-head">
             <div>
@@ -7670,7 +7605,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             </div>
           </div>
           <ApprovalRulesView rules={approvalRules.rules} apiReachable={approvalRules.apiReachable} />
-        </section>)}
+        </section>
       </div>
     </ConsoleShell>
   );
