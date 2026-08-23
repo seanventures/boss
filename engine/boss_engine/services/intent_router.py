@@ -1064,8 +1064,24 @@ class IntentRouter:
                 "title": self._short_title(message, "Discovery"),
                 "seed": message,
             }
+        # "FIX THE DEPLOYMENT" IS NOT A REQUEST TO WRITE CODE.
+        #
+        # This matched the bare word `fix` and spawned a code task, so
+        # "the deployment for run X failed with health check 000, fix it and retry" became a
+        # governed build — a new run, real money — when the correct action was one redeploy
+        # call. The operator asked for a fix and got the most expensive possible interpretation
+        # of the word.
+        #
+        # When the subject is something BOSS OPERATES rather than something it authors, hand
+        # the turn to the agent instead of guessing here. The agent now holds every tool,
+        # including create_code_task, so it can still choose to write code when that is the
+        # real answer — with the run in front of it, which this regex does not have.
+        operational_subject = re.search(
+            r"\b(deploy(ment|ed|s)?|redeploy|rollback|rolled back|preview|health check|"
+            r"job|queue|worker|gate|decision|approval|stuck|orphan(ed)?|priority|"
+            r"container|host|infra(structure)?)\b", lowered)
         if re.search(r"\b(fix|implement|build|change|refactor|add|remove|update)\b", lowered) and (
-                not lead_question):
+                not lead_question) and not operational_subject:
             return "create_code_task", {
                 "title": self._short_title(message, "Code task"),
                 "instructions": message,

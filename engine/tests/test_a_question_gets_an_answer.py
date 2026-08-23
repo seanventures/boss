@@ -147,3 +147,44 @@ def test_the_new_diagnostic_tools_are_named_in_the_prompt():
     assert "inspect_self" in src
     assert "OOM-KILL COUNT" in src, "the trigger matters more than the tool name"
     assert "consistency_report" in src
+
+
+# --------------------------------------------------------------------------- #
+# "Fix the deployment" is not a request to write code
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("message", [
+    "The deployment for run crun_abc failed with health check 000. Fix it and retry now.",
+    "fix the deployment",
+    "the preview is dead, fix it",
+    "this job is stuck, fix the queue",
+    "the gate is blocking it, fix that",
+    "redeploy it",
+])
+def test_an_operational_fix_is_handed_to_the_agent(message):
+    """Observed live: this spawned a governed CODE TASK — a new run and real money — when the
+    correct action was one redeploy call. The operator asked for a fix and got the most
+    expensive reading of the word.
+
+    None routes to the agent, which holds every tool INCLUDING create_code_task, so it can
+    still choose to write code when that is genuinely the answer — with the run in front of it,
+    which a regex does not have.
+    """
+    name, _ = _classify(message)
+    assert name is None, f"routed to {name!r} instead of letting the agent choose the tool"
+
+
+@pytest.mark.parametrize("message", [
+    "build a settings page",
+    "add a currency picker",
+    "implement dark mode",
+])
+def test_a_genuine_code_request_still_becomes_a_code_task(message):
+    """The narrowing must not cost the ordinary path."""
+    name, _ = _classify(message)
+    assert name == "create_code_task"
+
+
+def test_fixing_app_code_is_still_a_code_task():
+    """No operational noun, so it is what it looks like: a change to their app."""
+    name, _ = _classify("fix the slug validation bug in the URL shortener")
+    assert name == "create_code_task"
