@@ -205,3 +205,15 @@ def test_boss_does_not_promise_to_message_you_later(reply):
 ])
 def test_replies_that_promise_nothing_are_untouched(reply):
     assert _boss_cannot_call_you_back(reply) == reply
+
+
+def test_write_db_tells_the_model_it_is_the_no_dedicated_tool_escape_hatch():
+    """Asked to deploy to production, BOSS found the app had only a staging target and said
+    creating one was a "custom admin action (requires a human to add a row)". It was holding
+    write_db, which does exactly that -- verified: the INSERT passes _is_single_write. The model
+    only sees tool DESCRIPTIONS, so "there is no create-target tool" has to be answered where it
+    is reading: in the description of the tool that is the general case."""
+    spec = {s.name: s for s in build_discuss_read_registry().specs()}["write_db"]
+    d = spec.description.lower()
+    assert "requires a human" in d and "no dedicated tool" in d
+    assert "deployment_targets" in d, "name the case that actually came up"

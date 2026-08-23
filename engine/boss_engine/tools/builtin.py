@@ -700,14 +700,15 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
 
     @reg.tool(
         "write_db",
-        "Run a WRITE statement (INSERT / UPDATE / DELETE) against the engine's Postgres and "
-        "report how many rows changed. The escape hatch for state no structured tool covers: a "
-        "stuck flag, a mislinked row, a status the pipeline left wrong. "
-        "PREFER a structured tool when one exists (cancel_job, decide, close_orphaned_runs) — "
-        "they emit events and keep related rows consistent, and raw SQL does neither. "
-        "UPDATE/DELETE require a WHERE unless whole_table=true, since an unqualified one "
-        "rewrites the entire table. Schema changes (DROP/ALTER/TRUNCATE) are refused: those are "
-        "migrations, not CRUD.",
+        "Create, update or delete ONE row when no dedicated tool covers it. This is the reason "
+        "you almost never need to tell an operator that something 'requires a human' or is a "
+        "'custom admin action'. If a record is missing or has the wrong value and you can name "
+        "the table, you can fix it YOURSELF with this. Examples that have no dedicated tool and "
+        "ARE done with write_db: creating a production deployment_targets row for an app that "
+        "only has staging, clearing a paused flag, correcting a wrong domain or URL, fixing a "
+        "status that is stuck. Before you say a change needs someone else, check whether it is "
+        "one row in one table -- if it is, do it. One statement, always WHERE-qualified unless "
+        "whole_table is set. Never invent a value you write: read it first, or ask.",
         _obj({"sql": {"type": "string",
                       "description": "a single INSERT, UPDATE or DELETE statement"},
               "reason": {"type": "string", "description": "why — recorded in the event stream"},
