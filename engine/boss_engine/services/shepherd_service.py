@@ -426,6 +426,20 @@ ORPHAN_AFTER_MINUTES = 20
 #: cold cache or a lost port; a third attempt has never told us anything the second did not.
 PREVIEW_MAX_ATTEMPTS = 2
 
+#: How many attempts one LINEAGE may make before the shepherd stops retrying it.
+#:
+#: The per-run ledger cannot bound this. It refuses the same remedy on the same `task_ref`, and
+#: `retry_code_task` mints a NEW run id for every attempt — so the child is a fresh task_ref with
+#: an empty ledger and the same remedy applies again, and again. Bounded per instance, unbounded
+#: per lineage. Unlike the preview loop this one SPENDS: $4-15 a link, unattended.
+#:
+#: MAX_ACTIONS_PER_TICK bounds the rate, not the total. The only thing preventing this today is
+#: that autopilot defaults to off — a feature flag standing in for a limit.
+#:
+#: Three, because the second attempt is the one that carries the first's findings as feedback and
+#: is therefore the one most likely to succeed; a fourth has never told us anything a third did not.
+SHEPHERD_MAX_LINEAGE_ATTEMPTS = 3
+
 #: A preview that has been 'starting' longer than this never came up. Previews are NOT
 #: job-driven — start_preview runs inline — so the no-live-job rule cannot see them, and a row
 #: left at 'starting' is what rendered "Starting preview…" forever. Generous: a cold npm
@@ -826,11 +840,22 @@ def act(engine, settings: Settings, jobs, run_id: str, *,
         if remedy.action in ("retry_code_task", "extend_code_task"):
             # BACKGROUND: a repair the system chose to do must never queue ahead of a person.
             # Eleven of these went in front of an operator's PRD meeting and it never started.
-            res = retry_code_task(engine, settings, jobs, run_id, fix_note=note,
-                                  profile=("lean" if remedy.id == "reissue_lean" else None),
-                                  job_priority=JOB_PRIORITY_BACKGROUND)
-            new_run = res.get("run_id")
-            outcome = "started"
+            # The ceiling is passed EXPLICITLY rather than left to the callee's default: an
+            # automated repair and an operator pressing retry are the same function, and only
+            # one of them should be stopped by a limit it cannot argue with.
+            try:
+                res = retry_code_task(engine, settings, jobs, run_id, fix_note=note,
+                                      profile=("lean" if remedy.id == "reissue_lean" else None),
+                                      job_priority=JOB_PRIORITY_BACKGROUND,
+                                      attempt_ceiling=SHEPHERD_MAX_LINEAGE_ATTEMPTS)
+                new_run = res.get("run_id")
+                outcome = "started"
+            except ValueError as exc:
+                # Stopping silently would trade a spend loop for work nobody is told is stuck.
+                # The escalation also engages the open-escalation guard in `sweep`, so the run
+                # stops being a candidate and the loop closes itself.
+                _escalate_exhausted_lineage(engine, p.get("project_id"), run_id, str(exc))
+                outcome = f"no_action: {str(exc)[:200]}"
         elif remedy.action == "restart_preview":
             # The cheap remedy, tried first: clone/install/boot are idempotent.
             from .preview_service import start_preview
@@ -1526,3 +1551,36 @@ def watch(engine, settings: Settings, project_id: str, *, dry_run: bool = False,
                     escalated.append(record)
     return {"project_id": project_id, "in_flight": seen, "acted": acted,
             "escalated": escalated, "ineffective": ineffective, "dry_run": dry_run}
+
+
+def _escalate_exhausted_lineage(engine, project_id: Optional[str], run_id: str,
+                                reason: str) -> None:
+    """Record that automatic repair has given up, and why.
+
+    A bound that just stops is indistinguishable from a bound that never fired. The escalation
+    is also what makes the bound STICK: `sweep` skips runs with an open escalation, so the run
+    leaves the candidate set instead of being reconsidered on every 180s tick.
+    """
+    from ..db import begin
+
+    if not project_id:
+        project_id = _project_of(engine, run_id)
+    if not project_id:
+        return
+    try:
+        with begin(engine) as c:
+            c.execute(
+                sql("INSERT INTO shepherd_escalations "
+                    "(id, project_id, task_ref, question, options, evidence) "
+                    "SELECT :i, :p, :t, :q, CAST(:o AS JSONB), CAST(:e AS JSONB) "
+                    "WHERE NOT EXISTS (SELECT 1 FROM shepherd_escalations e "
+                    "                  WHERE e.task_ref = :t AND e.status = 'open')"),
+                {"i": make_id("shesc"), "p": project_id, "t": run_id,
+                 "q": ("Automatic repair has stopped: this work has been retried to its limit "
+                       "and keeps failing the same way. Diagnose it, retry it explicitly, or "
+                       "abandon it?"),
+                 "o": json.dumps(["diagnose", "retry anyway", "abandon"]),
+                 "e": json.dumps({"reason": reason,
+                                  "limit": SHEPHERD_MAX_LINEAGE_ATTEMPTS}, default=str)})
+    except Exception:
+        logger.debug("escalate_exhausted_lineage_failed run=%s", run_id, exc_info=True)

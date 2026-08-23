@@ -681,6 +681,7 @@ def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
+    attempt_ceiling: Optional[int] = None,
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -707,6 +708,25 @@ def retry_code_task(
     #      this attempt runs the working stages on the LOCAL substrate (degraded mode, flagged).
     #   2. Circuit breaker: already on local and still failing `infra` repeatedly -> refuse the
     #      blind retry with a diagnosis instead of burning another expensive attempt.
+    # A CEILING THE CALLER CANNOT TALK ITS WAY PAST.
+    #
+    # The `not fix_note` escape below exists so a HUMAN can say "I know, proceed". The shepherd
+    # passes fix_note on every single retry, so for automated repair that condition is always
+    # False and the breaker under it can never fire. Worse, the ledger that is supposed to stop
+    # a remedy repeating keys on `task_ref` — and a retry mints a NEW run id, so each child
+    # starts with an empty ledger. Bounded per instance, unbounded per lineage; at $4-15 a link.
+    #
+    # `attempt` is carried in finalize_ctx across the whole lineage and cannot be reset by
+    # minting a new run, which is exactly why the bound belongs on it.
+    if attempt_ceiling is not None and attempt > attempt_ceiling:
+        raise ValueError(
+            f"retry ceiling reached: this lineage (root {root}) has already made "
+            f"{attempt - 1} attempts and the caller's ceiling is {attempt_ceiling}. "
+            f"Last error: {str(prev.get('error') or 'none recorded')[:200]!r}. "
+            "Repeating it will not change the outcome — diagnose the cause, or retry "
+            "explicitly with a higher ceiling."
+        )
+
     prev_infra = (fctx_prev.get("failure_class") == "infra")
     prev_substrate = (fctx_prev.get("execution_substrate") or "").lower()
     substrate_override = spec.get("substrate")
