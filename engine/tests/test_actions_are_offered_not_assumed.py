@@ -183,3 +183,46 @@ def test_the_prompt_forbids_invented_arguments():
     src = prompt_text(IntentRouter)
     assert "NEVER PROPOSE WITH AN ARGUMENT YOU INVENTED" in src
     assert "crun_placeholder" in src, "name the real fabrication"
+
+
+# --------------------------------------------------------------------------- #
+# Deploy is not build. Never substitute a bigger action for the one asked for.
+# --------------------------------------------------------------------------- #
+def test_the_prompt_forbids_substituting_a_bigger_action():
+    """Asked to "deploy Living Colors to live", BOSS called redeploy, got "no deployment run
+    for this task" — the app had never deployed, its last build FAILED — then quietly called
+    retry_code_task, starting a build worth minutes and real money. It reported that as
+    "I've retried the failed task, which will redeploy Living Colors", conflating the two so
+    the operator could not tell a build had begun.
+    """
+    src = prompt_text(IntentRouter)
+    assert "NEVER SUBSTITUTE A BIGGER" in src
+    assert "DEPLOY IS NOT BUILD" in src
+    assert "Substituting silently is worse than refusing" in src
+
+
+def test_the_prompt_requires_honest_reporting_of_what_ran():
+    src = prompt_text(IntentRouter)
+    assert "in the words of the tool you actually called" in src
+
+
+def test_redeploys_refusal_carries_the_instruction_itself():
+    """A distant rule in the system prompt did not prevent it three times. The correction has
+    to be where the model is standing when it decides — in the result it just received."""
+    import inspect
+    from boss_engine.services import shepherd_service
+
+    src = inspect.getsource(shepherd_service._act_on_deployment)
+    assert "DO NOT substitute a build for a deploy" in src
+    assert "propose_action" in src, "say what to do instead, not only what not to do"
+
+
+def test_the_refusal_explains_why_rather_than_just_refusing():
+    """'no deployment run for this task' reads as missing DATA. The truth is the app has never
+    deployed, which is a different fact and points at a different next step."""
+    import inspect
+    from boss_engine.services import shepherd_service
+
+    src = inspect.getsource(shepherd_service._act_on_deployment)
+    assert "never been deployed" in src
+    assert "no build to re-ship" in src

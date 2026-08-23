@@ -980,7 +980,30 @@ def _act_on_deployment(engine, settings, run_id: str, action: str, actor: str) -
                 "ORDER BY created_at DESC LIMIT 1"),
             {"i": run_id}).mappings().first()
     if not row:
-        return "no_action: no deployment run for this task"
+        # THE MESSAGE IS THE GUARDRAIL.
+        #
+        # This said only "no deployment run for this task". Asked to deploy an app whose last
+        # build had FAILED, the agent read that, silently called retry_code_task instead, and
+        # started a build worth minutes and real money — then described it as "retried the
+        # failed task, which will redeploy". The operator could not see that a build had begun.
+        #
+        # A distant instruction in the system prompt did not prevent it, so the correction goes
+        # where the model is actually standing when it decides: in the result it just received.
+        status = ""
+        try:
+            with begin(engine) as c:
+                status = str(c.execute(
+                    sql("SELECT status FROM code_task_runs WHERE id = :i"),
+                    {"i": run_id}).scalar() or "")
+        except Exception:  # noqa: BLE001
+            status = ""
+        return (
+            "no_action: this app has never been deployed, so there is no build to re-ship"
+            + (f" (its run is {status})" if status else "")
+            + ". DO NOT substitute a build for a deploy — they are different actions and one "
+              "costs money. Tell the operator that deploying is not possible yet and why, and "
+              "offer the next step with propose_action so THEY choose whether to spend."
+        )
 
     if action == "redeploy_deployment":
         from .delivery_pipeline import redeploy
