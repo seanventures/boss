@@ -238,6 +238,57 @@ def _boss_cannot_call_you_back(reply: str) -> str:
 _TABLE_ROW = re.compile(r"^\s*\|(?P<cells>.+)\|\s*$")
 
 
+# The model also writes the tool call as PSEUDO-MARKUP inside prose:
+#
+#   <propose_action tool="redeploy" args='{"run_id":"crun_..."}' label="Deploy to Staging" why="..."/>
+#
+# which renders as raw angle brackets in the operator's chat and produces no button. It is the
+# third shape invented after the previous two were handled, which is the argument for recovering
+# by MEANING rather than blocking one syntax at a time. This form is the most reliable of the
+# three to recover, because every field is named.
+_PROPOSE_TAG = re.compile(
+    r"<\s*propose_action\b(?P<attrs>[^>]*?)/?\s*>",
+    re.I | re.S,
+)
+_TAG_ATTR = re.compile(r"""(\w+)\s*=\s*(?P<q>["'])(?P<val>.*?)(?P=q)""", re.S)
+
+
+def _recover_tagged_actions(reply: str, known_tools, existing) -> tuple[list, str]:
+    """Pull <propose_action .../> tags out of the reply and turn them into real offers.
+
+    Returns the offers AND the reply with the tags removed — leaving them in shows the operator
+    raw markup where a button should be, which is worse than the missing button.
+
+    Validated exactly like the table form: the tool must exist, args must parse, and no
+    placeholder values. A tag that fails any of those is still STRIPPED from the text, because
+    unparseable markup is never something the operator should read.
+    """
+    if not reply or "propose_action" not in reply:
+        return [], reply
+    from ..tools.builtin import _placeholder_argument
+
+    found: list = []
+    have = {(a.get("tool"), json.dumps(a.get("args") or {}, sort_keys=True)) for a in existing}
+
+    def _take(match: "re.Match[str]") -> str:
+        attrs = {m.group(1).lower(): m.group("val")
+                 for m in _TAG_ATTR.finditer(match.group("attrs") or "")}
+        tool = _strip_md(attrs.get("tool", ""))
+        args = _loads_object(attrs.get("args", "") or "{}")
+        if tool in known_tools and args is not None and not _placeholder_argument(args):
+            key = (tool, json.dumps(args, sort_keys=True))
+            if key not in have:
+                have.add(key)
+                found.append({
+                    "id": make_id("act"), "tool": tool, "args": args,
+                    "label": (_strip_md(attrs.get("label", "")) or tool)[:80],
+                    "why": (_strip_md(attrs.get("why", "")) or None),
+                })
+        return ""      # strip the markup either way
+
+    return found, _PROPOSE_TAG.sub(_take, reply)
+
+
 def _recover_described_actions(reply: str, known_tools, existing) -> list:
     """Turn a proposal TABLE the model wrote into real, validated offers.
 
@@ -818,6 +869,8 @@ class IntentRouter:
             _known = set(build_discuss_read_registry().names())
         except Exception:  # noqa: BLE001 — recovery is a bonus, never a new failure mode
             _known = set()
+        tagged, reply = _recover_tagged_actions(reply, _known, proposed)
+        proposed.extend(tagged)
         proposed.extend(_recover_described_actions(reply, _known, proposed))
         reply = _no_button_was_promised(reply, proposed)
         reply = _boss_cannot_call_you_back(reply)

@@ -511,3 +511,54 @@ def test_ask_boss_uses_the_consoles_standard_header():
     for cls in ("mr-header", "mr-header-main", "mr-header-meta", "mr-title",
                 "eyebrow", "cap-badge tone-", "mr-meta-item", "mr-avatar tone-"):
         assert cls in src, f"not using the shared primitive: {cls}"
+
+
+# --------------------------------------------------------------------------- #
+# The third invented shape: the tool call written as markup
+# --------------------------------------------------------------------------- #
+from boss_engine.services.intent_router import _recover_tagged_actions  # noqa: E402
+
+# Verbatim from production. After "choose the appropriate button", the markdown table, and the
+# bracket pseudo-button were each handled, the model started emitting THIS — which renders as
+# raw angle brackets in the operator's chat and still produces no button.
+_TAGGED = """Only staging targets exist, so "deploy to live" has nowhere to ship the build.
+
+| Action | Button |
+|--------|--------|
+| Deploy to the existing staging environment | <propose_action tool="redeploy" args='{"run_id":"crun_dad37a91c4b0470480fd","reason":"Deploy to staging as requested"}' label="Deploy to Staging" why="Ships the latest successful run"/> |
+"""
+
+
+def test_a_tool_call_written_as_markup_becomes_a_button():
+    out, cleaned = _recover_tagged_actions(_TAGGED, _TOOLS, [])
+    assert len(out) == 1, out
+    assert out[0]["tool"] == "redeploy"
+    assert out[0]["args"]["run_id"] == "crun_dad37a91c4b0470480fd"
+    assert out[0]["label"] == "Deploy to Staging"
+
+
+def test_the_raw_markup_never_reaches_the_operator():
+    """Leaving the tag in shows angle brackets where a button belongs — worse than nothing."""
+    _, cleaned = _recover_tagged_actions(_TAGGED, _TOOLS, [])
+    assert "propose_action" not in cleaned
+    assert "<" not in cleaned.split("| Action | Button |")[-1]
+    assert "Deploy to the existing staging environment" in cleaned, "the row's text must survive"
+
+
+def test_a_tag_naming_an_unknown_tool_is_stripped_but_not_offered():
+    bad = _TAGGED.replace('tool="redeploy"', 'tool="ship_it_now"')
+    out, cleaned = _recover_tagged_actions(bad, _TOOLS, [])
+    assert out == []
+    assert "propose_action" not in cleaned, "unparseable markup must still be removed"
+
+
+def test_a_tag_with_an_invented_argument_is_refused():
+    bad = _TAGGED.replace("crun_dad37a91c4b0470480fd", "crun_placeholder")
+    out, _ = _recover_tagged_actions(bad, _TOOLS, [])
+    assert out == []
+
+
+def test_a_reply_with_no_tag_is_returned_untouched():
+    plain = "The deployment failed its health check after 120s."
+    out, cleaned = _recover_tagged_actions(plain, _TOOLS, [])
+    assert out == [] and cleaned == plain
