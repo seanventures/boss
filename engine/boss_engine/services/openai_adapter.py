@@ -4,13 +4,54 @@ import random
 import time
 from typing import Optional, Tuple
 
-from openai import APIConnectionError, APITimeoutError, AzureOpenAI, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AzureOpenAI,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 
 from ..config import Settings
 from .github_adapter import IntegrationConfigurationError
 from .redaction import redact as _redact
 
 _RETRYABLE = (RateLimitError, APITimeoutError, APIConnectionError)
+
+#: Signatures of a provider rejecting the MODEL'S OWN OUTPUT, not our request.
+#:
+#: Observed live, and it killed an entire Ask BOSS turn:
+#:
+#:   GroqException - Tool call validation failed: attempted to call tool
+#:   'functions/read_logs' which was not in request.tools
+#:
+#: The model emitted `functions/read_logs` instead of `read_logs` — a generation flake, and a
+#: non-deterministic one. The provider reports it as HTTP 400, so it lands as BadRequestError
+#: and is treated as "your request was malformed". Our request was fine: the tool list was
+#: correct and `read_logs` was in it. The next sample would almost certainly name it properly.
+#:
+#: Deliberately NARROW. A real 400 — a bad schema, an unsupported parameter — must still fail
+#: fast and loudly, because retrying it eight times just burns money to reach the same error.
+#: Only these signatures, which can only be produced by the model's own tool call, are retried.
+_MODEL_OUTPUT_REJECTED = (
+    "tool call validation failed",
+    "which was not in request.tools",
+    "tool_use_failed",
+    "failed_generation",
+)
+
+
+def is_model_output_rejection(exc: BaseException) -> bool:
+    """True when a 400 is the provider refusing what the MODEL produced.
+
+    Retrying is correct: nothing about the request needs to change, and the flake does not
+    reproduce reliably.
+    """
+    if not isinstance(exc, BadRequestError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in _MODEL_OUTPUT_REJECTED)
 
 # Groq free-tier TPM is 6k. Default native_max_output_tokens=8192 plus a packed
 # repo context routinely *requests* ~12k and 429s before any token is generated.
@@ -80,6 +121,14 @@ def _with_retry(call, *, tries: int = 8, base: float = 2.0, stats: Optional[dict
             stats["retries"] = attempt
         try:
             return call()
+        except BadRequestError as exc:
+            # A 400 that describes the MODEL's output, not ours. See _MODEL_OUTPUT_REJECTED.
+            if not is_model_output_rejection(exc) or attempt == tries - 1:
+                raise
+            # Short, fixed backoff: this is a resample, not congestion. Waiting 45s to ask a
+            # model to name its own tool correctly helps nobody.
+            time.sleep(min(1.0 + attempt, 4.0))
+            continue
         except _RETRYABLE as exc:
             if attempt == tries - 1:
                 raise

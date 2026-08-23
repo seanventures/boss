@@ -94,11 +94,39 @@ class ToolRegistry:
         return deco
 
     # ---- lookup / listing -------------------------------------------------
+    #: Namespace prefixes some models put in front of a tool name. OpenAI's legacy function
+    #: calling used `functions.foo`, and models trained on it still emit `functions.foo` or
+    #: `functions/foo` — observed live as `functions/read_logs`, which Groq rejected outright.
+    #: Where a provider does NOT validate, the malformed name reaches us instead, and failing
+    #: it as "unknown tool" would blame the operator for a model's namespacing habit.
+    _NAME_PREFIXES = ("functions/", "functions.", "tools/", "tools.")
+
+    @classmethod
+    def canonical_tool_name(cls, name: str) -> str:
+        """Strip a model-added namespace prefix. Idempotent, and safe on a plain name."""
+        cleaned = (name or "").strip()
+        for prefix in cls._NAME_PREFIXES:
+            if cleaned.lower().startswith(prefix):
+                return cleaned[len(prefix):]
+        return cleaned
+
     def get(self, name: str) -> ToolSpec:
         try:
             return self._tools[name]
+        except KeyError:
+            pass
+        canonical = self.canonical_tool_name(name)
+        try:
+            return self._tools[canonical]
         except KeyError as exc:
-            raise ToolError(f"unknown tool: {name}") from exc
+            # Name the tools we DO have. "unknown tool: functions/read_logs" with no list sent
+            # the operator to the source to find out what was available.
+            available = ", ".join(self.names()[:40])
+            raise ToolError(
+                f"unknown tool: {name!r}"
+                + (f" (also tried {canonical!r})" if canonical != name else "")
+                + f". Available: {available}"
+            ) from exc
 
     def names(self) -> list[str]:
         return sorted(self._tools)
