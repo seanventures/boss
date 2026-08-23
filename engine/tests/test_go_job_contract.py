@@ -47,7 +47,12 @@ def test_default_settings_select_local_provider_without_go(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     from boss_engine.config import Settings
 
-    settings = Settings()
+    # `_env_file=None` matters as much as delenv: this test asserts the DEFAULT, and the repo's
+    # own .env sets BOSS_SANDBOX_PROVIDER=microvm. Clearing the environment variable does not
+    # touch a value that arrives from the FILE, so the test failed for everyone running it from
+    # the repo root and passed only from a checkout with no .env — which is how it looked like a
+    # regression when it had been failing all along.
+    settings = Settings(_env_file=None)
     assert settings.sandbox_provider == "local"
     provider = make_sandbox_provider(settings)
     assert isinstance(provider, LocalSubprocessProvider)
