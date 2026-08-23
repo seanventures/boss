@@ -735,6 +735,15 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
     abandoned = sweep_abandoned_runs(engine, settings, project_id, actor=actor)
     # Previews need their own rule; see sweep_stale_previews.
     stale_previews = sweep_stale_previews(engine, settings, project_id, actor=actor)
+    # Reclaiming disk costs nothing and must run whatever the spend gate says. A preview that
+    # can never serve again is holding a full npm install; 31 failed previews had accumulated
+    # before anything deleted one, on the same disk the code agent works on.
+    try:
+        from .preview_service import sweep_preview_workdirs
+        workdirs = sweep_preview_workdirs(engine)
+    except Exception:  # noqa: BLE001
+        logger.debug("sweep_preview_workdirs_failed", exc_info=True)
+        workdirs = {"reclaimed": 0, "bytes": 0}
 
     with begin(engine) as c:
         queue_depth = int(c.execute(
@@ -744,6 +753,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
         return {"project_id": project_id, "considered": len(candidates), "applied": [],
                 "deferred": [], "escalated": [], "failed": [], "unstarved": unstarved,
                 "abandoned": abandoned, "stale_previews": stale_previews,
+                "reclaimed_workdirs": workdirs,
                 "paused_because": f"{queue_depth} jobs already queued or running; repair work "
                                   "must not push ahead of the operator's work"}
 
@@ -751,6 +761,7 @@ def autopilot(engine, settings: Settings, jobs, project_id: str, *,
         return {"project_id": project_id, "considered": len(candidates), "applied": [],
                 "deferred": [], "escalated": [], "failed": [], "unstarved": unstarved,
                 "abandoned": abandoned, "stale_previews": stale_previews,
+                "reclaimed_workdirs": workdirs,
                 "paused_because": "BOSS_SHEPHERD_AUTOPILOT_ENABLED is false — sensors and "
                                   "cleanup ran, but no work was started. Remedies that spend "
                                   "money are opt-in."}

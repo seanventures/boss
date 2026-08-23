@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import logging
 import os
 import re
 import shutil
@@ -32,6 +33,8 @@ from .code_task_service import load_code_task_run
 from .core import emit_event, make_id
 from .execution_substrate import ExecutionSubstrate, normalize_build_substrate
 from .sandbox_provider import MicroVMProvider
+
+logger = logging.getLogger(__name__)
 
 PREVIEW_ROOT = Path(os.environ.get("BOSS_PREVIEW_ROOT", "/tmp/boss-previews"))
 
@@ -1855,3 +1858,118 @@ def start_preview_for_run(engine, settings: Settings, run_id: str, *, ttl_minute
             return res
         last = res
     return last
+
+
+# --------------------------------------------------------------------------- #
+# Reclaiming preview workdirs
+# --------------------------------------------------------------------------- #
+#: Terminal preview states. A preview in one of these can never serve again, so its tree is
+#: dead weight — but note `running` is deliberately absent: that process is serving FROM its
+#: workdir and deleting it pulls the floor out from under a live preview.
+_TERMINAL_PREVIEW_STATES = ("failed", "stopped", "expired")
+
+#: How long an unrecognised directory must sit before it is reclaimed. A workdir is created
+#: BEFORE its row is inserted, so a young orphan may simply be a preview mid-start.
+ORPHAN_WORKDIR_AFTER_HOURS = 6
+
+
+def _preview_log_archive(preview_id: str) -> Path:
+    """Where a reclaimed preview's log is kept.
+
+    The log lives INSIDE the workdir (`workdir/_preview.log`), so deleting the tree destroys the
+    evidence — and that log is exactly what identified `MODULE_NOT_FOUND` three levels down when
+    a finished app could not be previewed. Keep the log, drop the 300 MB of node_modules around
+    it: the diagnosis is a few KB, the waste is everything else.
+    """
+    return PREVIEW_ROOT / "_logs" / f"{preview_id}.log"
+
+
+def reclaim_preview_workdir(preview_id: str) -> int:
+    """Delete a terminal preview's tree, preserving its log. Returns bytes reclaimed.
+
+    Never raises: reclaiming space must not be able to fail a caller that was doing something
+    else, and a directory that has already gone is a success, not an error.
+    """
+    freed = 0
+    try:
+        if not PREVIEW_ROOT.exists():
+            return 0
+        archive = _preview_log_archive(preview_id)
+        for d in PREVIEW_ROOT.glob(f"{preview_id}-*"):
+            if not d.is_dir():
+                continue
+            try:
+                log = d / "_preview.log"
+                if log.is_file() and not archive.exists():
+                    archive.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(log, archive)
+            except Exception:  # noqa: BLE001
+                pass  # a lost log is regrettable; a full disk is an outage
+            try:
+                for root, _dirs, files in os.walk(d):
+                    for f in files:
+                        try:
+                            freed += os.path.getsize(os.path.join(root, f))
+                        except OSError:
+                            pass
+            except Exception:  # noqa: BLE001
+                pass
+            shutil.rmtree(d, ignore_errors=True)
+    except Exception:  # noqa: BLE001
+        logger.debug("reclaim_preview_workdir_failed preview=%s", preview_id, exc_info=True)
+    return freed
+
+
+def sweep_preview_workdirs(engine, *, dry_run: bool = False) -> dict:
+    """Reclaim the tree of every preview that can no longer serve.
+
+    THE SWEEP IS THE MECHANISM, not a backstop. `start_preview` has several launch paths, each
+    with its own `_fail` closure, and cleanup wired into call sites is precisely how the same
+    rule ends up expressed in four places and satisfied in three (S3). This joins the FILESYSTEM
+    against the DATABASE, so a path that forgets to call anything is still covered — including
+    one that does not exist yet.
+
+    Two populations:
+      * previews in a terminal state that still have a tree;
+      * directories with no row at all — a process that died between mkdtemp and INSERT. Those
+        are reclaimed only after a grace period, because a workdir is created BEFORE its row.
+    """
+    import time as _time
+
+    if not PREVIEW_ROOT.exists():
+        return {"reclaimed": 0, "bytes": 0, "orphans": 0, "dry_run": dry_run}
+
+    known: dict[str, str] = {}
+    try:
+        with begin(engine) as c:
+            for r in c.execute(text("SELECT id, status FROM app_previews")).mappings():
+                known[str(r["id"])] = str(r["status"] or "")
+    except Exception:  # noqa: BLE001
+        logger.debug("sweep_preview_workdirs_db_failed", exc_info=True)
+        return {"reclaimed": 0, "bytes": 0, "orphans": 0, "error": "db unavailable"}
+
+    reclaimed, orphans, freed = [], 0, 0
+    cutoff = _time.time() - ORPHAN_WORKDIR_AFTER_HOURS * 3600
+    for d in PREVIEW_ROOT.iterdir():
+        if not d.is_dir() or d.name.startswith("_"):
+            continue  # _logs is ours
+        preview_id = d.name.rsplit("-", 1)[0] if "-" in d.name else d.name
+        status = known.get(preview_id)
+        if status is None:
+            try:
+                if d.stat().st_mtime > cutoff:
+                    continue  # may be starting right now
+            except OSError:
+                continue
+            orphans += 1
+        elif status not in _TERMINAL_PREVIEW_STATES:
+            continue  # running, or starting — its process is serving from this tree
+        if not dry_run:
+            freed += reclaim_preview_workdir(preview_id)
+        reclaimed.append(preview_id)
+
+    if reclaimed and not dry_run:
+        logger.info("preview_workdirs_reclaimed count=%d orphans=%d mb=%.1f",
+                    len(reclaimed), orphans, freed / 1_000_000)
+    return {"reclaimed": len(reclaimed), "bytes": freed, "orphans": orphans,
+            "ids": reclaimed[:10], "dry_run": dry_run}
