@@ -20,6 +20,9 @@ with whatever model the engine is configured for.
 """
 from __future__ import annotations
 
+import datetime
+import decimal
+import uuid
 import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -62,6 +65,31 @@ class AgentTurn:
             "steps": self.steps,
         }
 
+
+
+def _jsonable(value):
+    """Make a tool result serialisable instead of killing the turn.
+
+    "What is my spend so far this month?" answered with
+    "TypeError: Object of type Decimal is not JSON serializable" -- the tool worked, read the
+    real numbers, and the answer was destroyed encoding them. Postgres NUMERIC arrives as
+    Decimal, timestamps as datetime, ids as UUID; any tool that returns a DB value unconverted
+    hits this, so it is fixed once here rather than in each tool.
+
+    Decimal -> float, because this is the model's copy of the result and it needs to compare and
+    add; the authoritative value stays Decimal in the database.
+    """
+    if isinstance(value, decimal.Decimal):
+        return float(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, (set, frozenset)):
+        return sorted(value, key=str)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value)
 
 
 def _propose_label(tool: str, args: dict) -> str:
@@ -170,7 +198,7 @@ class EngineAgent:
                     {
                         "role": "tool",
                         "tool_call_id": tc.get("id"),
-                        "content": json.dumps(result)[:16000],
+                        "content": json.dumps(result, default=_jsonable)[:16000],
                     }
                 )
         else:

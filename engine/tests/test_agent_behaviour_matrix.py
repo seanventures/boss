@@ -217,3 +217,47 @@ def test_write_db_tells_the_model_it_is_the_no_dedicated_tool_escape_hatch():
     d = spec.description.lower()
     assert "requires a human" in d and "no dedicated tool" in d
     assert "deployment_targets" in d, "name the case that actually came up"
+
+
+# --------------------------------------------------------------------------- #
+# A tool result must never destroy the turn on the way to the model
+# --------------------------------------------------------------------------- #
+import datetime as _dt  # noqa: E402
+import decimal as _dec  # noqa: E402
+import json as _json  # noqa: E402
+import uuid as _uuid  # noqa: E402
+
+from boss_engine.agent.engine_agent import _jsonable  # noqa: E402
+
+
+@pytest.mark.parametrize("value,expect", [
+    (_dec.Decimal("12.34"), 12.34),
+    (_dec.Decimal("0"), 0.0),
+])
+def test_money_survives_the_trip_to_the_model(value, expect):
+    """"What is my spend so far this month?" -> "TypeError: Object of type Decimal is not JSON
+    serializable". The tool worked and read the real numbers; encoding them killed the answer.
+    Decimal becomes float because the model has to compare and add it."""
+    assert _jsonable(value) == expect
+
+
+def test_a_realistic_cost_row_encodes():
+    row = {
+        "project_id": "boss-dogfood",
+        "spend_usd": _dec.Decimal("41.9900"),
+        "budget_usd": _dec.Decimal("250"),
+        "as_of": _dt.datetime(2026, 8, 24, 19, 52, tzinfo=_dt.timezone.utc),
+        "run_id": _uuid.UUID("1b4e28ba-2fa1-11d2-883f-0016d3cca427"),
+        "tags": {"api", "worker"},
+    }
+    out = _json.loads(_json.dumps(row, default=_jsonable))
+    assert out["spend_usd"] == 41.99 and out["budget_usd"] == 250.0
+    assert out["as_of"].startswith("2026-08-24T19:52")
+    assert out["tags"] == ["api", "worker"]
+
+
+def test_an_unknown_object_degrades_instead_of_raising():
+    """A tool returning something exotic must cost fidelity, never the whole answer."""
+    class Odd:
+        def __str__(self): return "odd-value"
+    assert _json.loads(_json.dumps({"x": Odd()}, default=_jsonable))["x"] == "odd-value"

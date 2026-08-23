@@ -160,6 +160,36 @@ export async function runAgentActionAction(
   return result;
 }
 
+/**
+ * Ask BOSS from the Command Center hero.
+ *
+ * Identical request to agentChatAction, deliberately WITHOUT revalidatePath("/").
+ *
+ * The hero holds its answer in component state. revalidatePath re-renders the whole
+ * console tree underneath it, and the answer disappeared the instant it arrived --
+ * observed live: question sent, "3s" ticking, then the panel snapped back to its
+ * empty state with the openers showing, as though nothing had been asked. A chat
+ * that loses the reply it just received is worse than one that is slow.
+ *
+ * Nothing on the page depends on this turn having happened, so there is nothing to
+ * revalidate: a turn that DOES change the board (via an action button) goes through
+ * runAgentActionAction, which still revalidates.
+ */
+export async function askBossAction(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  const message = String(formData.get("message") ?? "").trim();
+  if (!message) return { ok: false, error: "Ask BOSS something first." };
+  return postJsonReturn("/v1/engine/agent/chat", {
+    project_id: getProjectId(formData),
+    actor: getActor(formData),
+    thread_id: String(formData.get("thread_id") ?? "").trim() || undefined,
+    message,
+    surface: "chat",
+  });
+}
+
 export async function agentChatAction(
   _prev: ActionResult | null,
   formData: FormData,

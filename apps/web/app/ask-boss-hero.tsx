@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
-import { agentChatAction, runAgentActionAction } from "./actions";
+import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
 const STALL_SECONDS = 120;
@@ -60,6 +60,36 @@ export function AskBossHero({
   const [busy, startTransition] = useTransition();
   const boxRef = useRef<HTMLTextAreaElement>(null);
 
+  // SURVIVE A RE-RENDER OF THE PAGE UNDERNEATH.
+  //
+  // Server actions that revalidate ("/") re-render the whole console tree, and this panel's
+  // answer went with it -- observed live: the reply arrived and vanished in the same frame.
+  // askBossAction no longer revalidates, but runAgentActionAction still must (a button click
+  // really does change the board), and any future action might. Rather than audit every call
+  // site forever, the panel restores its own last answer. sessionStorage, not local: an answer
+  // about live state should not outlive the tab that asked.
+  const SESSION_KEY = `boss.ask.${projectId}`;
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(SESSION_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        reply?: string; proposed?: ProposedAction[]; threadId?: string | null;
+      };
+      if (saved.reply) setReply(saved.reply);
+      if (Array.isArray(saved.proposed)) setProposed(saved.proposed);
+      if (saved.threadId) setThreadId(saved.threadId);
+    } catch {}
+    // Restore once, on mount, for this project.
+  }, [SESSION_KEY]);
+
+  useEffect(() => {
+    try {
+      if (!reply && proposed.length === 0) window.sessionStorage.removeItem(SESSION_KEY);
+      else window.sessionStorage.setItem(SESSION_KEY, JSON.stringify({ reply, proposed, threadId }));
+    } catch {}
+  }, [SESSION_KEY, reply, proposed, threadId]);
+
   useEffect(() => {
     if (!busy) { setElapsed(0); return; }
     const t0 = Date.now();
@@ -83,7 +113,7 @@ export function AskBossHero({
       // as cancelled, because it may still land server-side.
       const stalled = Symbol("stalled");
       const r = await Promise.race([
-        agentChatAction(null, fd),
+        askBossAction(null, fd),
         new Promise<typeof stalled>((res) =>
           window.setTimeout(() => res(stalled), STALL_SECONDS * 1000)),
       ]);
