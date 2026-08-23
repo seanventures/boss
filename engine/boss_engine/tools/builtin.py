@@ -708,7 +708,10 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
         "only has staging, clearing a paused flag, correcting a wrong domain or URL, fixing a "
         "status that is stuck. Before you say a change needs someone else, check whether it is "
         "one row in one table -- if it is, do it. One statement, always WHERE-qualified unless "
-        "whole_table is set. Never invent a value you write: read it first, or ask.",
+        "whole_table is set. Never invent a value you write: read it first, or ask. "
+        "PREFER a structured tool when one exists: raw SQL emits no domain events and updates "
+        "no related rows, so cancel_job is better than UPDATE jobs SET status. This is the "
+        "fallback for what those tools do not cover, not a shortcut around them.",
         _obj({"sql": {"type": "string",
                       "description": "a single INSERT, UPDATE or DELETE statement"},
               "reason": {"type": "string", "description": "why — recorded in the event stream"},
