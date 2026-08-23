@@ -773,7 +773,24 @@ touching deployment; do not let them displace Phase 0.
 
 Ordered by operator hours recovered per unit of risk.
 
-### R1 — Load only the active area *(largest remaining win)*
+### R1 — Load only the active area — **VERTICAL SLICE WIRED, EFFECT UNMEASURED**
+*The loaders already existed.* `lib/area-data/` was written on 2026-08-15 with all six exports
+— `loadBudgetAreaData` / `loadInfraAreaData` / `loadAssuranceAreaData` and their `shouldLoad*`
+gates — and **was never imported by `page.tsx`**. The test asserting the wiring has been red
+ever since, which is how §I26 mistook a never-built design for a half-built one.
+
+* **Wired by SUBSTITUTION, not restructuring.** The fan-out is one `Promise.all` with **79
+  entries destructured positionally**. Lifting calls out of it would silently swap two feeds if
+  a position slipped — a far worse failure than slow loading. So the three packs load first and
+  their results are substituted position-for-position (`Promise.resolve(budgetArea.…)`), which
+  cannot misalign.
+* **Covers 12 of ~70 calls** — budget/finops/cost, infra/provider-ops/mcp, assurance/security.
+  A slice, not the whole page, exactly as the original design intended.
+* **Effect not yet measured.** Baseline to beat: **8.38 MB, 20–25s** on a quiet box.
+* **Acceptance:** any single area < 1.5 MB and < 3s server render; `area-data.test.ts` passes
+  (it now does).
+
+### R1 (original framing) — *largest remaining win*
 `page.tsx` awaits ~15 loaders plus a `Promise.all` of 14 feeds **before reading `?area=`**. Every
 area pays for every other. All three area URLs return within 200 bytes of each other because they
 are the same payload.

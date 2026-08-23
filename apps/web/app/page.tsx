@@ -97,6 +97,14 @@ import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
 import { fetchInboxFeed, fetchOutboxFeed } from "../lib/comms";
 import { fetchBudgetAllocationFeed } from "../lib/budget-allocations";
+import {
+  loadAssuranceAreaData,
+  loadBudgetAreaData,
+  loadInfraAreaData,
+  shouldLoadAssuranceArea,
+  shouldLoadBudgetArea,
+  shouldLoadInfraArea,
+} from "../lib/area-data";
 import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
 import { fetchLatestCanary } from "../lib/canaries";
@@ -527,7 +535,25 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const activeOrgId = selectedOrg.org_id;
   const activeOrgName = selectedOrg.org_name;
   const activeProjectId = selectedOrg.project_id;
-  const assuranceFeed = await fetchAssuranceFeed(activeProjectId);
+  // LOAD ONLY WHAT THIS AREA NEEDS.
+  //
+  // Every area paid for every other: one render fetched ~70 feeds and shipped 8.38 MB in
+  // 20-25s on a QUIET box, and the console's own fetches timing out is what produced several
+  // "API unreachable" reports about a healthy API.
+  //
+  // These loaders were written in August and never wired in; the test asserting the wiring has
+  // been red ever since. Substituted BY POSITION into the fan-out below rather than lifted out
+  // of it: that array has 79 entries destructured positionally, and re-ordering it would
+  // silently swap two feeds — a far worse failure than the one being fixed.
+  const budgetActive = shouldLoadBudgetArea(requestedArea);
+  const infraActive = shouldLoadInfraArea(requestedArea);
+  const assuranceActive = shouldLoadAssuranceArea(requestedArea);
+  const [budgetArea, infraArea, assuranceArea] = await Promise.all([
+    loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive }),
+    loadInfraAreaData({ projectId: activeProjectId, active: infraActive }),
+    loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive }),
+  ]);
+  const assuranceFeed = assuranceArea.assuranceFeed;
   const projects = await fetchProjectFeed(activeProjectId);
   const activeProject = projects.items.find(
     (project) => project.id === activeProjectId,
@@ -622,17 +648,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         denied_only: routingOutcomeFilter === "denied" ? true : undefined,
       }),
       fetchSkillFeed(),
-      fetchProviderOpsFeed(activeProjectId),
+      Promise.resolve(infraArea.providerOps),
       fetchInfraFabricFeed(activeProjectId),
       fetchGitHubOperationsFeed(activeProjectId),
       fetchRepoActivity(activeProjectId, 30),
       fetchReceiptFeed(activeProjectId, 100),
-      fetchInfrastructureResourceFeed(activeProjectId),
-      fetchBudgetStatus(activeProjectId),
-      fetchBudgetIntensity(activeProjectId),
+      Promise.resolve(infraArea.infrastructureResources),
+      Promise.resolve(budgetArea.budgetStatus),
+      Promise.resolve(budgetArea.budgetIntensity),
       fetchLatestCanary(activeProjectId),
       fetchPlans(activeProjectId),
-      fetchBudgetAllocationFeed(activeProjectId),
+      Promise.resolve(budgetArea.budgetAllocations),
       fetchAuditSummary(activeProjectId),
       fetchChangeJournalFeed(activeProjectId),
       fetchSelfImprovementFeed(activeProjectId),
@@ -654,7 +680,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchBreakGlassGrantFeed(activeProjectId),
       fetchReportSummary(activeProjectId),
       fetchAgentRuns(activeProjectId),
-      fetchMcpServers(activeProjectId),
+      Promise.resolve(infraArea.mcpServers),
       fetchTaskOutputs(activeProjectId),
       fetchCapabilities(activeProjectId),
       fetchMeetingRooms(activeProjectId),
@@ -673,8 +699,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchAckState(activeProjectId),
       fetchWipStatus(activeProjectId),
       fetchChaosRuns(activeProjectId),
-      fetchCommitmentReconciliations(activeProjectId),
-      fetchFinopsSummary(activeProjectId, 30),
+      Promise.resolve(budgetArea.commitmentRecons),
+      Promise.resolve(budgetArea.finopsSummary),
       fetchWorkflowFeed(activeProjectId),
       fetchAgentStudioFeed(activeProjectId),
       fetchWorkOrchestrationFeed(activeProjectId),
@@ -682,8 +708,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const reliabilityFeed = await fetchReliabilityFeed(activeProjectId);
   const aiSreFeed = await fetchAiSreCapabilities(activeProjectId);
   const [costInsights, llmSpend] = await Promise.all([
-    fetchCostInsights(activeProjectId),
-    fetchLlmSpend(activeProjectId),
+    Promise.resolve(budgetArea.costInsights),
+    Promise.resolve(budgetArea.llmSpend),
   ]);
   // Platform ops panels nested into existing Mission Control areas (no new nav).
   const [
@@ -709,8 +735,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   ] = await Promise.all([
     fetchIdentityProvidersFeed(activeProjectId),
     fetchOncallSreStatus(activeProjectId),
-    fetchSecurityScanners(),
-    fetchLatestSecurityScan(activeProjectId),
+    Promise.resolve(assuranceArea.securityScanners),
+    Promise.resolve(assuranceArea.latestSecurityScan),
     fetchReleaseStatus(activeProjectId),
     fetchReleaseBoard(activeProjectId),
     fetchReleases(activeProjectId),
