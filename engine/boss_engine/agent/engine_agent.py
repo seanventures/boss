@@ -101,11 +101,39 @@ class EngineAgent:
         final_text = ""
         steps = 0
 
+        # A TURN MUST NEVER END WITHOUT AN ANSWER.
+        #
+        # The loop below spends a step per model round-trip, and a step that makes tool calls
+        # produces no text. So when the budget ran out mid-investigation the operator got
+        # "(reached the step limit while working; ask me to continue.)" — carrying NONE of what
+        # had just been read. With max_steps=4 from the router that was the ORDINARY outcome of
+        # any real question: the prompt lists ~47 tools and says "chain tools, several calls is
+        # normal", and four round-trips are consumed before anything can be written down.
+        #
+        # The last step is therefore reserved: it runs with NO tools, so the model has nothing
+        # to do but answer from what it gathered. Running out of budget now costs completeness,
+        # not the whole reply.
+        answer_step = max(1, max_steps - 1)
+
         for i in range(max_steps):
             steps = i + 1
-            msg, _usage = self._adapter_obj().create_chat_completion(messages, tools=schemas)
+            last = i >= answer_step
+            if last:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You are out of tool budget for this turn. Do not apologise and do not "
+                        "ask to continue. Answer from what you have already established:\n"
+                        "1. What you FOUND, with concrete evidence (ids, counts, timings).\n"
+                        "2. What you could NOT determine, and the one check that would settle it.\n"
+                        "3. The single next action you would take.\n"
+                        "Partial findings are useful; a report of running out of steps is not."
+                    ),
+                })
+            msg, _usage = self._adapter_obj().create_chat_completion(
+                messages, tools=(None if last else schemas))
             messages.append(msg["raw"])
-            tool_calls = msg.get("tool_calls")
+            tool_calls = None if last else msg.get("tool_calls")
             if not tool_calls:
                 final_text = msg.get("content") or ""
                 break
@@ -129,8 +157,13 @@ class EngineAgent:
                     }
                 )
         else:
-            # loop exhausted without a final text answer
-            final_text = final_text or "(reached the step limit while working; ask me to continue.)"
+            # Only reachable if the reserved answer step ALSO produced nothing, which means the
+            # model returned an empty completion — a provider fault, not a budget one. Say which.
+            final_text = final_text or (
+                "I gathered evidence but the model returned an empty answer on the final step. "
+                "That is a provider fault, not a limit on what BOSS knows — the same question "
+                "asked again will usually work."
+            )
 
         return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps)
 
@@ -140,6 +173,10 @@ class EngineAgent:
     ) -> dict:
         try:
             spec = self.registry.get(name)
+            # Models emit `functions/read_logs` for `read_logs`. registry.get resolves that,
+            # but everything downstream (write-gate, invoke) must use the resolved name or the
+            # tool is looked up twice under two spellings.
+            name = spec.name
         except ToolError as exc:
             return {"ok": False, "error": str(exc)}
         if spec.kind == "write" and not allow_writes:

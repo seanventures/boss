@@ -402,7 +402,21 @@ class IntentRouter:
                     turn = self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
                         message=latest, history=history, system=system,
-                        allow_writes=False, max_steps=4,
+                        # FOUR STEPS WAS THE BUG, not a tuning choice.
+                        #
+                        # A step is one model round-trip, and a step that calls tools produces
+                        # no text. The system prompt above lists ~47 tools and says "chain
+                        # tools — several calls is normal and correct"; four round-trips were
+                        # consumed investigating and none was left to answer, so every real
+                        # diagnostic question returned "(reached the step limit while working)"
+                        # with none of the findings. Only trivial one-lookup questions worked,
+                        # which is why it looked intermittent rather than broken.
+                        #
+                        # Twelve leaves room for a genuine chain — find the run, read its
+                        # timings, then read the code or logs that explain them — and the agent
+                        # reserves the last one for the answer, so exhausting the budget now
+                        # costs completeness rather than the entire reply.
+                        allow_writes=False, max_steps=12,
                     )
                     reply = str(turn.reply or "").strip()
                     if not reply:
