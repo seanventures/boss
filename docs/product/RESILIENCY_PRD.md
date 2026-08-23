@@ -864,7 +864,7 @@ are the same payload.
   never connected — this is the abandoned BOSS-13 refactor its own test still asserts.
 * **Acceptance:** any single area < 1.5 MB and < 3s server render; `area-data.test.ts` passes.
 
-### R1b — Render only the active area — **SHIPPED (option a, operator-approved)**
+### R1b — Render only the active area — **REVERTED. I shipped half of it.**
 
 | area | payload before | after | change | render before | after |
 |---|---|---|---|---|---|
@@ -874,8 +874,39 @@ are the same payload.
 | infra | 6.59 MB | **0.29 MB** | −96% | 19.0s | 18.1s |
 | assurance | 6.48 MB | **0.11 MB** | −98% | 18.0s | 17.5s |
 
-Content verified present after the cut, not merely smaller: `Shorty` renders on code_tasks,
-`ProviderOps` on infra, `Assurance` on assurance, and each page carries its own section.
+**Those numbers are real and the change is still reverted, because it broke the console.**
+
+**What I got wrong.** The operator reported `?area=meetings` blank after 30s. Cause:
+
+```js
+const go = useCallback((id: AreaId) => {
+    setActive(id);
+    // Reflect the selected tab in the URL as a new history entry
+    // WITHOUT a server round-trip / data refetch.
+```
+
+Tab switching is **purely client-side**. Clicking a nav item sets `data-active="delivery"` and
+rewrites the URL through the history API with **no new server request**. CSS then looks for
+`section[data-area="delivery"]`, which the server never rendered. Blank.
+
+I wrote in this very item that "switching tabs becomes a server round-trip instead of a CSS
+toggle" — and then **never made it one**. I gated the render and left `go()` untouched: half of
+option (a), which is worse than neither half.
+
+**Why my verification missed it.** I checked with `curl`: HTTP 200, `Shorty` present,
+`data-area="meetings"` present — all true, and all about the FIRST load, which genuinely works.
+The breakage is in every navigation after it, which a single server-side fetch cannot observe.
+*A check that only exercises the entry path cannot see a state machine.*
+
+**Shape:** S15 — a correct implementation resting on a false premise, the premise here being my
+own sentence about round-trips that I never implemented.
+
+**To do this properly**, `go()` must navigate (`router.push`) rather than mutate state, so a tab
+switch actually re-renders on the server. That is the real cost of option (a) and it needs the
+operator to accept a round-trip per switch — which, at the current ~18s render, would be a much
+worse experience than the CSS toggle it replaces. **So R1b is blocked behind the render-time
+work, not the other way round:** get a single area rendering in ~2s first, and only then is a
+per-switch round-trip an acceptable trade.
 
 **Payload acceptance met for three of five areas (< 1.5 MB); render time NOT met, and barely
 moved.** That is the honest headline, and the explanation is specific: **rendering is now gated,
