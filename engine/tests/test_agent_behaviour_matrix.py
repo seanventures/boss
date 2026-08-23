@@ -424,3 +424,30 @@ def test_it_still_refuses_to_turn_a_deploy_into_a_build():
                     [{"environment": "production", "status": "paused"}]):
         out = describe_undeployable(status="cancelled", repo="r/r", targets=targets)
         assert "DO NOT substitute a build for a deploy" in out
+
+
+# --------------------------------------------------------------------------- #
+# The console must not eject a working session over a link typo
+# --------------------------------------------------------------------------- #
+def test_no_console_link_uses_the_wrong_org_parameter():
+    """The page reads ?org=. A link carrying ?org_id= resolves to no org, drops the operator on
+    the picker mid-session, and the stored-org effect bounces them back a second later — it
+    reads as the console logging you out at random. One shipped link did exactly this."""
+    web = pathlib.Path("apps/web/app")
+    offenders = []
+    for f in sorted(web.glob("*.tsx")) + sorted(web.glob("*.ts")):
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if "org_id=" not in line:
+                continue
+            if not any(k in line for k in ("href", "url", "URL", "push(", "replace(")):
+                continue          # reading a param, not building a link
+            if "resolvedSearchParams" in line or "getParam" in line:
+                continue
+            offenders.append(f"{f.name}:{n}: {line.strip()[:90]}")
+    assert not offenders, "links must use ?org=, not ?org_id=:\n" + "\n".join(offenders)
+
+
+def test_the_page_still_accepts_org_id_from_old_links():
+    """Bookmarks and already-sent links carrying org_id must not eject anyone."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    assert "resolvedSearchParams?.org_id" in src, "org_id alias not honoured"

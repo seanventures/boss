@@ -511,7 +511,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // ---- Organization gate ----------------------------------------------------
   // An org must be selected before entering the console; all data is scoped to
   // the selected org's project. No org in the URL → show the org picker.
-  const requestedOrgId = getParam(resolvedSearchParams?.org);
+  // ACCEPT BOTH SPELLINGS.
+  //
+  // The console reads ?org=, but links and bookmarks carrying ?org_id= exist (one shipped from
+  // the Ask BOSS panel). The failure is nasty out of proportion to the typo: the org resolves
+  // to nothing, the operator is dropped on the picker mid-session, and OrgGate's stored-org
+  // effect redirects back a second later — so it reads as the console randomly logging you out
+  // and recovering. Treating org_id as an alias makes that class of link harmless.
+  const requestedOrgId =
+    getParam(resolvedSearchParams?.org) || getParam(resolvedSearchParams?.org_id);
   const orgs = await fetchOrgs();
   const selectedOrg = requestedOrgId
     ? orgs.items.find((o) => o.org_id === requestedOrgId)

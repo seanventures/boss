@@ -268,7 +268,11 @@ export function AskBossHero({
             }}>
               Ask something else
             </button>
-            <a className="askboss-reset" href={`/?area=agent${orgId ? `&org_id=${orgId}` : ""}`}>
+            {/* `org`, NOT `org_id`. The page reads ?org=; a link carrying org_id drops the
+                org, the picker appears mid-session, and the stored-org effect bounces you back
+                a second later. That flicker was this link. */}
+            <a className="askboss-reset"
+               href={`/?${orgId ? `org=${encodeURIComponent(orgId)}&` : ""}area=agent`}>
               Open the full agent panel →
             </a>
           </div>
