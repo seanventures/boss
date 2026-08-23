@@ -639,6 +639,27 @@ def _is_single_write(statement: str, *, whole_table: bool = False) -> tuple[bool
     return True, ""
 
 
+
+#: Values that mean "I did not look this up". A proposal carrying one produces a button that
+#: fails the moment the operator trusts it.
+_PLACEHOLDER_MARKERS = (
+    "placeholder", "example.com", "your-", "todo", "tbd", "xxx", "<", "...",
+    "changeme", "some-", "my-app", "foo", "bar", "abc123",
+)
+
+
+def _placeholder_argument(args: dict) -> str:
+    """The first argument that looks invented, described for the model, or ''."""
+    for key, value in (args or {}).items():
+        if not isinstance(value, str):
+            continue
+        low = value.strip().lower()
+        if not low:
+            continue
+        if any(marker in low for marker in _PLACEHOLDER_MARKERS):
+            return f"{key}={value!r}"
+    return ""
+
 def _register_operations_tools(reg: ToolRegistry) -> None:
     """Operational writes: BOSS running BOSS.
 
@@ -776,8 +797,22 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
             return {"ok": False,
                     "error": f"cannot propose {name!r}: not an action BOSS can run",
                     "available": sorted(_DISCUSS_OPERATIONS_TOOLS)}
+        call_args = args.get("args") or {}
+        placeholder = _placeholder_argument(call_args)
+        if placeholder:
+            # A BUTTON WITH AN INVENTED ARGUMENT IS A BUTTON THAT FAILS ON CLICK.
+            #
+            # Observed: proposing redeploy with run_id="crun_placeholder". The offer looked
+            # right, and the operator would have discovered the fabrication by pressing it.
+            # Refusing here sends the model back to look the value up, which is the work it
+            # skipped.
+            return {"ok": False,
+                    "error": (f"{placeholder} looks invented. Look up the real value first — "
+                              "query_db or list_code_tasks — then propose with it. An action "
+                              "the operator cannot actually run is worse than no offer."),
+                    "proposed": False}
         return {"ok": True, "proposed": True, "tool": name,
-                "args": args.get("args") or {}, "label": str(args.get("label") or name),
+                "args": call_args, "label": str(args.get("label") or name),
                 "why": str(args.get("why") or ""),
                 "note": "Offered to the operator as a button. NOT executed."}
 

@@ -124,3 +124,62 @@ def test_the_router_carries_proposals_separately_from_deeds():
     turn = RouterTurn(reply="x")
     assert turn.proposed_actions == []
     assert turn.actions == []
+
+
+# --------------------------------------------------------------------------- #
+# A button with an invented argument fails on click
+# --------------------------------------------------------------------------- #
+import pytest
+
+from boss_engine.tools.builtin import _placeholder_argument
+
+
+@pytest.mark.parametrize("args", [
+    {"run_id": "crun_placeholder"},          # the one actually observed
+    {"run_id": "<run_id>"},
+    {"domain": "living-colors.example.com"},
+    {"app": "your-app-name"},
+    {"run_id": "TODO"},
+    {"repo": "some-repo"},
+])
+def test_an_invented_argument_is_refused(args):
+    """Observed live: proposing redeploy with run_id='crun_placeholder'. The offer looked right
+    and the operator would have discovered the fabrication by pressing it."""
+    assert _placeholder_argument(args), f"{args} should be caught"
+    out = build_default_registry().invoke(
+        "propose_action", object(), project_id="p", actor="ceo",
+        args={"tool": "redeploy", "args": args, "label": "Redeploy"})
+    assert out["ok"] is False
+    assert out["proposed"] is False
+    assert "look" in out["error"].lower(), "the refusal must say what to do instead"
+
+
+@pytest.mark.parametrize("args", [
+    {"run_id": "crun_a57b42adc0884dc4bfda"},
+    {"run_id": "crun_0cd37e41b83a4114b567", "reason": "operator asked to retry"},
+    {"job_id": "job_4dc32933157c", "band": "interactive"},
+    {},
+])
+def test_a_real_argument_is_accepted(args):
+    assert _placeholder_argument(args) == ""
+    out = build_default_registry().invoke(
+        "propose_action", object(), project_id="p", actor="ceo",
+        args={"tool": "redeploy", "args": args, "label": "Redeploy"})
+    assert out["ok"] is True and out["proposed"] is True
+
+
+def test_non_string_arguments_do_not_break_the_check():
+    assert _placeholder_argument({"limit": 5, "force": True, "tags": ["a"]}) == ""
+
+
+def test_the_prompt_requires_a_button_for_every_option_it_lists():
+    """It described 'clear the URL' and 'redeploy' in a table and gave a button only to the
+    expensive one, leaving the operator to ask for the cheap one by hand."""
+    src = prompt_text(IntentRouter)
+    assert "IF YOU DESCRIBE AN OPTION IN PROSE, GIVE IT A BUTTON" in src
+
+
+def test_the_prompt_forbids_invented_arguments():
+    src = prompt_text(IntentRouter)
+    assert "NEVER PROPOSE WITH AN ARGUMENT YOU INVENTED" in src
+    assert "crun_placeholder" in src, "name the real fabrication"
