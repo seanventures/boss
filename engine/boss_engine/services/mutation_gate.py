@@ -1,4 +1,5 @@
 """VAG #106 — mutation-gate the frozen tests.
+from .scheduling import low_priority
 
 BOSS re-runs the frozen tests as its *authoritative* verifier (a passing suite is what lets a
 cheap-model implementation through the gate). But a **weak** suite passes buggy code just as
@@ -195,7 +196,10 @@ def _run_tests(workdir: str, test_command, timeout: int) -> bool:
     import subprocess
     cmd = test_command if isinstance(test_command, list) else shlex.split(test_command)
     try:
-        proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, timeout=timeout)
+        # Mutation testing re-runs the project's whole suite once per mutant, in the API's
+        # own container. See services/scheduling.py.
+        proc = subprocess.run(low_priority(cmd), cwd=workdir, capture_output=True,
+                              text=True, timeout=timeout)
         return proc.returncode == 0
     except subprocess.TimeoutExpired:
         return False

@@ -25,6 +25,7 @@ from typing import Optional
 
 from ..config import Settings
 from ..schemas import FileChange
+from .scheduling import low_priority
 
 
 #: Words that are shells, not programs. Seeing one as argv[0] means the caller wrote a shell
@@ -274,8 +275,10 @@ class EphemeralSandbox:
         if local_bin and Path(local_bin).is_dir():
             env["PATH"] = local_bin + os.pathsep + env.get("PATH", "")
         try:
+            # npm install / build / playwright run in the API's own container; at normal
+            # priority they starve it. See services/scheduling.py.
             completed = subprocess.run(
-                argv,
+                low_priority(argv),
                 cwd=workdir,
                 env=env,
                 capture_output=True,

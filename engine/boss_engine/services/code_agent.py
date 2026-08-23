@@ -26,6 +26,7 @@ from typing import Optional, Protocol
 from ..config import Settings
 from ..schemas import FileChange
 from .llm_telemetry import record_llm_call
+from .scheduling import low_priority
 from .model_rate_limiter import (
 
     NullRateLimiter,
@@ -460,8 +461,11 @@ class ClaudeCodeAgent:
                 # Popen rather than run(), so the pid is known and can be registered. A
                 # reaper that scans `ps` cannot tell which seat a claude process occupies;
                 # this is how it finds out.
+                # Yields CPU/IO to the control plane it shares a container with. See
+                # services/scheduling.py: this is scheduling WEIGHT under contention, not a
+                # change to what runs — with nothing else competing it is exactly as fast.
                 child = subprocess.Popen(
-                    cmd,
+                    low_priority(cmd),
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,

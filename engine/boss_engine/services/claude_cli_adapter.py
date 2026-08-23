@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from ..config import Settings
+from .scheduling import low_priority
 
 
 def _strip_fences(text: str) -> str:
@@ -112,8 +113,10 @@ class ClaudeCliAdapter:
         if model:
             cmd += ["--model", model]
         try:
+            # Mostly network wait, but it is still a node process in the API's container and
+            # nothing here is latency-critical. See services/scheduling.py.
             proc = subprocess.run(
-                cmd,
+                low_priority(cmd),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,

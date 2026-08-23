@@ -524,9 +524,87 @@ here was verified against the running system, not inferred.
 
 ---
 
+## 2c. Open experiment — E1: does yielding CPU fix the control-plane collapse?
+
+Recorded as an experiment, not a fix, because the mechanism is **inferred and not yet proven**.
+It must be settled by the next real run rather than assumed.
+
+### Hypothesis
+While a code task runs, `npm install` / `vite build` / `tsc` / Playwright — dozens of runnable
+processes at normal priority, in the API's own container — prevent the API's threads from being
+SCHEDULED. Not a CPU shortage in the API; a queueing delay behind the build.
+
+### Evidence for
+* `/v1/code-tasks?limit=5`: **0.37s** (p50, n=6) on a quiet box, **47.1s then 39.5s** while a
+  code task ran, then a Traefik plain-text 404 — the route had been evicted.
+* `preview_service._low_priority` already carried this exact diagnosis, in these words, for the
+  same container, and fixed it with `nice`/`ionice` — **for preview builds only**.
+
+### Ruled OUT by measurement, not argument
+The console's own ~90-call server-render burst. With no job running it moves the same query
+from **0.37s → 0.78s (max 1.18s)** and produces **no 404s**. It cannot account for 47s. This was
+checked precisely because the first 47s reading was taken while my own console load test was
+still in flight — a confound that would otherwise have credited the agent with my own load.
+
+### Not yet ruled out
+* FastAPI threadpool exhaustion — `/v1/code-tasks/step` is a `def` endpoint holding a threadpool
+  slot for the entire run (up to 90 min).
+* Database connection-pool contention.
+* Memory pressure / swap. **Unmeasurable from here — see R8**, which is exactly its argument.
+
+### The change
+`services/scheduling.py:low_priority()` — `nice -n 19` plus `ionice -c3` where available —
+applied to the code agent, the sandbox, sandbox validation, the mutation gate and the Claude CLI
+adapter. Previews keep their name and delegate to it. **This is scheduling WEIGHT under
+contention, not a change to what runs or in what order**: with nothing else competing, the build
+runs exactly as fast as before.
+
+Not applied to `deploy_service` / `ssh_host_adapter`: those `ssh` to another machine and consume
+no local CPU. A guard test asserts each exclusion really does ssh, so the list cannot quietly
+become a loophole.
+
+### Prediction (falsifiable)
+On the next real code task, measured DURING a heavy phase (`check_tests` / `implement`):
+* `/v1/code-tasks?limit=5` stays **under ~3s** (from 47s);
+* **no** Traefik 404s and no `Reconnecting to the control plane`;
+* run wall-clock is **not materially longer** (nice only matters under contention).
+
+### If the prediction fails
+CPU/IO contention is **not** the mechanism. Go after the threadpool and pool-contention
+hypotheses next, and do **not** proceed to concurrency (1.1b) — adding lanes on a wrong theory
+is S9 with more moving parts.
+
+### How to measure
+Quiet-box baseline is recorded above. During the next run:
+```
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' \
+    -H "Authorization: Bearer $KEY" \
+    'https://boss-api.local.sean.network/v1/code-tasks?project_id=boss-dogfood&limit=5'
+done
+```
+A `404` in ~0.3s with a `text/plain` body is Traefik, i.e. the route was evicted — that is the
+signal to watch for, not merely slow responses.
+
+**Status: applied, UNPROVEN. Do not close until measured under load.**
+
+
+### I41 — `retry_code_task` is broken on the OSS in-memory edition *(pre-existing, found in passing)*
+`active_duplicate` calls `connection.execute` with raw SQL, and `InMemoryPersistence.execute`
+raises `RuntimeError("raw SQL is unavailable in the OSS in-memory persistence adapter")`. Its
+sibling `active_same_app` guards with `hasattr(connection, "execute")` — but the adapter HAS an
+`execute`, it just refuses, so the guard passes and the call still raises.
+* **Evidence:** `test_ports.py::test_in_memory_persistence_preserves_retry_lineage` fails on
+  `main` with today's work stashed, so it is not a regression from this session.
+* **Shape:** S2 — a guard that checks the wrong property (presence, not capability).
+* **Status:** open, belongs with the engine-split/OSS work rather than resiliency.
+
+
+---
+
 ## 3. The shapes
 
-The incidents are forty; the shapes are fourteen. Fixing shapes is what stops recurrence.
+The incidents are forty-one; the shapes are fourteen. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|

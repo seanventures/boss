@@ -34,6 +34,8 @@ from .core import emit_event, make_id
 from .execution_substrate import ExecutionSubstrate, normalize_build_substrate
 from .sandbox_provider import MicroVMProvider
 
+from .scheduling import low_priority
+
 logger = logging.getLogger(__name__)
 
 PREVIEW_ROOT = Path(os.environ.get("BOSS_PREVIEW_ROOT", "/tmp/boss-previews"))
@@ -251,14 +253,17 @@ def _free_port() -> int:
 
 
 def _low_priority(command: list[str]) -> list[str]:
-    """Run a preview build at LOW CPU/IO priority. `npm install` + `vite build` run inside the api
-    container; at normal priority they starve the api during the ~60s build and it returns 404s
-    ("Reconnecting to the control plane"). nice (coreutils, always present) lets the api's own
-    threads preempt the build; ionice de-prioritizes its disk IO when available."""
-    prefix = ["nice", "-n", "19"]
-    if shutil.which("ionice"):
-        prefix += ["ionice", "-c3"]
-    return prefix + command
+    """Run a preview build at LOW CPU/IO priority.
+
+    The diagnosis this docstring used to carry — `npm install` + `vite build` run inside the api
+    container and at normal priority starve it into returning 404s ("Reconnecting to the control
+    plane") — was RIGHT, and was applied to preview builds only. The code agent and the sandbox
+    do the same work for far longer and were never given the same treatment.
+
+    So the rule moved to services/scheduling.py and all three call it. This wrapper stays because
+    it is the name the preview paths already use.
+    """
+    return low_priority(command)
 
 
 # Single source of truth for "which python file starts this app". Kept as one constant because

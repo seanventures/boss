@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from ..config import Settings
+from .scheduling import low_priority
 
 
 class SandboxValidationConfigurationError(RuntimeError):
@@ -188,8 +189,10 @@ class SandboxValidationAdapter:
 
         started = time.monotonic()
         try:
+            # Validation runs the app's build/test commands in-container. See
+            # services/scheduling.py.
             completed = subprocess.run(
-                argv,
+                low_priority(argv),
                 cwd=repo_path,
                 env={**os.environ, "CI": "1"},
                 capture_output=True,
