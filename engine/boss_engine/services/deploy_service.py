@@ -423,6 +423,48 @@ def _docker_run_cmd(app: str, app_port: int, remote: str, mode: str = "static",
     )
 
 
+
+#: How long a freshly started container gets to bind its port before the deploy gives up.
+#:
+#: This was `time.sleep(3)` followed by ONE curl. A Node service that runs migrations and seeds
+#: a database before `app.listen` cannot be up in three seconds, so the probe hit a closed port,
+#: curl reported `000` — "nothing answered" — and BOSS rolled back a deployment that was about
+#: to work. Deterministically: the same app failed twice, ~50 seconds apart, for the same reason.
+#:
+#: The preview path already understood this and waits up to 180s for the port
+#: (`_discover_working_port(timeout=180.0)`). Same requirement, two implementations, and only
+#: one of them correct.
+DEPLOY_HEALTH_TIMEOUT_SECONDS = 120
+
+#: Gap between probes. Short enough that a fast app is not made to wait, long enough that a slow
+#: one is not hammered with ssh connections while it is trying to start.
+DEPLOY_HEALTH_INTERVAL_SECONDS = 3
+
+
+def _await_healthy(key_path, host: str, user: str, ssh_port: int, app_port: int,
+                   *, timeout: int = DEPLOY_HEALTH_TIMEOUT_SECONDS) -> tuple[str, int]:
+    """Poll the app until it answers 2xx, or the deadline passes.
+
+    Returns (last_http_code, seconds_waited). `000` means nothing ever listened — a different
+    fault from a 500, and the caller says so.
+
+    Succeeds the moment the app is ready, so a fast container is not delayed; only a slow or
+    broken one uses the full budget.
+    """
+    deadline = time.monotonic() + timeout
+    code = ""
+    started = time.monotonic()
+    while True:
+        hc = _ssh(key_path, host, user, ssh_port,
+                  f"curl -fsS -o /dev/null -w '%{{http_code}}' http://localhost:{app_port}/")
+        code = (hc.stdout or "").strip()
+        if code.startswith("2"):
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(DEPLOY_HEALTH_INTERVAL_SECONDS)
+    return code, int(time.monotonic() - started)
+
 def _rollback_remote(key_path: str, host: str, user: str, ssh_port: int, *, remote: str,
                      app: str, app_port: int, mode: str = "static", entry: str = ""):
     """Restore staged previous dist and ensure a container is serving it.
@@ -729,10 +771,7 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
                            {"app": app, "host": host, "reason": "docker_run_failed",
                             "detail": (dep.stderr or "")[:900]})
             raise RuntimeError(f"docker run failed: {(dep.stderr or '')[:900]}")
-        time.sleep(3)
-        hc = _ssh(key_path, host, user, ssh_port,                              # 6 health gate
-                  f"curl -fsS -o /dev/null -w '%{{http_code}}' http://localhost:{int(app_port)}/")
-        code = (hc.stdout or "").strip()
+        code, waited = _await_healthy(key_path, host, user, ssh_port, int(app_port))  # 6 health gate
         if not code.startswith("2"):                                           # Phase 3 rollback
             _rollback_remote(key_path, host, user, ssh_port, remote=remote, app=app,
                              app_port=app_port, mode=mode, entry=entry)
@@ -740,8 +779,18 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
             with begin(engine) as c:
                 emit_event(c, project_id, "deploy.rolled_back", "boss", "code_task_run", run_id,
                            {"app": app, "host": host, "health": code})
+            never_answered = code in ("", "000")
             return {"status": "rolled_back", "app": app, "host": host, "health": code,
-                    "detail": f"health check returned {code or 'no response'}; rolled back to previous build"}
+                    "detail": (
+                        f"health check returned {code or 'no response'} after waiting "
+                        f"{waited}s; rolled back to previous build. "
+                        + ("Nothing was listening on port "
+                           f"{int(app_port)} — the container never bound it (start crash, a "
+                           "long migration/seed, or the app ignoring $PORT)."
+                           if never_answered else
+                           "The app answered but not with a 2xx, so it started and is "
+                           "unhealthy rather than absent.")
+                    )}
         needs_rollback = False
         url = f"http://{host}:{app_port}/"
         with begin(engine) as c:
