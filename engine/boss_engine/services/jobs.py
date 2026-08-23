@@ -50,6 +50,64 @@ def resolve_job_data_boundary(
     return "internal"
 
 
+
+#: Which run table a job kind's ``payload["run_id"]`` names.
+#:
+#: CANCEL MUST BE AN INSTRUCTION, NOT A RACE.
+#:
+#: Every phase enqueues its successor when it finishes, and nothing consulted the run's status
+#: before doing so. Cancelling a meeting set the run to `cancelled` and the worker then queued
+#: the NEXT `meeting.step` for it anyway; it had to be cancelled repeatedly before it stayed
+#: clean. `cancel_queued_job` closes the run and the job THAT EXISTS — it cannot close one that
+#: has not been created yet. On a paid path that is spend continuing after an operator said stop.
+#:
+#: The check lives here, in the one function every enqueue passes through, keyed on a field
+#: these payloads already carry. Wiring it into each caller instead is how the same rule ends up
+#: expressed in seven places and satisfied in five (S3).
+_RUN_TABLE_FOR_KIND: dict[str, str] = {
+    "meeting.step": "meeting_runs",
+    "code.task": "code_task_runs",
+    "discovery.step": "discovery_runs",
+    "discovery.run": "discovery_runs",
+}
+
+#: A run in one of these can never advance, so nothing should be queued on its behalf.
+_TERMINAL_RUN_STATES = ("completed", "failed", "cancelled")
+
+
+def stopped_run_reason(
+    connection: Connection, kind: str, payload: dict[str, Any]
+) -> Optional[str]:
+    """Why this job must not be queued, or None to proceed.
+
+    Extracted so the RULE can be tested without going through the INSERT — which uses
+    Postgres-only `ON CONFLICT ... DO NOTHING RETURNING` and therefore cannot run on a
+    throwaway SQLite database. A rule that can only be exercised via the one statement that
+    needs production infrastructure is a rule that quietly stops being exercised.
+
+    Fails OPEN on every uncertainty — an unmapped kind, an absent run row, a table this edition
+    does not have. Blocking an enqueue we are unsure about would deadlock the ordinary path,
+    which is a worse failure than the one this prevents.
+    """
+    table = _RUN_TABLE_FOR_KIND.get(kind)
+    run_id = (payload or {}).get("run_id")
+    if not table or not run_id:
+        return None
+    try:
+        cur = connection.execute(
+            text(f"SELECT status FROM {table} WHERE id = :id"),  # noqa: S608 - fixed map above
+            {"id": run_id},
+        ).first()
+    except Exception:  # noqa: BLE001
+        return None
+    if cur is None:
+        return None  # the run row is sometimes written after its first job
+    status = str(cur[0] or "")
+    if status not in _TERMINAL_RUN_STATES:
+        return None
+    return f"{table[:-1]} {run_id} is {status}; not queueing further work for it"
+
+
 def enqueue_job(
     connection: Connection,
     project_id: str,
@@ -98,6 +156,15 @@ def enqueue_job(
                 raise ValueError(
                     f"{column} references an unknown record in this project."
                 )
+
+    # Refuse to queue work for a run that has already stopped. See _RUN_TABLE_FOR_KIND.
+    _skip = stopped_run_reason(connection, kind, job_payload)
+    if _skip:
+        return {
+            "id": None, "project_id": project_id, "task_id": task_id,
+            "kind": kind, "status": "skipped", "created": False,
+            "skipped_reason": _skip,
+        }
 
     row = connection.execute(
         text(

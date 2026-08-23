@@ -773,7 +773,12 @@ from .services.agent_service import (
     AgentThreadNotFoundError,
     AgentThreadOwnershipError,
 )
-from .services.jobs import JOB_PRIORITY_BULK, JobLeaseService, LeaseNotFoundError
+from .services.jobs import (
+    JOB_PRIORITY_BULK,
+    JOB_PRIORITY_INTERACTIVE,
+    JobLeaseService,
+    LeaseNotFoundError,
+)
 from .services.model_gateway import (
     ModelCapacityDeniedError,
     ModelCredentialPolicyError,
@@ -6032,7 +6037,7 @@ def convene_prd_meeting(payload: MeetingProposeRequest):
         )
         job = jobs.create_job(
             connection, project_id=payload.project_id, task_id=task_id,
-            kind="meeting.step", priority=48, payload={"run_id": run_id},
+            kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": run_id},
         )
         return MeetingProposeResponse(status="accepted", task_id=task_id, job_id=job["id"])
 
@@ -9981,7 +9986,7 @@ def promote_discovery_outcome_endpoint(run_id: str, payload: dict):
             constraints={}, role_keys=None, finalize_ctx={"reservation_id": reservation_id},
         )
         jobs.create_job(connection, project_id=project_id, task_id=task_id,
-                        kind="meeting.step", priority=48, payload={"run_id": meeting_run_id})
+                        kind="meeting.step", priority=JOB_PRIORITY_INTERACTIVE, payload={"run_id": meeting_run_id})
         # Link the promotion back onto the discovery run so the UI can show it.
         state = run.get("state") or {}
         promos = state.get("promotions") or []

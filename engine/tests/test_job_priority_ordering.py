@@ -127,3 +127,43 @@ def test_no_service_invents_a_bare_priority_above_interactive():
     assert not offenders, (
         "these outrank interactive work with a bare literal; name the band instead:\n  "
         + "\n  ".join(sorted(set(offenders))))
+
+
+# --------------------------------------------------------------------------- #
+# The guard scanned only engine/; two live literals survived in the API layer
+# --------------------------------------------------------------------------- #
+def test_no_meeting_is_enqueued_at_a_bare_literal_anywhere():
+    """I6 was fixed in meeting_service.py and left unfixed in apps/api/app/main.py.
+
+    `test_no_service_invents_a_bare_priority_above_interactive` scans
+    engine/boss_engine/services only, and it only fails on values BELOW interactive — so
+    `kind="meeting.step", priority=48` in the API layer matched neither condition and sat there
+    still ranking an operator's meeting BEHIND batch code tasks at 46, which is the exact
+    inversion I6 was about.
+    """
+    import pathlib
+    import re
+
+    offenders = []
+    for root in (pathlib.Path("engine/boss_engine"), pathlib.Path("apps/api/app"),
+                 pathlib.Path("apps/worker")):
+        if not root.exists():
+            continue
+        for path in root.rglob("*.py"):
+            for lineno, line in enumerate(path.read_text().splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "meeting.step" in line and re.search(r"priority\s*=\s*\d+", line):
+                    offenders.append(f"{path}:{lineno}: {stripped[:70]}")
+    assert not offenders, (
+        "a meeting enqueued at a bare number is how the ranking inverted; name the band:\n  "
+        + "\n  ".join(offenders))
+
+
+def test_the_bare_literal_sweep_covers_the_api_layer_too():
+    """The sweep's ROOTS are the bug: a rule enforced over one directory is a rule the next
+    directory does not have."""
+    import inspect
+    src = inspect.getsource(test_no_meeting_is_enqueued_at_a_bare_literal_anywhere)
+    assert "apps/api/app" in src
