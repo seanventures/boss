@@ -954,23 +954,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         </section>
 
         <section className="ov-cc" data-area="overview" aria-label="Command center">
-          <form action={submitCommandAction} className="cc-composer">
-            <input type="hidden" name="project_id" value={activeProjectId} />
-            <input type="hidden" name="actor" value={activeActorId} />
-            <span className="cc-spinner" aria-hidden />
-            <input
-              aria-label="Outcome command"
-              className="cc-input"
-              name="command"
-              placeholder="Assign an outcome to your team…"
-              disabled={disableCommandEntry}
-              required
-            />
-            <span className="cc-kbd" aria-hidden>⌘K</span>
-            <SubmitButton className="cc-assign" disabled={disableCommandEntry} type="submit">
-              Assign →
-            </SubmitButton>
-          </form>
+          {/* The "Assign an outcome to your team…" bar stood here, directly under Ask BOSS —
+              two prompts on the same screen, with nothing to say which took what. They are one
+              composer now (see AskBossHero): the same words are either ANSWERED or BUILT, and
+              the operator chooses with a button instead of by picking a lane first. */}
 
           <div className="cc-kpis">
             <AreaLink className="cc-kpi" area="work" orgId={activeOrgId}>

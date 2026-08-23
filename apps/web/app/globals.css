@@ -5709,3 +5709,43 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* Working bubble: same amber escalation as the hero, so "slow" means one thing
    everywhere. */
 .agent-working[data-slow="true"] { color: var(--warn, #E0A33E); }
+
+
+/* One composer, two intents. Ask is the safe default and reads as primary; Build starts
+   governed work that costs money, so it is deliberately the quieter of the two — the
+   expensive action should never be the one you hit by reflex. */
+.askboss-actions-inline { display: flex; gap: 8px; flex: 0 0 auto; }
+.askboss-assign {
+  min-width: 86px; height: 42px; padding: 0 16px;
+  border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--accent-line, rgba(76,141,246,.45));
+  background: transparent;
+  color: var(--accent-text, #7FB0FF);
+  font: inherit; font-weight: 700; font-size: .92rem;
+  transition: background 150ms ease, color 150ms ease, transform 120ms ease;
+}
+.askboss-assign:hover:not(:disabled) {
+  background: rgba(76, 141, 246, .16); color: var(--ink, #E8EEFC); transform: translateY(-1px);
+}
+.askboss-assign:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Starter outcomes. A blank prompt is the hardest first run, so the page offers a few real
+   ones — the fastest way to learn what BOSS does is to watch it do one. */
+.askboss-ideas { margin-top: 14px; }
+.askboss-ideas-label {
+  display: block; margin-bottom: 8px;
+  color: var(--muted, #7C8CB0);
+  font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+}
+.askboss-idea { padding-left: 12px; }
+.askboss-idea-tag {
+  flex: 0 0 auto;
+  padding: 2px 8px; border-radius: 6px;
+  background: rgba(46, 209, 195, .14);
+  border: 1px solid rgba(46, 209, 195, .34);
+  color: #2ED1C3;
+  font-size: .66rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+}
+@media (prefers-reduced-motion: reduce) {
+  .askboss-assign:hover:not(:disabled) { transform: none; }
+}

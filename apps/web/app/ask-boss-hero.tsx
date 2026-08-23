@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
-import { askBossAction, runAgentActionAction } from "./actions";
+import { askBossAction, runAgentActionAction, submitCommandAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
 const STALL_SECONDS = 120;
@@ -39,6 +39,21 @@ const OPENERS = [
   { badge: "RN", tone: "blue",   text: "Which runs failed today, and why?" },
   { badge: "QU", tone: "amber",  text: "Is anything starving or stuck in a queue?" },
   { badge: "$$", tone: "green",  text: "What is my spend so far this month?" },
+];
+
+/**
+ * Starter outcomes, for the case the composer is worst at: an empty box and no idea.
+ *
+ * These are DIRECTIVES, not questions — each one goes down the governed path (panel, PRD,
+ * code task), which is the same thing the separate "Assign an outcome" bar used to do. They
+ * exist because a blank prompt is the hardest possible first run, and because the fastest way
+ * to learn what BOSS does is to watch it do one.
+ */
+const IDEAS = [
+  { tag: "SaaS",     text: "Build a link-shortener with click analytics and a simple dashboard" },
+  { tag: "Internal", text: "Build an on-call rota tool with escalation and Slack notifications" },
+  { tag: "Data",     text: "Build a CSV-to-chart explorer that saves named views" },
+  { tag: "Agent",    text: "Build a changelog writer that summarises merged PRs weekly" },
 ];
 
 export function AskBossHero({
@@ -148,6 +163,25 @@ export function AskBossHero({
     });
   }, [projectId, actor, threadId]);
 
+  /**
+   * Send the text down the GOVERNED path instead of the chat one.
+   *
+   * This was a second composer sitting directly underneath ("Assign an outcome to your
+   * team…"), so the page opened with two prompts side by side and no way to tell which took
+   * what. They are one box now: the same words either get answered or get built, and the
+   * operator picks which by pressing a different button rather than by choosing a lane first.
+   */
+  const assign = useCallback((text: string) => {
+    const command = text.trim();
+    if (!command || busy) return;
+    const fd = new FormData();
+    fd.set("command", command);
+    fd.set("project_id", projectId);
+    fd.set("actor", actor);
+    setError(""); setReply(""); setProposed([]);
+    startTransition(async () => { await submitCommandAction(fd); });
+  }, [busy, projectId, actor]);
+
   const slow = elapsed >= NORMAL_SECONDS;
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
 
@@ -188,7 +222,7 @@ export function AskBossHero({
               value={input}
               rows={1}
               disabled={busy}
-              placeholder="Ask BOSS anything, or tell it what to do…"
+              placeholder="Ask a question, or describe something to build…"
               onChange={(e) => setInput(e.target.value)}
               // Enter sends; Shift+Enter is a newline. A chat box that needs a mouse to send
               // is not a chat box.
@@ -197,15 +231,27 @@ export function AskBossHero({
               }}
               data-testid="askboss-input"
             />
-            <button
-              className="askboss-send"
-              type="submit"
-              disabled={busy || !input.trim()}
-              data-testid="askboss-send"
-              aria-label="Ask BOSS"
-            >
-              {busy ? <span className="askboss-spinner" aria-hidden /> : "Ask"}
-            </button>
+            <div className="askboss-actions-inline">
+              <button
+                className="askboss-send"
+                type="submit"
+                disabled={busy || !input.trim()}
+                data-testid="askboss-send"
+                title="Answer this from live control-plane state"
+              >
+                {busy ? <span className="askboss-spinner" aria-hidden /> : "Ask"}
+              </button>
+              <button
+                className="askboss-assign"
+                type="button"
+                disabled={busy || !input.trim()}
+                data-testid="askboss-assign"
+                title="Send this down the governed path — panel, PRD, then code"
+                onClick={() => assign(input)}
+              >
+                Build →
+              </button>
+            </div>
           </div>
 
           {!reply && !busy ? (
@@ -221,6 +267,26 @@ export function AskBossHero({
                   {o.text}
                 </button>
               ))}
+            </div>
+          ) : null}
+
+          {!reply && !busy ? (
+            <div className="askboss-ideas">
+              <span className="askboss-ideas-label">Or start something</span>
+              <div className="askboss-openers">
+                {IDEAS.map((i) => (
+                  <button
+                    key={i.text}
+                    type="button"
+                    className="askboss-opener askboss-idea"
+                    onClick={() => { setInput(i.text); assign(i.text); }}
+                    title="Starts the governed build path"
+                  >
+                    <span className="askboss-idea-tag">{i.tag}</span>
+                    {i.text}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
         </form>
