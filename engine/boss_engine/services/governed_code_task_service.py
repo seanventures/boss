@@ -884,7 +884,7 @@ def _test_amend_prompt(criteria, ruling_target: str, rationale: str) -> str:
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
-    parent_root: Optional[str] = None,
+    parent_root: Optional[str] = None, parent_origin: Optional[dict] = None,
 ):
     """Queue sub-threshold review findings as their own code task on the shipped branch.
 
@@ -925,7 +925,16 @@ def _spawn_deferred_findings_task(
             # it was sent to fix. Carrying the root fixes both at the source.
             finalize_ctx={"deferred_from_run": parent_run_id, "is_followup": True,
                           "root_run_id": parent_root or parent_run_id,
-                          "parent_run_id": parent_run_id},
+                          "parent_run_id": parent_run_id,
+                          # WHERE THE APP CAME FROM IS A PROPERTY OF THE APP.
+                          #
+                          # `retry_code_task` already carries `origin` forward; a follow-up is
+                          # created fresh and did not, so it had none. The card's spine narrates
+                          # the newest COMPLETED run — which for a shipped app is usually this
+                          # follow-up — and therefore reported "Research: none / Spec: none" for
+                          # an app that came from a panel and has a PRD. Same reasoning as the
+                          # root_run_id note above: lineage must survive the hop.
+                          **({"origin": parent_origin} if parent_origin else {})},
             jobs=jobs, profile=spec.get("profile"),
         )
 
@@ -3774,7 +3783,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     engine, settings, jobs, project_id=project_id, task_id=task_id,
                     spec=spec, base_branch=work_branch, findings=deferred_findings,
                     parent_run_id=run_id, parent_title=title,
-                    parent_root=(fctx.get("root_run_id") or run_id))
+                    parent_root=(fctx.get("root_run_id") or run_id),
+                    parent_origin=fctx.get("origin"))
                 with _transaction(engine) as c:
                     emit_event(c, project_id, "code_task.deferred_findings_task", "boss",
                                "code_task_run", run_id,

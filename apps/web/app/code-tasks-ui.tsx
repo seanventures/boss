@@ -572,6 +572,29 @@ export function pickBuiltRun<T extends { status?: string; pull_request_url?: str
     (m) => m.status === "completed" || m.pull_request_url) ?? membersNewestFirst[0];
 }
 
+
+/**
+ * The app's origin, taken from whichever run in the group actually recorded one.
+ *
+ * The spine narrates `builtRun` — the newest COMPLETED run — which for a shipped app is usually
+ * the deferred-findings FOLLOW-UP. A follow-up is created fresh rather than as a retry, so it
+ * carried no `origin`, and the card reported "Research: none / Spec: none" for an app that came
+ * from a panel and has a PRD sitting behind it.
+ *
+ * Where an app came from is a property of the APP, not of whichever run happens to be newest —
+ * the same lesson as app_id (I21). The engine now carries origin across the follow-up hop; this
+ * repairs the runs created before it did.
+ */
+export function appOrigin<T extends { finalize_ctx?: Record<string, unknown> | null }>(
+  members: T[],
+): Record<string, unknown> | undefined {
+  for (const m of members) {
+    const o = (m.finalize_ctx ?? {})["origin"];
+    if (o && typeof o === "object") return o as Record<string, unknown>;
+  }
+  return undefined;
+}
+
 /** The most recent preview attempt for a run, or null. `previews` arrives newest-first. */
 export function latestPreviewFor(previews: PreviewRec[], runId: string): PreviewRec | null {
   return previews.find((p) => p.run_id === runId) ?? null;
@@ -2336,7 +2359,19 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       the spine underneath read "Build blocked · Ship not yet", because it was
                       narrating a blocked follow-up instead of the completed run behind PR #83.
                       "last one failed" in the header is what reports the newest attempt. */}
-                  <JourneySpine run={builtRun as never} previewUrl={livePreviewFor(builtRun.id)} large />
+                  {/* Origin comes from the GROUP: the run being narrated is often a follow-up,
+                      which records none of its own. See appOrigin. */}
+                  <JourneySpine
+                    run={{
+                      ...builtRun,
+                      finalize_ctx: {
+                        ...(builtRun.finalize_ctx ?? {}),
+                        ...(appOrigin(members) ? { origin: appOrigin(members) } : {}),
+                      },
+                    } as never}
+                    previewUrl={livePreviewFor(builtRun.id)}
+                    large
+                  />
                   {/* ONE action row. These were two block-level children of a grid, so they
                       stacked full-width and the weaker of the two sat centred above the
                       stronger -- the change control read as a caption rather than a choice.

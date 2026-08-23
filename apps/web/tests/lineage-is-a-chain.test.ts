@@ -67,3 +67,47 @@ describe("the origin that feeds it", () => {
     expect(block.slice(0, 600)).toContain("except Exception");
   });
 });
+
+
+// --------------------------------------------------------------------------- //
+// Where an app came from is a property of the APP, not of its newest run
+// --------------------------------------------------------------------------- //
+describe("the card spine's origin", () => {
+  it("takes origin from whichever run in the group recorded one", async () => {
+    const { appOrigin } = await import("../app/code-tasks-ui");
+    const members = [
+      { finalize_ctx: { is_followup: true } },            // newest: a follow-up, no origin
+      { finalize_ctx: { origin: { kind: "meeting", meeting_run_id: "mrun_1" } } },
+    ];
+    expect(appOrigin(members)).toEqual({ kind: "meeting", meeting_run_id: "mrun_1" });
+  });
+
+  it("returns undefined when no run in the group has one", async () => {
+    const { appOrigin } = await import("../app/code-tasks-ui");
+    expect(appOrigin([{ finalize_ctx: {} }, { finalize_ctx: null }])).toBeUndefined();
+  });
+
+  it("prefers the newest origin when several runs carry one", async () => {
+    const { appOrigin } = await import("../app/code-tasks-ui");
+    const members = [
+      { finalize_ctx: { origin: { kind: "meeting", meeting_run_id: "newest" } } },
+      { finalize_ctx: { origin: { kind: "meeting", meeting_run_id: "older" } } },
+    ];
+    expect((appOrigin(members) as { meeting_run_id: string }).meeting_run_id).toBe("newest");
+  });
+
+  it("the grouped card feeds that origin into the spine", () => {
+    const ui = readFileSync(resolve(__dirname, "../app/code-tasks-ui.tsx"), "utf8");
+    expect(ui).toContain("appOrigin(members)");
+  });
+
+  it("the engine carries origin across the follow-up hop", () => {
+    // Fixing only the console would leave every NEW follow-up wrong again.
+    const svc = readFileSync(
+      resolve(__dirname, "../../../engine/boss_engine/services/governed_code_task_service.py"),
+      "utf8",
+    );
+    expect(svc).toContain("parent_origin");
+    expect(svc).toContain('**({"origin": parent_origin} if parent_origin else {})');
+  });
+});

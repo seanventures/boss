@@ -105,7 +105,10 @@ describe("card wiring: artifact consumers use the built run", () => {
   it.each([
     ["AppPrimaryAction", /<AppPrimaryAction[\s\S]{0,200}?run=\{builtRun\}/],
     ["DeploymentLine", /<DeploymentLine\s+run=\{builtRun\}/],
-    ["JourneySpine", /<JourneySpine\s+run=\{builtRun as never\}/],
+    // The spine now spreads builtRun so it can carry the GROUP's origin (a follow-up records
+    // none of its own, and where an app came from is a property of the app). Still builtRun —
+    // the point of this guard is that it is not members[0].
+    ["JourneySpine", /<JourneySpine[\s\S]{0,240}?\.\.\.builtRun/],
   ])("%s takes builtRun", (_name, pattern) => {
     expect(source).toMatch(pattern);
   });
