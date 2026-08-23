@@ -82,3 +82,45 @@ describe("the composer", () => {
     expect(src).toContain("`${appFacts}\\n\\n${typed}`");
   });
 });
+
+
+// --------------------------------------------------------------------------- //
+// BOSS answers in markdown; the chat was the one place printing the source
+// --------------------------------------------------------------------------- //
+describe("chat formatting", () => {
+  const UI = readFileSync(resolve(__dirname, "../app/agent-ui.tsx"), "utf8");
+  const CSS = readFileSync(resolve(__dirname, "../app/globals.css"), "utf8");
+
+  it("renders an assistant reply as markdown", () => {
+    // "**What I found**", GFM evidence tables, `run_id` in backticks — printed raw, the table
+    // that matters most became unreadable.
+    expect(UI).toContain('import { Markdown } from "./markdown"');
+    expect(UI).toContain('<Markdown className="agent-md"');
+  });
+
+  it("reuses the renderer the rest of the console already uses", () => {
+    // Three other views import it. A second markdown implementation is two to keep correct.
+    const md = readFileSync(resolve(__dirname, "../app/markdown.tsx"), "utf8");
+    expect(md).toContain("md-table");
+  });
+
+  it("leaves the operator's own message as plain text", () => {
+    // They typed characters, not markup; turning their underscores into italics rewrites what
+    // they said.
+    expect(UI).toContain('m.role === "assistant" ? (');
+    expect(UI).toContain('whiteSpace: "pre-wrap"');
+  });
+
+  it("lets a wide table scroll instead of widening the dock", () => {
+    // .md-table-wrap has overflow-x:auto, which does nothing unless the bubble may shrink.
+    const bubble = CSS.slice(CSS.indexOf(".agent-message {"), CSS.indexOf(".agent-message.user"));
+    expect(bubble).toContain("min-width: 0");
+    expect(CSS).toContain(".agent-message > * { min-width: 0; }");
+  });
+
+  it("keeps long code lines inside the panel", () => {
+    expect(CSS).toContain(".agent-md pre");
+    const pre = CSS.slice(CSS.indexOf(".agent-md pre {"));
+    expect(pre.slice(0, 320)).toContain("overflow-x: auto");
+  });
+});

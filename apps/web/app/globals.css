@@ -2931,11 +2931,16 @@ select.input:focus {
 
 .agent-message {
   width: min(82%, 720px);
+  /* A flex item defaults to min-width:auto, so a wide evidence table pushed the bubble past the
+     dock instead of scrolling inside it — the .md-table-wrap overflow can only work if the
+     bubble is allowed to be narrower than its content. Same rule as .mr-meeting-card. */
+  min-width: 0;
   padding: 0.85rem 1rem;
   border: 1px solid var(--border);
   border-radius: 14px 14px 14px 4px;
   background: var(--surface);
 }
+.agent-message > * { min-width: 0; }
 
 .agent-message.user {
   align-self: flex-end;
@@ -5403,3 +5408,33 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .agent-proposal { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .agent-proposal-btn { flex: 0 0 auto; }
 .agent-proposal-why { min-width: 0; overflow-wrap: anywhere; }
+
+
+/* BOSS answers in markdown: headings, GFM evidence tables, bullets, `run_id` in backticks.
+   The chat renders it with the same component the rest of the console uses; these rules only
+   tighten the spacing for a dense bubble and keep wide content inside the dock. */
+.agent-md { min-width: 0; }
+.agent-md > *:first-child { margin-top: 0; }
+.agent-md > *:last-child { margin-bottom: 0; }
+.agent-md p { margin: 0 0 8px; }
+.agent-md h1, .agent-md h2, .agent-md h3, .agent-md h4 {
+  margin: 12px 0 6px; font-size: 0.95rem; font-weight: 700; line-height: 1.3;
+}
+.agent-md ul, .agent-md ol { margin: 0 0 8px; padding-left: 1.2rem; }
+.agent-md li { margin: 2px 0; }
+.agent-md code {
+  font-size: 0.86em; padding: 1px 5px; border-radius: 4px;
+  background: rgba(127,127,127,0.16);
+  overflow-wrap: anywhere;
+}
+.agent-md pre {
+  margin: 0 0 8px; padding: 9px 11px; border-radius: 8px;
+  background: var(--surface-2, #0F1830);
+  border: 1px solid var(--border, #1C2740);
+  overflow-x: auto;                 /* a long line scrolls; it does not widen the dock */
+}
+.agent-md pre code { background: none; padding: 0; }
+/* An evidence table in a 520px dock is the case that has to work. */
+.agent-md .md-table-wrap { max-width: 100%; }
+.agent-md .md-table { font-size: 0.82em; }
+.agent-md .md-table th, .agent-md .md-table td { padding: 4px 7px; }

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, useTransition } from "react";
 
+import { Markdown } from "./markdown";
+
 import {
   agentChatAction,
   loadAgentWorkspaceAction,
@@ -280,9 +282,21 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
                   prepended to the outgoing message and then echoed back in the transcript, so
                   every question appeared with a wall of run_id / live_preview / "use your
                   tools" above it — context doing its job and ruining the conversation. */}
-              <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                {stripAppFacts(m.content)}
-              </p>
+              {/* BOSS answers in markdown — "**What I found**", GFM tables of evidence, bullet
+                  lists, `run_id` in backticks. Rendered as preformatted text the operator read
+                  raw pipes and asterisks, and an evidence table became unreadable exactly when
+                  it mattered most. The renderer already existed and three other views used it;
+                  the chat was the one place still printing the source.
+
+                  A USER's message stays plain: they typed characters, not markup, and turning
+                  their underscores into italics rewrites what they said. */}
+              {m.role === "assistant" ? (
+                <Markdown className="agent-md" text={stripAppFacts(m.content)} />
+              ) : (
+                <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+                  {stripAppFacts(m.content)}
+                </p>
+              )}
               {m.actions && m.actions.length > 0 ? (
                 <div className="agent-action-row">
                   {m.actions.map((a, j) => <span className="agent-action" key={j}>{a.kind.replaceAll("_", " ")}</span>)}
