@@ -477,6 +477,34 @@ def sweep_stale_previews(engine, settings: Settings, project_id: str, *,
     return {"stale_previews": len(ids), "ids": ids[:10], "dry_run": dry_run}
 
 
+
+#: Run tables that carry a `decision_id`. `discovery_runs` does NOT — and because the sweep's
+#: per-table error handling swallows failures so one missing table cannot stop the rest, a
+#: column reference that is wrong for one table would have SILENTLY DISABLED its sweep rather
+#: than failing loudly. Kept as an explicit set, cross-checked against db/schema.sql by a test.
+_TABLES_WITH_DECISIONS = frozenset({"code_task_runs", "meeting_runs"})
+
+
+def _answerable_decision_clause(table: str) -> str:
+    """SQL excluding runs that are waiting on a decision someone can still act on.
+
+    A RUN WAITING ON AN ANSWERABLE DECISION IS NOT ABANDONED. Including 'blocked' in the sweep
+    was justified as "approving a decision on a run whose job is gone resumes nothing". That
+    premise was wrong: blocking on a plan gate ENDS the job by design (the handler returns
+    done=True) and approving CREATES a new code.task job and flips the run back to running. So
+    a run legitimately waiting for a person is indistinguishable from an orphan by the
+    no-live-job rule alone, and the sweep would kill the very thing the operator was about to
+    approve.
+
+    `expired` is included in the answerable set because an expired decision is REOPENED by
+    answering it (see R4) — a deadline nobody met must not also destroy the work.
+    """
+    if table not in _TABLES_WITH_DECISIONS:
+        return ""
+    return (" AND NOT EXISTS (SELECT 1 FROM decisions d "
+            "                 WHERE d.id = r.decision_id "
+            "                   AND d.status IN ('pending','delegated','expired')) ")
+
 def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                          actor: str = SHEPHERD_ACTOR) -> dict[str, Any]:
     """Close any run that claims to be working but has no job that could advance it.
@@ -508,6 +536,20 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
                         f"  AND NOT EXISTS (SELECT 1 FROM jobs j "
                         f"                  WHERE j.payload->>'run_id' = r.{id_col} "
                         f"                    AND j.status IN ('queued','running','leased')) "
+                        # A RUN WAITING ON AN ANSWERABLE DECISION IS NOT ABANDONED.
+                        #
+                        # Including 'blocked' in the sweep was justified as "approving a
+                        # decision on a run whose job is gone resumes nothing". That premise
+                        # was WRONG. Blocking on a plan gate ENDS the job by design (the
+                        # handler returns done=True), and approving CREATES A NEW code.task
+                        # job and flips the run back to running. So a run legitimately waiting
+                        # for a person looks exactly like an orphan, and this swept it away
+                        # after ORPHAN_AFTER_MINUTES - killing the very thing the operator was
+                        # about to approve.
+                        #
+                        # The real distinction is not "has a job" but "can still be resumed".
+                        # A decision that can still be acted on IS the resume path.
+                        f"{_answerable_decision_clause(table)}"
                         f"LIMIT 200"),
                     {"p": project_id, "working": list(working),
                      "m": ORPHAN_AFTER_MINUTES}).mappings().all()

@@ -19,6 +19,7 @@ from .members import MemberDirectoryService
 from .role_governance import RoleGovernanceService
 from .self_improvement import SelfImprovementService
 from .specpack import AgentModuleNotFoundError, SpecPackService
+from .jobs import JOB_PRIORITY_INTERACTIVE
 
 
 class DecisionNotFoundError(Exception):
@@ -98,7 +99,21 @@ class DecisionService:
                 {
                     "deadline_at": row["deadline_at"].isoformat(),
                     "default_action": row["default_action"] or "hold",
-                    "safe_default_applied": row["default_action"] or "hold",
+                    # "hold" means DO NOTHING, so nothing was applied. Reporting
+                    # `safe_default_applied: hold` read as "handled safely" when the truth is
+                    # "nobody answered and the work is waiting" — and 77% of decisions on the
+                    # live project took this path.
+                    "safe_default_applied": (
+                        None if (row["default_action"] or "hold") == "hold"
+                        else row["default_action"]
+                    ),
+                    "still_answerable": (row["default_action"] or "hold") == "hold",
+                    "note": (
+                        "Nobody answered before the deadline. The safe default is 'hold', so "
+                        "nothing was applied and this decision can still be answered."
+                        if (row["default_action"] or "hold") == "hold"
+                        else f"Safe default {row['default_action']!r} was applied."
+                    ),
                 },
             )
         return expired
@@ -305,15 +320,55 @@ class DecisionService:
             )
 
         if action in {"approve", "reject", "revise", "delegate"}:
+            # A DEADLINE NOBODY MET MUST NOT ALSO DESTROY THE WORK.
+            #
+            # Measured on the live project: 127 of 165 decisions (77%) expired, 22 were
+            # approved — and EVERY one of the 165 had `default_action: hold`.
+            #
+            # "Hold" means do nothing. So expiring a hold-default decision does not apply a
+            # safe default; it removes the operator's ability to answer and strands the run
+            # forever, while the refusal below claims "the safe default was applied". Nothing
+            # was applied. That message was false and the outcome was silent data loss.
+            #
+            # So expiry stays as a REPORTING state — it is true and useful to record that
+            # nobody answered in time — but for a hold default it no longer locks the
+            # decision. Answering reopens it and the work proceeds.
+            #
+            # Deliberately narrow: a decision whose default is anything OTHER than hold really
+            # did apply something on expiry, and reversing that silently would be a different
+            # and worse bug. Those still refuse.
+            safe_default = str(row.get("default_action") or "hold").lower()
+            reopenable = safe_default == "hold"
+
             if current_status not in {"pending", "delegated"}:
-                raise InvalidDecisionTransitionError(
-                    f"Decision is already {current_status} and cannot be {action}d."
+                if not (current_status == "expired" and reopenable):
+                    raise InvalidDecisionTransitionError(
+                        f"Decision is already {current_status} and cannot be {action}d."
+                    )
+                connection.execute(
+                    text(
+                        """
+                        UPDATE decisions SET status = 'pending', updated_at = :ts
+                        WHERE id = :decision_id AND status = 'expired'
+                        """
+                    ),
+                    {"decision_id": decision_id, "ts": timestamp},
                 )
+                emit_event(
+                    connection, row["project_id"], "decision.reopened", actor,
+                    "decision", decision_id,
+                    {"was": current_status, "default_action": safe_default,
+                     "why": "answered after its deadline; a hold default applied nothing, "
+                            "so there is nothing to reverse"},
+                )
+                current_status = "pending"
+
             deadline_at = row["deadline_at"]
-            if deadline_at and deadline_at <= timestamp:
+            if deadline_at and deadline_at <= timestamp and not reopenable:
                 self.expire_overdue(connection, row["project_id"])
                 raise InvalidDecisionTransitionError(
-                    "Decision deadline has passed and the safe default was applied."
+                    f"Decision deadline has passed and the safe default "
+                    f"({safe_default}) was applied."
                 )
 
         if action == "approve":
@@ -633,7 +688,10 @@ class DecisionService:
                 project_id=row["project_id"],
                 task_id=row["task_id"],
                 kind="code.task",
-                priority=46,
+                # A person clicked approve and is watching. This used to be a bare 46, the
+                # REQUESTED band — behind other batch work, for a run whose operator is
+                # sitting in front of it. Same inversion as I6, one layer further in.
+                priority=JOB_PRIORITY_INTERACTIVE,
                 payload={"run_id": run_id},
             )
             emit_event(

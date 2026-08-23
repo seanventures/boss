@@ -600,11 +600,31 @@ sibling `active_same_app` guards with `hasattr(connection, "execute")` — but t
 * **Status:** open, belongs with the engine-split/OSS work rather than resiliency.
 
 
+### I42 — I broke runs that were legitimately waiting for the operator *(self-inflicted, same day)*
+* **What I did:** added `blocked` to `sweep_abandoned_runs` (I22), on the stated reasoning that
+  "approving a decision on a run whose job is gone resumes nothing".
+* **The premise was wrong.** Blocking on a plan gate ENDS the job by design — the handler
+  returns `done=True` — and approving CREATES a new `code.task` job and flips the run back to
+  `running`. So a run waiting for a person has no live job **by design**, is indistinguishable
+  from an orphan under the no-live-job rule, and my sweep cancelled it after
+  `ORPHAN_AFTER_MINUTES` — destroying the very thing the operator was about to approve.
+* **Why it was not caught:** the guard tests asserted the RULE ("no live job ⇒ abandoned") and
+  the rule was faithfully implemented. Nothing tested the premise the rule rested on.
+* **Fix:** the real distinction is not "has a job" but **"can still be resumed"** — a decision
+  that can still be acted on IS the resume path. The sweep now spares runs whose decision is
+  `pending`, `delegated` or `expired`.
+* **Second-order:** the clause is per-table, because `discovery_runs` has no `decision_id` and
+  the sweep swallows per-table errors so one missing table cannot stop the rest — a bad column
+  reference would have **silently disabled** that table's sweep rather than failing loudly. A
+  test cross-checks the table set against `db/schema.sql`.
+* **Status:** fixed.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are forty-one; the shapes are fourteen. Fixing shapes is what stops recurrence.
+The incidents are forty-two; the shapes are fifteen. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -621,6 +641,7 @@ The incidents are forty-one; the shapes are fourteen. Fixing shapes is what stop
 | **S11** | **Unbounded retry of a decided outcome.** The same failure repeated N times because nothing counts. | I23 |
 | **S12** | **A conclusion checked against the shape of the code, not its behaviour.** | I26 |
 | **S13** | **Bounded per instance, unbounded per lineage.** The guard keys on an id that the remedy itself replaces, so every application starts with a clean slate. | I38, I17 |
+| **S15** | **A correct rule resting on a false premise.** The implementation matches the stated rule, the tests assert the rule, and the rule itself was derived from something untrue. No test of the rule can catch it. | I42, I26 |
 | **S14** | **A path's first real execution is its first test.** Every stage in §2 failed the first time it ran against a real app. Nothing had ever gone end to end, so the whole log is one integration test, run manually, at operator expense. | all of §2 |
 
 **The counter-measure to each is the same: a test that rejects the SHAPE, not the instance.**
@@ -765,12 +786,28 @@ question, run `find_starved_work` + `consistency_report` before answering.
 * **Acceptance:** "why is my meeting stuck?" returns a diagnosis **and** the action taken, in one
   turn, without a step-limit abort.
 
-### R4 — Decision gates that cannot silently kill work
-**127 decisions expired vs 18 approved.** Every gate is 24h with `default_action: hold`, so an
-unanswered gate kills its run silently. Shorty was gated as *"touches auth"* — it has no auth; a
-false positive is therefore fatal, not merely annoying.
-* **Work:** a `MERGE_GATE_EXPIRED` shepherd class; reversible `expired → pending`; the gate visible
-  on the app card; tighten the risk classifier.
+### R4 — Decision gates that cannot silently kill work — **PARTLY SHIPPED**
+Re-measured live: **127 of 165 decisions (77%) expired**, 22 approved, 10 pending, 6 rejected —
+and **all 165** carry `default_action: hold`.
+
+`hold` means DO NOTHING. Expiring a hold-default decision therefore applies no safe default; it
+removes the operator's ability to answer and strands the run, while the refusal claimed *"the
+safe default was applied"* and the event reported `safe_default_applied: hold`. Both read as
+"handled safely". Nothing was handled.
+
+* **Shipped:** expiry is now a REPORTING state, not a lock — answering a hold-default decision
+  after its deadline **reopens** it (`decision.reopened`) and the work proceeds. Decisions with
+  a real safe default still refuse, because there expiry genuinely applied something and
+  reversing it silently would be worse. The expiry event no longer claims a hold was applied.
+  Resume-after-approval moved from a bare `priority=46` to `INTERACTIVE` — the operator is
+  watching.
+* **Also shipped (regression, see I42):** the abandoned-run sweep no longer cancels runs that
+  are waiting on an answerable decision. These two only work together: reopening an expired
+  decision is pointless if the sweep already cancelled the run it would resume.
+* **Still open:** a `MERGE_GATE_EXPIRED` shepherd class, the gate surfaced on the app card, an
+  expiry warning before the deadline, and tightening the risk classifier (Shorty was gated as
+  *"touches auth"* and has no auth — with expiry no longer fatal this is now annoying rather
+  than destructive, which is why it drops down the list).
 * **Acceptance:** no run reaches a terminal state solely because nobody answered.
 
 ### R5 — Lineage visible end to end
