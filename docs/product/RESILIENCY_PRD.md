@@ -786,7 +786,37 @@ ever since, which is how §I26 mistook a never-built design for a half-built one
   cannot misalign.
 * **Covers 12 of ~70 calls** — budget/finops/cost, infra/provider-ops/mcp, assurance/security.
   A slice, not the whole page, exactly as the original design intended.
-* **Effect not yet measured.** Baseline to beat: **8.38 MB, 20–25s** on a quiet box.
+* **MEASURED, and the slice moved almost nothing — for an instructive reason.**
+
+| area | payload | render |
+|---|---|---|
+| code_tasks | 8.23 MB | 20.1s |
+| meetings | 6.47 MB | 18.3s |
+| budget | 6.48 MB | 17.3s |
+| infra | 6.59 MB | 19.0s |
+| assurance | 6.48 MB | 18.0s |
+
+  Areas now differ, where before they were "within 200 bytes of each other" — so the gating
+  demonstrably works. But `code_tasks` fell only **8.38 MB → 8.23 MB (~150 KB, 1.8%)**, and the
+  1.75 MB gap between `code_tasks` and the rest is **not** this change: it is
+  `codeTaskLimitFor(area)` returning 200 rows there and 12 elsewhere, which shipped earlier.
+  Reporting the 23% spread as R1's win would have been crediting this work with someone else's.
+
+* **Where the bytes actually are.** Decomposing a 6.38 MB payload by key:
+  **`className` = 2.04 MB (32%)**. Not data — CSS class names. `tasks`, `status`, `budgetState`
+  and every other feed key together are a rounding error.
+* **Root cause, and it is a design choice, not a defect.** `page.tsx` renders **all 66 area
+  sections unconditionally** and `globals.css` shows one with
+  `.bx-content[data-active="X"] … section[data-area="X"]`. Every load renders 66 React trees on
+  the server and serialises all of them; CSS then hides 65. That is why payload and time are
+  ~flat across areas, and why gating the FETCHES could never have fixed it.
+  `area-data/types.ts` states the intent plainly: *"still load shared areas so client-side tab
+  switch from Command Center has data."* The trade bought instant tab switching at the price of
+  a 6.5 MB, 20-second first paint.
+* **So R1 needs a product decision, not more plumbing** — see R1b.
+* **What the slice is still worth:** it is a prerequisite. Rendering only the active area is
+  pointless while every area's data is fetched regardless, and the wiring pattern is now proven
+  and mechanical to extend.
 * **Acceptance:** any single area < 1.5 MB and < 3s server render; `area-data.test.ts` passes
   (it now does).
 
@@ -799,6 +829,24 @@ are the same payload.
 * **Work:** wire the `lib/area-data.ts` loaders and `shouldLoad*` gates that already exist and were
   never connected — this is the abandoned BOSS-13 refactor its own test still asserts.
 * **Acceptance:** any single area < 1.5 MB and < 3s server render; `area-data.test.ts` passes.
+
+### R1b — Render only the active area *(needs a product decision)*
+The measurement above says the console's weight is **rendered markup for 66 areas**, not data.
+Two options, and the choice is a UX trade rather than an engineering one:
+
+* **(a) Render only the requested area.** Payload should fall from ~6.5 MB to well under 1 MB
+  and render from ~20s to a few seconds — the acceptance criteria as written. **Cost:** switching
+  tabs becomes a server round-trip instead of a CSS toggle. With only one area loading, that
+  round-trip should be seconds rather than the current 20, so switching may well end up *faster*
+  than today's first load — but it stops being instant.
+* **(b) Keep rendering everything.** First paint stays ~6.5 MB / ~20s, and every "the console is
+  down" report during a run stays possible, because a 20-second render competing with a build is
+  exactly I40.
+
+Recommendation: (a). Twenty seconds to first paint is paid on every visit by every operator;
+instant switching is paid back only when someone actually switches. But it changes how the
+console feels, so it is the operator's call, not mine.
+
 
 ### R2 — Find out what is actually slow before indexing anything
 *Premise re-checked and it does not hold.* `db/schema.sql` already carries **242** indexes,
