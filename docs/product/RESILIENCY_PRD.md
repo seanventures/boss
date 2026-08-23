@@ -399,9 +399,103 @@ runs on one card, HookWatch 20, BugBox 12, ApproveIt 6 — and the Shorty card n
 
 ---
 
+## 2b. Second-pass review — what the first pass missed
+
+Written after re-reading the log above and going looking for what was *not* in it. Every item
+here was verified against the running system, not inferred.
+
+### I38 — Shepherd retry chains are unbounded, and each link costs money *(highest severity)*
+* **The guard that exists:** `shepherd_ledger` refuses to apply the same remedy to the same run
+  twice — `WHERE task_ref = :t AND status = 'used'`.
+* **Why it does not bind:** `retry_code_task` creates a **new run with a new id**. That child is
+  a fresh `task_ref` with an empty ledger. If it fails, the same remedy applies again, to the
+  grandchild, and so on. **The ledger keys on the very identity the remedy replaces.**
+* **Cost:** a preview retry storm (I23) burned CPU. This burns **$4–15 per link**, unattended.
+  `MAX_ACTIONS_PER_TICK = 2` bounds the *rate*, not the total; the chain has no depth limit.
+* **Why it did not fire today:** `BOSS_SHEPHERD_AUTOPILOT_ENABLED` is `false` on goldeneye (I18).
+  The bound that is actually holding the money is a feature flag, not a limit.
+* **Fixable cheaply:** lineage is already recorded — `retry_code_task` sets
+  `root = fctx_prev.get("root_run_id") or run_id`. Count the chain and stop at N.
+* **Status:** open. This is R9 generalised, and R9 as written covers only previews.
+
+### I39 — Preview workdirs are never deleted
+* **Evidence:** `preview_service.py` contains **no `rmtree`, no `unlink`, no cleanup path** of
+  any kind. `PREVIEW_ROOT = /tmp/boss-previews`, one directory per attempt, each holding a full
+  `npm install`.
+* **Scale:** 50 preview rows exist for this project alone; 31 are `failed` — and a failed preview
+  has still done its install before dying. `node_modules` for a Vite/Playwright app is commonly
+  100–300 MB.
+* **Consequence:** unbounded disk growth inside the API container, whose disk is also where the
+  agent works. Disk exhaustion presents as unrelated, confusing failures everywhere at once.
+* **Not measurable from here** — which is R8's argument made concrete: BOSS cannot report its own
+  container's disk, so the size of this cannot be stated, only bounded from below.
+* **Status:** open.
+
+### I33 — A 404 from a feature this edition does not have is not an error
+* **Saw:** 10 × "API returned 404" on every console load. Deterministic: 10 on load 1, 10 on
+  load 2, 10 on load 3.
+* **Actually:** 5 panels, each counted twice (rendered HTML + RSC flight payload), and **none of
+  them in the area being viewed** — `/v1/self-improvement/*`, `/v1/marketplace/listings`,
+  `/v1/marketplace/sync-runs`, and three SSO/IdP cards. All are defined in `main.py` but mounted
+  on **paid-edition routers**; this instance is Community, so 404 is the correct answer.
+* **Consequence:** the console prints an infrastructure error for a licensing fact, on every
+  load, five times. It reads as a broken control plane, which is exactly how it was reported.
+* **The rule already exists in one place:** `self-improvement.ts` says the feature is not in this
+  edition and hides the CTAs. Marketplace and SSO do not. **S3.**
+* **Status:** open.
+
+### I34 — Recreating `web` briefly 404s the `api` route
+* **Saw:** immediately after a `--recreate web` deploy, *every* API path returned Traefik's
+  plain-text `404 page not found` — including `/health`, which touches neither the database nor
+  editions. It recovered on its own within minutes.
+* **Distinguishing evidence:** Traefik's 404 is `text/plain "404 page not found"`; FastAPI's is
+  JSON `{"detail":"Not Found"}`. The former means *no router matched* — deregistration, not a
+  slow or failing backend.
+* **Consequence:** every deploy today looked like an outage, and cost time proving it was not.
+  The console handles it correctly (`OrgReconnect` holds the session and retries every 5s) —
+  which is why it degraded gracefully instead of dumping the operator to the org picker.
+* **Status:** open. Deploy-window defect, not an availability defect.
+
+### I35 — Two BOSS instances share one project id, silently
+* **Saw:** a meeting started through the MCP tool could not be found on goldeneye — its run, task
+  and job all 404'd there.
+* **Cause:** `boss-mcp.sh` exports `DATABASE_URL=…localhost:5432/boss` and drives the **local**
+  engine. The console drives **goldeneye**. Both call the project `boss-dogfood`.
+* **Consequence:** identical ids, identical project name, two different databases, no signal
+  anywhere about which one you are looking at. Work started in one is invisible in the other, and
+  a cancel issued against the wrong one silently succeeds.
+* **Aggravating:** the local API is an **older build** — `/v1/jobs/{id}/cancel` returns 404 there
+  (route absent) and 409 on goldeneye (route present, job unknown). The *shape* of the error is
+  the only way to tell the versions apart.
+* **Status:** open. Needs an instance identity surfaced in every response and in the console.
+
+### I36 — The deploy client times out before the deploy finishes
+* **Saw:** `ops.py deploy` raised `TimeoutError` twice while the deploy **succeeded**.
+* **Cause:** a 60s client timeout against an api+worker recreate with health checks that takes
+  longer. The failure is indistinguishable from a real failure without an independent check.
+* **Consequence:** the honest response to a timeout is "I do not know", and re-running risks
+  double-applying. Confirmation had to be behavioural — watching a `blocked` run flip to
+  `cancelled`, something only the new code does.
+* **Aggravating:** `ops.py diagnose` does not report image tags, so "what is actually deployed"
+  cannot be read back directly.
+* **Status:** open.
+
+### I37 — Cancelling a meeting does not stop its next step
+* **Saw:** cancelling `mrun_31a5f9bf` set the run to `cancelled`; the worker then enqueued a
+  **new** `meeting.step` job for it. Cancellation had to be applied repeatedly until it stayed
+  clean.
+* **Cause:** each step enqueues the next on completion; nothing consults the run's status before
+  doing so. `cancel_queued_job` closes the run and the job *that exists* — it cannot close the
+  one that has not been created yet.
+* **Consequence:** cancel is not a terminal instruction, it is a race. On the paid path this is
+  spend continuing after an operator said stop.
+* **Status:** open. The fix is a status check at enqueue time, not a better cancel.
+
+---
+
 ## 3. The shapes
 
-The incidents are thirty-two; the shapes are twelve. Fixing shapes is what stops recurrence.
+The incidents are thirty-nine; the shapes are fourteen. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -417,10 +511,17 @@ The incidents are thirty-two; the shapes are twelve. Fixing shapes is what stops
 | **S10** | **Identity assigned late.** The linking fact is written on the exceptional path (retry) and not on the ordinary one (create), so the common case has no identity at all. | I21 |
 | **S11** | **Unbounded retry of a decided outcome.** The same failure repeated N times because nothing counts. | I23 |
 | **S12** | **A conclusion checked against the shape of the code, not its behaviour.** | I26 |
+| **S13** | **Bounded per instance, unbounded per lineage.** The guard keys on an id that the remedy itself replaces, so every application starts with a clean slate. | I38, I17 |
+| **S14** | **A path's first real execution is its first test.** Every stage in §2 failed the first time it ran against a real app. Nothing had ever gone end to end, so the whole log is one integration test, run manually, at operator expense. | all of §2 |
 
 **The counter-measure to each is the same: a test that rejects the SHAPE, not the instance.**
-Three such tests now exist (dedupe anti-pattern, bare priority literals, artifact-consumer
-wiring). Each one found violations the moment it was written — which is the point.
+**Eight** now exist — dedupe anti-pattern, bare priority literals, artifact-consumer wiring,
+no-run-sits-forever, starvation sensors, bounded preview retry, build-before-start (whole-module),
+and empty-is-not-an-answer. Each found violations the moment it was written, which is the point.
+
+S14 is the one no test can close, and it is the reason this document exists. The counter-measure
+is not a test but a habit: **the pipeline must be run end to end, on a real app, on a schedule** —
+otherwise the next unexercised path is discovered the same way these were.
 
 ---
 
