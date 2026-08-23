@@ -27,11 +27,26 @@ function railBtn(active: boolean) {
 }
 
 /** Hide the machine-addressed context block from the human transcript. */
+/**
+ * Hide the machine-addressed context block, and NEVER hide the operator's own words.
+ *
+ * The facts block is prepended to the outgoing message so the tools know which run the
+ * conversation is about; it is noise to a reader, so it is stripped for display. But this
+ * returned `""` for two real inputs — a facts block with no message after it, and one followed
+ * by whitespace — and the console rendered that as an empty "You" bubble. From the operator's
+ * side their message had simply disappeared, which is worse than showing them the raw context:
+ * a chat that loses what you typed cannot be trusted with anything you type next.
+ *
+ * A display transform must never be able to erase its input. If stripping leaves nothing, the
+ * original is shown instead.
+ */
 export function stripAppFacts(content: string): string {
   const text = content ?? "";
   if (!text.startsWith("[app context]")) return text;
   const split = text.indexOf("\n\n");
-  return split === -1 ? "" : text.slice(split + 2).trimStart();
+  if (split === -1) return text;
+  const stripped = text.slice(split + 2).trimStart();
+  return stripped || text;
 }
 
 export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
@@ -106,9 +121,17 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
     // id. So it answered "tell me what to do" to "what is the PR link", while the answer sat
     // in the row behind the card. The facts go in front of the message, with the run id, so
     // the tools have something to be pointed at.
+    // A BLANK TURN IS NOT A QUESTION.
+    //
+    // Sending an empty message produced an empty "You" bubble and a real (billed) model call
+    // that had nothing to answer. Combined with the strip above, the operator saw a blank turn
+    // and reasonably concluded their message had been lost.
+    const typed = String(fd.get("message") ?? "").trim();
+    if (!typed) return;
     if (appFacts) {
-      const message = String(fd.get("message") ?? "");
-      if (message) fd.set("message", `${appFacts}\n\n${message}`);
+      fd.set("message", `${appFacts}\n\n${typed}`);
+    } else {
+      fd.set("message", typed);
     }
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
