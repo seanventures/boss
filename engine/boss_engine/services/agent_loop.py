@@ -2112,9 +2112,30 @@ def _drive_run(connection: Connection, settings: Settings, run_id: str, max_step
         _save_run(connection, run_id, project_id, task_id, "running", messages, transcript, total, finalize_ctx, step=step + 1)
 
     if final_text is None:
+        # RUNNING OUT OF STEPS IS NOT THE SAME AS HAVING NOTHING TO SAY.
+        #
+        # The loop already made one last tool-free call here, but with no instruction — so a
+        # model that had gathered real evidence over a dozen calls could still return nothing
+        # and the operator got "(agent reached its step limit before finishing)". An
+        # investigation that stops early has still LEARNED something, and the half it finished
+        # is usually the half that matters.
+        messages = messages + [{
+            "role": "user",
+            "content": (
+                "You have used your tool budget for this turn. Do not apologise and do not ask "
+                "to continue. Write the answer from what you have already established:\n"
+                "1. What you FOUND, with the concrete evidence (ids, counts, timings).\n"
+                "2. What you could NOT determine, and precisely which check would settle it.\n"
+                "3. The single next action you would take.\n"
+                "Partial findings are useful; a report of running out of steps is not."
+            ),
+        }]
         message, usage = adapter.create_chat_completion(messages, tools=None)
         add_usage(usage)
-        final_text = message.get("content") or "(agent reached its step limit before finishing)"
+        final_text = message.get("content") or (
+            "I ran out of tool budget before reaching a conclusion, and could not summarise "
+            "what I had. Ask again narrowing the question to one run or one table."
+        )
 
     _save_run(connection, run_id, project_id, task_id, "completed", messages, transcript, total, finalize_ctx, step=last_step + 1, output_text=final_text)
     emit_event(connection, project_id, "agent.run_completed", "agent_loop", "agent_run", run_id, {"steps": len(transcript)})

@@ -620,11 +620,30 @@ sibling `active_same_app` guards with `hasattr(connection, "execute")` — but t
 * **Status:** fixed.
 
 
+### I43 — Three of my own tests asserted on comments, not code
+Recorded because it is the same shape three times in one session, and the passing case is the
+dangerous one.
+* `assert src.index("attempt_ceiling") < src.index("not fix_note")` matched the COMMENT
+  explaining why `not fix_note` was the wrong guard.
+* `assert 'findall(r"\band\b"' not in src` matched the docstring quoting the old regex.
+* `assert "(agent reached its step limit...)" not in src` matched the comment quoting the old
+  message.
+* **All three failed loudly, which is the good case.** The bad case is the same mistake in a
+  test that PASSES: an assertion satisfied by a comment proves characters exist near each other,
+  not that the code does anything. Writing a comment that names the old behaviour — which good
+  commit hygiene encourages — is exactly when it bites.
+* **Counter-measure:** `engine/tests/_source.py:code_only()` strips comments (tokenizer) and
+  docstrings (AST, because a docstring is a string in statement position and no regex can find
+  one without reimplementing the tokenizer). Prefer a behavioural assertion; when only source
+  will do, read it through there.
+* **Shape:** S12 — a conclusion checked against the shape of the text rather than its behaviour.
+
+
 ---
 
 ## 3. The shapes
 
-The incidents are forty-two; the shapes are fifteen. Fixing shapes is what stops recurrence.
+The incidents are forty-three; the shapes are fifteen. Fixing shapes is what stops recurrence.
 
 | # | Shape | Incidents |
 |---|---|---|
@@ -639,7 +658,7 @@ The incidents are forty-two; the shapes are fifteen. Fixing shapes is what stops
 | **S9** | **A fix at the wrong layer.** The diagnosis is right and the remedy addresses a different property of the system — ordering when the constraint is capacity. | I19 |
 | **S10** | **Identity assigned late.** The linking fact is written on the exceptional path (retry) and not on the ordinary one (create), so the common case has no identity at all. | I21 |
 | **S11** | **Unbounded retry of a decided outcome.** The same failure repeated N times because nothing counts. | I23 |
-| **S12** | **A conclusion checked against the shape of the code, not its behaviour.** | I26 |
+| **S12** | **A conclusion checked against the shape of the code, not its behaviour.** | I26, I43 |
 | **S13** | **Bounded per instance, unbounded per lineage.** The guard keys on an id that the remedy itself replaces, so every application starts with a clean slate. | I38, I17 |
 | **S15** | **A correct rule resting on a false premise.** The implementation matches the stated rule, the tests assert the rule, and the rule itself was derived from something untrue. No test of the rule can catch it. | I42, I26 |
 | **S14** | **A path's first real execution is its first test.** Every stage in §2 failed the first time it ran against a real app. Nothing had ever gone end to end, so the whole log is one integration test, run manually, at operator expense. | all of §2 |
@@ -780,9 +799,37 @@ layer — and would have left the actual cause untouched while looking like prog
   (ANALYZE, BUFFERS)` of the slow path. Then decide — index, pool sizing, or pre-warm.
 * **Acceptance:** cold first query < 3s, *with the reason named*.
 
-### R3 — Make Ask BOSS a reliable first responder
-Fix the three defects in §5. Add a proactive opening move: on any "stuck/slow/not started"
-question, run `find_starved_work` + `consistency_report` before answering.
+### R3 — Make Ask BOSS a reliable first responder — **SHIPPED**
+
+**(1) Misroutes questions into planning.** Root cause found: `_looks_multi_phase` returned True
+on `len(re.findall(r"\band\b", message)) >= 2` — **two occurrences of the commonest conjunction
+in English**. So "the meeting sat queued for two hours AND the jobs table shows deadlettered rows
+AND I need to know why" was answered with *"I drafted 3 sequenced phases"*, and so was any pasted
+`WHERE ... AND ... AND ...`. Both reported cases explained in one line.
+* Sequencing is now signalled by **sequencing words**, not by counting conjunctions. Verb-counting
+  went too: *"the build failed and the deploy failed"* is two action verbs and a conjunction, and
+  is a report, not an order.
+* Question detection widened — a "?" **anywhere**, an interrogative **embedded** mid-message
+  ("…, what happened"), and pasted SQL, all route to answering. Scoped by how the message OPENS,
+  so *"build a page that shows what users did"* stays an order.
+* The asymmetry is the design rule: wrong toward *answer* costs one follow-up message; wrong
+  toward *act* spends money, creates junk work, and buries what was asked.
+
+**(2) Abandons mid-investigation.** `agent_max_steps` is 12 while the prompt says "chain tools,
+several calls is normal". The loop already made a final tool-free call at the cap — with **no
+instruction** — so a model holding a dozen calls' worth of evidence could still return nothing
+and the operator got *"reached the step limit before finishing"*. It is now told to report what
+it found, what it could not determine, which check would settle it, and the one next action.
+An investigation that stops early has still learned something.
+
+**(3) Not proactive.** The prompt already said "DIAGNOSE AND THEN FIX IT" — but it also records
+why that is not enough: *"the previous prompt listed four example tools, so anything outside
+those four got a plausible guess."* **`inspect_self` had just been built and was invisible.**
+Both it and `consistency_report` are now named, with their triggers (`exited -9` → OOM count;
+API slow during a build → load-per-core).
+
+* **Still open:** `agent_max_steps = 12` is a tuning question with a spend implication, left for
+  the operator rather than raised unilaterally.
 * **Acceptance:** "why is my meeting stuck?" returns a diagnosis **and** the action taken, in one
   turn, without a step-limit abort.
 

@@ -24,6 +24,8 @@ breaker under it can never fire. The escape built for a person was taken by the 
 import inspect
 
 from boss_engine.services import shepherd_service
+
+from ._source import code_only
 from boss_engine.services.code_task_service import retry_code_task
 
 
@@ -45,27 +47,17 @@ def test_the_bound_is_on_lineage_not_on_the_run_id():
     assert 'attempt = int(fctx_prev.get("attempt", 1)) + 1' in src
 
 
-def _code_only(src: str) -> str:
-    """Source with comment lines removed.
-
-    The first version of the test below matched `not fix_note` inside the COMMENT that explains
-    the bug, not the code that contains it — reading prose and calling it behaviour, which is
-    the exact mistake recorded as I26. Strip comments before reasoning about order.
-    """
-    return "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
-
-
 def test_the_ceiling_is_checked_before_the_fix_note_escape():
     """The pre-existing breaker is bypassed by any fix_note. The new ceiling must not sit behind
     the same escape, or it inherits the bug it exists to fix."""
-    src = _code_only(inspect.getsource(retry_code_task))
+    src = code_only(retry_code_task)
     assert src.index("attempt_ceiling is not None") < src.index("not fix_note")
 
 
 def test_the_ceiling_is_not_itself_bypassable_by_a_fix_note():
     """The whole point: the shepherd supplies a fix_note every time, so any guard standing
     behind `not fix_note` is dead code for automated repair."""
-    src = _code_only(inspect.getsource(retry_code_task))
+    src = code_only(retry_code_task)
     block = src[src.index("attempt_ceiling is not None"):]
     block = block[:block.index("prev_infra =")]
     assert "fix_note" not in block, (

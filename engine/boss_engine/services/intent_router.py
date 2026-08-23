@@ -336,7 +336,18 @@ class IntentRouter:
             "background / bulk). Also clears priority_score, which overrides the bands entirely.\n"
             "• cancel_job — drop a queued job; force=true stops a RUNNING one that is wedged and "
             "holding a slot. It closes the run too, so nothing is left reported as in flight.\n"
-            "• close_orphaned_runs — runs claiming to be running with no live job.\n\n"
+            "• close_orphaned_runs — runs claiming to be running with no live job.\n"
+            "• inspect_self — the container BOSS itself runs in: CPU load per core, cgroup "
+            "throttling, memory against the container ceiling, OOM-KILL COUNT, free disk, and "
+            "the heaviest processes. Reach for this FIRST when a process died without an "
+            "explanation (`exited -9`, `exited 137`, SIGKILL) — the OOM count settles in one "
+            "number what otherwise takes an hour of guessing — and whenever the API is slow "
+            "while a build is running, because load-per-core says whether anything is actually "
+            "contending. The database says what BOSS intended; this says what the machine did "
+            "to it.\n"
+            "• consistency_report — every invariant at once: runs working with no job, jobs "
+            "for runs that ended, decisions blocking runs that are gone. Run it when someone "
+            "reports something inconsistent, before forming a theory.\n\n"
             "When an operator reports something stuck, DIAGNOSE AND THEN FIX IT. Do not hand "
             "back an explanation and wait to be asked. Say what you changed and why. A real "
             "case: a PRD meeting sat queued for two hours behind benchmark jobs boosted past "
@@ -912,7 +923,38 @@ class IntentRouter:
         starts_discussion = bool(re.match(
             r"^\s*(how|what|why|when|where|who|which|whose|explain|tell me|show me)\b", lowered))
         polite_imperative = bool(re.match(r"^\s*(can|could|would|will|please)\b", lowered))
-        lead_question = starts_discussion or (message.strip().endswith("?") and not polite_imperative)
+        # A QUESTION ANYWHERE MAKES THIS A QUESTION.
+        #
+        # This looked only at the START of the message or a trailing "?", so a question with
+        # context in front of it — "the run is blocked, the console shows nothing, why?" — or
+        # one followed by a detail line fell through to the work-spawning matchers below.
+        anywhere_question = "?" in message and not polite_imperative
+        # An interrogative can sit in the middle with no question mark at all:
+        # "the build failed and the deploy failed, what happened". That is a report plus a
+        # question, and it was being read as an order to build something.
+        #
+        # Scoped by how the message OPENS: a sentence that begins with an imperative verb is an
+        # instruction whatever it mentions later ("build a page that shows what users did"),
+        # while one that opens with a subject is describing a situation.
+        starts_imperative = bool(re.match(
+            r"^\s*(build|create|make|implement|add|fix|change|refactor|remove|update|deploy|"
+            r"ship|write|generate|set up|research|compare|investigate|design|plan|start|run)\b",
+            lowered))
+        embedded_question = (
+            not starts_imperative
+            and not polite_imperative
+            and bool(re.search(r"\b(why|what|how|when|which|who|whose)\b", lowered))
+        )
+        # Pasted SQL is evidence for a QUESTION, never an order. It arrives when someone is
+        # investigating, and its ANDs and verbs are what tripped the phase detector.
+        looks_like_sql = bool(re.search(r"\bselect\b.+\bfrom\b", lowered, re.S))
+        lead_question = (
+            starts_discussion
+            or anywhere_question
+            or embedded_question
+            or looks_like_sql
+            or (message.strip().endswith("?") and not polite_imperative)
+        )
 
         # A QUESTION IS A QUESTION, whichever verb it happens to contain.
         #
@@ -1068,15 +1110,31 @@ class IntentRouter:
 
     @staticmethod
     def _looks_multi_phase(message: str) -> bool:
-        action_verbs = re.findall(
-            r"\b(research|compare|design|plan|build|implement|ship|fix|deploy|document|test)\b",
-            message,
-        )
-        return bool(
-            re.search(r"\b(first|then|after that|followed by|multiple|end[- ]to[- ]end)\b", message)
-            or len(re.findall(r"\band\b", message)) >= 2
-            or (" and " in message and len(set(action_verbs)) >= 2)
-        )
+        """Is this an order to do several things in sequence?
+
+        SEQUENCING IS SIGNALLED BY SEQUENCING WORDS, NOT BY COUNTING CONJUNCTIONS.
+
+        This used to return True on `len(re.findall(r"\band\b", message)) >= 2` — two
+        occurrences of the commonest conjunction in English. So
+
+            "the meeting sat queued for two hours AND the jobs table shows deadlettered rows
+             AND I need to know why"
+
+        was answered with "I drafted 3 sequenced phases", and so was any pasted SQL:
+
+            WHERE kind='meeting.step' AND status='queued' AND project_id='boss-dogfood'
+
+        An operator asking why their work was stuck got a project plan. Observed twice.
+
+        Counting verbs has the same flaw more subtly — "the build failed and the deploy failed"
+        is two distinct action verbs and a conjunction, and is a report, not an order. So the
+        burden is now explicit: a multi-phase command must SAY that it has phases. Being wrong
+        the other way costs one follow-up message; being wrong this way spends money and buries
+        the answer the operator asked for.
+        """
+        return bool(re.search(
+            r"\b(first|then|after that|followed by|afterwards|next,|"
+            r"phase \d|step \d|multiple phases|end[- ]to[- ]end)\b", message))
 
     @staticmethod
     def _short_title(message: str, fallback: str) -> str:
