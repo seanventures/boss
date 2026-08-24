@@ -654,3 +654,37 @@ def test_the_metrics_are_aggregates_not_page_counts():
     src = inspect.getsource(self_observability.delivery_metrics)
     assert "count(*)" in src and "COALESCE(sum(" in src
     assert "LIMIT" not in src.upper(), "a metric must not be computed from a limited page"
+
+
+# --------------------------------------------------------------------------- #
+# Build has to actually start the governed sequence
+# --------------------------------------------------------------------------- #
+def test_build_starts_a_prd_panel_not_a_plan_artifact():
+    """An operator clicked an idea, saw "Working", and nothing ever happened. The task WAS
+    created and the job DID succeed — it was an openai.plan job, which writes a plan artifact
+    and stops, because nothing downstream consumes a plan. Build must use the documented entry
+    point for "build X": POST /v1/meetings/prd -> panel -> PRD -> code task."""
+    import re
+    actions = pathlib.Path("apps/web/app/actions.ts").read_text(encoding="utf-8")
+    assert "startBuildAction" in actions
+    i = actions.index("export async function startBuildAction")
+    body = actions[i:i + 900]
+    assert "/v1/meetings/prd" in body, "Build does not convene a panel"
+    assert "directive" in body
+
+    hero = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
+    code = re.sub(r"/\*.*?\*/", "", hero, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    assert "submitCommandAction" not in code, "Build still uses the plan-artifact pipeline"
+
+
+def test_build_reports_success_and_failure():
+    """The old action returned void, so a failure and a success looked identical: "Working",
+    then nothing, forever."""
+    import re
+    hero = pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
+    i = hero.index("const assign = useCallback")
+    body = hero[i:i + 1400]
+    assert "setError(" in body, "a failed build is still silent"
+    assert "setReply(" in body, "a started build gives no confirmation"
+    assert "task_id" in body, "the operator is not told what was created"

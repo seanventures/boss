@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
-import { askBossAction, runAgentActionAction, submitCommandAction } from "./actions";
+import { askBossAction, runAgentActionAction, startBuildAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
 const STALL_SECONDS = 120;
@@ -426,14 +426,26 @@ export function AskBossHero({
    * operator picks which by pressing a different button rather than by choosing a lane first.
    */
   const assign = useCallback((text: string) => {
-    const command = text.trim();
-    if (!command || busy) return;
-    const fd = new FormData();
-    fd.set("command", command);
-    fd.set("project_id", projectId);
-    fd.set("actor", actor);
+    const directive = text.trim();
+    if (!directive || busy) return;
     setError(""); setReply(""); setProposed([]);
-    startTransition(async () => { await submitCommandAction(fd); });
+    startTransition(async () => {
+      const r = await startBuildAction(projectId, actor, directive);
+      const d = r.data as Record<string, unknown> | undefined;
+      if (!r.ok) {
+        // Build used to swallow this entirely: the action returned void, so a failure and a
+        // success looked identical — "Working", then nothing, forever.
+        setError(r.error ?? "Could not start the build.");
+        return;
+      }
+      const taskId = String(d?.task_id ?? "");
+      setInput("");
+      setReply(
+        `**Started.** A PRD panel is convening for this directive.\n\n` +
+        (taskId ? `Task \`${taskId}\` — track it under **Meetings**, then Factory once the PRD is approved.\n\n` : "") +
+        `The sequence from here is: panel debates → PRD drafted → you approve → code task runs.`,
+      );
+    });
   }, [busy, projectId, actor]);
 
   /**

@@ -175,6 +175,36 @@ export async function runAgentActionAction(
  * revalidate: a turn that DOES change the board (via an action button) goes through
  * runAgentActionAction, which still revalidates.
  */
+/**
+ * Start the governed build for a directive: panel -> PRD -> code task.
+ *
+ * Build used to call submitCommandAction, which is the old "Assign an outcome" pipeline: it
+ * creates a task, runs one openai.plan job, writes a plan artifact, and STOPS. An operator
+ * clicked an idea, watched "Working", and nothing else ever happened — the task really was
+ * created and really did sit at `open` forever, because nothing downstream consumes a plan.
+ *
+ * POST /v1/meetings/prd is the documented entry point for "build X" and is what actually
+ * starts the sequence. It dedupes on (project, directive), so a double-click is one meeting.
+ *
+ * Returns the ids rather than void: the previous action returned nothing, so the UI could not
+ * confirm, link, or report a failure even when it had one.
+ */
+export async function startBuildAction(
+  projectId: string,
+  actor: string,
+  directive: string,
+): Promise<ActionResult> {
+  const text = directive.trim();
+  if (!text) return { ok: false, error: "Describe what to build first." };
+  const result = await postJsonReturn("/v1/meetings/prd", {
+    project_id: projectId,
+    actor,
+    directive: text,
+  });
+  revalidatePath("/");
+  return result;
+}
+
 export async function askBossAction(
   _prev: ActionResult | null,
   formData: FormData,
