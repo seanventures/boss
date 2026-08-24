@@ -730,3 +730,27 @@ def test_every_in_flight_row_names_an_area_to_open():
     assert "_STAGE_AREA" in src
     for stage in ("discovery", "meeting", "coding", "review", "deployment"):
         assert f'"{stage}"' in src, f"{stage} has no console area"
+
+
+def test_the_host_list_is_fetched_once_per_page_not_once_per_card():
+    """Every app card sat at "Checking for a host…", which reads as "BOSS cannot reach the VM".
+    The API was fine — ~3s, one verified host, SSH allowed. SetupDeployment renders inside every
+    card and each copy fired its own identical lookup; past ~6 apps they queue behind a browser's
+    per-origin connection limit while a multi-megabyte page loads, so none of them resolves."""
+    import re
+    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    assert "loadHostsOnce" in code and "hostsCache" in code
+    assert code.count("listDeploymentHostsAction(projectId)") == 1, (
+        "the host list is still fetched from more than one place")
+
+
+def test_the_host_lookup_always_settles():
+    """A fetch with no timeout can hang forever, and this one is the only thing between the
+    operator and the Deploy button — so "still loading" was indistinguishable from "broken"."""
+    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    i = src.index("function loadHostsOnce")
+    body = src[i:i + 900]
+    assert "Promise.race" in body and "timed out" in body
+    assert ".catch(" in body, "a rejected lookup would leave the card loading forever"

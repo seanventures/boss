@@ -689,6 +689,37 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running, 
  * Offered on the card because the alternative was a wizard on another screen, which is the
  * trip this work exists to remove. Shown only when the app has no destination yet.
  */
+/**
+ * ONE host lookup for the whole page, not one per card.
+ *
+ * SetupDeployment renders inside every app card, and each copy fired its own identical
+ * `listDeploymentHostsAction`. With a handful of apps that was invisible; past about six it is
+ * not, because a browser opens roughly six connections per origin and this page is already
+ * megabytes of HTML competing for them. The requests queue, the effects do not resolve, and
+ * EVERY card sits at "Checking for a host…" — which reads as "BOSS cannot reach the VM" when
+ * the host list actually returns in about three seconds.
+ *
+ * The result is shared and briefly cached: the host list is the same for every card on the
+ * page, so asking N times was never anything but waste.
+ */
+const HOSTS_TTL_MS = 30_000;
+const hostsCache = new Map<string, { at: number; promise: Promise<unknown> }>();
+
+function loadHostsOnce(projectId: string): Promise<any> {
+  const hit = hostsCache.get(projectId);
+  const now = Date.now();
+  if (hit && now - hit.at < HOSTS_TTL_MS) return hit.promise as Promise<any>;
+  // A fetch with no timeout can hang forever, and this one is the ONLY thing standing between
+  // the operator and the Deploy button — so it always settles, even if the answer is an error.
+  const promise = Promise.race([
+    listDeploymentHostsAction(projectId),
+    new Promise((resolve) =>
+      setTimeout(() => resolve({ ok: false, error: "host list timed out after 20s" }), 20_000)),
+  ]).catch((e) => ({ ok: false, error: String(e) }));
+  hostsCache.set(projectId, { at: now, promise });
+  return promise as Promise<any>;
+}
+
 function SetupDeployment({ run, projectId, onDone }: {
   run: CodeTaskRun; projectId: string; onDone: () => void;
 }) {
@@ -714,7 +745,7 @@ function SetupDeployment({ run, projectId, onDone }: {
   useEffect(() => {
     let live = true;
     setLoadState("loading"); setLoadError(null);
-    void listDeploymentHostsAction(projectId).then((r) => {
+    void loadHostsOnce(projectId).then((r) => {
       if (!live) return;
       if (!r.ok) {
         setLoadState("error");
