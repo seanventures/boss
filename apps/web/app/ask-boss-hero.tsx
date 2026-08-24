@@ -576,13 +576,27 @@ export function AskBossHero({
     if (stripHeld || drift === false || busy || reply || input.trim()) return;
     let raf = 0;
     let last = 0;
-    const PX_PER_SECOND = 14;          // about one card every fifteen seconds
+    // ACCUMULATE THE SUB-PIXEL REMAINDER.
+    //
+    // This is why the drift did nothing at all. 14px/s is about 0.23px per frame at 60fps, and
+    // scrollLeft is rounded to whole pixels — so `scrollLeft = scrollLeft + 0.23` rounded
+    // straight back to the same integer, every frame, forever. The motion has to be banked
+    // until it is worth at least one pixel and then applied.
+    let carry = 0;
+    const PX_PER_SECOND = 16;          // about one card every fifteen seconds
     const step = (t: number) => {
       if (last) {
-        const move = ((t - last) / 1000) * PX_PER_SECOND;
         const end = strip.scrollWidth - strip.clientWidth;
-        // Wrap rather than stop: a strip that parks at the end looks broken.
-        strip.scrollLeft = end <= 0 ? 0 : (strip.scrollLeft + move) % (end + 1);
+        if (end > 0) {
+          carry += ((t - last) / 1000) * PX_PER_SECOND;
+          const whole = Math.floor(carry);
+          if (whole >= 1) {
+            carry -= whole;
+            // Wrap rather than stop: a strip parked at the end looks broken.
+            const next = strip.scrollLeft + whole;
+            strip.scrollLeft = next >= end ? 0 : next;
+          }
+        }
       }
       last = t;
       raf = window.requestAnimationFrame(step);

@@ -993,3 +993,21 @@ def test_salvage_does_not_invent_a_dossier_from_noise():
     from boss_engine.services.discovery_service import _extract_json
     assert _extract_json("sorry, I could not complete that") == {}
     assert _extract_json("") == {}
+
+
+def test_the_drift_banks_sub_pixel_movement():
+    """The drift did nothing on a real browser. 14px/s is ~0.23px per frame at 60fps, and
+    scrollLeft is rounded to whole pixels — so `scrollLeft = scrollLeft + 0.23` rounded back to
+    the same integer every frame, forever. Nothing about the CSS or the ref was wrong; the
+    arrows worked because they moved a whole card at a time.
+
+    The motion must be accumulated until it is worth at least one pixel."""
+    import re
+    src = _hero_src()
+    i = src.index("const PX_PER_SECOND")
+    body = src[max(0, i - 900):i + 900]
+    assert "carry" in body, "sub-pixel movement is still assigned straight to scrollLeft"
+    assert "Math.floor(carry)" in body, "the remainder is not banked"
+    # and the naive form must not come back
+    code = re.sub(r"//.*$", "", body, flags=re.M)
+    assert "scrollLeft + move" not in code, "fractional pixels assigned to scrollLeft again"
