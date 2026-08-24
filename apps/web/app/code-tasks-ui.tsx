@@ -730,8 +730,18 @@ function loadHostsOnce(projectId: string): Promise<any> {
   if (hit && now - hit.at < HOSTS_TTL_MS) return hit.promise as Promise<any>;
   // A fetch with no timeout can hang forever, and this one is the ONLY thing standing between
   // the operator and the Deploy button — so it always settles, even if the answer is an error.
+  // A ROUTE HANDLER, NOT A SERVER ACTION.
+  //
+  // listDeploymentHostsAction answered in ~2s and still timed out at 20s, because a Server
+  // Action re-renders the current route and returns a fresh RSC payload alongside its value —
+  // and this page takes 20-27s to render. The lookup was never slow; the reply was.
+  // /api/deployment-hosts returns JSON and nothing else.
   const promise = Promise.race([
-    listDeploymentHostsAction(projectId),
+    fetch(`/api/deployment-hosts?project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" })
+      .then(async (r) => (r.ok
+        ? { ok: true, data: await r.json() }
+        : { ok: false, error: `HTTP ${r.status}` })),
     new Promise((resolve) =>
       setTimeout(() => resolve({ ok: false, error: "host list timed out after 20s" }), 20_000)),
   ]).catch((e) => ({ ok: false, error: String(e) }));
