@@ -742,8 +742,14 @@ def test_the_host_list_is_fetched_once_per_page_not_once_per_card():
     code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
     code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
     assert "loadHostsOnce" in code and "hostsCache" in code
-    assert code.count("listDeploymentHostsAction(projectId)") == 1, (
+    assert code.count("/api/deployment-hosts?project_id=") == 1, (
         "the host list is still fetched from more than one place")
+    # And it must NOT be a Server Action: that re-renders the whole route to reply, which on a
+    # 20-27s page is the entire reason this looked like a hang.
+    # Comments still explain WHY the Server Action was removed, so strip them first — the
+    # fourth time this suite has nearly asserted on prose.
+    assert "listDeploymentHostsAction(" not in code, (
+        "a Server Action reply re-renders the route — that was the bug")
 
 
 def test_the_host_lookup_always_settles():
@@ -751,9 +757,24 @@ def test_the_host_lookup_always_settles():
     operator and the Deploy button — so "still loading" was indistinguishable from "broken"."""
     src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
     i = src.index("function loadHostsOnce")
-    body = src[i:i + 900]
+    # Slice to the end of the function rather than a fixed byte count — the first version cut
+    # at 900 chars and started failing when a comment grew, which tests nothing about behaviour.
+    body = src[i:src.index("\n}", i)]
     assert "Promise.race" in body and "timed out" in body
     assert ".catch(" in body, "a rejected lookup would leave the card loading forever"
+
+
+def test_the_host_lookup_is_a_route_handler_not_a_server_action():
+    """The lookup answered in ~2s and still hit a 20s timeout. A Server Action does not just
+    return its value — the App Router re-renders the current route and ships a fresh RSC
+    payload with the reply, and this console takes 20-27s to render. Three earlier measurements
+    (API, API-under-render, web-under-render) all came back fast because they measured the
+    REQUEST path; the cost was in the reply."""
+    route = pathlib.Path("apps/web/app/api/deployment-hosts/route.ts")
+    assert route.exists(), "no route handler for the host list"
+    body = route.read_text(encoding="utf-8")
+    assert "export async function GET" in body
+    assert "/v1/deployment-hosts" in body and "authHeaders" in body
 
 
 # --------------------------------------------------------------------------- #
@@ -766,6 +787,20 @@ def test_the_composer_can_research_not_only_ask_and_build():
     assert "startDiscoveryAction" in src
     assert "askboss-research" in src, "no Research action on the composer"
     assert "RESEARCH" in src and src.count("seed:") >= 4, "no research starters"
+
+
+def test_the_research_row_stays_one_compact_line():
+    """Four full-width questions is a lot of height for a secondary path, and it pushed the
+    composer — the thing that should read first — down the panel. The chip carries a short
+    label; the full question goes into the composer on click."""
+    src = _hero_src()
+    assert "askboss-seed" in src
+    import re
+    labels = re.findall(r'label: "([^"]+)"', src)
+    assert len(labels) >= 4, "no short labels"
+    for lbl in labels:
+        assert len(lbl) <= 26, f"not a chip: {lbl!r}"
+        assert "?" not in lbl, f"the full question belongs in the composer, not the chip: {lbl!r}"
 
 
 def test_research_seeds_are_questions_not_products():
@@ -798,3 +833,31 @@ def test_the_debug_grid_is_gone_and_failures_are_not():
     assert "<h2>Blocking State</h2>" not in src
     assert "<h2>Database</h2>" not in src
     assert "deadletters.items.length > 0" in src, "failed work is no longer surfaced at all"
+
+
+# --------------------------------------------------------------------------- #
+# The console must not poll itself faster than it can render
+# --------------------------------------------------------------------------- #
+def test_the_auto_refresh_backs_off_to_what_a_render_costs():
+    """A fixed 15s interval against a 20-27s render means every open tab asks for the next
+    refresh before the last finished. The per-tab guard stops ONE tab stacking; enough tabs
+    still saturate a single-threaded Node process — unrelated requests intermittently took 56s,
+    the api healthcheck went unhealthy, and the console 502'd. The code comment shows this
+    already happened once at 7s, so 15s only moved the threshold."""
+    src = pathlib.Path("apps/web/app/ConsoleShell.tsx").read_text(encoding="utf-8")
+    assert "lastRefreshMs" in src, "the refresh cost is not measured"
+    i = src.index("const schedule = ()")
+    body = src[i:i + 400]
+    assert "lastRefreshMs.current * 3" in body, "the interval does not scale with the cost"
+    assert "Math.max(20_000" in body, "no floor on the interval"
+    assert "Math.min(180_000" in body, "no ceiling — a slow render could stop refresh entirely"
+    assert "setInterval" not in src[i - 600:i + 900], "still a fixed-rate timer"
+
+
+def test_the_refresh_still_skips_a_hidden_tab_and_a_typing_operator():
+    """The existing guards are load-bearing and must survive the rewrite."""
+    src = pathlib.Path("apps/web/app/ConsoleShell.tsx").read_text(encoding="utf-8")
+    i = src.index("const tick = ()")
+    body = src[i:i + 700]
+    for guard in ("document.hidden", "refreshPending", "paletteOpen", '"TEXTAREA"'):
+        assert guard in body, f"lost guard: {guard}"

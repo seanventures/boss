@@ -253,16 +253,44 @@ export default function ConsoleShell({
   //  - never stack refreshes: skip while the previous one is still rendering
   //  - never refresh a hidden tab: a console left open in a background tab
   //    must not keep hammering boss-api all day
+  //  - never poll faster than a refresh actually COSTS. The interval was a fixed 15s while a
+  //    render takes 20-27s, so a tab asked for the next one before the last had finished. The
+  //    per-tab guard below stops ONE tab stacking, but every open tab then issues a
+  //    near-continuous 23s render, and enough of them saturate a single-threaded Node process:
+  //    unrelated requests intermittently took 56s, the api healthcheck went unhealthy, and the
+  //    console 502'd mid-session. The comment above says this happened once before at 7s; 15s
+  //    only moved the threshold. Measuring the cost and backing off removes it.
   const [refreshPending, startRefresh] = useTransition();
+  const lastRefreshMs = useRef(0);
   useEffect(() => {
     if (!live) return;
-    const id = setInterval(() => {
-      if (paletteOpen || refreshPending || document.hidden) return;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const schedule = () => {
+      // At least 20s, and at least three times what the last refresh cost — so a slow console
+      // polls itself gently instead of continuously, and a fast one stays responsive.
+      const delay = Math.min(180_000, Math.max(20_000, lastRefreshMs.current * 3));
+      timer = window.setTimeout(tick, delay);
+    };
+
+    const tick = () => {
+      if (cancelled) return;
+      if (paletteOpen || refreshPending || document.hidden) { schedule(); return; }
       const tag = document.activeElement?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      startRefresh(() => router.refresh());
-    }, 15000);
-    return () => clearInterval(id);
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") { schedule(); return; }
+      const started = Date.now();
+      startRefresh(() => {
+        router.refresh();
+        // Not exact — the transition resolves when React has the payload — but it is the right
+        // order of magnitude, which is all the backoff needs.
+        lastRefreshMs.current = Date.now() - started;
+      });
+      schedule();
+    };
+
+    schedule();
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
   }, [live, paletteOpen, refreshPending, router]);
 
   // Depend on the query STRING (stable across router.refresh(), changes on real

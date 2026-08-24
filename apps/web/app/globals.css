@@ -5865,10 +5865,28 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .cc-flight-row:hover .cc-flight-go { opacity: 1; }
 
 
-/* Research seeds — the stage before a build, for when the idea is not yet formed. */
-.askboss-research-row { margin: 14px 0 18px; padding-bottom: 16px; border-bottom: 1px solid var(--border, #1C2740); }
-.askboss-research-row .askboss-ideas-label { display: block; margin-bottom: 8px; }
-.askboss-research-row .askboss-opener { max-width: 100%; }
+/* Research seeds. One line, chips only — the composer is what should read first, and four
+   full-width questions pushed it down the panel. The chip is a short label; the full question
+   goes into the composer on click, where it can be edited before it runs. */
+.askboss-research-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 12px 0 14px;
+}
+.askboss-research-label {
+  color: var(--muted, #7C8CB0);
+  font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+}
+.askboss-seed {
+  padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid rgba(46, 209, 195, .32);
+  background: rgba(46, 209, 195, .08);
+  color: #7FE3DA; font: inherit; font-size: .8rem; font-weight: 600;
+  transition: background 140ms ease, border-color 140ms ease;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.askboss-seed:hover { background: rgba(46, 209, 195, .18); border-color: #2ED1C3; }
+.askboss-research-hint { color: var(--muted, #7C8CB0); font-size: .74rem; }
+
 .linklike {
   border: 0; background: none; padding: 0; cursor: pointer;
   color: var(--accent-text, #7FB0FF); font: inherit; text-decoration: underline;

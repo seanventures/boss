@@ -322,11 +322,15 @@ Done when: a package two years old is marked unmaintained with its age, and a de
  *
  * Phrased as questions, not products, because that is what separates research from a build.
  */
-const RESEARCH: Array<{ tag: string; seed: string }> = [
-  { tag: "Market",  seed: "What are teams currently using to manage on-call rotas, and what do they complain about?" },
-  { tag: "Problem", seed: "Why do small teams abandon their internal tools within a year?" },
-  { tag: "Signal",  seed: "Which developer-tooling categories have had the most new entrants in the last year?" },
-  { tag: "Compete", seed: "How do incident-management products differentiate on pricing for teams under 20 people?" },
+const RESEARCH: Array<{ label: string; seed: string }> = [
+  { label: "On-call tooling",
+    seed: "What are teams currently using to manage on-call rotas, and what do they complain about?" },
+  { label: "Why internal tools die",
+    seed: "Why do small teams abandon their internal tools within a year?" },
+  { label: "Crowded categories",
+    seed: "Which developer-tooling categories have had the most new entrants in the last year?" },
+  { label: "Pricing for small teams",
+    seed: "How do incident-management products differentiate on pricing for teams under 20 people?" },
 ];
 
 const IDEAS_PER_PAGE = 4;
@@ -636,22 +640,34 @@ export function AskBossHero({
 
           {!reply && !busy ? (
             <div className="askboss-ideas">
+              {/* COMPACT ON PURPOSE. These were four full-width sentences, which is a lot of
+                  height for a secondary path and pushed the composer — the thing that should
+                  read first — down the panel. The chip carries a short label; the full question
+                  goes into the composer on click, where it can be edited before it runs. */}
               <div className="askboss-research-row">
-                <span className="askboss-ideas-label">Not sure yet? Research it</span>
-                <div className="askboss-openers">
-                  {RESEARCH.map((r) => (
-                    <button
-                      key={r.seed}
-                      type="button"
-                      className="askboss-opener"
-                      onClick={() => { setInput(r.seed); research(r.seed); }}
-                      title="Starts a Discovery run — web research, cited dossier"
-                    >
-                      <span className="askboss-idea-tag">{r.tag}</span>
-                      {r.seed}
-                    </button>
-                  ))}
-                </div>
+                <span className="askboss-research-label">Not sure yet?</span>
+                {RESEARCH.map((r) => (
+                  <button
+                    key={r.seed}
+                    type="button"
+                    className="askboss-seed"
+                    title={r.seed}
+                    onClick={() => {
+                      setInput(r.seed);
+                      window.requestAnimationFrame(() => {
+                        const box = boxRef.current;
+                        if (!box) return;
+                        box.focus();
+                        box.setSelectionRange(box.value.length, box.value.length);
+                        box.style.height = "auto";
+                        box.style.height = `${Math.min(box.scrollHeight, 320)}px`;
+                      });
+                    }}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+                <span className="askboss-research-hint">→ then press Research</span>
               </div>
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>

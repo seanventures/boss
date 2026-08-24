@@ -27,7 +27,6 @@ import {
   followUpCodeTaskAction,
   conveneMeetingAction,
   deployRunNowAction,
-  listDeploymentHostsAction,
   retryDeploymentAction,
   runDeploymentsAction,
   setupDeploymentAction,
