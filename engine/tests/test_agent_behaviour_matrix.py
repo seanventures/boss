@@ -20,6 +20,7 @@ would have caught four of the five above.
 """
 
 import pathlib
+import re
 
 import pytest
 
@@ -562,3 +563,47 @@ def test_a_reply_with_no_tag_is_returned_untouched():
     plain = "The deployment failed its health check after 120s."
     out, cleaned = _recover_tagged_actions(plain, _TOOLS, [])
     assert out == [] and cleaned == plain
+
+
+# --------------------------------------------------------------------------- #
+# Starter briefs: draft for editing, never spend on a click
+# --------------------------------------------------------------------------- #
+def _hero_src() -> str:
+    return pathlib.Path("apps/web/app/ask-boss-hero.tsx").read_text(encoding="utf-8")
+
+
+def test_clicking_an_idea_drafts_it_instead_of_building():
+    """A one-line prompt used to fire a governed build the instant it was clicked — money spent
+    on a spec nobody had read. It now loads the brief for editing."""
+    import re
+    code = re.sub(r"/\*.*?\*/", "", _hero_src(), flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    assert "draftIdea" in code
+    i = code.index("const draftIdea")
+    body = code[i:i + 700]
+    assert "setInput(idea.brief)" in body
+    assert "assign(" not in body, "clicking a suggestion still starts a build"
+
+
+def test_every_brief_is_a_real_spec_not_a_sentence():
+    """"It should not be one sentence — feed some good info about the idea." Each brief has to
+    say what it is, what it must do, and how you know it worked, or Build has nothing to go on."""
+    src = _hero_src()
+    briefs = re.findall(r"brief: `(.*?)`", src, re.S)
+    assert len(briefs) >= 8, f"only {len(briefs)} briefs"
+    for b in briefs:
+        assert b.count("\n") >= 6, f"too thin to build from:\n{b[:120]}"
+        assert "Who it is for:" in b
+        assert "What it must do:" in b
+        assert "Done when:" in b, "no acceptance criteria"
+
+
+def test_the_ideas_can_be_cycled():
+    src = _hero_src()
+    assert "askboss-ideas-next" in src and "setIdeaPage" in src
+    assert "% pageCount" in src, "Next must wrap rather than dead-end"
+
+
+def test_the_composer_can_show_a_multi_line_brief():
+    """A brief is a paragraph; a fixed one-row box hid all but the first line."""
+    assert "scrollHeight" in _hero_src()

@@ -49,12 +49,145 @@ const OPENERS = [
  * exist because a blank prompt is the hardest possible first run, and because the fastest way
  * to learn what BOSS does is to watch it do one.
  */
-const IDEAS = [
-  { tag: "SaaS",     text: "Build a link-shortener with click analytics and a simple dashboard" },
-  { tag: "Internal", text: "Build an on-call rota tool with escalation and Slack notifications" },
-  { tag: "Data",     text: "Build a CSV-to-chart explorer that saves named views" },
-  { tag: "Agent",    text: "Build a changelog writer that summarises merged PRs weekly" },
+/**
+ * Starter briefs.
+ *
+ * These were one-line prompts that fired a governed build the instant they were clicked —
+ * which is both too little information to build from and too much commitment for a click. A
+ * brief now DRAFTS into the composer: it says what the thing is, who it is for, what it must
+ * do, and how you know it worked, and the operator edits it before pressing Build.
+ *
+ * Themes follow the categories YC and similar programmes keep asking for (developer tooling,
+ * vertical SaaS, ops automation, data plumbing, agents). They are shipped in the bundle rather
+ * than fetched, so they work offline and cost nothing to show; a live feed is a separate
+ * capability and is noted in the UI rather than faked here.
+ */
+type Idea = { tag: string; title: string; brief: string };
+
+const IDEAS: Idea[] = [
+  {
+    tag: "DevTools",
+    title: "Flaky-test detector",
+    brief: `Build a flaky-test detector for CI.
+
+Who it is for: a team whose test suite fails intermittently and who currently re-run jobs by hand.
+
+What it must do:
+- Ingest JUnit XML from CI runs and store each test's pass/fail history per commit.
+- Flag a test as flaky when it both passed and failed on the SAME commit SHA.
+- Show a ranked list: flakiest first, with failure rate and last-seen date.
+- Let a user mute a known-flaky test and record who muted it and why.
+
+Done when: seeding two runs of the same commit with opposite results produces exactly one flagged test, and muting it removes it from the default list but keeps it in history.`,
+  },
+  {
+    tag: "Ops",
+    title: "On-call rota with escalation",
+    brief: `Build an on-call rota tool.
+
+Who it is for: a small team that currently tracks who is on call in a spreadsheet.
+
+What it must do:
+- Define rotations (weekly/daily) over a list of people, with timezone-aware handover.
+- Show who is on call right now and who is next, with a shareable read-only page.
+- Support overrides for holidays without breaking the underlying rotation.
+- Escalate: if a page is unacknowledged for N minutes, notify the next person.
+
+Done when: a two-person weekly rotation shows the correct person across a handover boundary, and an unacknowledged page escalates exactly once.`,
+  },
+  {
+    tag: "Data",
+    title: "CSV-to-chart explorer",
+    brief: `Build a CSV-to-chart explorer.
+
+Who it is for: someone who receives CSV exports and wants a chart without opening a spreadsheet.
+
+What it must do:
+- Upload a CSV, infer column types (number, date, category), and show a preview.
+- Pick x and y and a chart type; render it; handle 100k rows without freezing the page.
+- Save a named view (file + columns + chart type) and reopen it later.
+- Export the chart as PNG.
+
+Done when: a 100k-row file renders in under two seconds and a saved view reopens with the same chart.`,
+  },
+  {
+    tag: "Agents",
+    title: "Weekly changelog writer",
+    brief: `Build a changelog writer that summarises merged pull requests.
+
+Who it is for: a maintainer who writes release notes by hand every week.
+
+What it must do:
+- Pull PRs merged in a date range from a GitHub repo.
+- Group them by label (feature / fix / chore) and drop anything labelled "no-changelog".
+- Write one plain sentence per PR, linking the PR number and crediting the author.
+- Output markdown ready to paste into a release.
+
+Done when: a week with mixed labels produces grouped markdown, and excluded PRs are absent.`,
+  },
+  {
+    tag: "SaaS",
+    title: "Link shortener with analytics",
+    brief: `Build a link shortener with click analytics.
+
+Who it is for: someone sharing links across channels who wants to know which channel worked.
+
+What it must do:
+- Create a short code for a URL; redirect with a 301 and record the click.
+- Record referrer, coarse device type and country; never store raw IP addresses.
+- Dashboard: clicks over time per link, and a breakdown by referrer.
+- Support a custom alias, and reject one that is already taken.
+
+Done when: two links show independent counts, a duplicate alias is rejected with a clear error, and no raw IP is persisted anywhere.`,
+  },
+  {
+    tag: "Vertical",
+    title: "Invoice chaser",
+    brief: `Build an invoice chaser for a small consultancy.
+
+Who it is for: a freelancer who forgets to chase unpaid invoices.
+
+What it must do:
+- Record invoices: client, amount, issue date, due date, paid/unpaid.
+- Show an ageing view: due soon, overdue by 1-30 days, overdue by 30+.
+- Draft a polite reminder email whose tone escalates with how overdue it is.
+- Never send anything automatically — the user reviews and sends.
+
+Done when: an invoice 45 days overdue appears in the right bucket with the firmest of the three drafts, and nothing is sent without an explicit click.`,
+  },
+  {
+    tag: "Internal",
+    title: "Access review helper",
+    brief: `Build an access review helper.
+
+Who it is for: a team that has to certify quarterly who has access to what.
+
+What it must do:
+- Import a list of users, systems and roles from CSV.
+- Generate a review round: each owner sees only their systems and approves or revokes per user.
+- Track progress and produce an export of every decision with a timestamp and reviewer.
+- Flag users with access to a system who have not logged in for 90 days.
+
+Done when: a round with two owners shows each only their own systems, and the export contains one row per decision.`,
+  },
+  {
+    tag: "DevTools",
+    title: "Env-var drift checker",
+    brief: `Build an environment variable drift checker.
+
+Who it is for: a team whose staging and production configs silently diverge.
+
+What it must do:
+- Read a .env.example as the schema and compare against each environment's actual key list.
+- Report three things separately: missing keys, extra keys, and keys present but empty.
+- Never read or display a value — key names only.
+- Exit non-zero in CI when a required key is missing.
+
+Done when: an environment missing one required key fails CI naming exactly that key, and no value is ever printed.`,
+  },
 ];
+
+const IDEAS_PER_PAGE = 4;
 
 export function AskBossHero({
   projectId,
@@ -72,6 +205,7 @@ export function AskBossHero({
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [ranAction, setRanAction] = useState<string | null>(null);
+  const [ideaPage, setIdeaPage] = useState(0);
   const [busy, startTransition] = useTransition();
   const boxRef = useRef<HTMLTextAreaElement>(null);
 
@@ -182,6 +316,30 @@ export function AskBossHero({
     startTransition(async () => { await submitCommandAction(fd); });
   }, [busy, projectId, actor]);
 
+  /**
+   * Put a brief in the composer. Deliberately does NOT build.
+   *
+   * Clicking a suggestion used to fire a governed build immediately — a click that spends money
+   * on a one-line spec nobody had read. It drafts now: the operator edits the brief, then
+   * presses Build when they mean it.
+   */
+  const draftIdea = useCallback((idea: Idea) => {
+    setInput(idea.brief);
+    setError(""); setReply(""); setProposed([]);
+    // Let the textarea size to the brief before the caret lands at the end.
+    window.requestAnimationFrame(() => {
+      const box = boxRef.current;
+      if (!box) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.style.height = "auto";
+      box.style.height = `${Math.min(box.scrollHeight, 320)}px`;
+    });
+  }, []);
+
+  const pageCount = Math.ceil(IDEAS.length / IDEAS_PER_PAGE);
+  const shownIdeas = IDEAS.slice(ideaPage * IDEAS_PER_PAGE, ideaPage * IDEAS_PER_PAGE + IDEAS_PER_PAGE);
+
   const slow = elapsed >= NORMAL_SECONDS;
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
 
@@ -223,7 +381,12 @@ export function AskBossHero({
               rows={1}
               disabled={busy}
               placeholder="Ask a question, or describe something to build…"
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                // A brief is many lines; a fixed one-row box hid all but the first.
+                e.target.style.height = "auto";
+                e.target.style.height = `${Math.min(e.target.scrollHeight, 320)}px`;
+              }}
               // Enter sends; Shift+Enter is a newline. A chat box that needs a mouse to send
               // is not a chat box.
               onKeyDown={(e) => {
@@ -272,21 +435,44 @@ export function AskBossHero({
 
           {!reply && !busy ? (
             <div className="askboss-ideas">
-              <span className="askboss-ideas-label">Or start something</span>
-              <div className="askboss-openers">
-                {IDEAS.map((i) => (
+              <div className="askboss-ideas-head">
+                <span className="askboss-ideas-label">Or start something</span>
+                <div className="askboss-ideas-nav">
+                  <span className="askboss-ideas-count">
+                    {ideaPage + 1} / {pageCount}
+                  </span>
                   <button
-                    key={i.text}
                     type="button"
-                    className="askboss-opener askboss-idea"
-                    onClick={() => { setInput(i.text); assign(i.text); }}
-                    title="Starts the governed build path"
+                    className="askboss-next"
+                    onClick={() => setIdeaPage((n) => (n + 1) % pageCount)}
+                    data-testid="askboss-ideas-next"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+              <div className="askboss-idea-grid">
+                {shownIdeas.map((i) => (
+                  <button
+                    key={i.title}
+                    type="button"
+                    className="askboss-idea"
+                    onClick={() => draftIdea(i)}
+                    title="Loads the full brief into the box — nothing starts until you press Build"
+                    data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
                     <span className="askboss-idea-tag">{i.tag}</span>
-                    {i.text}
+                    <span className="askboss-idea-title">{i.title}</span>
+                    <span className="askboss-idea-hint">
+                      {i.brief.split("\n")[0].replace(/^Build /, "")}
+                    </span>
                   </button>
                 ))}
               </div>
+              <p className="askboss-ideas-foot">
+                Clicking loads the full brief so you can edit it first — nothing builds until
+                you press Build.
+              </p>
             </div>
           ) : null}
         </form>

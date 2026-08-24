@@ -5729,23 +5729,71 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .askboss-assign:disabled { opacity: .45; cursor: not-allowed; }
 
-/* Starter outcomes. A blank prompt is the hardest first run, so the page offers a few real
-   ones — the fastest way to learn what BOSS does is to watch it do one. */
-.askboss-ideas { margin-top: 14px; }
+/* Starter briefs. A blank prompt is the hardest first run, so the page offers real ones —
+   as CARDS, because a brief is a paragraph, not a chip, and clicking one drafts it for
+   editing rather than spending money on a sentence nobody read. */
+.askboss-ideas { margin-top: 16px; }
+.askboss-ideas-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px;
+}
 .askboss-ideas-label {
-  display: block; margin-bottom: 8px;
   color: var(--muted, #7C8CB0);
   font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
 }
-.askboss-idea { padding-left: 12px; }
+.askboss-ideas-nav { display: flex; align-items: center; gap: 10px; }
+.askboss-ideas-count {
+  color: var(--muted, #7C8CB0); font-size: .74rem; font-variant-numeric: tabular-nums;
+}
+.askboss-next {
+  border: 1px solid var(--border, #1C2740);
+  background: rgba(255, 255, 255, .04);
+  color: var(--accent-text, #7FB0FF);
+  font: inherit; font-size: .8rem; font-weight: 600;
+  padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+.askboss-next:hover { background: rgba(76, 141, 246, .16); border-color: var(--accent, #4C8DF6); }
+
+.askboss-idea-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.askboss-idea {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 12px 14px; border-radius: 12px; cursor: pointer; text-align: left;
+  border: 1px solid var(--border, #1C2740);
+  background: rgba(255, 255, 255, .035);
+  color: var(--ink, #E8EEFC); font: inherit;
+  transition: background 150ms ease, border-color 150ms ease, transform 120ms ease;
+  min-width: 0;
+}
+.askboss-idea:hover {
+  background: rgba(76, 141, 246, .12);
+  border-color: var(--accent, #4C8DF6);
+  transform: translateY(-1px);
+}
 .askboss-idea-tag {
-  flex: 0 0 auto;
   padding: 2px 8px; border-radius: 6px;
   background: rgba(46, 209, 195, .14);
   border: 1px solid rgba(46, 209, 195, .34);
   color: #2ED1C3;
-  font-size: .66rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase;
+  font-size: .62rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
 }
+.askboss-idea-title { font-weight: 700; font-size: .95rem; }
+.askboss-idea-hint {
+  color: var(--ink-soft, #9FB0D0); font-size: .82rem; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.askboss-ideas-foot {
+  margin: 10px 0 0; color: var(--muted, #7C8CB0); font-size: .78rem;
+}
+
+/* The composer holds a multi-line brief now, so it must not clip to one row. */
+.askboss-input { min-height: 44px; }
+.askboss-box { align-items: flex-end; }
+
 @media (prefers-reduced-motion: reduce) {
   .askboss-assign:hover:not(:disabled) { transform: none; }
 }
