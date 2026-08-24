@@ -5930,41 +5930,41 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .cc-alert-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
 
 
-/* HIGHLIGHT, DO NOT RESIZE.
-   Rendering the extra detail inline grew the hovered card to roughly three times its height
-   and shoved the whole row around — worse than showing nothing. It floats above the card, so
-   the strip never changes size, and the card itself only lifts and brightens. */
-.askboss-idea { position: relative; }
+/* HIGHLIGHT INSIDE THE CARD, NOT OUTSIDE IT.
+   Two failed attempts before this. Rendered inline the detail tripled the card's height and
+   shoved the row around. Floated below the card it was CLIPPED — the strip must carry
+   overflow-x:auto to scroll at all, and that clips the y axis too, so anything hanging past
+   the card's bottom edge is sliced off. Visible in the operator's screenshot.
+
+   The overlay now covers the card's own area: same footprint, nothing to clip, no layout
+   shift. Which is what "highlight with the same window size" asked for in the first place. */
+.askboss-idea { position: relative; overflow: hidden; }
 .askboss-idea-peek {
   position: absolute;
-  left: 10px; right: 10px; top: calc(100% - 6px);
-  z-index: 5;
-  display: none;
-  padding: 9px 11px; border-radius: 9px;
-  border: 1px solid var(--accent, #4C8DF6);
-  background: var(--surface-2, #0F1830);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, .55);
-  color: var(--ink-soft, #9FB0D0); font-size: .74rem; line-height: 1.4;
+  inset: 0;
+  z-index: 2;
+  display: flex; align-items: flex-end;
+  padding: 12px 14px;
+  border-radius: 12px;
+  /* Fades up from the bottom so the tag and title stay readable underneath. */
+  background: linear-gradient(to top,
+    var(--surface-2, #0F1830) 0%,
+    var(--surface-2, #0F1830) 58%,
+    rgba(15, 24, 48, .92) 78%,
+    rgba(15, 24, 48, 0) 100%);
+  color: var(--ink-soft, #9FB0D0); font-size: .76rem; line-height: 1.45;
   text-align: left;
-  /* Two lines, hard stop — this is a hint, not the brief. */
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-  overflow: hidden;
-  visibility: hidden; opacity: 0;
-  transition: opacity 120ms ease;
+  opacity: 0;
+  transition: opacity 130ms ease;
   pointer-events: none;
 }
 .askboss-idea:hover, .askboss-idea:focus-visible {
-  z-index: 6;
   border-color: var(--accent, #4C8DF6);
-  background: var(--surface-2, #0F1830);
-  box-shadow: 0 0 0 1px var(--accent, #4C8DF6) inset, 0 8px 22px rgba(0, 0, 0, .40);
+  box-shadow: 0 0 0 1px var(--accent, #4C8DF6) inset;
 }
 .askboss-idea:hover .askboss-idea-peek,
-.askboss-idea:focus-visible .askboss-idea-peek { visibility: visible; opacity: 1; }
+.askboss-idea:focus-visible .askboss-idea-peek { opacity: 1; }
 
-/* Room for the overlay to hang below the strip without being clipped. */
-.askboss-idea-strip { padding-bottom: 8px; align-items: stretch; }
-.askboss-ideas { padding-bottom: 46px; }
 
 @media (prefers-reduced-motion: reduce) {
   /* The drift is suppressed by the effect itself; make sure the lift does not animate either. */
@@ -6046,4 +6046,70 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 @media (prefers-reduced-motion: reduce) {
   .dx-flow-step.current .dx-flow-dot { animation: none; }
+}
+
+
+/* Discovery list rows. This is the page the operator opens, and it was inline styles plus
+   `.detail` — grey text on grey. Same vocabulary as the Meeting room: a coloured stage chip,
+   the run's progress as a compact tick ribbon, and the numbers as pills. */
+.dx-row {
+  display: flex; flex-direction: column; gap: 9px; width: 100%;
+  padding: 14px 16px; text-align: left; cursor: pointer;
+  border: 1px solid var(--border, #1C2740);
+  border-left: 3px solid var(--border, #1C2740);
+  border-radius: 12px;
+  background: var(--surface, #0B1226);
+  color: inherit; font: inherit;
+  transition: border-color 150ms ease, background 150ms ease, transform 120ms ease;
+}
+.dx-row:hover {
+  border-color: var(--accent, #4C8DF6);
+  border-left-color: var(--accent, #4C8DF6);
+  background: var(--surface-2, #0F1830);
+  transform: translateY(-1px);
+}
+.dx-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dx-row-title {
+  flex: 1 1 auto; min-width: 0;
+  font-weight: 700; font-size: .98rem; line-height: 1.35; color: var(--ink, #E8EEFC);
+}
+.dx-row-badges { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Stage chip — where this run actually is, coloured by phase rather than stated in grey. */
+.dx-stage {
+  flex: 0 0 auto;
+  padding: 3px 10px; border-radius: 999px;
+  font-size: .64rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  border: 1px solid var(--border, #1C2740); color: var(--muted, #7C8CB0);
+}
+.dx-stage.stage-signal_sweep { color: #8B6AF5; border-color: rgba(139,106,245,.45); background: rgba(139,106,245,.12); }
+.dx-stage.stage-synthesize   { color: #4C8DF6; border-color: rgba(76,141,246,.45);  background: rgba(76,141,246,.14); }
+.dx-stage.stage-vet          { color: #E0A33E; border-color: rgba(224,163,62,.45);  background: rgba(224,163,62,.12); }
+.dx-stage.stage-shape        { color: #2ED1C3; border-color: rgba(46,209,195,.45);  background: rgba(46,209,195,.12); }
+.dx-stage.stage-done         { color: #2ED18B; border-color: rgba(46,209,139,.42);  background: rgba(46,209,139,.10); }
+
+/* The whole pipeline as five ticks — shape at a glance, without a legend. */
+.dx-mini-flow { display: flex; gap: 5px; align-items: center; }
+.dx-tick {
+  width: 26px; height: 3px; border-radius: 2px;
+  background: var(--border, #1C2740);
+}
+.dx-tick.done { background: var(--green, #2ED18B); }
+.dx-tick.current { background: var(--accent, #4C8DF6); animation: agentWorkingPulse 1.2s ease-in-out infinite; }
+.dx-tick.stopped { background: var(--red, #F85149); }
+
+.dx-row-stats { display: flex; gap: 8px; flex-wrap: wrap; }
+.dx-pill {
+  padding: 3px 9px; border-radius: 6px;
+  border: 1px solid var(--border, #1C2740);
+  background: rgba(255, 255, 255, .03);
+  color: var(--ink-soft, #9FB0D0); font-size: .76rem;
+}
+.dx-pill b { color: var(--ink, #E8EEFC); font-weight: 700; font-variant-numeric: tabular-nums; }
+.dx-pill.muted { color: var(--muted, #7C8CB0); }
+.dx-row-fail { color: var(--red, #F85149); font-size: .82rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dx-tick.current { animation: none; }
+  .dx-row:hover { transform: none; }
 }

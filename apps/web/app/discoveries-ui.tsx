@@ -156,27 +156,55 @@ export function DiscoveriesHome({ projectId, orgId, discoveries, apiReachable }:
             const findings = st.signal_findings?.length ?? 0;
             const outcomes = st.candidate_outcomes?.length ?? 0;
             const title = (d.seed && d.seed.trim()) || d.title || "(untitled)";
+            // THE LIST IS WHAT THE OPERATOR SEES.
+            //
+            // The colour work went into the expanded run detail, which is one click away — so
+            // the page itself looked untouched, and the operator said so. Same vocabulary as
+            // the Meeting room applied HERE: a coloured stage chip, the flow as a compact
+            // ribbon, and the numbers as pills rather than grey text.
             return (
-              <button key={d.id} className="ct-card" onClick={() => setSelected(d.id)} style={{ gap: 6 }}>
-                <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
-                  <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.35, color: "var(--ink)", flex: 1, minWidth: 0 }}>
-                    <span style={{ color: "var(--muted)", fontWeight: 600, marginRight: 8 }}>{i + 1}.</span>
-                    {title}
-                  </div>
-                  <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <button key={d.id} className="dx-row" onClick={() => setSelected(d.id)}>
+                <span className="dx-row-head">
+                  <span className={`dx-stage stage-${String(d.phase || "queued")}`}>
+                    {PHASE_LABEL[d.phase] ?? d.phase}
+                  </span>
+                  <span className="dx-row-title">{title}</span>
+                  <span className="dx-row-badges">
                     <span className={`cap-badge tone-${statusTone(d.status)}`}>{d.status}</span>
                     <VerdictBadge v={verdict} />
                   </span>
-                </div>
-                <div className="detail">
-                  {d.status === "running" ? `running — ${PHASE_LABEL[d.phase] ?? d.phase}` :
-                   d.status === "failed" ? `✗ ${(d.error ?? "failed").slice(0, 80)}` :
-                   `${findings} cited signals · ${outcomes} outcome${outcomes === 1 ? "" : "s"}`}
-                </div>
-                <div className="ct-card-foot">
-                  {st.gate?.confidence != null ? <span className="detail">confidence {Math.round((st.gate.confidence ?? 0) * 100)}%</span> : null}
-                  {d.usage?.cost_usd_micros != null ? <span className="detail">{fmtUsd(d.usage.cost_usd_micros)}</span> : null}
-                </div>
+                </span>
+
+                <span className="dx-mini-flow" aria-hidden>
+                  {PHASE_ORDER.map((ph) => {
+                    const at = PHASE_ORDER.indexOf(d.phase);
+                    const done = PHASE_ORDER.indexOf(ph) < at || d.status === "completed";
+                    const cur = ph === d.phase && d.status === "running";
+                    const stopped = ph === d.phase && d.status === "failed";
+                    return (
+                      <span
+                        key={ph}
+                        className={`dx-tick${done ? " done" : ""}${cur ? " current" : ""}${stopped ? " stopped" : ""}`}
+                        title={PHASE_LABEL[ph]}
+                      />
+                    );
+                  })}
+                </span>
+
+                {d.status === "failed" ? (
+                  <span className="dx-row-fail">✗ {(d.error ?? "failed").slice(0, 120)}</span>
+                ) : (
+                  <span className="dx-row-stats">
+                    <span className="dx-pill"><b>{findings}</b> cited signals</span>
+                    <span className="dx-pill"><b>{outcomes}</b> outcome{outcomes === 1 ? "" : "s"}</span>
+                    {st.gate?.confidence != null ? (
+                      <span className="dx-pill"><b>{Math.round((st.gate.confidence ?? 0) * 100)}%</b> confidence</span>
+                    ) : null}
+                    {d.usage?.cost_usd_micros != null ? (
+                      <span className="dx-pill muted">{fmtUsd(d.usage.cost_usd_micros)}</span>
+                    ) : null}
+                  </span>
+                )}
               </button>
             );
           })}

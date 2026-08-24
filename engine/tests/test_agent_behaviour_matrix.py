@@ -640,12 +640,18 @@ def test_auto_scroll_is_not_silently_disabled_by_an_os_setting():
 
 
 def test_the_hover_detail_does_not_resize_the_card():
-    """Rendered inline it grew the hovered card to ~3x its height and shoved the row around."""
+    """Three attempts at this. Inline, it tripled the card's height and shoved the row around.
+    Floated below, it was clipped by the strip's overflow-x. It now covers the card's own area,
+    so containment is structural — inset:0 inside a card that hides overflow cannot change the
+    layout or be sliced, and needs no text-length trick to stay put."""
     css = pathlib.Path("apps/web/app/globals.css").read_text(encoding="utf-8")
     i = css.index(".askboss-idea-peek {")
     block = css[i:css.index("}", i)]
     assert "position: absolute" in block, "the detail still occupies layout space"
-    assert "-webkit-line-clamp: 2" in block, "no cap on how much it shows"
+    assert "inset: 0" in block, "the overlay is not bounded to the card"
+    card = css.index(".askboss-idea { position: relative;")
+    assert "overflow: hidden" in css[card:css.index("}", card)], (
+        "the card does not clip its own overlay, so long text can still escape")
 
 
 def test_there_are_enough_ideas_to_be_worth_cycling():
@@ -1011,3 +1017,27 @@ def test_the_drift_banks_sub_pixel_movement():
     # and the naive form must not come back
     code = re.sub(r"//.*$", "", body, flags=re.M)
     assert "scrollLeft + move" not in code, "fractional pixels assigned to scrollLeft again"
+
+
+def test_the_discovery_LIST_is_restyled_not_only_the_expanded_run():
+    """"I asked for a change on the discovery page but it looks the same." It did. The colour
+    work went into RunDetail, which is one click away, so the page the operator opens was
+    untouched — and my own check showed dx-flow absent from that page's HTML, which I explained
+    away instead of following."""
+    src = pathlib.Path("apps/web/app/discoveries-ui.tsx").read_text(encoding="utf-8")
+    i = src.index("setSelected(d.id)")           # the list row, not the detail
+    row = src[max(0, i - 400):i + 2600]
+    assert "dx-row" in row, "the list row is still the old ct-card"
+    assert "dx-stage" in row, "no stage chip on the row"
+    assert "dx-mini-flow" in row, "the row does not show where the run got to"
+    assert "dx-pill" in row, "the numbers are still plain grey text"
+
+
+def test_the_hover_overlay_cannot_be_clipped_by_the_scroll_container():
+    """Floated below the card it was sliced off: the strip needs overflow-x:auto to scroll, and
+    that clips the y axis too. The overlay covers the card's own area instead."""
+    css = pathlib.Path("apps/web/app/globals.css").read_text(encoding="utf-8")
+    i = css.index(".askboss-idea-peek {")
+    block = css[i:css.index("}", i)]
+    assert "inset: 0" in block, "the overlay still hangs outside the card"
+    assert "top: calc(100%" not in block, "still positioned below the card, where it is clipped"

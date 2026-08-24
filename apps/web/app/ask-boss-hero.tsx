@@ -798,7 +798,6 @@ export function AskBossHero({
                     type="button"
                     className="askboss-idea"
                     onClick={() => draftIdea(i)}
-                    title="Loads the full brief into the box — nothing starts until you press Build"
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
                     <span className="askboss-idea-tag">{i.tag}</span>
