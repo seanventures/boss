@@ -11668,6 +11668,20 @@ def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
         return delivery_metrics(connection, project_id, days=window)
 
 
+@app.get("/v1/metrics/in-flight")
+def in_flight_endpoint(project_id: str, limit: int = 8) -> dict:
+    """Work started recently, and the console area that shows its current stage.
+
+    Pressing Build produced no visible trace: the task, the meeting and the run all existed,
+    and the operator had no way to see any of them. Stage is derived from what EXISTS rather
+    than a status column, so it stays right even when a status is never updated.
+    """
+    from boss_engine.services.self_observability import in_flight
+
+    with engine.begin() as connection:
+        return {"items": in_flight(connection, project_id, limit=limit)}
+
+
 @app.get("/v1/self/diagnostics")
 def self_diagnostics(preview_root: Optional[str] = None) -> dict:
     """What BOSS can see about the container it is itself running in.

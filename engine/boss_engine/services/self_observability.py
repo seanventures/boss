@@ -329,6 +329,16 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
         f"SELECT count(*) FROM code_task_runs "
         f"WHERE project_id = :p AND status IN ('failed','error') AND {since}")
     jobs_ran = scalar(f"SELECT count(*) FROM jobs WHERE project_id = :p AND {since}")
+    # WHAT IS HAPPENING RIGHT NOW, from the work itself.
+    #
+    # The console's "Agents active" tile counted ROLES that own a task in an active column.
+    # Only 23 of 187 tasks carry an owner_role_id at all, so it read 0/21 while four runs were
+    # genuinely executing — honest arithmetic over a field nothing populates, which reads as
+    # broken. These count the work, which is what the operator is actually asking about.
+    runs_running = scalar(
+        "SELECT count(*) FROM code_task_runs WHERE project_id = :p AND status = 'running'")
+    jobs_queued = scalar(
+        "SELECT count(*) FROM jobs WHERE project_id = :p AND status IN ('queued','leased')")
     deploys = scalar(f"SELECT count(*) FROM deployment_runs WHERE project_id = :p AND {since}")
 
     micros = scalar(
@@ -355,8 +365,83 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
             round(100.0 * (runs_total - runs_failed) / runs_total, 1) if runs_total else None
         ),
         "jobs_ran": int(jobs_ran),
+        "runs_running": int(runs_running),
+        "jobs_queued": int(jobs_queued),
         "deployments": int(deploys),
         "spend_usd": round(int(micros) / 1_000_000, 2),
         "tokens": int(tokens),
         "agent_hours": round(int(latency_ms) / 3_600_000, 2),
     }
+
+
+# --------------------------------------------------------------------------- #
+# What did I just start, and where is it?
+# --------------------------------------------------------------------------- #
+# An operator pressed Build, saw "Working", and had no idea what happened next — the work was
+# real and running, but nothing on screen said so or where to look. This answers both: the
+# thing's current STAGE, and the console area that shows that stage.
+
+_STAGE_AREA = {
+    "discovery": "discovery",
+    "meeting": "meetings",
+    "coding": "code_tasks",
+    "review": "decisions",
+    "deployment": "delivery",
+    "done": "code_tasks",
+}
+
+
+def in_flight(connection, project_id: str, *, limit: int = 8) -> list[dict]:
+    """Recently started work, newest first, each with the stage it is actually in.
+
+    Stage is derived from what EXISTS, not from a status column that may never have been
+    updated: a deployment run means it is deploying, a code run means it is coding, a meeting
+    means the panel is sitting. That ordering matters — the furthest-along artifact wins,
+    because a task that reached deployment also has a meeting behind it.
+    """
+    from sqlalchemy import text as _sql
+
+    rows = connection.execute(
+        _sql(
+            """
+            SELECT t.id, t.title, t.status, t.created_at,
+                   (SELECT count(*) FROM meetings m WHERE m.task_id = t.id)          AS meetings,
+                   (SELECT count(*) FROM code_task_runs r WHERE r.task_id = t.id)    AS runs,
+                   (SELECT count(*) FROM code_task_runs r
+                     WHERE r.task_id = t.id AND r.status = 'running')                AS runs_active,
+                   (SELECT count(*) FROM deployment_runs d
+                     WHERE d.project_id = t.project_id
+                       AND d.created_at >= t.created_at)                             AS deploys
+            FROM tasks t
+            WHERE t.project_id = :p
+              AND t.created_at > now() - interval '3 days'
+            ORDER BY t.created_at DESC
+            LIMIT :lim
+            """
+        ),
+        {"p": project_id, "lim": max(1, min(int(limit), 25))},
+    ).mappings().all()
+
+    out = []
+    for r in rows:
+        status = str(r["status"] or "")
+        if int(r["runs_active"] or 0):
+            stage = "coding"
+        elif int(r["runs"] or 0):
+            stage = "review" if status not in ("completed", "failed") else "done"
+        elif int(r["meetings"] or 0):
+            stage = "meeting"
+        else:
+            stage = "discovery"
+        if status in ("completed", "failed", "cancelled"):
+            stage = "done"
+        out.append({
+            "task_id": r["id"],
+            "title": (str(r["title"] or "").splitlines() or [""])[0][:110],
+            "status": status,
+            "stage": stage,
+            "area": _STAGE_AREA.get(stage, "code_tasks"),
+            "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            "active": status not in ("completed", "failed", "cancelled"),
+        })
+    return out
