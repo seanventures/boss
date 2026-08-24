@@ -1215,110 +1215,32 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             )}
           </article>
         </section>
+        {/* THE DIAGNOSTIC GRID IS GONE, DELIBERATELY.
+            Eleven tiles: Project, Database "Connected", Auth Session "Ceo", Budget State,
+            Pending Decisions, Active Jobs, Open Tasks, Blocking State "Clear", Artifacts,
+            Events, Deadletters. Almost all of it answered a question an operator never asks —
+            whether Postgres is reachable and which auth method the console used are things
+            they find out by the console working at all. Three were already duplicated by the
+            KPI row above (pending decisions, open tasks, active jobs).
 
-        <section className="grid" data-area="overview">
-          <article>
-            <h2>Project</h2>
-            <div className="metric">{status.projectName}</div>
-            <p className="detail">
-              {status.orgName} / {status.workspaceName} / {status.projectId}
-            </p>
-          </article>
-          <article>
-            <h2>Database</h2>
-            <div className="metric">
-              {status.databaseConnected ? "Connected" : "Offline"}
-            </div>
-            <p className="detail">
-              Budget and workflow state are sourced from Postgres.
-            </p>
-          </article>
-          <article>
-            <h2>Auth Session</h2>
-            <div className="metric">
-              {authSession.actorBindingRequired
-                ? authSession.principalMemberId ?? "Bound"
-                : authSession.authRequired
-                  ? authSession.authMethod ?? "API key"
-                  : "Local"}
-            </div>
-            <p className="detail">
-              {authSession.apiReachable
-                ? authSession.message
-                : authSession.blockedReason ?? "Auth session API unavailable."}
-            </p>
-            <p className="detail">
-              Transport:{" "}
-              {authSession.transportAuthenticated ? "authenticated" : "open"} /
-              method {authSession.authMethod ?? "none"} / OIDC{" "}
-              {authSession.oidcEnabled ? "enabled" : "disabled"}
-            </p>
-          </article>
-          <article>
-            <h2>Budget State</h2>
-            <div className="metric">{status.budgetState}</div>
-            <p className="detail">
-              Real model and GitHub actions will fail closed without an active
-              reservation.
-            </p>
-          </article>
-          <article>
-            <h2>Pending Decisions</h2>
-            <div className="metric">{status.pendingDecisions}</div>
-            <p className="detail">
-              Decisions stay explicit when credentials, budget, or approvals are
-              missing.
-            </p>
-          </article>
-          <article>
-            <h2>Active Jobs</h2>
-            <div className="metric">{status.activeJobs}</div>
-            <p className="detail">
-              Leased or running jobs visible from the current control-plane state.
-            </p>
-          </article>
-        </section>
-
-        <section className="grid" data-area="overview">
-          <article>
-            <h2>Open Tasks</h2>
-            <div className="metric">{status.openTasks}</div>
-            <p className="detail">
-              Recent task state is shown below with direct IDs from the API.
-            </p>
-          </article>
-          <article>
-            <h2>Blocking State</h2>
-            <div className="metric">
-              {status.blockedReason ? "Visible" : "Clear"}
-            </div>
-            <p className="detail">
-              {status.blockedReason ??
-                "No bootstrap blocker reported by the control plane."}
-            </p>
-          </article>
-          <article>
-            <h2>Artifacts</h2>
-            <div className="metric">{artifacts.items.length}</div>
-            <p className="detail">
-              Recent review packets, plans, merge results, and command briefs.
-            </p>
-          </article>
-          <article>
-            <h2>Events</h2>
-            <div className="metric">{events.items.length}</div>
-            <p className="detail">
-              What changed is derived from immutable event records.
-            </p>
-          </article>
-          <article>
-            <h2>Deadletters</h2>
-            <div className="metric">{status.deadletters}</div>
-            <p className="detail">
-              Incidents must become visible deadletters or blocked states, never silent drops.
-            </p>
-          </article>
-        </section>
+            The one line worth keeping was Deadletters, because a non-zero count is work that
+            FAILED and is sitting unseen — so it survives as an alert that only appears when
+            there is something to act on, rather than as a tile reading 0 forever. */}
+        {deadletters.items.length > 0 ? (
+          <section className="panel-stack" data-area="overview" aria-label="Failed work">
+            <AreaLink className="cc-alert" area="monitoring" orgId={activeOrgId}>
+              <span className="cc-alert-count">{deadletters.items.length}</span>
+              <span className="cc-alert-main">
+                <strong>items failed and are waiting</strong>
+                <span className="detail">
+                  Deadlettered work never retries itself. Open Monitoring to see why each one
+                  stopped.
+                </span>
+              </span>
+              <span className="cc-flight-go" aria-hidden>→</span>
+            </AreaLink>
+          </section>
+        ) : null}
 
         <section className="bx-overview" data-area="overview" aria-label="Overview summary">
           <div className="bx-overview-split">

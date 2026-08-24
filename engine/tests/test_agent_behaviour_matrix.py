@@ -754,3 +754,47 @@ def test_the_host_lookup_always_settles():
     body = src[i:i + 900]
     assert "Promise.race" in body and "timed out" in body
     assert ".catch(" in body, "a rejected lookup would leave the card loading forever"
+
+
+# --------------------------------------------------------------------------- #
+# Research is a stage, and a stale tab is not a broken host
+# --------------------------------------------------------------------------- #
+def test_the_composer_can_research_not_only_ask_and_build():
+    """The flow started at "convene a meeting", so the only way in was to already know what you
+    wanted made. Discovery is the stage for when you do not."""
+    src = _hero_src()
+    assert "startDiscoveryAction" in src
+    assert "askboss-research" in src, "no Research action on the composer"
+    assert "RESEARCH" in src and src.count("seed:") >= 4, "no research starters"
+
+
+def test_research_seeds_are_questions_not_products():
+    """A seed that names a product is a build directive wearing a research label."""
+    import re
+    seeds = re.findall(r'seed: "([^"]+)"', _hero_src())
+    assert len(seeds) >= 4
+    for s in seeds:
+        assert s.rstrip().endswith("?"), f"not a research question: {s}"
+        assert not s.lower().startswith("build "), f"that is a build, not research: {s}"
+
+
+def test_a_stale_tab_is_not_reported_as_a_broken_host():
+    """After a redeploy an open tab calls server-action ids that no longer exist. It surfaced as
+    "Could not read the host list", sending the operator to check a VM that was never down."""
+    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    assert "isStaleClient" in src
+    assert "UnrecognizedActionError" in src
+    i = src.index("isStaleClient(loadError)")
+    assert "older version of the console" in src[i:i + 500]
+    assert "reload" in src[i:i + 700].lower(), "no way out is offered"
+
+
+def test_the_debug_grid_is_gone_and_failures_are_not():
+    """Eleven tiles answering questions nobody asks — is Postgres reachable, which auth method —
+    three of them already duplicated by the KPI row. Deadletters was the one that mattered, so
+    it survives as an alert that appears only when there is something to act on."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    assert "<h2>Auth Session</h2>" not in src
+    assert "<h2>Blocking State</h2>" not in src
+    assert "<h2>Database</h2>" not in src
+    assert "deadletters.items.length > 0" in src, "failed work is no longer surfaced at all"

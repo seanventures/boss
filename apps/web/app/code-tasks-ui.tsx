@@ -702,6 +702,25 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running, 
  * The result is shared and briefly cached: the host list is the same for every card on the
  * page, so asking N times was never anything but waste.
  */
+/**
+ * Did this tab outlive the build it was served by?
+ *
+ * Next.js derives a fresh id for every server action on every build, so a tab left open across
+ * a deploy calls ids the server no longer knows and gets UnrecognizedActionError. The page
+ * looks broken and the message blames the host list, which is the one thing that was fine.
+ *
+ * This deploys often, so that is a normal event, not an edge case — say what it is and offer
+ * the one action that fixes it.
+ */
+export function isStaleClient(error: unknown): boolean {
+  const text = String(error ?? "");
+  return (
+    text.includes("UnrecognizedActionError") ||
+    text.includes("was not found on the server") ||
+    text.includes("Failed to find Server Action")
+  );
+}
+
 const HOSTS_TTL_MS = 30_000;
 const hostsCache = new Map<string, { at: number; promise: Promise<unknown> }>();
 
@@ -770,12 +789,23 @@ function SetupDeployment({ run, projectId, onDone }: {
       {loadState === "loading" ? (
         <span className="detail">Checking for a host&hellip;</span>
       ) : loadState === "error" ? (
-        // Blaming a missing host for a failed lookup sends the operator to onboard a host
-        // they already have. Say which of the two actually happened.
-        <span className="detail">
-          Could not read the host list ({loadError}). The app may already have a host —
-          retry before onboarding a new one.
-        </span>
+        isStaleClient(loadError) ? (
+          // Not a host problem at all: this tab was served by an older build. Blaming the host
+          // list here sent the operator to check a VM that was never down.
+          <span className="detail">
+            This tab is running an older version of the console (BOSS was redeployed).{" "}
+            <button type="button" className="linklike" onClick={() => window.location.reload()}>
+              Reload to continue
+            </button>
+          </span>
+        ) : (
+          // Blaming a missing host for a failed lookup sends the operator to onboard a host
+          // they already have. Say which of the two actually happened.
+          <span className="detail">
+            Could not read the host list ({loadError}). The app may already have a host —
+            retry before onboarding a new one.
+          </span>
+        )
       ) : !ready ? (
         // Naming the missing thing beats an empty picker: "no hosts" reads as a broken form.
         <span className="detail">

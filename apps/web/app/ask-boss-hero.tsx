@@ -20,7 +20,12 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
-import { askBossAction, runAgentActionAction, startBuildAction } from "./actions";
+import {
+  askBossAction,
+  runAgentActionAction,
+  startBuildAction,
+  startDiscoveryAction,
+} from "./actions";
 
 const NORMAL_SECONDS = 20;
 const STALL_SECONDS = 120;
@@ -307,6 +312,23 @@ Done when: a package two years old is marked unmaintained with its age, and a de
   },
 ];
 
+/**
+ * Research seeds — the step BEFORE a build.
+ *
+ * The composer could ask and it could build, so the only way in was to already know what you
+ * wanted made. Discovery is the stage for when you do not: it researches a seed on the web and
+ * produces a cited dossier plus candidate outcomes, which is where a directive should come
+ * from when the idea is not yet formed.
+ *
+ * Phrased as questions, not products, because that is what separates research from a build.
+ */
+const RESEARCH: Array<{ tag: string; seed: string }> = [
+  { tag: "Market",  seed: "What are teams currently using to manage on-call rotas, and what do they complain about?" },
+  { tag: "Problem", seed: "Why do small teams abandon their internal tools within a year?" },
+  { tag: "Signal",  seed: "Which developer-tooling categories have had the most new entrants in the last year?" },
+  { tag: "Compete", seed: "How do incident-management products differentiate on pricing for teams under 20 people?" },
+];
+
 const IDEAS_PER_PAGE = 4;
 
 export function AskBossHero({
@@ -488,6 +510,27 @@ export function AskBossHero({
 
   const shownIdeas = IDEAS.slice(ideaPage * IDEAS_PER_PAGE, ideaPage * IDEAS_PER_PAGE + IDEAS_PER_PAGE);
 
+  /** Start a Discovery run: research first, decide what to build after. */
+  const research = useCallback((seedText: string) => {
+    const seed = seedText.trim();
+    if (!seed || busy) return;
+    setError(""); setReply(""); setProposed([]);
+    const fd = new FormData();
+    fd.set("seed", seed);
+    fd.set("project_id", projectId);
+    fd.set("actor", actor);
+    startTransition(async () => {
+      const r = await startDiscoveryAction(null, fd);
+      if (r.error) { setError(r.error); return; }
+      setInput("");
+      setReply(
+        `**Researching.** Discovery run \`${r.runId ?? ""}\` is gathering sources.\n\n` +
+        `It produces a cited dossier and candidate outcomes — watch it under **Discovery**. ` +
+        `When something looks worth building, bring it back here and press Build.`,
+      );
+    });
+  }, [busy, projectId, actor]);
+
   const slow = elapsed >= NORMAL_SECONDS;
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
 
@@ -556,6 +599,16 @@ export function AskBossHero({
                 className="askboss-assign"
                 type="button"
                 disabled={busy || !input.trim()}
+                data-testid="askboss-research"
+                title="Research this first — web sources, cited dossier, candidate outcomes"
+                onClick={() => research(input)}
+              >
+                Research
+              </button>
+              <button
+                className="askboss-assign"
+                type="button"
+                disabled={busy || !input.trim()}
                 data-testid="askboss-assign"
                 title="Send this down the governed path — panel, PRD, then code"
                 onClick={() => assign(input)}
@@ -583,6 +636,23 @@ export function AskBossHero({
 
           {!reply && !busy ? (
             <div className="askboss-ideas">
+              <div className="askboss-research-row">
+                <span className="askboss-ideas-label">Not sure yet? Research it</span>
+                <div className="askboss-openers">
+                  {RESEARCH.map((r) => (
+                    <button
+                      key={r.seed}
+                      type="button"
+                      className="askboss-opener"
+                      onClick={() => { setInput(r.seed); research(r.seed); }}
+                      title="Starts a Discovery run — web research, cited dossier"
+                    >
+                      <span className="askboss-idea-tag">{r.tag}</span>
+                      {r.seed}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>
                 <div className="askboss-ideas-nav">
