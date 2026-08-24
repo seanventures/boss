@@ -1141,7 +1141,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
-        <section className="panel-stack" data-area="overview" aria-label="Design-partner setup">
+        <section className="panel-stack" data-area="overview" aria-label="What you can do here">
           <OnboardingHelpCard />
         </section>
 

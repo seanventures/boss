@@ -569,4 +569,69 @@ def _extract_json(text_out: str) -> dict:
     try:
         return json.loads(repaired)
     except Exception:
-        return {}
+        pass
+
+    # LAST RESORT: KEEP WHAT COMPLETED, DROP WHAT DID NOT.
+    #
+    # Balancing brackets cannot fix a reply cut off mid-KEY or mid-ELEMENT — it yields things
+    # like {"brief": {"hyp"} or a half-written finding, so the whole object was discarded
+    # INCLUDING the findings that had already parsed. That is how a sweep carrying eleven good
+    # findings reported "no findings".
+    #
+    # Walk back through the completed boundaries — the end of any value, or the comma before
+    # the next one — and at each, close whatever is still open and try again. The first prefix
+    # that parses is the most complete valid dossier the reply contained. A partial dossier is
+    # worth far more than an empty one, and the caller can see which keys survived.
+    def _close(prefix: str) -> str:
+        instr2 = esc2 = False
+        stack2: list[str] = []
+        for ch2 in prefix:
+            if instr2:
+                if esc2:
+                    esc2 = False
+                elif ch2 == "\\":
+                    esc2 = True
+                elif ch2 == '"':
+                    instr2 = False
+                continue
+            if ch2 == '"':
+                instr2 = True
+            elif ch2 in "{[":
+                stack2.append(ch2)
+            elif ch2 in "}]" and stack2:
+                stack2.pop()
+        out = prefix.rstrip().rstrip(",")
+        for op2 in reversed(stack2):
+            out += "}" if op2 == "{" else "]"
+        return out
+
+    depth = 0
+    instr = esc = False
+    cuts: list[int] = []
+    for n, ch in enumerate(s):
+        if instr:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                instr = False
+            continue
+        if ch == '"':
+            instr = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth >= 1:
+                cuts.append(n + 1)       # a value just completed, at any nesting level
+        elif ch == "," and depth >= 1:
+            cuts.append(n)               # just before whatever came next
+    for cut in reversed(cuts):
+        try:
+            parsed = json.loads(_close(s[:cut]))
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            continue
+    return {}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState, type ReactNode } from "react";
+import React, { useActionState, useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 import type { DiscoveryRun, DiscoveryFinding, DiscoveryOutcome } from "@boss/api-client";
@@ -212,20 +212,27 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
         {run.context ? <div className="detail" style={{ marginTop: 4 }}>Context: {run.context}</div> : null}
       </div>
 
-      {/* progress rail — only while running */}
-      {live ? (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {PHASE_ORDER.map((p) => {
-            const done = PHASE_ORDER.indexOf(p) < PHASE_ORDER.indexOf(run.phase);
-            const cur = p === run.phase;
-            return (
-              <span key={p} className="cap-badge" style={{ opacity: done || cur ? 1 : 0.4, background: cur ? "#1f6feb33" : undefined }}>
-                {done ? "✓ " : cur ? "● " : ""}{PHASE_LABEL[p]}
+      {/* THE FLOW, ALWAYS. This appeared only while running, so a finished or failed run showed
+          no shape at all — which is most of why this page read as a wall of grey next to the
+          Meeting room. Same treatment as the meeting flow ribbon: where it got to, and where
+          it stopped. */}
+      <div className="dx-flow" data-testid="discovery-flow">
+        {PHASE_ORDER.map((p, n) => {
+          const at = PHASE_ORDER.indexOf(run.phase);
+          const done = PHASE_ORDER.indexOf(p) < at || run.status === "completed";
+          const cur = p === run.phase && live;
+          const stopped = p === run.phase && run.status === "failed";
+          return (
+            <React.Fragment key={p}>
+              {n > 0 ? <span className="dx-flow-arrow" aria-hidden>→</span> : null}
+              <span className={`dx-flow-step${done ? " done" : ""}${cur ? " current" : ""}${stopped ? " stopped" : ""}`}>
+                <span className="dx-flow-dot" aria-hidden />
+                {PHASE_LABEL[p]}
               </span>
-            );
-          })}
-        </div>
-      ) : null}
+            </React.Fragment>
+          );
+        })}
+      </div>
 
       {run.error ? <div className="panel" style={{ padding: 12, color: "#f85149" }}>⚠ {run.error}</div> : null}
 
@@ -306,7 +313,12 @@ function DiscoveryDetail({ run, orgId, onBack }: { run: DiscoveryRun; orgId?: st
           <div style={{ display: "grid", gap: 10 }}>
             {d.signal_findings!.map((f: DiscoveryFinding, i) => (
               <div key={i} style={{ display: "grid", gap: 2 }}>
-                <div className="detail"><span className="cap-badge">{f.angle}</span> {f.finding}</div>
+                <div className="dx-finding">
+                  <span className={`dx-angle angle-${String(f.angle || "other").toLowerCase()}`}>
+                    {f.angle}
+                  </span>
+                  <span className="dx-finding-text">{f.finding}</span>
+                </div>
                 {f.evidence ? <div className="detail">{f.evidence}</div> : null}
                 {f.citation_url ? <a className="detail" href={f.citation_url} target="_blank" rel="noreferrer" style={{ color: "#58a6ff" }}>{f.citation_url} ↗</a> : null}
               </div>

@@ -552,6 +552,39 @@ export function AskBossHero({
     });
   }, [busy, projectId, actor]);
 
+  // A SLOW DRIFT THE OPERATOR CAN OVERRIDE.
+  //
+  // Manual scrolling alone means the cards sit still and most people never learn there are
+  // sixteen. The strip drifts continuously instead — slowly enough to read across, not in
+  // page-sized jumps, so nothing you are looking at is ever yanked away.
+  //
+  // It stops the moment attention lands on it: pointer over the strip OR the composer, focus
+  // inside either, a turn running, an answer on screen, or any text typed. Motion that
+  // competes with what you are doing is worse than no motion.
+  const [stripHeld, setStripHeld] = useState(false);
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    if (stripHeld || busy || reply || input.trim()) return;
+    // Someone who has asked for less motion did not ask for a strip that moves by itself.
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    let raf = 0;
+    let last = 0;
+    const PX_PER_SECOND = 14;          // about one card every fifteen seconds
+    const step = (t: number) => {
+      if (last) {
+        const move = ((t - last) / 1000) * PX_PER_SECOND;
+        const end = strip.scrollWidth - strip.clientWidth;
+        // Wrap rather than stop: a strip that parks at the end looks broken.
+        strip.scrollLeft = end <= 0 ? 0 : (strip.scrollLeft + move) % (end + 1);
+      }
+      last = t;
+      raf = window.requestAnimationFrame(step);
+    };
+    raf = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(raf);
+  }, [stripHeld, busy, reply, input]);
+
   const slow = elapsed >= NORMAL_SECONDS;
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
 
@@ -565,14 +598,14 @@ export function AskBossHero({
         <header className="mr-header askboss-head">
           <div className="mr-header-main">
             <span className="eyebrow">BOSS Agent</span>
-            <h3 className="mr-title">Ask BOSS</h3>
+            <h3 className="mr-title">From idea to shipped — without the meetings.</h3>
             {/* The first line on the first page described PLUMBING — "reads live control-plane
                 state and acts with your approval" — which tells a visitor how it is wired, not
                 what it is for. Lead with the outcome; the governance is the reassurance that
                 follows, not the pitch. */}
             <p className="askboss-sub">
-              Describe an outcome. BOSS researches it, argues it out, writes the code,
-              and ships it — <strong>you approve, it does the work.</strong>
+              BOSS researches the idea, convenes the panel, writes the PRD, builds it and
+              deploys it. <strong>You approve; it does the work.</strong>
             </p>
           </div>
           <div className="mr-header-meta">
@@ -589,7 +622,11 @@ export function AskBossHero({
           className="askboss-form"
           onSubmit={(e) => { e.preventDefault(); ask(input); }}
         >
-          <div className="askboss-box">
+          <div
+            className="askboss-box"
+            onMouseEnter={() => setStripHeld(true)}
+            onMouseLeave={() => setStripHeld(false)}
+          >
             <textarea
               ref={boxRef}
               className="askboss-input"
@@ -705,7 +742,14 @@ export function AskBossHero({
                           onClick={() => stripRef.current?.scrollBy({ left: 320, behavior: "smooth" })}>→</button>
                 </div>
               </div>
-              <div className="askboss-idea-strip" ref={stripRef}>
+              <div
+                className="askboss-idea-strip"
+                ref={stripRef}
+                onMouseEnter={() => setStripHeld(true)}
+                onMouseLeave={() => setStripHeld(false)}
+                onFocusCapture={() => setStripHeld(true)}
+                onBlurCapture={() => setStripHeld(false)}
+              >
                 {IDEAS.map((i) => (
                   <button
                     key={i.title}
@@ -723,6 +767,15 @@ export function AskBossHero({
                     <span className="askboss-idea-hint">
                       {(i.brief.split("Who it is for:")[1] ?? "").split("\n")[0].trim()
                         || i.brief.split("\n")[0].replace(/^Build /, "")}
+                    </span>
+                    {/* What the card cannot show at rest. Appears on hover/focus so the
+                        operator can judge a brief before committing a click to it. */}
+                    <span className="askboss-idea-peek">
+                      {i.brief
+                        .split("What it must do:")[1]?.split("Done when:")[0]
+                        ?.split("\n").filter((l) => l.trim().startsWith("-"))
+                        .slice(0, 3).map((l) => l.replace(/^\s*-\s*/, ""))
+                        .join(" · ")}
                     </span>
                   </button>
                 ))}

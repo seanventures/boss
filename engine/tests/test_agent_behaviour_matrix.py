@@ -899,3 +899,63 @@ def test_every_composer_action_is_bounded():
     # and it is actually used by both paths
     code = re.sub(r"^\s*//.*$", "", re.sub(r"/\*.*?\*/", "", src, flags=re.S), flags=re.M)
     assert code.count("postBounded(") >= 3, "some action still has an unbounded wait"
+
+
+# --------------------------------------------------------------------------- #
+# Discovery: the reply was truncated, not the research missing
+# --------------------------------------------------------------------------- #
+def test_the_sweep_asks_for_evidence_before_the_summary():
+    """Three runs failed with "web research returned no findings" at ~$0.50 each, having
+    actually done the research: the reply was cut off after the brief and its sources and
+    BEFORE the findings array existed. The schema asked for the disposable part first."""
+    import inspect
+    from boss_engine.services import discovery_service
+    src = inspect.getsource(discovery_service._sweep_prompt)
+    findings_at = src.index('"findings"')
+    brief_at = src.index('"brief"')
+    assert findings_at < brief_at, "the evidence is still requested last, so truncation loses it"
+    # The instruction spans adjacent string literals, so join them before matching — the same
+    # trap as asserting on a comment.
+    # Concatenate adjacent literals the way Python does — with NOTHING between them — then
+    # normalise whitespace. Joining with a space puts a double space at every literal boundary,
+    # which is exactly where the phrase being matched happened to split.
+    joined = " ".join("".join(re.findall(r'"([^"]*)"', src)).split())
+    assert "cut the brief, never the findings" in joined
+
+
+def test_a_truncated_sweep_is_not_reported_as_a_broken_search_tool():
+    """It told the operator to check WebSearch/WebFetch while the reply contained six real
+    citations. Sending someone to debug a working tool is worse than saying nothing."""
+    import inspect
+    from boss_engine.services import discovery_service
+    src = inspect.getsource(discovery_service.run_discovery) if hasattr(
+        discovery_service, "run_discovery") else inspect.getsource(discovery_service)
+    assert "cut off before it produced any findings" in src
+    assert "Web search itself WORKED" in src
+    assert "sources_consulted" in src, "the two cases are not told apart by evidence"
+
+
+@pytest.mark.parametrize("label,text,expect_findings", [
+    ("mid-key",
+     '```json\n{"findings": [{"angle": "demand", "finding": "x"}], "brief": {"hyp', 1),
+    ("mid-array",
+     '{"findings": [{"angle": "market", "finding": "a"}, {"angle": "timing", "fin', 1),
+    ("mid-element",
+     '{"findings": [{"angle": "a", "finding": "1"}, {"angle": "b", "finding": "2"}, {"ang', 2),
+    ("brief first then cut",
+     '{"brief": {"hypothesis": "h"}, "findings": [{"angle": "demand", "finding": "z"}, {"an', 1),
+])
+def test_a_truncated_sweep_still_yields_its_findings(label, text, expect_findings):
+    """Bracket-balancing alone cannot fix a reply cut mid-key or mid-element: it produced
+    invalid JSON, so the whole object was thrown away INCLUDING findings that had parsed. That
+    is how a sweep carrying eleven good findings reported "no findings"."""
+    from boss_engine.services.discovery_service import _extract_json
+    out = _extract_json(text)
+    assert len(out.get("findings") or []) >= expect_findings, f"{label}: evidence lost"
+
+
+def test_salvage_does_not_invent_a_dossier_from_noise():
+    """Salvaging must not become "always return something" — a refusal has no findings."""
+    from boss_engine.services.discovery_service import _extract_json
+    assert _extract_json("sorry, I could not complete that") == {}
+    assert _extract_json("") == {}

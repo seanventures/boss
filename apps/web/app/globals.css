@@ -5930,3 +5930,106 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   color: var(--amber, #E0A33E); font-variant-numeric: tabular-nums;
 }
 .cc-alert-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+
+
+/* The hovered card lifts out of the drift and shows what it could not at rest, so a brief can
+   be judged before a click is committed to it. */
+.askboss-idea { position: relative; }
+.askboss-idea-peek {
+  display: none;
+  color: var(--ink-soft, #9FB0D0); font-size: .76rem; line-height: 1.45;
+  border-top: 1px solid var(--border, #1C2740); padding-top: 7px; margin-top: 2px;
+}
+.askboss-idea:hover, .askboss-idea:focus-visible {
+  z-index: 2;
+  transform: translateY(-3px) scale(1.02);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+  border-color: var(--accent, #4C8DF6);
+  background: var(--surface-2, #0F1830);
+}
+.askboss-idea:hover .askboss-idea-peek,
+.askboss-idea:focus-visible .askboss-idea-peek { display: block; }
+/* Room for the lift, so a raised card is not clipped by the scroll container. */
+.askboss-idea-strip { padding-top: 8px; padding-bottom: 14px; align-items: flex-start; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The drift is suppressed by the effect itself; make sure the lift does not animate either. */
+  .askboss-idea:hover, .askboss-idea:focus-visible { transform: none; }
+}
+
+
+/* Capabilities help. Two columns, because "what it does" and "what it does not" carry equal
+   weight — a feature list that omits its own limits is how an hour gets lost. */
+.help-grid {
+  display: grid; gap: 22px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: 4px;
+}
+.help-h {
+  margin: 0 0 8px; font-size: .74rem; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent-text, #7FB0FF);
+}
+.help-col:last-child .help-h { color: var(--amber, #E0A33E); }
+.help-list { margin: 0; padding-left: 18px; display: grid; gap: 9px; }
+.help-list li { color: var(--ink-soft, #9FB0D0); font-size: .88rem; line-height: 1.5; }
+.help-list b { color: var(--ink, #E8EEFC); }
+.help-foot { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--border, #1C2740); }
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   DISCOVERY — brought up to the Meeting room's treatment.
+
+   This page was 34 uses of `.detail` and almost nothing else: grey text, grey text,
+   grey text. The information was all there and none of it had shape. Colour here is
+   structural — where a run got to, and what KIND of evidence each finding is.
+   ───────────────────────────────────────────────────────────────────────────── */
+.dx-flow {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 12px 14px; margin: 4px 0 12px;
+  border: 1px solid var(--border, #1C2740);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .02);
+}
+.dx-flow-step {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: .82rem; color: var(--muted, #7C8CB0);
+}
+.dx-flow-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--border, #1C2740); flex: 0 0 auto;
+}
+.dx-flow-step.done { color: var(--ink-soft, #9FB0D0); }
+.dx-flow-step.done .dx-flow-dot { background: var(--green, #2ED18B); }
+.dx-flow-step.current { color: var(--accent-text, #7FB0FF); font-weight: 700; }
+.dx-flow-step.current .dx-flow-dot {
+  background: var(--accent, #4C8DF6);
+  animation: agentWorkingPulse 1.1s ease-in-out infinite;
+}
+.dx-flow-step.stopped { color: var(--red, #F85149); font-weight: 700; }
+.dx-flow-step.stopped .dx-flow-dot { background: var(--red, #F85149); }
+.dx-flow-arrow { color: var(--border, #1C2740); font-size: .8rem; }
+
+/* Findings, coloured by the kind of evidence — the four angles are the whole point of the
+   sweep and they all looked identical. */
+.dx-finding {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 9px 0; border-bottom: 1px solid var(--border, #1C2740);
+}
+.dx-finding:last-child { border-bottom: 0; }
+.dx-finding-text { color: var(--ink-soft, #9FB0D0); font-size: .88rem; line-height: 1.5; min-width: 0; }
+.dx-angle {
+  flex: 0 0 auto; min-width: 84px; text-align: center;
+  padding: 2px 9px; border-radius: 6px;
+  font-size: .64rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  border: 1px solid var(--border, #1C2740); color: var(--muted, #7C8CB0);
+}
+.dx-angle.angle-competitor { color: #F85149; border-color: rgba(248,81,73,.4);  background: rgba(248,81,73,.10); }
+.dx-angle.angle-demand     { color: #2ED18B; border-color: rgba(46,209,139,.4); background: rgba(46,209,139,.10); }
+.dx-angle.angle-market     { color: #4C8DF6; border-color: rgba(76,141,246,.4); background: rgba(76,141,246,.12); }
+.dx-angle.angle-timing     { color: #E0A33E; border-color: rgba(224,163,62,.4); background: rgba(224,163,62,.10); }
+.dx-angle.angle-pain       { color: #8B6AF5; border-color: rgba(139,106,245,.4); background: rgba(139,106,245,.12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dx-flow-step.current .dx-flow-dot { animation: none; }
+}

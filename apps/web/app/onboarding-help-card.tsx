@@ -1,56 +1,72 @@
 import React from "react";
 
 /**
- * Honest Command Center pointer for private design-partner setup.
- * Not a Cloud product, not a public-OSS flip, not a sandbox guarantee.
+ * What this console can actually do, for someone seeing it for the first time.
+ *
+ * This card used to be design-partner SETUP: `make onboard`, `make seed`, Plane API keys,
+ * "repo access is granted by a human". Two problems. It was setup instructions on a page you
+ * only reach after setup has already succeeded — nobody reading it needs it. And it described a
+ * private evaluation checkout, so a reader could not tell which parts apply to the release in
+ * front of them.
+ *
+ * It now answers the question a first-time operator actually has: what can I do here, and what
+ * is not here yet. The second half matters more than the first — a feature list that quietly
+ * omits its own limits is how "it says it can deploy" becomes an hour of confusion.
+ *
+ * Keep this honest as the product changes. Setup lives in
+ * docs/operations/DESIGN_PARTNER_ONBOARDING.md, where instructions belong.
  */
 export function OnboardingHelpCard() {
   return (
-    <article className="stack-card" data-testid="design-partner-onboarding-card">
+    <article className="stack-card" data-testid="console-capabilities-card">
       <div className="section-head">
         <div>
           <span className="eyebrow">Help</span>
-          <h2>Design-partner setup</h2>
+          <h2>What you can do here</h2>
         </div>
       </div>
-      <p className="detail">
-        This checkout is a <strong>private</strong> design-partner evaluation, not a
-        public open-source flip and not BOSS Cloud. Repo access is granted by a
-        human; Mission Control cannot mint GitHub or Plane credentials.
-      </p>
-      <p className="detail">
-        Week-1 path (never print secrets):{" "}
-        <code>make onboard</code> then{" "}
-        <code>make install</code>, <code>make seed</code>, <code>make dev</code>,{" "}
-        <code>make smoke</code>. Optional control-plane gate:{" "}
-        <code>make qa-live</code> (requires <code>BOSS_API_KEY</code> in the
-        environment; the target does not echo it).
-      </p>
-      <ul className="detail" style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-        <li>
-          <strong>Community</strong> is the self-hosted plane (BYOK, GitHub bind,
-          local Mission Control). Cloud is optional Easy Connect — not required.
-        </li>
-        <li>
-          Paste a model key via System Configuration paste-and-connect, or put it
-          in <code>.env</code>. GitHub bind uses an env SecretRef — do not paste a
-          raw token here.
-        </li>
-        <li>
-          Sandboxes and previews are <strong>not</strong> guaranteed. An empty or
-          blocked surface is fail-closed, not a silent pass.
-        </li>
-        <li>
-          File friction as a GitHub issue on this private repo. Do not invent
-          Plane API keys. Internal ops <code>/requests</code> already become Plane
-          issues — do not duplicate them.
-        </li>
-      </ul>
-      <p className="detail" style={{ marginTop: 10 }}>
-        Checkable guide:{" "}
-        <code>docs/operations/DESIGN_PARTNER_ONBOARDING.md</code>
-        {" · "}
-        Engine-only pack: <code>engine/DESIGN_PARTNER_ONBOARDING.md</code>
+
+      <div className="help-grid">
+        <div className="help-col">
+          <h3 className="help-h">Three ways in</h3>
+          <ul className="help-list">
+            <li>
+              <b>Ask</b> — a question about your work. BOSS reads live state and answers with
+              real numbers; it can also act on the answer with your approval.
+            </li>
+            <li>
+              <b>Research</b> — when the idea is not formed yet. Web research produces a cited
+              dossier and candidate outcomes under <b>Discovery</b>.
+            </li>
+            <li>
+              <b>Build</b> — a directive. A panel debates it, drafts a PRD, you approve, and the
+              code task runs. Watch it in <b>Meetings</b>, then <b>Factory</b>.
+            </li>
+          </ul>
+        </div>
+
+        <div className="help-col">
+          <h3 className="help-h">What is not here yet</h3>
+          <ul className="help-list">
+            <li>
+              Deploying needs a <b>host and a target</b> configured first (CI/CD → Hosts). BOSS
+              will not invent infrastructure.
+            </li>
+            <li>
+              Merge state is <b>not tracked</b> — the console shows PRs opened, not merged. That
+              needs GitHub.
+            </li>
+            <li>
+              Previews and sandboxes are <b>not guaranteed</b>. A blocked surface fails closed
+              and says so rather than passing silently.
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <p className="detail help-foot">
+        Anything BOSS starts is inspectable — every run, its cost, and the evidence behind it.
+        Setup and operations live in <code>docs/operations/DESIGN_PARTNER_ONBOARDING.md</code>.
       </p>
     </article>
   );
