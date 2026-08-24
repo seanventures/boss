@@ -18,6 +18,8 @@ came from. Scenarios are added here as they are found in production, so a case t
 operator once cannot come back silently.
 """
 
+import inspect
+
 import pytest
 
 from boss_engine.services.shepherd_service import describe_undeployable
@@ -155,3 +157,38 @@ def test_a_first_deployment_cannot_invent_infrastructure():
     assert "INSERT INTO deployment_targets" not in src
     assert "environments_available" in src
     assert "no deployment targets at all" in src
+
+
+# --------------------------------------------------------------------------- #
+# One repo, many apps — never guess which one
+# --------------------------------------------------------------------------- #
+def test_deploy_refuses_when_the_target_is_ambiguous():
+    """Asked to deploy Living Colors, it shipped that build to Invoice-Chaser's port and
+    reported "succeeded". Target resolution matched on repo + environment and took
+    ORDER BY created_at DESC LIMIT 1 — and every app in this project shares one repo and one
+    environment, so it resolved to whichever target was created most recently.
+
+    A wrong deployment that reports success is the worst outcome available here, so ambiguity
+    must be a refusal that lists the candidates."""
+    from boss_engine.services import delivery_pipeline
+    from engine.tests._source import code_only
+    # code_only strips comments AND docstrings. Without it this matched the comment explaining
+    # the bug, which is the sixth time a test in this suite has asserted on prose rather than
+    # behaviour. The helper exists precisely for this; use it.
+    code = code_only(delivery_pipeline.deploy_build)
+    src = inspect.getsource(delivery_pipeline.deploy_build)
+    assert "ORDER BY created_at DESC LIMIT 1" not in code, "still silently picking the newest"
+    assert "candidates" in src, "an ambiguous target does not report the options"
+    assert "does not name one unambiguously" in src
+    assert "app_name" in src, "the app is still not part of target resolution"
+
+
+def test_an_explicit_target_id_is_always_honoured():
+    """The escape hatch the refusal points at has to work."""
+    import inspect
+    from boss_engine.services import delivery_pipeline
+    src = inspect.getsource(delivery_pipeline.deploy_build)
+    i = src.index("if target_id:")
+    assert "WHERE id = :i AND project_id = :p" in src[i:i + 400], (
+        "target_id is not resolved directly, or is not project-scoped"
+    )

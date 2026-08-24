@@ -157,14 +157,59 @@ def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
                 sql("SELECT * FROM deployment_targets WHERE id = :i AND project_id = :p"),
                 {"i": target_id, "p": project_id}).mappings().first()
         else:
+            # NEVER GUESS WHICH APP. ONE REPO HOLDS MANY OF THEM.
+            #
+            # This matched on repo + environment and took ORDER BY created_at DESC LIMIT 1.
+            # Every app in this project lives in the SAME repo on the SAME environment, so that
+            # silently resolved to whichever target was created last — and a deploy of "Living
+            # Colors" shipped its build to Invoice-Chaser's port and reported success. A wrong
+            # deployment that says "succeeded" is the worst outcome available here.
+            #
+            # Match on the app as well, and when it is still ambiguous REFUSE and list the
+            # candidates. An operator picking from four names is fine; a coin flip that
+            # overwrites a running app is not.
             spec = run["spec"] or {}
             repo = str(spec.get("repo") or "")
-            target = c.execute(
+            candidates = [dict(r) for r in c.execute(
                 sql("SELECT * FROM deployment_targets "
                     "WHERE project_id = :p AND repo = :r AND environment = :e "
                     "  AND status = 'active' "
-                    "ORDER BY created_at DESC LIMIT 1"),
-                {"p": project_id, "r": repo, "e": environment}).mappings().first()
+                    "ORDER BY created_at DESC"),
+                {"p": project_id, "r": repo, "e": environment}).mappings().all()]
+
+            app_name = ""
+            try:
+                from .naming import stable_app_id  # noqa: F401  (import proves availability)
+                fctx = run.get("finalize_ctx") or {}
+                app_name = str(fctx.get("app_name") or "").strip()
+            except Exception:  # noqa: BLE001
+                app_name = ""
+            if not app_name:
+                app_name = str(run.get("title") or "").strip()
+
+            def _matches(t: dict) -> bool:
+                name = str(t.get("app_name") or "").strip().lower()
+                return bool(name) and (name in app_name.lower() or app_name.lower().startswith(name))
+
+            named = [t for t in candidates if _matches(t)]
+            if len(named) == 1:
+                target = named[0]
+            elif len(candidates) == 1:
+                target = candidates[0]
+            elif candidates:
+                return {
+                    "status": "failed",
+                    "reason": (
+                        f"{len(candidates)} active '{environment}' targets share repo "
+                        f"'{repo}', and this run does not name one unambiguously. Pass "
+                        "target_id — deploying the wrong app is worse than not deploying."),
+                    "candidates": [
+                        {"target_id": t["id"], "app_name": t.get("app_name"),
+                         "domains": t.get("domains")} for t in candidates
+                    ],
+                }
+            else:
+                target = None
 
         if not target:
             existing = [
