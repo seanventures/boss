@@ -12,7 +12,7 @@ from collections import defaultdict, deque
 from typing import Any, Optional
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import text
@@ -11649,6 +11649,33 @@ def refresh_health_snapshot(
             connection, payload.project_id, payload.actor
         )
         return health_snapshot_summary_from_row(row)
+
+
+@app.post("/v1/deployments")
+def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
+    """Deploy a successful build to an existing target — the FIRST deployment.
+
+    BOSS could create hosts and targets and could redeploy, but nothing could perform a
+    deployment that had never happened. "Deploy this app" therefore had no executable action
+    behind it: redeploy re-ships an existing deployment_run, and an app that never shipped has
+    none. Refuses a build that did not succeed and a target that does not exist, and reports
+    which environments DO exist so the caller can offer a real choice.
+    """
+    from boss_engine.services.delivery_pipeline import deploy_build
+
+    project_id = str(payload.get("project_id") or "").strip()
+    run_id = str(payload.get("run_id") or "").strip()
+    if not project_id or not run_id:
+        raise HTTPException(status_code=400, detail="project_id and run_id are required.")
+    result = deploy_build(
+        engine, settings,
+        project_id=project_id,
+        run_id=run_id,
+        environment=str(payload.get("environment") or "staging"),
+        target_id=(str(payload["target_id"]) if payload.get("target_id") else None),
+        actor=str(payload.get("actor") or "operator"),
+    )
+    return result
 
 
 @app.get("/v1/metrics/delivery")

@@ -119,6 +119,102 @@ def target_for(connection, project_id: str, repo: str, environment: str) -> Opti
     return found[0] if found else None
 
 
+def deploy_build(engine, settings: Settings, *, project_id: str, run_id: str,
+                 environment: str = "staging", target_id: Optional[str] = None,
+                 actor: str = "operator") -> dict[str, Any]:
+    """Deploy a finished build to a target, on request. The first deployment, not a re-ship.
+
+    BOSS could create hosts and targets and could REDEPLOY, and had no way to perform a
+    deployment that had never happened. So "deploy Living Colors to live" had no executable
+    action behind it at all: redeploy needs an existing deployment_run to re-ship, and for an
+    app that has never shipped there is none. The agent kept improvising markup for a button
+    that could not exist, which is a design answer, not a prompting problem.
+
+    Deliberately narrow:
+      * the build must have SUCCEEDED — deploying a failed build is never what was meant;
+      * the target must already exist and be active, so this cannot invent infrastructure;
+      * it reuses plan_deployment_run and execute_deployment, so budget reservation, health
+        checks and rollback behave exactly as they do on the merge path.
+    """
+    from ..db import begin
+
+    with begin(engine) as c:
+        run = c.execute(
+            sql("SELECT id, project_id, status, title, spec FROM code_task_runs "
+                "WHERE id = :i AND project_id = :p"),
+            {"i": run_id, "p": project_id}).mappings().first()
+        if not run:
+            return {"status": "failed", "reason": f"no such run in this project: {run_id}"}
+        if str(run["status"]) not in ("completed", "succeeded", "passed"):
+            # The exact substitution this whole area keeps trying to make.
+            return {"status": "failed",
+                    "reason": f"run {run_id} is '{run['status']}', not a successful build. "
+                              "Deploying is not a way to finish a build — rebuild first, "
+                              "which costs money and is a separate decision."}
+
+        if target_id:
+            target = c.execute(
+                sql("SELECT * FROM deployment_targets WHERE id = :i AND project_id = :p"),
+                {"i": target_id, "p": project_id}).mappings().first()
+        else:
+            spec = run["spec"] or {}
+            repo = str(spec.get("repo") or "")
+            target = c.execute(
+                sql("SELECT * FROM deployment_targets "
+                    "WHERE project_id = :p AND repo = :r AND environment = :e "
+                    "  AND status = 'active' "
+                    "ORDER BY created_at DESC LIMIT 1"),
+                {"p": project_id, "r": repo, "e": environment}).mappings().first()
+
+        if not target:
+            existing = [
+                f"{r['environment']} ({r['status']})" for r in c.execute(
+                    sql("SELECT environment, status FROM deployment_targets "
+                        "WHERE project_id = :p AND repo = :r ORDER BY environment"),
+                    {"p": project_id,
+                     "r": str((run["spec"] or {}).get("repo") or "")}).mappings().all()
+            ]
+            return {"status": "failed",
+                    "reason": f"no active '{environment}' target for this app."
+                              + (f" It has: {', '.join(existing)}." if existing else
+                                 " It has no deployment targets at all."),
+                    "environments_available": existing}
+
+        if target.get("paused"):
+            return {"status": "failed",
+                    "reason": f"target {target['id']} is paused; un-pause it first"}
+
+        from .resource_plane import ResourcePlaneService
+
+        planned = ResourcePlaneService(settings).plan_deployment_run(
+            c,
+            project_id=project_id,
+            deployment_target_id=target["id"],
+            commit_ref=None,
+            release_packet={"source": "operator_deploy", "code_task_run_id": run_id,
+                            "requested_by": actor},
+            expected_cost_usd_micros=0,
+            reservation_id=None,
+            actor=actor,
+        )
+        deployment_run_id = planned.get("deployment_run_id") or planned.get("id")
+        if not deployment_run_id:
+            return {"status": "failed", "reason": f"could not plan a deployment: {planned}"}
+        c.execute(sql("UPDATE deployment_runs SET trigger = 'operator' WHERE id = :i"),
+                  {"i": deployment_run_id})
+        emit_event(c, project_id, "delivery.requested", actor, "code_task_run", run_id,
+                   {"deployment_run_id": deployment_run_id, "target": target["id"],
+                    "environment": target["environment"]})
+
+    result = execute_deployment(engine, settings, deployment_run_id, actor=actor)
+    return {"status": str(result.get("status") or "unknown"),
+            "deployment_run_id": deployment_run_id,
+            "target_id": target["id"],
+            "app_name": target.get("app_name"),
+            "environment": target["environment"],
+            "detail": result}
+
+
 def on_pull_request_merged(engine, settings: Settings, *, project_id: str, run_id: str,
                            repo: str, commit_ref: Optional[str], decision_id: Optional[str],
                            actor: str = "delivery") -> dict[str, Any]:

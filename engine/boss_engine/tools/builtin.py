@@ -760,6 +760,33 @@ def _register_operations_tools(reg: ToolRegistry) -> None:
                 "reason": args.get("reason") or "operator asked BOSS to retry the deployment"}
 
     @reg.tool(
+        "deploy_app",
+        "Deploy a SUCCESSFUL build to an environment for the FIRST time. This is the tool to "
+        "use when an operator says 'deploy it', 'ship it', or 'deploy to staging/live' and the "
+        "app has never been deployed — redeploy only re-ships a deployment that already "
+        "exists, so it cannot help there. Takes the crun_ of a completed run and the "
+        "environment name. It will REFUSE if the run did not succeed, or if no active target "
+        "exists for that environment, and it tells you which environments DO exist so you can "
+        "offer the operator a real choice. It never creates infrastructure.",
+        _obj({"run_id": {"type": "string", "description": "crun_ of a COMPLETED build"},
+              "environment": {"type": "string",
+                              "description": "staging | production — must already have a target"},
+              "target_id": {"type": "string", "description": "optional exact deptgt_ to use"}},
+             required=["run_id", "environment"]),
+        kind="write",
+    )
+    def deploy_app(ctx, *, project_id, actor, args):
+        from ..services.delivery_pipeline import deploy_build
+        return deploy_build(
+            ctx.engine, ctx.settings,
+            project_id=project_id,
+            run_id=str(args["run_id"]),
+            environment=str(args.get("environment") or "staging"),
+            target_id=(str(args["target_id"]) if args.get("target_id") else None),
+            actor=actor,
+        )
+
+    @reg.tool(
         "preflight_deployment_target",
         "Check the machine an app deploys to is reachable and healthy, WITHOUT shipping "
         "anything. Read-only. Run this first when a deployment failed with a connection or "
@@ -2240,6 +2267,7 @@ def build_default_registry() -> ToolRegistry:
 # from the registry — do not silently disarm it here, which is how BOSS spent this session
 # owning eighteen tools and being allowed five.
 _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
+    "deploy_app",
     # Queue and run state
     "cancel_job",
     "set_job_priority",

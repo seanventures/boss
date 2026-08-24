@@ -11,6 +11,10 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
     "cancel_code_task",
+    # The first deployment. BOSS could create hosts and targets and could redeploy, and had
+    # nothing that performs a deployment which never happened — so "deploy it" had no
+    # executable action at all.
+    "deploy_app",
     "cancel_job",
     "close_orphaned_runs",
     "consistency_report",
@@ -75,11 +79,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 51, (
+    assert len(reg.names()) == 52, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 32
-    assert len(write) == 19
+    assert len(write) == 20
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",

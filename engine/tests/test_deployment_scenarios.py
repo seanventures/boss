@@ -118,3 +118,40 @@ def test_live_is_recognised_by_any_of_its_names(env):
     out = describe_undeployable(status=DONE, repo="r/r",
                                 targets=[{"environment": env, "status": "active"}])
     assert "no production/live target" not in out, f"{env!r} not recognised as live"
+
+
+# --------------------------------------------------------------------------- #
+# The capability the guardrails were standing in for
+# --------------------------------------------------------------------------- #
+def test_boss_can_perform_a_first_deployment():
+    """Every "why don't the buttons work" report traced to the same hole: BOSS could create
+    hosts and targets and could REDEPLOY, and had nothing that performs a deployment which has
+    never happened. So "deploy it" had no executable action, the agent improvised markup for a
+    button that could not exist, and each parser I wrote was treating the symptom."""
+    from boss_engine.tools.builtin import build_discuss_read_registry, _DISCUSS_OPERATIONS_TOOLS
+    from boss_engine.agent.engine_agent import EngineAgent
+
+    assert "deploy_app" in build_discuss_read_registry().names()
+    assert "deploy_app" in _DISCUSS_OPERATIONS_TOOLS, "registered but unreachable"
+    assert "deploy_app" not in EngineAgent.PROPOSE_ONLY, (
+        "an operator who said 'deploy it' has already authorised it")
+
+
+def test_deploying_is_never_a_way_to_finish_a_build():
+    """The substitution this whole area kept attempting: asked to deploy, start a rebuild."""
+    import inspect
+    from boss_engine.services import delivery_pipeline
+    src = inspect.getsource(delivery_pipeline.deploy_build)
+    assert "not a successful build" in src
+    assert "rebuild first" in src
+
+
+def test_a_first_deployment_cannot_invent_infrastructure():
+    """It must refuse a missing target rather than create one — and say what DOES exist, so the
+    operator is offered a real choice instead of a wall."""
+    import inspect
+    from boss_engine.services import delivery_pipeline
+    src = inspect.getsource(delivery_pipeline.deploy_build)
+    assert "INSERT INTO deployment_targets" not in src
+    assert "environments_available" in src
+    assert "no deployment targets at all" in src
