@@ -20,12 +20,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
-import {
-  askBossAction,
-  runAgentActionAction,
-  startBuildAction,
-  startDiscoveryAction,
-} from "./actions";
+import { askBossAction, runAgentActionAction } from "./actions";
 
 const NORMAL_SECONDS = 20;
 const STALL_SECONDS = 120;
@@ -335,6 +330,43 @@ const RESEARCH: Array<{ label: string; seed: string }> = [
 
 const IDEAS_PER_PAGE = 4;
 
+/**
+ * POST to one of our own route handlers, with the same stall bound `ask` already had.
+ *
+ * Research and Build were Server Actions, which re-render the whole route to reply — on a
+ * 20-27s console that meant pressing Research showed a spinner for 163 seconds for a call that
+ * enqueues in about one. They were also the two paths with NO timeout, so nothing ever ended
+ * the spin. Both are fixed here: a route handler returns JSON only, and the wait is bounded.
+ */
+async function postBounded(
+  url: string,
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean; data?: any; error?: string }> {
+  const stalled = Symbol("stalled");
+  try {
+    const r = await Promise.race([
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        cache: "no-store",
+      }),
+      new Promise<typeof stalled>((res) =>
+        setTimeout(() => res(stalled), STALL_SECONDS * 1000)),
+    ]);
+    if (r === stalled) {
+      return { ok: false,
+               error: `No answer after ${STALL_SECONDS}s. It may still be running — nothing was `
+                      + "cancelled. Check the area before trying again." };
+    }
+    const data = await (r as Response).json().catch(() => ({}));
+    if (!(r as Response).ok) return { ok: false, error: data?.error ?? `HTTP ${(r as Response).status}` };
+    return { ok: true, data };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) };
+  }
+}
+
 export function AskBossHero({
   projectId,
   actor,
@@ -456,7 +488,8 @@ export function AskBossHero({
     if (!directive || busy) return;
     setError(""); setReply(""); setProposed([]);
     startTransition(async () => {
-      const r = await startBuildAction(projectId, actor, directive);
+      const r = await postBounded("/api/builds",
+                                  { project_id: projectId, directive, actor });
       const d = r.data as Record<string, unknown> | undefined;
       if (!r.ok) {
         // Build used to swallow this entirely: the action returned void, so a failure and a
@@ -519,16 +552,13 @@ export function AskBossHero({
     const seed = seedText.trim();
     if (!seed || busy) return;
     setError(""); setReply(""); setProposed([]);
-    const fd = new FormData();
-    fd.set("seed", seed);
-    fd.set("project_id", projectId);
-    fd.set("actor", actor);
     startTransition(async () => {
-      const r = await startDiscoveryAction(null, fd);
-      if (r.error) { setError(r.error); return; }
+      const r = await postBounded("/api/discoveries",
+                                  { project_id: projectId, seed, actor });
+      if (!r.ok) { setError(r.error ?? "Could not start the research run."); return; }
       setInput("");
       setReply(
-        `**Researching.** Discovery run \`${r.runId ?? ""}\` is gathering sources.\n\n` +
+        `**Researching.** Discovery run \`${r.data?.run_id ?? ""}\` is gathering sources.\n\n` +
         `It produces a cited dossier and candidate outcomes — watch it under **Discovery**. ` +
         `When something looks worth building, bring it back here and press Build.`,
       );

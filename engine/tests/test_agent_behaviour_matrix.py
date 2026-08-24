@@ -784,7 +784,10 @@ def test_the_composer_can_research_not_only_ask_and_build():
     """The flow started at "convene a meeting", so the only way in was to already know what you
     wanted made. Discovery is the stage for when you do not."""
     src = _hero_src()
-    assert "startDiscoveryAction" in src
+    # Asserts the CAPABILITY, not the mechanism: this originally required
+    # startDiscoveryAction, and broke when that Server Action was replaced by a route handler
+    # to stop it waiting on a full console re-render. Research still has to exist either way.
+    assert "/api/discoveries" in src, "no way to start a research run"
     assert "askboss-research" in src, "no Research action on the composer"
     assert "RESEARCH" in src and src.count("seed:") >= 4, "no research starters"
 
@@ -861,3 +864,33 @@ def test_the_refresh_still_skips_a_hidden_tab_and_a_typing_operator():
     body = src[i:i + 700]
     for guard in ("document.hidden", "refreshPending", "paletteOpen", '"TEXTAREA"'):
         assert guard in body, f"lost guard: {guard}"
+
+
+def test_no_composer_action_waits_on_a_route_re_render():
+    """Pressing Research spun for 163 seconds for a call that enqueues in about one. It was a
+    Server Action that ALSO called revalidatePath, so it waited on a full 20-27s console render
+    twice over. Ask, Research and Build all go to route handlers now — JSON only, no re-render."""
+    import re
+    src = _hero_src()
+    code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    for gone in ("startDiscoveryAction", "startBuildAction", "submitCommandAction"):
+        assert gone not in code, f"{gone} re-renders the route to reply"
+    for route in ("/api/discoveries", "/api/builds"):
+        assert route in code, f"missing route handler call: {route}"
+
+
+def test_every_composer_action_is_bounded():
+    """Research and Build had NO timeout, so nothing ever ended the spin — the operator watched
+    163s tick past a bound that only wrapped Ask."""
+    import re
+    src = _hero_src()
+    assert "postBounded" in src
+    i = src.index("async function postBounded")
+    body = src[i:src.index("\n}", i)]
+    assert "STALL_SECONDS" in body and "Promise.race" in body
+    assert "nothing was `" in body or "nothing was cancelled" in body, (
+        "a stalled action must not claim the work was stopped")
+    # and it is actually used by both paths
+    code = re.sub(r"^\s*//.*$", "", re.sub(r"/\*.*?\*/", "", src, flags=re.S), flags=re.M)
+    assert code.count("postBounded(") >= 3, "some action still has an unbounded wait"
