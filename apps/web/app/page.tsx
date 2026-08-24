@@ -1226,21 +1226,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             The one line worth keeping was Deadletters, because a non-zero count is work that
             FAILED and is sitting unseen — so it survives as an alert that only appears when
             there is something to act on, rather than as a tile reading 0 forever. */}
-        {deadletters.items.length > 0 ? (
-          <section className="panel-stack" data-area="overview" aria-label="Failed work">
-            <AreaLink className="cc-alert" area="monitoring" orgId={activeOrgId}>
-              <span className="cc-alert-count">{deadletters.items.length}</span>
-              <span className="cc-alert-main">
-                <strong>items failed and are waiting</strong>
-                <span className="detail">
-                  Deadlettered work never retries itself. Open Monitoring to see why each one
-                  stopped.
-                </span>
-              </span>
-              <span className="cc-flight-go" aria-hidden>→</span>
-            </AreaLink>
-          </section>
-        ) : null}
+        {/* The deadletter alert is gone too. "25 items failed and are waiting" floating
+            above the fold says a number and nothing else — not what failed, not when, not
+            whether it matters now. A count with no context is an anxiety generator, not a
+            signal; failures belong next to the work they came from, which is Monitoring. */}
 
         <section className="bx-overview" data-area="overview" aria-label="Overview summary">
           <div className="bx-overview-split">
@@ -1299,41 +1288,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               )}
             </article>
 
-            <article
-              className="bx-card"
-              style={{ padding: "22px", display: "grid", gap: "14px" }}
-            >
-              <div className="section-head">
-                <div>
-                  <span className="eyebrow">What changed</span>
-                  <h2 style={{ fontSize: "1.18rem", margin: "4px 0 0" }}>
-                    Recent activity
-                  </h2>
-                </div>
-              </div>
-              {events.apiReachable && events.items.length > 0 ? (
-                <div className="feed-list">
-                  {events.items.slice(0, 6).map((event) => (
-                    <div className="feed-row" key={event.id}>
-                      <div style={{ minWidth: 0 }}>
-                        <h4 style={{ margin: 0 }}>
-                          {titleCaseToken(event.eventType)}
-                        </h4>
-                        <p
-                          className="detail"
-                          style={{ fontSize: "0.82rem" }}
-                        >
-                          {event.actor} / {formatDateTime(event.createdAt)}
-                        </p>
-                      </div>
-                      <code className="mono">{event.entityId}</code>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="detail">No activity recorded yet.</p>
-              )}
-            </article>
+            {/* "Recent activity" removed. It was the same event stream taken out of the
+                landing panel earlier — audit.export generated, resource.quota updated,
+                factory flow.ticked, receipt.created. Machine bookkeeping: every line true,
+                none of it something an operator decides anything from. Removing it from one
+                place and leaving it in another was half a decision. */}
           </div>
         </section>
 

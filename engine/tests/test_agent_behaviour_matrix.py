@@ -598,23 +598,24 @@ def test_every_brief_is_a_real_spec_not_a_sentence():
         assert "Done when:" in b, "no acceptance criteria"
 
 
-def test_the_ideas_cycle_on_their_own_and_never_move_under_a_click():
-    """"Let's keep scrolling those slowly instead of clicking Next." A button makes the operator
-    do the work of discovering more exist. It rotates itself — but must stop while the pointer
-    is over the row, or a brief moves out from under a click."""
+def test_the_ideas_scroll_rather_than_flipping_on_a_timer():
+    """A nine-second auto-flip means the card you are reading can leave mid-sentence, and seeing
+    the whole set requires waiting. All of them sit in one scroll strip now."""
+    import re
     src = _hero_src()
-    assert "setIdeasPaused" in src, "no pause — a card could move mid-click"
-    for guard in ("onMouseEnter", "onMouseLeave", "onFocusCapture", "onBlurCapture"):
-        assert guard in src, f"rotation is not paused on {guard}"
-    i = src.index("if (ideasPaused")
-    cond = src[i:i + 120]
-    for stop in ("ideasPaused", "busy", "reply", "input.trim()"):
-        assert stop in cond, f"rotation does not stop for {stop}"
-    assert "% pageCount" in src, "cycling must wrap rather than dead-end"
+    code = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    assert "askboss-idea-strip" in code
+    # Scoped to the idea state, not the file: an unqualified "no setInterval" also catches the
+    # elapsed-seconds ticker, which is a different thing and should stay.
+    assert "setIdeaPage" not in code and "ideasPaused" not in code, (
+        "the paging timer is still there")
+    assert "IDEAS.map(" in code, "the strip must hold every idea, not a page of them"
+    assert "scrollBy" in code, "no manual scroll control for a trackpad that will not scroll sideways"
 
 
 def test_there_are_enough_ideas_to_be_worth_cycling():
-    """Eight across two pages was thin enough that the operator saw the whole set at once."""
+    """Eight was thin enough that the operator saw the whole set at once."""
     briefs = re.findall(r"brief: `(.*?)`", _hero_src(), re.S)
     assert len(briefs) >= 16, f"only {len(briefs)} briefs"
 
@@ -835,7 +836,11 @@ def test_the_debug_grid_is_gone_and_failures_are_not():
     assert "<h2>Auth Session</h2>" not in src
     assert "<h2>Blocking State</h2>" not in src
     assert "<h2>Database</h2>" not in src
-    assert "deadletters.items.length > 0" in src, "failed work is no longer surfaced at all"
+    # The deadletter banner went too, on the operator's call: "25 items failed and are waiting"
+    # floating above the fold names a number and nothing else — not what failed, not when, not
+    # whether it still matters. A count with no context is an anxiety generator; failures
+    # belong beside the work they came from, in Monitoring.
+    assert "cc-alert" not in src, "the contextless failure banner is back"
 
 
 # --------------------------------------------------------------------------- #

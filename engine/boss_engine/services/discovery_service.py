@@ -195,6 +195,21 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
         # happened is that research never ran. The operator is left to infer a broken tool from
         # a verdict about their idea. Stop here and say which it is.
         if not dossier.get("signal_findings"):
+            # DISTINGUISH "RESEARCH DID NOT RUN" FROM "THE REPLY WAS CUT OFF".
+            #
+            # This said web research returned nothing and pointed at WebSearch/WebFetch. In
+            # the three failures that prompted the fix, research had run fine — the brief
+            # parsed, with real sources_consulted — and the reply was simply truncated before
+            # the findings array. Sending the operator to debug a working search tool is worse
+            # than saying nothing, so name the two cases apart using what actually came back.
+            brief = dossier.get("research_brief") or {}
+            consulted = brief.get("sources_consulted") or []
+            if consulted or brief:
+                raise DiscoveryResearchUnavailable(
+                    f"The research reply was cut off before it produced any findings, after "
+                    f"consulting {len(consulted)} source(s). Web search itself WORKED — this is "
+                    "a truncated response, not a missing tool, so retrying is reasonable. "
+                    "See state._diagnostics.signal_sweep.reply_head for where it stopped.")
             raise DiscoveryResearchUnavailable(
                 "Web research returned no findings, so there is nothing to analyse. This is a "
                 "TOOLING failure, not a verdict on the idea: the research agent completed "
@@ -388,10 +403,21 @@ def _sweep_prompt(seed: str, context: str) -> str:
         "4. Timing — what changed that makes now relevant.\n"
         "Be skeptical and evidence-driven; prefer primary sources you actually open.\n\n"
         f"{_JSON_ONLY}\n"
-        '{"brief": {"hypothesis": "...", "questions": ["..."], "sources_consulted": ["url"]}, '
-        '"findings": [{"angle": "competitor|demand|market|timing", "finding": "concise fact", '
-        '"evidence": "what the source shows", "citation_url": "https://..."}]}\n'
-        "Include 6-12 findings, each with a real citation_url you visited."
+        # FINDINGS FIRST, DELIBERATELY.
+        #
+        # This asked for `brief` first and `findings` last. Three runs in a row failed with
+        # "web research returned no findings" while having actually done the research: the
+        # reply was cut off partway through, after the brief and its sources_consulted and
+        # BEFORE the findings array existed. The evidence — the only part the next phase needs
+        # — was the part always lost, and each failure still cost about $0.50.
+        #
+        # A truncated reply now loses the summary rather than the substance.
+        '{"findings": [{"angle": "competitor|demand|market|timing", "finding": "concise fact", '
+        '"evidence": "what the source shows", "citation_url": "https://..."}], '
+        '"brief": {"hypothesis": "...", "questions": ["..."], "sources_consulted": ["url"]}}\n'
+        "Emit `findings` FIRST and completely; 6-12 of them, each with a real citation_url you "
+        "visited. Keep every field short — one or two sentences. If you are running long, cut "
+        "the brief, never the findings."
     )
 
 

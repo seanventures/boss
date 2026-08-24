@@ -383,7 +383,7 @@ export function AskBossHero({
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState(0);
   const [ranAction, setRanAction] = useState<string | null>(null);
-  const [ideaPage, setIdeaPage] = useState(0);
+  const stripRef = useRef<HTMLDivElement>(null);
   const [busy, startTransition] = useTransition();
   const boxRef = useRef<HTMLTextAreaElement>(null);
 
@@ -528,33 +528,20 @@ export function AskBossHero({
     });
   }, []);
 
-  // KEEP MOVING, BUT NEVER UNDER THE CURSOR.
-  //
-  // With a fixed pool, a Next button makes the operator do the work of discovering that more
-  // exist. It rotates on its own instead — slowly, because a panel that changes while you are
-  // reading it is worse than one that does not change at all. It stops the moment the pointer
-  // is over the row or the composer has text, so a brief can never move out from under a click.
-  const [ideasPaused, setIdeasPaused] = useState(false);
-  const pageCount = Math.ceil(IDEAS.length / IDEAS_PER_PAGE);
-  useEffect(() => {
-    if (ideasPaused || busy || reply || input.trim()) return;
-    const id = window.setInterval(
-      () => setIdeaPage((n) => (n + 1) % pageCount),
-      9000,
-    );
-    return () => window.clearInterval(id);
-  }, [ideasPaused, busy, reply, input, pageCount]);
-
-  const shownIdeas = IDEAS.slice(ideaPage * IDEAS_PER_PAGE, ideaPage * IDEAS_PER_PAGE + IDEAS_PER_PAGE);
-
-  /** Start a Discovery run: research first, decide what to build after. */
+  // The nine-second auto-rotate is gone: a panel that changes while you are reading it is
+  // worse than one that does not, and scrolling shows the whole set without waiting for it.
+  /**
+   * Start a Discovery run: research first, decide what to build after.
+   *
+   * Restored after a careless edit removed it along with the idea-paging state it happened to
+   * sit next to — the build caught it, which is the argument for typechecking before deploying.
+   */
   const research = useCallback((seedText: string) => {
     const seed = seedText.trim();
     if (!seed || busy) return;
     setError(""); setReply(""); setProposed([]);
     startTransition(async () => {
-      const r = await postBounded("/api/discoveries",
-                                  { project_id: projectId, seed, actor });
+      const r = await postBounded("/api/discoveries", { project_id: projectId, seed, actor });
       if (!r.ok) { setError(r.error ?? "Could not start the research run."); return; }
       setInput("");
       setReply(
@@ -579,9 +566,13 @@ export function AskBossHero({
           <div className="mr-header-main">
             <span className="eyebrow">BOSS Agent</span>
             <h3 className="mr-title">Ask BOSS</h3>
+            {/* The first line on the first page described PLUMBING — "reads live control-plane
+                state and acts with your approval" — which tells a visitor how it is wired, not
+                what it is for. Lead with the outcome; the governance is the reassurance that
+                follows, not the pitch. */}
             <p className="askboss-sub">
-              Ask anything about your work — or tell BOSS to do it. It reads live
-              control-plane state and acts with your approval.
+              Describe an outcome. BOSS researches it, argues it out, writes the code,
+              and ships it — <strong>you approve, it does the work.</strong>
             </p>
           </div>
           <div className="mr-header-meta">
@@ -699,36 +690,23 @@ export function AskBossHero({
                 ))}
                 <span className="askboss-research-hint">→ then press Research</span>
               </div>
+              {/* A SCROLL STRIP, NOT A SLIDESHOW.
+                  These flipped pages on a nine-second timer, which means the one you were
+                  reading could leave while you read it, and seeing the whole set required
+                  waiting. All sixteen sit in one horizontal strip now: scroll or drag at
+                  whatever pace you want, nothing moves on its own, and the arrows are there
+                  for a trackpad that will not scroll sideways. */}
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>
                 <div className="askboss-ideas-nav">
-                  {Array.from({ length: pageCount }, (_, n) => (
-                    <button
-                      key={n}
-                      type="button"
-                      className={`askboss-dot${n === ideaPage ? " on" : ""}`}
-                      aria-label={`Idea set ${n + 1} of ${pageCount}`}
-                      onClick={() => setIdeaPage(n)}
-                    />
-                  ))}
-                  <button
-                    type="button"
-                    className="askboss-next"
-                    onClick={() => setIdeaPage((n) => (n + 1) % pageCount)}
-                    data-testid="askboss-ideas-next"
-                  >
-                    More →
-                  </button>
+                  <button type="button" className="askboss-arrow" aria-label="Scroll left"
+                          onClick={() => stripRef.current?.scrollBy({ left: -320, behavior: "smooth" })}>←</button>
+                  <button type="button" className="askboss-arrow" aria-label="Scroll right"
+                          onClick={() => stripRef.current?.scrollBy({ left: 320, behavior: "smooth" })}>→</button>
                 </div>
               </div>
-              <div
-                className="askboss-idea-grid"
-                onMouseEnter={() => setIdeasPaused(true)}
-                onMouseLeave={() => setIdeasPaused(false)}
-                onFocusCapture={() => setIdeasPaused(true)}
-                onBlurCapture={() => setIdeasPaused(false)}
-              >
-                {shownIdeas.map((i) => (
+              <div className="askboss-idea-strip" ref={stripRef}>
+                {IDEAS.map((i) => (
                   <button
                     key={i.title}
                     type="button"
@@ -739,8 +717,12 @@ export function AskBossHero({
                   >
                     <span className="askboss-idea-tag">{i.tag}</span>
                     <span className="askboss-idea-title">{i.title}</span>
+                    {/* The first brief line just restates the title ("PR review-time tracker"
+                        / "a pull-request review-time tracker"). WHO it is for is the line that
+                        actually tells them apart. */}
                     <span className="askboss-idea-hint">
-                      {i.brief.split("\n")[0].replace(/^Build /, "")}
+                      {(i.brief.split("Who it is for:")[1] ?? "").split("\n")[0].trim()
+                        || i.brief.split("\n")[0].replace(/^Build /, "")}
                     </span>
                   </button>
                 ))}
