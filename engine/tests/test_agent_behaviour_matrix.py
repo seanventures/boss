@@ -607,3 +607,29 @@ def test_the_ideas_can_be_cycled():
 def test_the_composer_can_show_a_multi_line_brief():
     """A brief is a paragraph; a fixed one-row box hid all but the first line."""
     assert "scrollHeight" in _hero_src()
+
+
+# --------------------------------------------------------------------------- #
+# A dashboard number must be the number it claims to be
+# --------------------------------------------------------------------------- #
+def test_a_metric_is_never_named_for_something_it_cannot_know():
+    """"Are these real or placeholders?" One tile read exactly 100 — the console's own page
+    size, not a count. Writing these, the same trap appeared again: it is tempting to call
+    "completed run that has a PR" a merged PR. Merge state is NOT in this database (checked:
+    code_task_runs has pull_request_url/number, finalize_ctx has no merge key), so the field is
+    named for what it is and prs_merged is explicitly null with a reason."""
+    import inspect
+    from boss_engine.services import self_observability
+    src = inspect.getsource(self_observability.delivery_metrics)
+    assert '"runs_completed_with_pr"' in src
+    assert '"prs_merged": None' in src, "a number is being passed off as a merge count"
+    assert "prs_merged_note" in src
+
+
+def test_the_metrics_are_aggregates_not_page_counts():
+    """The bug being fixed: fetch 100 rows, count them, display the page size as a total."""
+    import inspect
+    from boss_engine.services import self_observability
+    src = inspect.getsource(self_observability.delivery_metrics)
+    assert "count(*)" in src and "COALESCE(sum(" in src
+    assert "LIMIT" not in src.upper(), "a metric must not be computed from a limited page"

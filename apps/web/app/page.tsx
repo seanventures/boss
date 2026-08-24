@@ -205,6 +205,7 @@ import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
+import { fetchDeliveryMetrics } from "../lib/metrics";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
@@ -732,9 +733,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
-  const [reliabilityFeed, aiSreFeed] = await Promise.all([
+  const [reliabilityFeed, aiSreFeed, deliveryMetrics] = await Promise.all([
     fetchReliabilityFeed(activeProjectId),
     fetchAiSreCapabilities(activeProjectId),
+    fetchDeliveryMetrics(activeProjectId, 7),
   ]);
   const [costInsights, llmSpend] = await Promise.all([
     Promise.resolve(budgetArea.costInsights),
@@ -965,6 +967,28 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               composer now (see AskBossHero): the same words are either ANSWERED or BUILT, and
               the operator chooses with a button instead of by picking a lane first. */}
 
+          {/* REAL, OR ABSENT. Every figure is count()/sum() over the whole window in SQL —
+              none sampled, capped or estimated. apiReachable gates the row so a failed fetch
+              shows nothing rather than a confident zero. */}
+          {deliveryMetrics.apiReachable ? (
+            <div className="cc-delivery" data-testid="cc-delivery">
+              <span className="cc-delivery-label">Last {deliveryMetrics.windowDays} days</span>
+              <span className="cc-delivery-item">
+                <b>{deliveryMetrics.runsTotal}</b> runs
+                {deliveryMetrics.runSuccessRate !== null ? (
+                  <small> · {deliveryMetrics.runSuccessRate}% passed</small>
+                ) : null}
+              </span>
+              <span className="cc-delivery-item"><b>{deliveryMetrics.jobsRan}</b> jobs</span>
+              <span className="cc-delivery-item"><b>{deliveryMetrics.deployments}</b> deployments</span>
+              <span className="cc-delivery-item"><b>${deliveryMetrics.spendUsd.toFixed(2)}</b> spent</span>
+              <span className="cc-delivery-item"><b>{deliveryMetrics.agentHours}</b> agent-hours</span>
+              <span className="cc-delivery-item">
+                <b>{(deliveryMetrics.tokens / 1_000_000).toFixed(1)}M</b> tokens
+              </span>
+            </div>
+          ) : null}
+
           <div className="cc-kpis">
             <AreaLink className="cc-kpi" area="work" orgId={activeOrgId}>
               <span className="cc-kpi-l">Outcomes in flight</span>
@@ -981,9 +1005,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="cc-kpi-l">Awaiting you</span>
               <span className="cc-kpi-n">{status.pendingDecisions}</span>
             </AreaLink>
-            <AreaLink className="cc-kpi green" area="reports" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Verified today</span>
-              <span className="cc-kpi-n">{ccVerifiedToday}</span>
+            {/* Was "Verified today", which counted a 100-row page and so displayed exactly
+                100 whenever there were 100 or more — a page size dressed as a count. This is
+                an aggregate over the window instead. */}
+            <AreaLink className="cc-kpi green" area="code_tasks" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Shipped · 7d</span>
+              <span className="cc-kpi-n">{deliveryMetrics.prsOpened}<small> PRs</small></span>
             </AreaLink>
           </div>
 

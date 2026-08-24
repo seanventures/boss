@@ -5797,3 +5797,25 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   .askboss-assign:hover:not(:disabled) { transform: none; }
 }
+
+
+/* Delivery numbers. Real aggregates over a stated window — the row is hidden entirely when
+   the fetch fails, because a confident zero is worse than nothing. */
+.cc-delivery {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px;
+  margin: 12px 0 4px; padding: 12px 16px;
+  border: 1px solid var(--border, #1C2740);
+  border-left: 2px solid var(--green, #2ED18B);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .025);
+}
+.cc-delivery-label {
+  color: var(--muted, #7C8CB0);
+  font-size: .7rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+}
+.cc-delivery-item { color: var(--ink-soft, #9FB0D0); font-size: .88rem; }
+.cc-delivery-item b {
+  color: var(--ink, #E8EEFC); font-weight: 700; font-size: 1rem;
+  font-variant-numeric: tabular-nums; margin-right: 4px;
+}
+.cc-delivery-item small { color: var(--muted, #7C8CB0); font-size: .8rem; }

@@ -314,9 +314,13 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
     prs_opened = scalar(
         f"SELECT count(*) FROM code_task_runs "
         f"WHERE project_id = :p AND pull_request_url IS NOT NULL AND {since}")
-    # "merged" is the run reaching a completed state WITH a PR attached — BOSS opens the PR and
-    # the merge is what completes the lineage.
-    prs_merged = scalar(
+    # NOT "merged". Nothing in this database records merge state: code_task_runs stores
+    # pull_request_url and pull_request_number, and finalize_ctx has no merge key — checked,
+    # rather than assumed, before naming this field. What CAN be counted is the run finishing
+    # with a PR attached, which is a different claim, so it carries a different name. A real
+    # merged-count needs GitHub, and inventing one from status would put a false number on a
+    # dashboard people make decisions from.
+    runs_completed_with_pr = scalar(
         f"SELECT count(*) FROM code_task_runs "
         f"WHERE project_id = :p AND pull_request_url IS NOT NULL "
         f"  AND status IN ('completed','succeeded','passed') AND {since}")
@@ -339,7 +343,12 @@ def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_
     return {
         "window_days": days,
         "prs_opened": int(prs_opened),
-        "prs_merged": int(prs_merged),
+        "runs_completed_with_pr": int(runs_completed_with_pr),
+        "prs_merged": None,
+        "prs_merged_note": (
+            "not tracked — this database stores the PR url and number but no merge state; "
+            "a real merged-count requires querying GitHub"
+        ),
         "runs_total": int(runs_total),
         "runs_failed": int(runs_failed),
         "run_success_rate": (
