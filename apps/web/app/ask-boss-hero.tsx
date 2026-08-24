@@ -633,14 +633,18 @@ export function AskBossHero({
         <header className="mr-header askboss-head">
           <div className="mr-header-main">
             <span className="eyebrow">BOSS Agent</span>
-            <h3 className="mr-title">From idea to shipped — without the meetings.</h3>
+            <h3 className="mr-title">Your autonomous software factory.</h3>
             {/* The first line on the first page described PLUMBING — "reads live control-plane
                 state and acts with your approval" — which tells a visitor how it is wired, not
-                what it is for. Lead with the outcome; the governance is the reassurance that
-                follows, not the pitch. */}
+                what it is for.
+                
+                It then said "without the meetings", which sold the wrong thing: the governed
+                panel IS the product. Agents convene it and it produces the PRD, so naming it as
+                friction to avoid undersold the part that makes the output trustworthy. */}
             <p className="askboss-sub">
-              BOSS researches the idea, convenes the panel, writes the PRD, builds it and
-              deploys it. <strong>You approve; it does the work.</strong>
+              Describe an outcome. BOSS agents research it, debate it in a governed panel,
+              deliver the PRD, build it and ship it —{" "}
+              <strong>with your approval at every gate.</strong>
             </p>
           </div>
           <div className="mr-header-meta">
