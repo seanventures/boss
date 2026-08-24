@@ -185,6 +185,126 @@ What it must do:
 
 Done when: an environment missing one required key fails CI naming exactly that key, and no value is ever printed.`,
   },
+  {
+    tag: "DevTools",
+    title: "PR review-time tracker",
+    brief: `Build a pull-request review-time tracker.
+
+Who it is for: a team that suspects reviews are the bottleneck but has no numbers.
+
+What it must do:
+- For each merged PR, record time-to-first-review and time-to-merge.
+- Show p50 and p90 per week, and per reviewer.
+- Highlight PRs that waited more than 24h for a first look.
+- Exclude bot-authored PRs from the statistics but list them separately.
+
+Done when: a week with one 3-day-old PR shows a p90 clearly above p50, and bot PRs do not move either figure.`,
+  },
+  {
+    tag: "Ops",
+    title: "Status page from health checks",
+    brief: `Build a public status page driven by real health checks.
+
+Who it is for: a team that announces outages manually, late.
+
+What it must do:
+- Poll a list of HTTP endpoints on an interval and record up/down with latency.
+- Compute uptime over 24h, 7d and 30d per service.
+- Show a 90-day history strip per service.
+- Let an operator post an incident note pinned above the services.
+
+Done when: taking one endpoint down for five minutes shows a dip in the strip and reduces its 24h uptime, without affecting the others.`,
+  },
+  {
+    tag: "Data",
+    title: "Schema drift diff",
+    brief: `Build a database schema drift detector.
+
+Who it is for: a team whose staging schema quietly diverges from production.
+
+What it must do:
+- Snapshot table, column, type and index metadata for two databases.
+- Diff them: missing tables, missing columns, type mismatches, missing indexes.
+- Ignore an allowlist of expected differences, stored in a config file.
+- Output a readable report and exit non-zero when a non-allowlisted difference exists.
+
+Done when: adding a column to one side is reported with the exact table and column, and adding it to the allowlist makes the run pass.`,
+  },
+  {
+    tag: "Agents",
+    title: "Meeting-notes to tickets",
+    brief: `Build a tool that turns meeting notes into draft tickets.
+
+Who it is for: someone who leaves meetings with actions that never get written down.
+
+What it must do:
+- Accept pasted notes or a transcript.
+- Extract action items with an owner and a due date where stated.
+- Produce a draft ticket per action: title, description, owner — never created automatically.
+- Flag actions with no owner so they cannot be silently lost.
+
+Done when: notes with three actions, one unowned, produce three drafts and one visible warning.`,
+  },
+  {
+    tag: "SaaS",
+    title: "Waitlist with referral",
+    brief: `Build a waitlist with referral positions.
+
+Who it is for: someone launching a product who wants signups to spread.
+
+What it must do:
+- Collect an email, confirm it double opt-in, and assign a queue position.
+- Give each signup a referral link; a confirmed referral moves the referrer up.
+- Show a person their position and how many referrals they have.
+- Resist obvious self-referral (same email, same link).
+
+Done when: a referral moves the referrer up exactly one place, and referring yourself does nothing.`,
+  },
+  {
+    tag: "Vertical",
+    title: "Shift swap for clinics",
+    brief: `Build a shift-swap board for a small clinic.
+
+Who it is for: staff who arrange cover over text messages.
+
+What it must do:
+- Show the published roster and let someone offer a shift for swap.
+- Let a colleague claim it; the swap is pending until a manager approves.
+- Enforce that a claimer is qualified for that shift type.
+- Keep an audit trail: who offered, who claimed, who approved, when.
+
+Done when: an unqualified claim is refused with a clear reason, and an approved swap updates the roster and the trail.`,
+  },
+  {
+    tag: "Internal",
+    title: "Runbook linter",
+    brief: `Build a linter for operational runbooks.
+
+Who it is for: a team whose runbooks are stale and fail at 3am.
+
+What it must do:
+- Parse markdown runbooks and extract every command block.
+- Flag commands referencing hosts, paths or services that no longer exist in an inventory file.
+- Flag steps with no verification ("how do I know it worked").
+- Report per runbook with line numbers.
+
+Done when: a runbook naming a decommissioned host fails with that host and line number, and a verified step passes.`,
+  },
+  {
+    tag: "DevTools",
+    title: "Dependency freshness report",
+    brief: `Build a dependency freshness report.
+
+Who it is for: a team that only discovers outdated packages during an incident.
+
+What it must do:
+- Read a lockfile and compare each direct dependency against its latest release.
+- Classify: current, minor behind, major behind, unmaintained (no release in 24 months).
+- Show how far behind in time, not just in versions.
+- Exclude packages pinned deliberately, with the reason from a config file.
+
+Done when: a package two years old is marked unmaintained with its age, and a deliberately pinned one is excluded with its reason shown.`,
+  },
 ];
 
 const IDEAS_PER_PAGE = 4;
@@ -337,7 +457,23 @@ export function AskBossHero({
     });
   }, []);
 
+  // KEEP MOVING, BUT NEVER UNDER THE CURSOR.
+  //
+  // With a fixed pool, a Next button makes the operator do the work of discovering that more
+  // exist. It rotates on its own instead — slowly, because a panel that changes while you are
+  // reading it is worse than one that does not change at all. It stops the moment the pointer
+  // is over the row or the composer has text, so a brief can never move out from under a click.
+  const [ideasPaused, setIdeasPaused] = useState(false);
   const pageCount = Math.ceil(IDEAS.length / IDEAS_PER_PAGE);
+  useEffect(() => {
+    if (ideasPaused || busy || reply || input.trim()) return;
+    const id = window.setInterval(
+      () => setIdeaPage((n) => (n + 1) % pageCount),
+      9000,
+    );
+    return () => window.clearInterval(id);
+  }, [ideasPaused, busy, reply, input, pageCount]);
+
   const shownIdeas = IDEAS.slice(ideaPage * IDEAS_PER_PAGE, ideaPage * IDEAS_PER_PAGE + IDEAS_PER_PAGE);
 
   const slow = elapsed >= NORMAL_SECONDS;
@@ -438,20 +574,32 @@ export function AskBossHero({
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>
                 <div className="askboss-ideas-nav">
-                  <span className="askboss-ideas-count">
-                    {ideaPage + 1} / {pageCount}
-                  </span>
+                  {Array.from({ length: pageCount }, (_, n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      className={`askboss-dot${n === ideaPage ? " on" : ""}`}
+                      aria-label={`Idea set ${n + 1} of ${pageCount}`}
+                      onClick={() => setIdeaPage(n)}
+                    />
+                  ))}
                   <button
                     type="button"
                     className="askboss-next"
                     onClick={() => setIdeaPage((n) => (n + 1) % pageCount)}
                     data-testid="askboss-ideas-next"
                   >
-                    Next →
+                    More →
                   </button>
                 </div>
               </div>
-              <div className="askboss-idea-grid">
+              <div
+                className="askboss-idea-grid"
+                onMouseEnter={() => setIdeasPaused(true)}
+                onMouseLeave={() => setIdeasPaused(false)}
+                onFocusCapture={() => setIdeasPaused(true)}
+                onBlurCapture={() => setIdeasPaused(false)}
+              >
                 {shownIdeas.map((i) => (
                   <button
                     key={i.title}

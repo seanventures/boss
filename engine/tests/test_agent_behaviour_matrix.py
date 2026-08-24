@@ -598,10 +598,31 @@ def test_every_brief_is_a_real_spec_not_a_sentence():
         assert "Done when:" in b, "no acceptance criteria"
 
 
-def test_the_ideas_can_be_cycled():
+def test_the_ideas_cycle_on_their_own_and_never_move_under_a_click():
+    """"Let's keep scrolling those slowly instead of clicking Next." A button makes the operator
+    do the work of discovering more exist. It rotates itself — but must stop while the pointer
+    is over the row, or a brief moves out from under a click."""
     src = _hero_src()
-    assert "askboss-ideas-next" in src and "setIdeaPage" in src
-    assert "% pageCount" in src, "Next must wrap rather than dead-end"
+    assert "setIdeasPaused" in src, "no pause — a card could move mid-click"
+    for guard in ("onMouseEnter", "onMouseLeave", "onFocusCapture", "onBlurCapture"):
+        assert guard in src, f"rotation is not paused on {guard}"
+    i = src.index("if (ideasPaused")
+    cond = src[i:i + 120]
+    for stop in ("ideasPaused", "busy", "reply", "input.trim()"):
+        assert stop in cond, f"rotation does not stop for {stop}"
+    assert "% pageCount" in src, "cycling must wrap rather than dead-end"
+
+
+def test_there_are_enough_ideas_to_be_worth_cycling():
+    """Eight across two pages was thin enough that the operator saw the whole set at once."""
+    briefs = re.findall(r"brief: `(.*?)`", _hero_src(), re.S)
+    assert len(briefs) >= 16, f"only {len(briefs)} briefs"
+
+
+def test_the_ideas_cover_more_than_one_kind_of_product():
+    """A pool that is all developer tooling is a narrower prompt than an empty box."""
+    tags = {t.lower() for t in re.findall(r'tag: "([^"]+)"', _hero_src())}
+    assert len(tags) >= 5, f"only {len(tags)} categories: {tags}"
 
 
 def test_the_composer_can_show_a_multi_line_brief():

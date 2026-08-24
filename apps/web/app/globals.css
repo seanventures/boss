@@ -5819,3 +5819,17 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   font-variant-numeric: tabular-nums; margin-right: 4px;
 }
 .cc-delivery-item small { color: var(--muted, #7C8CB0); font-size: .8rem; }
+
+
+/* Page dots. The row rotates on its own, so this shows position rather than demanding a click. */
+.askboss-dot {
+  width: 6px; height: 6px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 0; background: var(--border, #1C2740);
+  transition: background 200ms ease, transform 200ms ease;
+}
+.askboss-dot.on { background: var(--accent, #4C8DF6); transform: scale(1.4); }
+.askboss-idea-grid { transition: opacity 220ms ease; }
+@media (prefers-reduced-motion: reduce) {
+  .askboss-dot { transition: none; }
+  .askboss-idea-grid { transition: none; }
+}
