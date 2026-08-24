@@ -19,12 +19,15 @@ export type DeliveryMetrics = {
   spendUsd: number;
   tokens: number;
   agentHours: number;
+  runsRunning: number;
+  jobsQueued: number;
   apiReachable: boolean;
 };
 
 const EMPTY: DeliveryMetrics = {
   windowDays: 7, prsOpened: 0, runsCompletedWithPr: 0, runsTotal: 0, runsFailed: 0,
   runSuccessRate: null, jobsRan: 0, deployments: 0, spendUsd: 0, tokens: 0, agentHours: 0,
+  runsRunning: 0, jobsQueued: 0,
   apiReachable: false,
 };
 
@@ -52,9 +55,44 @@ export async function fetchDeliveryMetrics(
       spendUsd: Number(d.spend_usd ?? 0),
       tokens: Number(d.tokens ?? 0),
       agentHours: Number(d.agent_hours ?? 0),
+      runsRunning: Number(d.runs_running ?? 0),
+      jobsQueued: Number(d.jobs_queued ?? 0),
       apiReachable: true,
     };
   } catch {
     return EMPTY;
+  }
+}
+
+/** One thing the operator started, and where it is now. */
+export type InFlightItem = {
+  taskId: string;
+  title: string;
+  status: string;
+  stage: string;
+  area: string;
+  createdAt: string | null;
+  active: boolean;
+};
+
+export async function fetchInFlight(projectId: string, limit = 6): Promise<InFlightItem[]> {
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/metrics/in-flight?project_id=${encodeURIComponent(projectId)}&limit=${limit}`,
+      { headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) return [];
+    const d = (await r.json()) as { items?: Array<Record<string, unknown>> };
+    return (d.items ?? []).map((i) => ({
+      taskId: String(i.task_id ?? ""),
+      title: String(i.title ?? ""),
+      status: String(i.status ?? ""),
+      stage: String(i.stage ?? ""),
+      area: String(i.area ?? "code_tasks"),
+      createdAt: (i.created_at as string) ?? null,
+      active: Boolean(i.active),
+    }));
+  } catch {
+    return [];
   }
 }

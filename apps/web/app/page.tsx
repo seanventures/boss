@@ -205,7 +205,7 @@ import { RepoActivityPanel } from "./repo-activity-ui";
 import { DeploymentPromotionTimeline } from "./deployment-promotion-timeline";
 import { fetchProjectFeed } from "../lib/projects";
 import { fetchReceiptFeed } from "../lib/receipts";
-import { fetchDeliveryMetrics } from "../lib/metrics";
+import { fetchDeliveryMetrics, fetchInFlight } from "../lib/metrics";
 import { fetchRoleFeed } from "../lib/roles";
 import { fetchRoutingLogFeed } from "../lib/routing";
 import { fetchSelfImprovementFeed } from "../lib/self-improvement";
@@ -733,10 +733,11 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
-  const [reliabilityFeed, aiSreFeed, deliveryMetrics] = await Promise.all([
+  const [reliabilityFeed, aiSreFeed, deliveryMetrics, inFlight] = await Promise.all([
     fetchReliabilityFeed(activeProjectId),
     fetchAiSreCapabilities(activeProjectId),
     fetchDeliveryMetrics(activeProjectId, 7),
+    fetchInFlight(activeProjectId, 6),
   ]);
   const [costInsights, llmSpend] = await Promise.all([
     Promise.resolve(budgetArea.costInsights),
@@ -994,11 +995,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <span className="cc-kpi-l">Outcomes in flight</span>
               <span className="cc-kpi-n">{status.openTasks}</span>
             </AreaLink>
-            <AreaLink className="cc-kpi teal" area="org" orgId={activeOrgId}>
-              <span className="cc-kpi-l">Agents active</span>
+                        {/* Was "Agents active", which counted ROLES owning a task in an active column.
+                Only 23 of 187 tasks carry an owner_role_id, so it showed 0/21 while four runs
+                were executing — arithmetic over a field nothing populates, which reads as
+                broken. This counts the work instead. */}
+            <AreaLink className="cc-kpi" area="code_tasks" orgId={activeOrgId}>
+              <span className="cc-kpi-l">Running now</span>
               <span className="cc-kpi-n">
-                {ccRoster.filter((agent) => agent.state !== "idle").length}
-                <small>/{ccRoster.length}</small>
+                {deliveryMetrics.runsRunning}
+                {deliveryMetrics.jobsQueued > 0 ? (
+                  <small> · {deliveryMetrics.jobsQueued} queued</small>
+                ) : null}
               </span>
             </AreaLink>
             <AreaLink className="cc-kpi amber" area="decisions" orgId={activeOrgId}>
@@ -1076,29 +1083,43 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               </div>
             </article>
 
-            <article className="cc-feed" aria-label="What changed">
+            {/* WHAT YOU STARTED, NOT WHAT THE MACHINE LOGGED.
+                This was the raw event stream: worker heartbeats, leased jobs, budget
+                reservations released. All true, none of it something a person acts on, and it
+                pushed the one question an operator actually has off the page — "I pressed
+                Build, what is it doing, and where do I look?" Each row is a thing they
+                started, the stage it is in, and a link to the area that shows that stage. */}
+            <article className="cc-feed" aria-label="In flight">
               <div className="cc-panel-head">
                 <span className="cc-live-dot" aria-hidden />
-                <strong>What changed</strong>
-                <span className="cc-feed-meta">live</span>
+                <strong>In flight</strong>
+                <span className="cc-feed-meta">last 3 days</span>
               </div>
               <div className="cc-feed-list">
-                {events.items.slice(0, 8).map((event) => (
-                  <div className="cc-feed-row" key={event.id}>
-                    <span className="cc-feed-orb" aria-hidden>{roleInitials(event.actor)}</span>
-                    <div className="cc-feed-main">
-                      <div className="cc-feed-text">
-                        <b>{event.actor}</b> {event.eventType.replaceAll("_", " ").replaceAll(".", " · ")}{" "}
-                        <span>{event.entityType}</span>
-                      </div>
-                      <div className="cc-feed-sub">
-                        <time dateTime={event.createdAt}>{formatDateTime(event.createdAt)}</time>
-                      </div>
-                    </div>
-                  </div>
+                {inFlight.map((item) => (
+                  <AreaLink
+                    className="cc-flight-row"
+                    area={item.area}
+                    orgId={activeOrgId}
+                    key={item.taskId}
+                    title={item.title}
+                  >
+                    <span className={`cc-flight-stage stage-${item.stage}`}>{item.stage}</span>
+                    <span className="cc-flight-main">
+                      <span className="cc-flight-title">{item.title || item.taskId}</span>
+                      <span className="cc-flight-sub">
+                        {item.active ? "running" : item.status}
+                        {item.createdAt ? <> · <time dateTime={item.createdAt}>{formatDateTime(item.createdAt)}</time></> : null}
+                      </span>
+                    </span>
+                    <span className="cc-flight-go" aria-hidden>→</span>
+                  </AreaLink>
                 ))}
-                {events.items.length === 0 ? (
-                  <p className="empty-state">No activity yet. Assign an outcome to start the event stream.</p>
+                {inFlight.length === 0 ? (
+                  <p className="empty-state">
+                    Nothing started in the last three days. Describe something in Ask BOSS and
+                    press Build.
+                  </p>
                 ) : null}
               </div>
             </article>

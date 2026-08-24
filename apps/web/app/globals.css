@@ -5833,3 +5833,33 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .askboss-dot { transition: none; }
   .askboss-idea-grid { transition: none; }
 }
+
+
+/* In flight — one row per thing you started, routed to the stage it is in. */
+.cc-flight-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px; text-decoration: none; color: inherit;
+  border-bottom: 1px solid var(--border, #1C2740);
+  transition: background 140ms ease;
+}
+.cc-flight-row:last-child { border-bottom: 0; }
+.cc-flight-row:hover { background: rgba(76, 141, 246, .10); }
+.cc-flight-stage {
+  flex: 0 0 auto; min-width: 76px; text-align: center;
+  padding: 3px 9px; border-radius: 6px;
+  font-size: .64rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  border: 1px solid var(--border, #1C2740); color: var(--muted, #7C8CB0);
+}
+.cc-flight-stage.stage-discovery { color: #8B6AF5; border-color: rgba(139,106,245,.45); background: rgba(139,106,245,.12); }
+.cc-flight-stage.stage-meeting   { color: #2ED1C3; border-color: rgba(46,209,195,.45);  background: rgba(46,209,195,.12); }
+.cc-flight-stage.stage-coding    { color: #4C8DF6; border-color: rgba(76,141,246,.45);  background: rgba(76,141,246,.14); }
+.cc-flight-stage.stage-review    { color: #E0A33E; border-color: rgba(224,163,62,.45);  background: rgba(224,163,62,.12); }
+.cc-flight-stage.stage-done      { color: #2ED18B; border-color: rgba(46,209,139,.40);  background: rgba(46,209,139,.10); }
+.cc-flight-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.cc-flight-title {
+  font-weight: 600; font-size: .9rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-flight-sub { color: var(--muted, #7C8CB0); font-size: .76rem; }
+.cc-flight-go { flex: 0 0 auto; color: var(--accent-text, #7FB0FF); opacity: .7; }
+.cc-flight-row:hover .cc-flight-go { opacity: 1; }

@@ -688,3 +688,45 @@ def test_build_reports_success_and_failure():
     assert "setError(" in body, "a failed build is still silent"
     assert "setReply(" in body, "a started build gives no confirmation"
     assert "task_id" in body, "the operator is not told what was created"
+
+
+# --------------------------------------------------------------------------- #
+# The Command Center shows work, not machine noise
+# --------------------------------------------------------------------------- #
+def test_the_landing_panel_shows_started_work_not_the_event_log():
+    """"These don't make real sense to me." The panel was the raw event stream — worker
+    heartbeats, leased jobs, budget reservations released. All true, none of it actionable, and
+    it crowded out the only question an operator has after pressing Build: what is it doing and
+    where do I look?"""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    assert 'aria-label="In flight"' in src
+    assert "cc-flight-stage" in src, "no stage is shown"
+    i = src.index('aria-label="In flight"')
+    panel = src[i:i + 2200]
+    assert "AreaLink" in panel and "item.area" in panel, "rows do not route to the stage"
+    assert "heartbeat" not in panel
+
+
+def test_in_flight_only_uses_columns_that_exist():
+    """The first version joined meetings on task_id — a column meetings does not have — and the
+    endpoint returned "Required database relation is not applied". Verified against
+    information_schema, not assumed."""
+    import inspect
+    from boss_engine.services import self_observability
+    src = inspect.getsource(self_observability.in_flight)
+    # Strip SQL comments before asserting: the first version of this test matched the comment
+    # EXPLAINING why action_task_ids is unused, which is the third time this suite has asserted
+    # on prose instead of code.
+    code = re.sub(r"--.*$", "", src, flags=re.M)
+    assert "m.task_id" not in code
+    assert "action_task_ids" not in code, "that array is empty on this path — checked live"
+
+
+def test_every_in_flight_row_names_an_area_to_open():
+    """A status with nowhere to go is the same dead end as no status."""
+    import inspect
+    from boss_engine.services import self_observability
+    src = inspect.getsource(self_observability)
+    assert "_STAGE_AREA" in src
+    for stage in ("discovery", "meeting", "coding", "review", "deployment"):
+        assert f'"{stage}"' in src, f"{stage} has no console area"

@@ -405,13 +405,16 @@ def in_flight(connection, project_id: str, *, limit: int = 8) -> list[dict]:
         _sql(
             """
             SELECT t.id, t.title, t.status, t.created_at,
-                   (SELECT count(*) FROM meetings m WHERE m.task_id = t.id)          AS meetings,
+                   -- The PRD flow titles its task "PRD meeting: <directive>", and that is the
+                   -- signal that actually EXISTS. meetings has no task_id (checked against
+                   -- information_schema, after a first version failed on it), and its
+                   -- action_task_ids array is not populated on this path -- verified against
+                   -- live rows, where every count came back 0 while the runs were real.
+                   (CASE WHEN t.title LIKE 'PRD meeting:%' THEN 1 ELSE 0 END)        AS meetings,
                    (SELECT count(*) FROM code_task_runs r WHERE r.task_id = t.id)    AS runs,
                    (SELECT count(*) FROM code_task_runs r
                      WHERE r.task_id = t.id AND r.status = 'running')                AS runs_active,
-                   (SELECT count(*) FROM deployment_runs d
-                     WHERE d.project_id = t.project_id
-                       AND d.created_at >= t.created_at)                             AS deploys
+                   0                                                             AS deploys
             FROM tasks t
             WHERE t.project_id = :p
               AND t.created_at > now() - interval '3 days'
