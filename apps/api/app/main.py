@@ -11651,6 +11651,23 @@ def refresh_health_snapshot(
         return health_snapshot_summary_from_row(row)
 
 
+@app.get("/v1/metrics/delivery")
+def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
+    """What this project actually shipped, in real counts.
+
+    Added after an operator asked whether the Command Center tiles were real or placeholders.
+    Three of four were real; "Verified today: 100" was the console fetching the 100 most recent
+    receipts and counting them, so the tile showed its own page size. These are aggregates over
+    the whole window in SQL — nothing sampled, capped, or estimated — so a number here is either
+    the real one or absent.
+    """
+    from boss_engine.services.self_observability import delivery_metrics
+
+    window = max(1, min(int(days), 90))
+    with engine.begin() as connection:
+        return delivery_metrics(connection, project_id, days=window)
+
+
 @app.get("/v1/self/diagnostics")
 def self_diagnostics(preview_root: Optional[str] = None) -> dict:
     """What BOSS can see about the container it is itself running in.

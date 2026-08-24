@@ -288,3 +288,66 @@ def self_snapshot(preview_root: Optional[str] = None) -> dict[str, Any]:
         "processes": processes,
         "notes": notes or ["Nothing anomalous in CPU, memory or disk."],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Delivery metrics
+# --------------------------------------------------------------------------- #
+# "Are these real or placeholder templates?" — a fair question about a tile reading exactly
+# 100, which turned out to be a page size: the console fetched the 100 most recent receipts and
+# counted them. These are computed in SQL over the whole window instead, so a number is either
+# the real one or absent. Nothing here is sampled, capped, or estimated.
+
+_METRIC_WINDOW_DAYS = 7
+
+
+def delivery_metrics(connection, project_id: str, *, days: int = _METRIC_WINDOW_DAYS) -> dict:
+    """Real counts for the work this project actually did in the last `days`."""
+    from sqlalchemy import text as _sql
+
+    def scalar(sql: str, **params):
+        row = connection.execute(_sql(sql), {"p": project_id, "d": days, **params}).scalar()
+        return row or 0
+
+    since = "created_at > now() - make_interval(days => :d)"
+
+    prs_opened = scalar(
+        f"SELECT count(*) FROM code_task_runs "
+        f"WHERE project_id = :p AND pull_request_url IS NOT NULL AND {since}")
+    # "merged" is the run reaching a completed state WITH a PR attached — BOSS opens the PR and
+    # the merge is what completes the lineage.
+    prs_merged = scalar(
+        f"SELECT count(*) FROM code_task_runs "
+        f"WHERE project_id = :p AND pull_request_url IS NOT NULL "
+        f"  AND status IN ('completed','succeeded','passed') AND {since}")
+    runs_total = scalar(f"SELECT count(*) FROM code_task_runs WHERE project_id = :p AND {since}")
+    runs_failed = scalar(
+        f"SELECT count(*) FROM code_task_runs "
+        f"WHERE project_id = :p AND status IN ('failed','error') AND {since}")
+    jobs_ran = scalar(f"SELECT count(*) FROM jobs WHERE project_id = :p AND {since}")
+    deploys = scalar(f"SELECT count(*) FROM deployment_runs WHERE project_id = :p AND {since}")
+
+    micros = scalar(
+        f"SELECT COALESCE(sum(cost_usd_micros), 0) FROM llm_calls WHERE project_id = :p AND {since}")
+    tokens = scalar(
+        f"SELECT COALESCE(sum(total_tokens), 0) FROM llm_calls WHERE project_id = :p AND {since}")
+    # Machine time, from the latency the calls actually reported — not wall-clock, which would
+    # count time the operator spent reading.
+    latency_ms = scalar(
+        f"SELECT COALESCE(sum(latency_ms), 0) FROM llm_calls WHERE project_id = :p AND {since}")
+
+    return {
+        "window_days": days,
+        "prs_opened": int(prs_opened),
+        "prs_merged": int(prs_merged),
+        "runs_total": int(runs_total),
+        "runs_failed": int(runs_failed),
+        "run_success_rate": (
+            round(100.0 * (runs_total - runs_failed) / runs_total, 1) if runs_total else None
+        ),
+        "jobs_ran": int(jobs_ran),
+        "deployments": int(deploys),
+        "spend_usd": round(int(micros) / 1_000_000, 2),
+        "tokens": int(tokens),
+        "agent_hours": round(int(latency_ms) / 3_600_000, 2),
+    }
