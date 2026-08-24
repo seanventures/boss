@@ -192,3 +192,35 @@ def test_an_explicit_target_id_is_always_honoured():
     assert "WHERE id = :i AND project_id = :p" in src[i:i + 400], (
         "target_id is not resolved directly, or is not project-scoped"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Binding a target must be undoable
+# --------------------------------------------------------------------------- #
+def test_the_console_can_unbind_a_target():
+    """"If I already bound the port there's no way to unbind." True: DELETE
+    /v1/deployment-targets/{id} has existed all along and nothing in the console called it, so
+    a wrong binding — this app sitting on another app's port — could only be undone in the
+    database. Retry was the ONLY control offered, and a deployment that fails because the
+    target is wrong fails identically on every retry."""
+    import pathlib
+    route = pathlib.Path("apps/web/app/api/deployment-targets/route.ts")
+    assert route.exists(), "no console route for retiring a target"
+    body = route.read_text(encoding="utf-8")
+    assert "export async function DELETE" in body
+    assert "/v1/deployment-targets/" in body
+
+    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    assert "app-deployment-unbind" in ui, "no unbind control beside Retry"
+    assert "app-target-retire" in ui, "no unbind control on an unshipped binding"
+
+
+def test_the_unbind_control_has_the_id_it_needs():
+    import pathlib
+    """The first version of this shipped disabled forever: the deployments feed did not return
+    deployment_target_id, so `disabled={!latest.deployment_target_id}` was always true. A
+    control that cannot fire is worse than no control — it looks like the feature exists."""
+    main = pathlib.Path("apps/api/app/main.py").read_text(encoding="utf-8")
+    i = main.index('@app.get("/v1/code-tasks/{run_id}/deployments")')
+    body = main[i:i + 2000]
+    assert "r.deployment_target_id" in body, "the id the unbind button needs is not selected"

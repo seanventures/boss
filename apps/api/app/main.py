@@ -9174,8 +9174,15 @@ def deployments_for_code_task_endpoint(run_id: str, limit: int = 5,
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
         rows = connection.execute(
+            # deployment_target_id is returned so the card can UNBIND, not only retry. The
+            # console had no way to undo a binding at all — DELETE /v1/deployment-targets/{id}
+            # existed and nothing called it — and a deployment that fails because the TARGET is
+            # wrong (no domain, or a port belonging to another app) fails identically on every
+            # retry. Without this id the unbind control is permanently disabled, which is how
+            # the first version of it shipped before this was checked.
             text("SELECT r.id, r.app_name, r.environment, r.status, r.commit_ref, "
                  "       r.started_at, r.finished_at, r.failure_reason, r.trigger, "
+                 "       r.deployment_target_id, "
                  "       t.domains, t.health_checks, h.name AS host_name "
                  "FROM deployment_runs r "
                  "LEFT JOIN deployment_targets t ON t.id = r.deployment_target_id "

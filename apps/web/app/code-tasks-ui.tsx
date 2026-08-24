@@ -877,6 +877,24 @@ function SetupDeployment({ run, projectId, onDone }: {
  * Renders nothing when the app has never deployed: a card for a task that was never meant to
  * ship should not grow a permanently empty deployment row.
  */
+/**
+ * Retire the target this app is bound to — the undo the console never had.
+ *
+ * DELETE /v1/deployment-targets/{id} existed all along and nothing called it, so a wrong
+ * binding (an app on another app's port, say) could only be fixed in the database. The API
+ * retires rather than deletes, because deployment runs and health samples reference the row.
+ */
+async function retireTarget(targetId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/api/deployment-targets?target_id=${encodeURIComponent(targetId)}`,
+                          { method: "DELETE", cache: "no-store" });
+    const d = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true } : { ok: false, error: d?.error ?? `HTTP ${r.status}` };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) };
+  }
+}
+
 function DeploymentLine({ run, projectId, deployable }: {
   run: CodeTaskRun; projectId: string;
   /** Has this app produced reviewed code? A blocked or still-building task has nothing to
@@ -953,6 +971,26 @@ function DeploymentLine({ run, projectId, deployable }: {
               <RocketLaunch size={15} weight="fill" aria-hidden />{" "}
               {retrying || starting ? "Deploying…" : "Deploy now"}
             </button>
+            {/* THE UNDO THAT WAS NEVER THERE.
+                Once an app was bound to a host and port the card only ever offered "Deploy
+                now" — a wrong binding (this app sat on another app's port) could be fixed
+                nowhere but the database. Retiring keeps the history: deployment runs and
+                health samples reference the target row. */}
+            <button className="cap-btn ct-deploy-action"
+                    disabled={retrying || starting || !targetId}
+                    data-testid="app-target-retire"
+                    title="Unbind this app from its host and port. Deployment history is kept."
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!targetId) return;
+                      setRetrying(true); setNote(null);
+                      const r = await retireTarget(targetId);
+                      setNote(r.ok ? "target retired — pick a new one below" : (r.error ?? "could not retire"));
+                      setRetrying(false);
+                      await load();
+                    }}>
+              Unbind target
+            </button>
             {note ? <span className="detail">{note}</span> : null}
           </>
         ) : (
@@ -1004,6 +1042,28 @@ function DeploymentLine({ run, projectId, deployable }: {
                   }}>
             <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}
             {retrying ? "Retrying…" : "Retry"}
+          </button>
+          {/* RETRY IS NOT ALWAYS THE ANSWER.
+              A deployment that fails because the target itself is wrong — no domain, or the
+              port belongs to another app — fails identically every time it is retried, and
+              the card offered nothing else. Unbinding is the other move, and it was reachable
+              only from the database. */}
+          <button className="cap-btn ct-deploy-action"
+                  disabled={retrying || !latest.deployment_target_id}
+                  data-testid="app-deployment-unbind"
+                  title="Unbind this app from its host and port. Deployment history is kept."
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const tid = latest.deployment_target_id;
+                    if (!tid) return;
+                    setRetrying(true); setNote(null);
+                    const r = await retireTarget(String(tid));
+                    setNote(r.ok ? "target retired — set a new one to deploy again"
+                                 : (r.error ?? "could not retire"));
+                    setRetrying(false);
+                    await load();
+                  }}>
+            Unbind target
           </button>
           {note ? <span className="detail">{note}</span> : null}
         </>
