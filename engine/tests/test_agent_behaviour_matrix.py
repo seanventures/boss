@@ -611,7 +611,41 @@ def test_the_ideas_scroll_rather_than_flipping_on_a_timer():
     assert "setIdeaPage" not in code and "ideasPaused" not in code, (
         "the paging timer is still there")
     assert "IDEAS.map(" in code, "the strip must hold every idea, not a page of them"
-    assert "scrollBy" in code, "no manual scroll control for a trackpad that will not scroll sideways"
+
+
+def test_the_arrows_do_not_fight_css_scroll_snap():
+    """The arrows did nothing: scrollBy with behavior:"smooth" against a strip carrying CSS
+    scroll-snap, where snap pulls the position back mid-animation."""
+    css = pathlib.Path("apps/web/app/globals.css").read_text(encoding="utf-8")
+    assert "scroll-snap" not in css, "snap is back and will cancel programmatic scrolling"
+    src = _hero_src()
+    assert "const nudge = useCallback" in src
+    i = src.index("const nudge = useCallback")
+    body = src[i:i + 600]
+    assert "offsetWidth" in body, "still stepping by a magic pixel count instead of a card"
+
+
+def test_auto_scroll_is_not_silently_disabled_by_an_os_setting():
+    """The drift never started: it was gated on prefers-reduced-motion, so on a machine with
+    Reduce Motion enabled an explicitly requested feature did nothing and looked broken. The
+    preference now sets the DEFAULT of a visible toggle instead of hiding the feature."""
+    src = _hero_src()
+    assert "setDrift" in src, "no way to turn the drift on"
+    # Strip comments first: the phrase also appears in this file's header, and matching that
+    # occurrence tests the prose rather than the behaviour — the fifth time in this suite.
+    code = re.sub(r"^\s*\*.*$", "", re.sub(r"//.*$", "", src, flags=re.M), flags=re.M)
+    i = code.index("prefers-reduced-motion")
+    around = code[max(0, i - 500):i + 200]
+    assert "setDrift" in around, "the preference still gates the effect rather than the default"
+
+
+def test_the_hover_detail_does_not_resize_the_card():
+    """Rendered inline it grew the hovered card to ~3x its height and shoved the row around."""
+    css = pathlib.Path("apps/web/app/globals.css").read_text(encoding="utf-8")
+    i = css.index(".askboss-idea-peek {")
+    block = css[i:css.index("}", i)]
+    assert "position: absolute" in block, "the detail still occupies layout space"
+    assert "-webkit-line-clamp: 2" in block, "no cap on how much it shows"
 
 
 def test_there_are_enough_ideas_to_be_worth_cycling():

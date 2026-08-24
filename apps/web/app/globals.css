@@ -5762,7 +5762,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   display: flex; gap: 10px;
   overflow-x: auto; overflow-y: hidden;
   padding: 2px 2px 10px;
-  scroll-snap-type: x proximity;
   scrollbar-width: thin;
   scrollbar-color: var(--border, #1C2740) transparent;
   overscroll-behavior-x: contain;
@@ -5775,7 +5774,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-idea-strip::-webkit-scrollbar-thumb:hover { background: var(--accent, #4C8DF6); }
 .askboss-idea-strip > .askboss-idea {
   flex: 0 0 clamp(210px, 22vw, 260px);
-  scroll-snap-align: start;
 }
 .askboss-arrow {
   width: 26px; height: 26px; padding: 0; border-radius: 50%; cursor: pointer;
@@ -5932,25 +5930,41 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .cc-alert-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
 
 
-/* The hovered card lifts out of the drift and shows what it could not at rest, so a brief can
-   be judged before a click is committed to it. */
+/* HIGHLIGHT, DO NOT RESIZE.
+   Rendering the extra detail inline grew the hovered card to roughly three times its height
+   and shoved the whole row around — worse than showing nothing. It floats above the card, so
+   the strip never changes size, and the card itself only lifts and brightens. */
 .askboss-idea { position: relative; }
 .askboss-idea-peek {
+  position: absolute;
+  left: 10px; right: 10px; top: calc(100% - 6px);
+  z-index: 5;
   display: none;
-  color: var(--ink-soft, #9FB0D0); font-size: .76rem; line-height: 1.45;
-  border-top: 1px solid var(--border, #1C2740); padding-top: 7px; margin-top: 2px;
+  padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--accent, #4C8DF6);
+  background: var(--surface-2, #0F1830);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .55);
+  color: var(--ink-soft, #9FB0D0); font-size: .74rem; line-height: 1.4;
+  text-align: left;
+  /* Two lines, hard stop — this is a hint, not the brief. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  visibility: hidden; opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
 }
 .askboss-idea:hover, .askboss-idea:focus-visible {
-  z-index: 2;
-  transform: translateY(-3px) scale(1.02);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+  z-index: 6;
   border-color: var(--accent, #4C8DF6);
   background: var(--surface-2, #0F1830);
+  box-shadow: 0 0 0 1px var(--accent, #4C8DF6) inset, 0 8px 22px rgba(0, 0, 0, .40);
 }
 .askboss-idea:hover .askboss-idea-peek,
-.askboss-idea:focus-visible .askboss-idea-peek { display: block; }
-/* Room for the lift, so a raised card is not clipped by the scroll container. */
-.askboss-idea-strip { padding-top: 8px; padding-bottom: 14px; align-items: flex-start; }
+.askboss-idea:focus-visible .askboss-idea-peek { visibility: visible; opacity: 1; }
+
+/* Room for the overlay to hang below the strip without being clipped. */
+.askboss-idea-strip { padding-bottom: 8px; align-items: stretch; }
+.askboss-ideas { padding-bottom: 46px; }
 
 @media (prefers-reduced-motion: reduce) {
   /* The drift is suppressed by the effect itself; make sure the lift does not animate either. */

@@ -562,12 +562,18 @@ export function AskBossHero({
   // inside either, a turn running, an answer on screen, or any text typed. Motion that
   // competes with what you are doing is worse than no motion.
   const [stripHeld, setStripHeld] = useState(false);
+  // Defaults to OFF for anyone who asked the OS for less motion, but it is a VISIBLE toggle
+  // rather than a silent gate: drifting was requested, and a requested feature that quietly
+  // does nothing because of a system setting is indistinguishable from a bug.
+  const [drift, setDrift] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (drift !== null) return;
+    setDrift(!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+  }, [drift]);
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip) return;
-    if (stripHeld || busy || reply || input.trim()) return;
-    // Someone who has asked for less motion did not ask for a strip that moves by itself.
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    if (stripHeld || drift === false || busy || reply || input.trim()) return;
     let raf = 0;
     let last = 0;
     const PX_PER_SECOND = 14;          // about one card every fifteen seconds
@@ -583,7 +589,22 @@ export function AskBossHero({
     };
     raf = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(raf);
-  }, [stripHeld, busy, reply, input]);
+  }, [stripHeld, drift, busy, reply, input]);
+
+  /**
+   * Step the strip by one card.
+   *
+   * The arrows used scrollBy with behavior:"smooth" while the strip had CSS scroll-snap on it.
+   * The two fight: snap pulls the position back mid-animation, so a click appeared to do
+   * nothing. Snap is gone from the CSS and this measures a real card instead of a magic 320px.
+   */
+  const nudge = useCallback((dir: 1 | -1) => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const card = strip.querySelector<HTMLElement>(".askboss-idea");
+    const step = (card?.offsetWidth ?? 240) + 10;
+    strip.scrollLeft += dir * step;
+  }, []);
 
   const slow = elapsed >= NORMAL_SECONDS;
   const state = busy ? (slow ? "slow" : "thinking") : reply || error ? "answered" : "idle";
@@ -736,10 +757,17 @@ export function AskBossHero({
               <div className="askboss-ideas-head">
                 <span className="askboss-ideas-label">Or start something</span>
                 <div className="askboss-ideas-nav">
+                  <button
+                    type="button"
+                    className="askboss-arrow"
+                    aria-label={drift ? "Pause auto-scroll" : "Resume auto-scroll"}
+                    title={drift ? "Pause auto-scroll" : "Resume auto-scroll"}
+                    onClick={() => setDrift((d) => !d)}
+                  >{drift ? "❙❙" : "▶"}</button>
                   <button type="button" className="askboss-arrow" aria-label="Scroll left"
-                          onClick={() => stripRef.current?.scrollBy({ left: -320, behavior: "smooth" })}>←</button>
+                          onClick={() => nudge(-1)}>←</button>
                   <button type="button" className="askboss-arrow" aria-label="Scroll right"
-                          onClick={() => stripRef.current?.scrollBy({ left: 320, behavior: "smooth" })}>→</button>
+                          onClick={() => nudge(1)}>→</button>
                 </div>
               </div>
               <div
@@ -768,14 +796,16 @@ export function AskBossHero({
                       {(i.brief.split("Who it is for:")[1] ?? "").split("\n")[0].trim()
                         || i.brief.split("\n")[0].replace(/^Build /, "")}
                     </span>
-                    {/* What the card cannot show at rest. Appears on hover/focus so the
-                        operator can judge a brief before committing a click to it. */}
+                    {/* A small overlay, not an expansion. Rendering this inline grew the card
+                        to about three times its height and shoved the row around, which is
+                        worse than showing nothing. It floats above the card now, so the strip
+                        never changes size, and it is capped to two lines. */}
                     <span className="askboss-idea-peek">
-                      {i.brief
+                      {(i.brief
                         .split("What it must do:")[1]?.split("Done when:")[0]
                         ?.split("\n").filter((l) => l.trim().startsWith("-"))
-                        .slice(0, 3).map((l) => l.replace(/^\s*-\s*/, ""))
-                        .join(" · ")}
+                        .slice(0, 2).map((l) => l.replace(/^\s*-\s*/, "").trim())
+                        .join(" · ") ?? "").slice(0, 150)}
                     </span>
                   </button>
                 ))}
