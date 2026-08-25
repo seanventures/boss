@@ -914,6 +914,9 @@ function DeploymentLine({ run, projectId, deployable }: {
   const [starting, setStarting] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Whether the binding has been READ yet. Without this, `targetId` is null for the first
+  // render and the card would flash "not bound" at every app on load.
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     const r = await runDeploymentsAction(run.id, appIdentity(run).name);
@@ -922,6 +925,7 @@ function DeploymentLine({ run, projectId, deployable }: {
       setDeploys((d.deployments ?? []) as any[]);
       setLinked(d.linked_host ?? null);
       setTargetId(d.linked_target_id ?? null);
+      setLoaded(true);
     }
   }, [run]);
 
@@ -946,9 +950,24 @@ function DeploymentLine({ run, projectId, deployable }: {
   // already says BLOCKED or BUILDING two inches above.
   if (!deployable && !latest) return null;
 
-  if (!latest) {
+  // UNBOUND IS ABOUT THE BINDING, NOT THE HISTORY.
+  //
+  // This asked `if (!latest)` — no deployment runs — so an app that had ever deployed stayed
+  // on the deployment row forever. After unbinding, the card therefore still showed "DEPLOY
+  // FAILED · hetzner-ci-01" with a Retry button aimed at a target that no longer exists, and
+  // the unbind looked like it had done nothing. It had: the target was retired.
+  //
+  // Deployment runs are permanent history and a retired target is current state; the card has
+  // to follow the state and show the history as history.
+  if (!latest || (loaded && !targetId)) {
     return (
       <div className="ct-deploy-line" data-testid="app-deployment-none">
+        {latest && loaded && !targetId ? (
+          <span className="detail ct-deploy-history" title={latest.failure_reason ?? undefined}>
+            last deploy: {latest.status}
+            {latest.finished_at ? <> · <ClientRelativeTime iso={latest.finished_at} /></> : null}
+          </span>
+        ) : null}
         {linked ? (
           <>
             <span className="cap-badge tone-amber">not deployed</span>

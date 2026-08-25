@@ -6113,3 +6113,23 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .dx-tick.current { animation: none; }
   .dx-row:hover { transform: none; }
 }
+
+
+/* The deployment row grew a second button (Unbind), and the failure reason next to it has no
+   width of its own — a flex item sized by content. With a long reason the row could not fit
+   and spilled past the card's edge, visibly overlapping the card beside it.
+
+   The reason is the only elastic part, so it is the part that shrinks. */
+.ct-deploy-reason {
+  flex: 1 1 140px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Buttons keep their size and wrap to the next line instead of being squeezed or pushed out. */
+.ct-deploy-action { flex: 0 0 auto; }
+/* Belt and braces: nothing inside a card may paint outside it, whatever a future child does. */
+.ct-card, .ct-deploy-wrap { overflow: hidden; }
+
+/* What this app last did, when it is no longer bound to anything. History, not status —
+   shown quietly so it cannot be mistaken for a live deployment. */
+.ct-deploy-history { opacity: .7; font-style: italic; }

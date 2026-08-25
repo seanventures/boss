@@ -224,3 +224,34 @@ def test_the_unbind_control_has_the_id_it_needs():
     i = main.index('@app.get("/v1/code-tasks/{run_id}/deployments")')
     body = main[i:i + 2000]
     assert "r.deployment_target_id" in body, "the id the unbind button needs is not selected"
+
+
+def test_the_card_follows_the_binding_not_the_deployment_history():
+    """"Unbind target is not working." It WAS working — the target showed status=retired in the
+    database and the button's own message said "target retired". The card was wrong: it decided
+    whether an app was bound by asking whether any deployment RUN existed, so an app that had
+    ever deployed kept showing "DEPLOY FAILED · hetzner-ci-01" and a Retry button aimed at a
+    target that no longer existed.
+
+    Deployment runs are permanent history; a retired target is current state."""
+    import pathlib
+    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    assert "if (!latest || (loaded && !targetId))" in ui, (
+        "the card still decides boundness from deployment history"
+    )
+    assert "ct-deploy-history" in ui, "the old deployment is not shown as history"
+    # and it must not flash "not bound" before the binding has been read
+    assert "const [loaded, setLoaded]" in ui, "no guard against the pre-load render"
+
+
+def test_the_deploy_row_cannot_paint_outside_its_card():
+    """Adding the Unbind button widened the row; with a long failure reason beside it, the row
+    overflowed and overlapped the neighbouring card."""
+    import pathlib
+    css = pathlib.Path("apps/web/app/globals.css").read_text(encoding="utf-8")
+    i = css.rindex(".ct-deploy-reason {")
+    block = css[i:css.index("}", i)]
+    assert "flex: 1 1" in block and "min-width: 0" in block, (
+        "the failure reason is still sized by its content"
+    )
+    assert ".ct-card, .ct-deploy-wrap { overflow: hidden; }" in css
