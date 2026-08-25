@@ -26,10 +26,7 @@ import {
   overrideCodeTaskAction,
   followUpCodeTaskAction,
   conveneMeetingAction,
-  deployRunNowAction,
-  retryDeploymentAction,
   runDeploymentsAction,
-  setupDeploymentAction,
 } from "./actions";
 import { LiveDeployment } from "./deploy-ui";
 import { Markdown } from "./markdown";
@@ -827,12 +824,17 @@ function SetupDeployment({ run, projectId, onDone }: {
             e.preventDefault();
             e.stopPropagation();
             const fd = new FormData(e.currentTarget as HTMLFormElement);
-            fd.set("run_id", run.id);
             setBusy(true); setMsg(null);
-            const r = await setupDeploymentAction(null, fd);
+            const r = await appDeployOp({
+              op: "set-target",
+              run_id: run.id,
+              host_id: fd.get("host_id"),
+              app_name: fd.get("app_name"),
+              app_port: fd.get("app_port"),
+            });
             setBusy(false);
             setMsg(r.ok
-              ? `target set: ${(r.data as any)?.host ?? "host"} — deploy it once below`
+              ? `target set: ${r.data?.host ?? "host"} — deploy it once below`
               : (r.error ?? "could not set the target"));
             if (r.ok) onDone();
           }}
@@ -884,6 +886,28 @@ function SetupDeployment({ run, projectId, onDone }: {
  * binding (an app on another app's port, say) could only be fixed in the database. The API
  * retires rather than deletes, because deployment runs and health samples reference the row.
  */
+/**
+ * Card deployment actions, via a route handler rather than a Server Action.
+ *
+ * "Set target" showed "Saving…" for minutes. The write takes milliseconds; the wait was the
+ * REPLY — a Server Action re-renders the current route to respond, and setupDeploymentAction
+ * additionally called revalidatePath("/"), on an area with a measured TTFB of ~115 seconds.
+ */
+async function appDeployOp(body: Record<string, unknown>): Promise<{ ok: boolean; data?: any; error?: string }> {
+  try {
+    const r = await fetch("/api/app-deploy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    const d = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, data: d } : { ok: false, error: d?.error ?? `HTTP ${r.status}` };
+  } catch (e) {
+    return { ok: false, error: String((e as Error)?.message ?? e) };
+  }
+}
+
 async function retireTarget(targetId: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const r = await fetch(`/api/deployment-targets?target_id=${encodeURIComponent(targetId)}`,
@@ -978,10 +1002,12 @@ function DeploymentLine({ run, projectId, deployable }: {
                     onClick={async (e) => {
                       e.stopPropagation();
                       setRetrying(true); setNote(null);
-                      const fd = new FormData();
-                      fd.set("target_id", targetId ?? "");
-                      fd.set("run_id", run.id);
-                      const r = await deployRunNowAction(null, fd);
+                      const r = await appDeployOp({
+                        op: "deploy",
+                        project_id: projectId,
+                        run_id: run.id,
+                        target_id: targetId ?? "",
+                      });
                       setNote(r.ok ? null : (r.error ?? "deploy failed"));
                       if (r.ok) setStarting(true);
                       setRetrying(false);
@@ -1052,9 +1078,7 @@ function DeploymentLine({ run, projectId, deployable }: {
                   onClick={async (e) => {
                     e.stopPropagation();
                     setRetrying(true); setNote(null);
-                    const fd = new FormData();
-                    fd.set("deployment_run_id", latest.id);
-                    const r = await retryDeploymentAction(null, fd);
+                    const r = await appDeployOp({ op: "retry", deployment_run_id: latest.id });
                     setNote(r.ok ? "retry started" : (r.error ?? "retry failed"));
                     setRetrying(false);
                     await load();

@@ -255,3 +255,18 @@ def test_the_deploy_row_cannot_paint_outside_its_card():
         "the failure reason is still sized by its content"
     )
     assert ".ct-card, .ct-deploy-wrap { overflow: hidden; }" in css
+
+
+def test_no_card_button_waits_on_a_route_re_render():
+    """"Set target" showed "Saving…" for minutes. The write takes milliseconds — the wait was
+    the REPLY: a Server Action re-renders the current route to respond, setupDeploymentAction
+    also called revalidatePath("/"), and code_tasks has a measured TTFB of ~115s. Two full page
+    renders for a one-row write."""
+    import pathlib, re
+    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    code = re.sub(r"/\*.*?\*/", "", ui, flags=re.S)
+    code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+    for gone in ("setupDeploymentAction", "deployRunNowAction", "retryDeploymentAction"):
+        assert gone not in code, f"{gone} still re-renders the route to reply"
+    assert "appDeployOp(" in code
+    assert pathlib.Path("apps/web/app/api/app-deploy/route.ts").exists()
