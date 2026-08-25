@@ -26,7 +26,14 @@ export async function POST(req: Request) {
     const r = await fetch(`${API_URL}/v1/meetings/prd`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ project_id: projectId, directive, actor: body.actor ?? "operator" }),
+      // No invented actor. Claiming a principal you are not is impersonation even when it is
+      // an accident — the API rightly refuses it ("'ceo' is not allowed to act as 'operator'").
+      // Omitted, the action is attributed to whoever is actually authenticated.
+      body: JSON.stringify({
+        project_id: projectId,
+        directive,
+        ...(String(body.actor ?? "").trim() ? { actor: String(body.actor).trim() } : {}),
+      }),
       cache: "no-store",
     });
     const data = await r.json().catch(() => ({}));

@@ -270,3 +270,18 @@ def test_no_card_button_waits_on_a_route_re_render():
         assert gone not in code, f"{gone} still re-renders the route to reply"
     assert "appDeployOp(" in code
     assert pathlib.Path("apps/web/app/api/app-deploy/route.ts").exists()
+
+
+def test_no_route_handler_invents_an_actor():
+    """"Authenticated principal 'ceo' is not allowed to act as 'operator'." My route handlers
+    defaulted actor to "operator" when the caller sent none — and the card never sends one.
+    Claiming a principal you are not is impersonation even by accident, and the API is right to
+    refuse it. Omitting the field attributes the action to whoever is authenticated."""
+    import pathlib, re
+    for name in ("app-deploy", "builds", "discoveries"):
+        f = pathlib.Path(f"apps/web/app/api/{name}/route.ts")
+        if not f.exists():
+            continue
+        code = re.sub(r"/\*.*?\*/", "", f.read_text(encoding="utf-8"), flags=re.S)
+        code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
+        assert '"operator"' not in code, f"{name} still invents an actor"

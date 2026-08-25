@@ -19,11 +19,27 @@ import { API_URL, authHeaders } from "../../../lib/client";
  */
 export const dynamic = "force-dynamic";
 
+/**
+ * NEVER INVENT AN ACTOR.
+ *
+ * These ops defaulted actor to "operator" when the caller did not send one — and the caller
+ * never does. The API refused with "Authenticated principal 'ceo' is not allowed to act as
+ * 'operator'", which is exactly right: claiming to be a principal you are not is impersonation,
+ * whether or not it was meant.
+ *
+ * Omitting the field lets the API attribute the action to whoever is actually authenticated,
+ * which is both correct and the only thing the caller can honestly assert.
+ */
+function actorOf(b: Record<string, unknown>): Record<string, string> {
+  const actor = String(b.actor ?? "").trim();
+  return actor ? { actor } : {};
+}
+
 const OPS: Record<string, (b: Record<string, unknown>) => { path: string; body: unknown }> = {
   "set-target": (b) => ({
     path: `/v1/code-tasks/${encodeURIComponent(String(b.run_id))}/setup-deployment`,
     body: {
-      actor: b.actor ?? "operator",
+      ...actorOf(b),
       host_id: String(b.host_id ?? "").trim(),
       app_name: String(b.app_name ?? "").trim(),
       app_port: String(b.app_port ?? "").trim() || undefined,
@@ -38,12 +54,12 @@ const OPS: Record<string, (b: Record<string, unknown>) => { path: string; body: 
       run_id: b.run_id,
       environment: b.environment ?? "staging",
       target_id: b.target_id || undefined,
-      actor: b.actor ?? "operator",
+      ...actorOf(b),
     },
   }),
   retry: (b) => ({
     path: `/v1/delivery/deployments/${encodeURIComponent(String(b.deployment_run_id))}/redeploy`,
-    body: { actor: b.actor ?? "operator" },
+    body: { ...actorOf(b) },
   }),
 };
 

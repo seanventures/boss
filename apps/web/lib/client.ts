@@ -1,5 +1,7 @@
 import { createBossApiClient } from "@boss/api-client";
 
+import { installFeedCache } from "./feed-cache";
+
 /**
  * Where the control plane lives.
  *
@@ -49,5 +51,12 @@ export function authHeaders(extra?: Record<string, string>): Record<string, stri
     ...(extra ?? {}),
   };
 }
+
+// Collapse duplicate control-plane GETs before they leave this process.
+//
+// Installed here because every feed imports this module, so one line covers all 173 call
+// sites — both the typed client and the raw fetch() helpers. See lib/feed-cache.ts for what
+// is and is not cached, and why the window is deliberately tiny.
+installFeedCache(API_URL);
 
 export const client = createBossApiClient({ baseUrl: API_URL, apiKey: API_KEY });
