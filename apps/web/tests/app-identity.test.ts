@@ -91,3 +91,35 @@ describe("appIdentity — real titles from the running system", () => {
     }
   });
 });
+
+describe("a document type is never a product name", () => {
+  // The card read "📄 Product Requirements Document". BOILERPLATE matches that phrase, but it
+  // is anchored at ^ and the real title starts with an emoji, so the check never fired and the
+  // heading became the app's name — four different apps would read identically.
+  it("sees past a leading emoji", () => {
+    expect(appIdentity({ title: "📄 Product Requirements Document" }).name)
+      .not.toMatch(/product requirements document/i);
+  });
+
+  it("sees past other decoration", () => {
+    for (const t of [
+      "# 📄 Product Requirements Document",
+      "• PRD",
+      "**Spec**",
+      "📝  Specification",
+    ]) {
+      expect(appIdentity({ title: t }).name).not.toMatch(
+        /^(product requirements document|prd|spec|specification)$/i,
+      );
+    }
+  });
+
+  it("says Untitled app rather than naming the artifact", () => {
+    expect(appIdentity({ title: "📄 Product Requirements Document" }).name).toBe("Untitled app");
+  });
+
+  it("still finds a real name behind the decoration", () => {
+    expect(appIdentity({ title: "📄 PRD: Invoice Chaser" }).name).toBe("Invoice Chaser");
+    expect(appIdentity({ title: "# Shorty — Product Requirements Document" }).name).toBe("Shorty");
+  });
+});

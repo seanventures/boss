@@ -30,6 +30,20 @@ function norm(s: string): string {
 }
 
 /**
+ * Drop a leading emoji or symbol so the boilerplate test can see the words behind it.
+ *
+ * A card read "Product Requirements Document" — a document TYPE shown as a product name. The
+ * BOILERPLATE pattern matches that phrase, but it is anchored at ^ and the real title began
+ * with a page emoji, so the check never fired and the heading became the app's name. Emoji are
+ * decoration on a title; they must not change how it is read.
+ */
+function unadorn(line: string): string {
+  return line
+    .replace(/^[\s\p{Extended_Pictographic}\p{So}\p{Sk}\u200d\ufe0f•·*_>#]+/u, "")
+    .trim();
+}
+
+/**
  * What an app IS, pulled out of the run that built it.
  *
  * Titles were built server-side by truncating whatever prose started the brief, so a card read
@@ -52,7 +66,7 @@ export function appIdentity(run: AppRun): {
     return { name: bench.name, kind: bench.tagline, blurb: bench.summary };
   }
 
-  let t = norm(run.title ?? "").replace(/^\[\d+\/\d+\]\s*/, "");
+  let t = unadorn(norm(run.title ?? "").replace(/^\[\d+\/\d+\]\s*/, ""));
   t = t.replace(/\s*·\s*retry\s*\d+\s*$/i, "");
 
   let label = "";
@@ -74,7 +88,7 @@ export function appIdentity(run: AppRun): {
     named = explicit[1];
   } else {
     for (const raw of t.split("\n")) {
-      const line = raw.trim().replace(/^#+\s*/, "").trim();
+      const line = unadorn(raw.replace(/^#+\s*/, ""));
       if (!line || BOILERPLATE.test(line)) continue;
       const stripped = line.replace(/\s*[-–—]\s*(product requirements document|prd)\b.*$/i, "");
       if (stripped && !BOILERPLATE.test(stripped)) {
@@ -112,8 +126,12 @@ export function appIdentity(run: AppRun): {
       .join(" ");
   }
 
+  // LAST GATE. Everything above tries to find a real name; this makes sure a document TYPE
+  // never reaches the card as one. "Product Requirements Document" is what the artifact is,
+  // not what the product is called — and left through, four different apps read identically.
+  const final = BOILERPLATE.test(unadorn(name)) ? "" : name;
   return {
-    name: name.slice(0, 46) || "Untitled app",
+    name: final.slice(0, 46) || "Untitled app",
     kind: tail ? tail.slice(0, 44) : undefined,
     label: label || undefined,
   };
