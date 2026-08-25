@@ -1041,3 +1041,37 @@ def test_the_hover_overlay_cannot_be_clipped_by_the_scroll_container():
     block = css[i:css.index("}", i)]
     assert "inset: 0" in block, "the overlay still hangs outside the card"
     assert "top: calc(100%" not in block, "still positioned below the card, where it is clipped"
+
+
+# --------------------------------------------------------------------------- #
+# The console must ask for things concurrently
+# --------------------------------------------------------------------------- #
+def test_the_page_does_not_fetch_its_feeds_one_at_a_time():
+    """Load time was 20-30s and none of it was work. Measured: the API serves 82 concurrent
+    requests in 1.6s, Node issues 82 in 0.8s, and the same page renders in 1.9s when every feed
+    comes from memory. The page was simply asking for them one at a time — seven sequential
+    awaits at the top, each a full round-trip before the next began."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    body = src[src.index("export default async function HomePage"):]
+    # Count barriers: an await that is not part of a Promise.all forces everything after it to
+    # wait for one round-trip.
+    barriers = [
+        ln.strip() for ln in body.splitlines()
+        if "await " in ln and "Promise.all" not in ln and not ln.strip().startswith(("//", "*"))
+    ]
+    assert len(barriers) <= 4, (
+        f"{len(barriers)} sequential round-trips before the page can render:\n  "
+        + "\n  ".join(barriers[:10])
+    )
+
+
+def test_a_failing_feed_still_cannot_take_the_console_down():
+    """The batch must not turn one dead panel into a blank page: Promise.all rejects if any
+    member throws, so every feed keeps its own .catch."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    i = src.index("] = await Promise.all([")
+    batch = src[i:i + 700]
+    feeds = [ln for ln in batch.splitlines() if "Action(" in ln]
+    assert feeds, "no feeds in the batch"
+    for ln in feeds:
+        assert ".catch(" in ln, f"unguarded feed in a Promise.all batch: {ln.strip()}"
