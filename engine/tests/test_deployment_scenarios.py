@@ -285,3 +285,22 @@ def test_no_route_handler_invents_an_actor():
         code = re.sub(r"/\*.*?\*/", "", f.read_text(encoding="utf-8"), flags=re.S)
         code = re.sub(r"^\s*//.*$", "", code, flags=re.M)
         assert '"operator"' not in code, f"{name} still invents an actor"
+
+
+def test_the_deploy_controls_send_the_operator_s_own_actor():
+    """Two failures in a row on the same field. Sending actor="operator" was rejected —
+    "Authenticated principal 'ceo' is not allowed to act as 'operator'" — so I removed the
+    default entirely and got "actor is required". The field is mandatory AND must name a real
+    principal; the only honest value is the one the console is operating as.
+
+    Verified against the live API: actor=operator is refused, actor=executive_console is
+    accepted."""
+    import pathlib, re
+    ui = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
+    for fn in ("function SetupDeployment(", "function DeploymentLine("):
+        i = ui.index(fn)
+        assert "actor" in ui[i:i + 220], f"{fn} does not receive the actor"
+    # every op must carry it
+    for op in ('op: "set-target"', 'op: "deploy"', 'op: "retry"'):
+        i = ui.index(op)
+        assert "actor" in ui[i - 120:i + 260], f"{op} is sent without an actor"

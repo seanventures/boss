@@ -745,8 +745,8 @@ function loadHostsOnce(projectId: string): Promise<any> {
   return promise as Promise<any>;
 }
 
-function SetupDeployment({ run, projectId, onDone }: {
-  run: CodeTaskRun; projectId: string; onDone: () => void;
+function SetupDeployment({ run, projectId, actor, onDone }: {
+  run: CodeTaskRun; projectId: string; actor: string; onDone: () => void;
 }) {
   const [hosts, setHosts] = useState<any[]>([]);
   // AN EMPTY LIST IS NOT AN ANSWER UNTIL SOMEONE HAS ASKED.
@@ -827,6 +827,7 @@ function SetupDeployment({ run, projectId, onDone }: {
             setBusy(true); setMsg(null);
             const r = await appDeployOp({
               op: "set-target",
+              actor,
               run_id: run.id,
               host_id: fd.get("host_id"),
               app_name: fd.get("app_name"),
@@ -919,8 +920,8 @@ async function retireTarget(targetId: string): Promise<{ ok: boolean; error?: st
   }
 }
 
-function DeploymentLine({ run, projectId, deployable }: {
-  run: CodeTaskRun; projectId: string;
+function DeploymentLine({ run, projectId, actor, deployable }: {
+  run: CodeTaskRun; projectId: string; actor: string;
   /** Has this app produced reviewed code? A blocked or still-building task has nothing to
    *  ship, and offering "Deploy now" there promises something the pipeline cannot honour —
    *  it would clone, build, transfer, and only then fail at the health gate. */
@@ -1004,6 +1005,7 @@ function DeploymentLine({ run, projectId, deployable }: {
                       setRetrying(true); setNote(null);
                       const r = await appDeployOp({
                         op: "deploy",
+                        actor,
                         project_id: projectId,
                         run_id: run.id,
                         target_id: targetId ?? "",
@@ -1039,7 +1041,7 @@ function DeploymentLine({ run, projectId, deployable }: {
             {note ? <span className="detail">{note}</span> : null}
           </>
         ) : (
-          <SetupDeployment run={run} projectId={projectId} onDone={load} />
+          <SetupDeployment run={run} projectId={projectId} actor={actor} onDone={load} />
         )}
       </div>
     );
@@ -1078,7 +1080,7 @@ function DeploymentLine({ run, projectId, deployable }: {
                   onClick={async (e) => {
                     e.stopPropagation();
                     setRetrying(true); setNote(null);
-                    const r = await appDeployOp({ op: "retry", deployment_run_id: latest.id });
+                    const r = await appDeployOp({ op: "retry", actor, deployment_run_id: latest.id });
                     setNote(r.ok ? "retry started" : (r.error ?? "retry failed"));
                     setRetrying(false);
                     await load();
@@ -2645,7 +2647,7 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                         that has no reviewed build, and "Set target" answered "this task is
                         'blocked' — there is no reviewed build to deploy" for an app whose
                         completed run was sitting right there under PR #83. */}
-                    <DeploymentLine run={builtRun} projectId={projectId}
+                    <DeploymentLine run={builtRun} projectId={projectId} actor={actor}
                                     deployable={anyShipped && !anyRunning} />
                     {specPanel[members[0].id] ? (
                       <RebuildWithSpec run={members[0]} projectId={projectId} actor={actor}
