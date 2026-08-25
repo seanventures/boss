@@ -77,7 +77,7 @@ import { MissionAgentRoster, MissionTaskBoard } from "./mission-operations-ui";
 import { ReportsView } from "./reports-ui";
 import type { DataBoundary } from "@boss/api-client";
 import { formatDateTime as formatDateTimeShared } from "../lib/datetime";
-import { fetchAuditSummary } from "../lib/audit";
+import { emptyAuditSummary, fetchAuditSummary } from "../lib/audit";
 import { fetchArtifactFeed } from "../lib/artifacts";
 import { fetchAgentModuleFeed } from "../lib/agent-modules";
 import { fetchAgentStudioFeed } from "../lib/agent-studio";
@@ -470,6 +470,7 @@ function getParam(value: string | string[] | undefined): string | undefined {
 }
 
 export default async function HomePage({ searchParams }: HomePageProps) {
+
   // START INDEPENDENT WORK TOGETHER.
   //
   // These were seven sequential awaits, each a full round-trip before the next began. Measured,
@@ -706,7 +707,23 @@ export default async function HomePage({ searchParams }: HomePageProps) {
       fetchLatestCanary(activeProjectId),
       fetchPlans(activeProjectId),
       Promise.resolve(budgetArea.budgetAllocations),
-      fetchAuditSummary(activeProjectId),
+      // THE SINGLE BIGGEST COST ON THIS PAGE, FOR EIGHT NUMBERS.
+      //
+      // Measured at 13.2 SECONDS — more than half the render, and larger than the other 78
+      // feeds combined. It calls /v1/audit/export, which serialises the entire audit trail
+      // (every task, job, decision, artifact, receipt, reservation, routing log and event)
+      // so the ops screen can display eight counts.
+      //
+      // It is rendered ONLY in data-area="ops". Every other area waited 13s for something it
+      // never showed — which is why every area cost the same regardless of content.
+      //
+      // Skipped elsewhere, and the panel already handles an unreachable summary by saying so,
+      // which is the same shape as "not loaded for this area".
+      requestedArea === "ops"
+        ? fetchAuditSummary(activeProjectId)
+        : Promise.resolve(emptyAuditSummary(
+            "Audit counts load on the Ops area — they are too expensive to fetch on every page.",
+            activeProjectId)),
       fetchChangeJournalFeed(activeProjectId),
       fetchSelfImprovementFeed(activeProjectId),
       fetchOutboxFeed(activeProjectId),
@@ -854,7 +871,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     commercial.edition?.editionId ?? selfImprovement.editionId,
   );
   const communityEdition = isCommunityEdition(editionId);
-
   return (
     <ConsoleShell
       status={{

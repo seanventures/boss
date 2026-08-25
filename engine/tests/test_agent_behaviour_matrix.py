@@ -1075,3 +1075,28 @@ def test_a_failing_feed_still_cannot_take_the_console_down():
     assert feeds, "no feeds in the batch"
     for ln in feeds:
         assert ".catch(" in ln, f"unguarded feed in a Promise.all batch: {ln.strip()}"
+
+
+def test_the_audit_export_does_not_run_on_every_page():
+    """Measured: /v1/audit/export took 13.2s — more than half the page load, and more than the
+    other 78 feeds combined. It serialises the ENTIRE audit trail (every task, job, decision,
+    artifact, receipt, reservation, routing log and event) so the ops screen can show eight
+    counts, and it is rendered only in data-area="ops". Every other area waited 13 seconds for
+    something it never displayed."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    i = src.index("fetchAuditSummary(activeProjectId)")
+    guard = src[max(0, i - 900):i]
+    assert 'requestedArea === "ops"' in guard, (
+        "the audit export is unconditional again — 13s on every page for eight numbers"
+    )
+    assert "emptyAuditSummary" in src, "no stand-in for the areas that skip it"
+
+
+def test_a_skipped_feed_says_why_rather_than_showing_zero():
+    """A count of 0 and a count that was never fetched must not look the same — one is a fact
+    about the system, the other is a fact about the page."""
+    src = pathlib.Path("apps/web/app/page.tsx").read_text(encoding="utf-8")
+    i = src.index("emptyAuditSummary(")
+    assert "too expensive to fetch on every page" in src[i:i + 400], (
+        "the skipped summary gives no reason"
+    )

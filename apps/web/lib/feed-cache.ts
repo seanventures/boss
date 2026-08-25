@@ -33,6 +33,23 @@
 
 type Entry = { at: number; response: Response };
 
+/**
+ * Per-URL durations, so a slow feed can be NAMED.
+ *
+ * The page's 20s is one Promise.all of 79 feeds, and Promise.all waits for its slowest member
+ * — so this is not a parallelism problem, it is one or two slow endpoints holding a barrier.
+ * Every control-plane GET already passes through here, so this is the one place that can see
+ * all of them without touching 173 call sites.
+ */
+const timings = new Map<string, { ms: number; at: number }>();
+
+export function slowestFeeds(limit = 15): Array<{ url: string; ms: number }> {
+  return [...timings.entries()]
+    .map(([url, v]) => ({ url, ms: v.ms }))
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, limit);
+}
+
 const DEFAULT_TTL_MS = 5_000;
 
 function ttlMs(): number {
@@ -87,8 +104,11 @@ export function installFeedCache(apiUrl: string): void {
     const flight = inFlight.get(key);
     if (flight) return (await flight).clone();
 
+    const started = Date.now();
     const promise = original(input as RequestInfo, init)
       .then((response) => {
+        timings.set(key.replace(apiUrl, ""), { ms: Date.now() - started, at: Date.now() });
+        if (timings.size > 300) timings.clear();
         // Only successful responses are reusable. Caching a 500 for five seconds would turn a
         // blip into an outage that outlives it.
         if (response.ok) {
