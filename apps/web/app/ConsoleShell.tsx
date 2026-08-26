@@ -1,6 +1,7 @@
 "use client";
 
 import { isInConsoleLink } from "./console-href";
+import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
 
 import React, {
@@ -621,6 +622,11 @@ export default function ConsoleShell({
           </div>
 
           <div className="bx-topbar-spacer" />
+
+          {/* Reachable from BOTH consoles, deliberately. A one-way door into v2 would strand
+              anyone who tried it before v2 was finished; v1 stays the working console and keeps
+              taking fixes until the parity checklist says otherwise. */}
+          <ConsoleToggle current="v1" orgId={org?.id} />
 
           {org ? (
             <button type="button" className="bx-org-chip" onClick={switchOrg} title="Switch organization">

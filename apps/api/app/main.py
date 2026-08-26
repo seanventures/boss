@@ -11685,6 +11685,23 @@ def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
     return result
 
 
+@app.get("/v1/console/v2/overview")
+def console_v2_overview_endpoint(project_id: str, limit: int = 40) -> dict:
+    """Everything the v2 shell and Projects screen render — in ONE call.
+
+    The v1 console issues 82 requests per render and shows nothing until the slowest answers;
+    measured TTFB was 24s, of which 13.2s was a single feed only one area displayed. v2 screens
+    get purpose-built endpoints instead, so the page is bounded by one query set rather than by
+    its unluckiest dependency. Budget: TTFB <= 2s, enforced by test.
+    """
+    from boss_engine.services.console_v2 import company_overview
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return company_overview(connection, project_id, limit=max(1, min(int(limit), 100)))
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.

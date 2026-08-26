@@ -1,0 +1,151 @@
+import Link from "next/link";
+import type { ReactNode } from "react";
+
+import { ConsoleToggle } from "./ConsoleToggle";
+import type { CompanyOverview } from "../../lib/v2/overview";
+
+/**
+ * The v2 shell: top bar, project strip, sidebar, autonomy footer.
+ *
+ * The nav is nine items, in the artifact's order. The internal ids are kept as the route
+ * segments because they say what each screen is FOR in a way the labels do not — `panels`
+ * is where agents argue, `factory` is the workforce, `timeline` is the audit trail.
+ */
+
+export const V2_NAV = [
+  { id: "missions", label: "Projects", href: "/v2" },
+  { id: "hive", label: "Hive", href: "/v2/hive" },
+  { id: "factory", label: "Workforce", href: "/v2/factory" },
+  { id: "org", label: "Org Chart", href: "/v2/org" },
+  { id: "panels", label: "Decisions", href: "/v2/panels" },
+  { id: "boss", label: "Workflows", href: "/v2/boss" },
+  { id: "timeline", label: "Receipts", href: "/v2/timeline" },
+  { id: "infra", label: "Infra & Models", href: "/v2/infra" },
+  { id: "settings", label: "Settings", href: "/v2/settings" },
+] as const;
+
+export type V2NavId = (typeof V2_NAV)[number]["id"];
+
+function money(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  return "$" + Math.round(n).toLocaleString();
+}
+
+export function Shell({
+  active,
+  overview,
+  orgId,
+  children,
+}: {
+  active: V2NavId;
+  overview: CompanyOverview;
+  orgId?: string;
+  children: ReactNode;
+}) {
+  const q = orgId ? `?org=${encodeURIComponent(orgId)}` : "";
+  const gates = overview.gates;
+
+  return (
+    <div className="v2-root v2-shell" data-console="v2">
+      {/* ── Top bar ─────────────────────────────────────────────────── */}
+      <header className="v2-topbar">
+        <span className="v2-brand">BOSS</span>
+        <span className="v2-label v2-brand-sub">Mission Control</span>
+
+        <button type="button" className="v2-company" data-testid="v2-company">
+          <span className="v2-dot" data-status="RUNNING" aria-hidden />
+          {overview.company.name}
+        </button>
+
+        <Link href={`/v2/new${q}`} className="v2-primary" data-testid="v2-new-project">
+          New project
+        </Link>
+
+        <div className="v2-topbar-right">
+          {/* Burn reads as machine data, so it is mono and tabular — the numbers line up
+              as they change, which is the point of watching a spend figure at all. */}
+          <span className="v2-meta" data-testid="v2-burn">
+            <span className="v2-label">Burn</span>
+            <b className="v2-mono">{money(overview.burn.spent_usd)}</b>
+            {overview.burn.cap_usd !== null ? (
+              <span className="v2-mono v2-meta-dim"> / {money(overview.burn.cap_usd)}</span>
+            ) : null}
+          </span>
+
+          {/* A count of zero is not the same as a queue with work in it: at zero this is
+              deliberately quiet, so an amber number always means something is waiting. */}
+          <Link
+            href={`/v2/panels${q}`}
+            className="v2-meta v2-meta-link"
+            data-active={gates > 0}
+            data-testid="v2-gates"
+          >
+            <b className="v2-mono">{gates}</b>
+            <span className="v2-label">{gates === 1 ? "Gate" : "Gates"}</span>
+          </Link>
+
+          <ConsoleToggle current="v2" orgId={orgId} />
+        </div>
+      </header>
+
+      {/* ── Project strip ───────────────────────────────────────────── */}
+      <nav className="v2-strip" aria-label="Projects">
+        <span className="v2-label v2-strip-label">Projects</span>
+        {overview.projects.slice(0, 6).map((p) => (
+          <Link
+            key={p.id}
+            href={`/v2/missions/${encodeURIComponent(p.id)}${q}`}
+            className="v2-strip-item"
+            data-testid={`v2-strip-${p.id}`}
+          >
+            <span className="v2-dot" data-status={p.status} aria-hidden />
+            <span className="v2-strip-name">{p.title}</span>
+            <span className="v2-mono v2-strip-stage">{p.stage}</span>
+            <span className="v2-mono v2-strip-pct">{p.pct}%</span>
+            {p.status === "GATED" ? (
+              <span className="v2-mono v2-strip-alert">GATED</span>
+            ) : null}
+          </Link>
+        ))}
+        {overview.projects.length === 0 ? (
+          <span className="v2-strip-empty">No projects yet</span>
+        ) : null}
+      </nav>
+
+      <div className="v2-body">
+        {/* ── Sidebar ───────────────────────────────────────────────── */}
+        <aside className="v2-sidebar">
+          <nav aria-label="Console sections">
+            {V2_NAV.map((item) => (
+              <Link
+                key={item.id}
+                href={`${item.href}${q}`}
+                className="v2-nav-item"
+                data-active={item.id === active}
+                data-testid={`v2-nav-${item.id}`}
+              >
+                {item.label}
+                {item.id === "panels" && gates > 0 ? (
+                  <span className="v2-mono v2-nav-badge">{gates}</span>
+                ) : null}
+              </Link>
+            ))}
+          </nav>
+
+          {/* Autonomy. Reported, not faked: BOSS implements one mode today, and offering a
+              switch that changes nothing would be worse than showing the state plainly. */}
+          <div className="v2-autonomy" data-testid="v2-autonomy">
+            <span className="v2-label">Autonomy</span>
+            <span className="v2-autonomy-mode">
+              <span className="v2-dot" data-status="RUNNING" aria-hidden />
+              {overview.autonomy.mode}
+            </span>
+            <p className="v2-autonomy-detail">{overview.autonomy.detail}</p>
+          </div>
+        </aside>
+
+        <main className="v2-main">{children}</main>
+      </div>
+    </div>
+  );
+}
