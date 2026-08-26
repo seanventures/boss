@@ -290,3 +290,8 @@
   text-decoration: none;
 }
 .v2-dec-open:hover { text-decoration: underline; }
+
+/* Receipts */
+.v2-rec-open { color: var(--v2-amber); }
+.v2-rec-failed { color: var(--v2-red); }
+.v2-rec[data-unfinished="true"] { border-left: 2px solid var(--v2-amber); }

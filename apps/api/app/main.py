@@ -11737,6 +11737,27 @@ def console_v2_decisions_endpoint(project_id: str, limit: int = 60) -> dict:
         return decision_queue(connection, project_id, limit=max(1, min(int(limit), 200)))
 
 
+@app.get("/v1/console/v2/receipts")
+def console_v2_receipts_endpoint(project_id: str, limit: int = 60, hours: int = 24) -> dict:
+    """What BOSS actually did in the window, with the evidence attached.
+
+    Window totals are aggregates over the whole window, computed separately from the page. A
+    tile on the old console read "Verified today: 100", which was its own page size -- it would
+    have said 100 for a project with a million receipts and for a project with exactly a
+    hundred. Here a number is either true or absent.
+    """
+    from boss_engine.services.console_v2 import receipt_feed
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return receipt_feed(
+            connection, project_id,
+            limit=max(1, min(int(limit), 200)),
+            hours=max(1, min(int(hours), 24 * 30)),
+        )
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.

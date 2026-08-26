@@ -568,3 +568,107 @@ def decision_queue(connection, project_id: str, *, limit: int = 60) -> dict[str,
         # will be made without you.
         "auto_resolving": len(expiring),
     }
+
+
+#: A receipt whose effect never completed. These are the interesting ones: an effect recorded
+#: as started and never resolved is either still going or was lost when something restarted.
+_RECEIPT_OPEN = ("in_progress", "pending")
+_RECEIPT_FAILED = ("failed", "error", "rejected")
+
+
+def receipt_feed(connection, project_id: str, *, limit: int = 60,
+                 hours: int = 24) -> dict[str, Any]:
+    """What BOSS actually did, with the evidence attached.
+
+    THE COUNT IS A REAL COUNT
+    -------------------------
+    A tile on the old console read "Verified today: 100" — which was the page size. It fetched
+    the hundred most recent receipts and counted them, so it would have said 100 for a project
+    with a million and for a project with exactly a hundred. Here the window totals come from
+    aggregates over the whole window, computed separately from the page, so a number is either
+    true or absent.
+
+    AN UNFINISHED EFFECT IS NOT A SUCCESS
+    -------------------------------------
+    A receipt sits at `in_progress` until its effect resolves. If the API restarts mid-effect
+    nothing moves it, so it stays there forever — which is exactly what "the API restarted
+    while this deployment was running" leaves behind. Counting those as done would report a
+    clean day for a day that lost work, so they are counted and shown separately.
+    """
+    rows = [dict(r) for r in connection.execute(
+        sql(
+            """
+            SELECT id, effect_kind, effect_scope, status, provider_ref, result, error,
+                   data_boundary, created_at, updated_at
+            FROM receipts
+            WHERE project_id = :p
+              AND created_at > now() - make_interval(hours => :h)
+            ORDER BY created_at DESC
+            LIMIT :lim
+            """
+        ),
+        {"p": project_id, "h": int(hours), "lim": int(limit)},
+    ).mappings().all()]
+
+    # Separate aggregate over the WHOLE window. `len(rows)` is the page, and reporting a page
+    # size as a total is the defect this is written to avoid.
+    totals = dict(connection.execute(
+        sql(
+            """
+            SELECT
+              count(*) AS total,
+              count(*) FILTER (WHERE status = ANY(:open)) AS unfinished,
+              count(*) FILTER (WHERE status = ANY(:bad)) AS failed
+            FROM receipts
+            WHERE project_id = :p
+              AND created_at > now() - make_interval(hours => :h)
+            """
+        ),
+        {"p": project_id, "h": int(hours),
+         "open": list(_RECEIPT_OPEN), "bad": list(_RECEIPT_FAILED)},
+    ).mappings().first() or {})
+
+    items = []
+    for r in rows:
+        status = str(r.get("status") or "")
+        err = r.get("error") or {}
+        items.append({
+            "id": r["id"],
+            "effect": str(r.get("effect_kind") or ""),
+            "scope": _scope_label(r.get("effect_scope") or {}),
+            "status": status,
+            "unfinished": status in _RECEIPT_OPEN,
+            # The provider's own reference, which is what makes this evidence rather than a
+            # claim: it can be checked against the system that did the work.
+            "provider_ref": r.get("provider_ref"),
+            "error": (
+                str(err.get("message") or err.get("detail") or err)[:300]
+                if err else None
+            ),
+            "data_boundary": str(r.get("data_boundary") or "internal"),
+            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+        })
+
+    return {
+        "project_id": project_id,
+        "window_hours": int(hours),
+        "items": items,
+        # Named so they cannot be mistaken for the page.
+        "window_total": int(totals.get("total") or 0),
+        "window_unfinished": int(totals.get("unfinished") or 0),
+        "window_failed": int(totals.get("failed") or 0),
+        "shown": len(items),
+    }
+
+
+def _scope_label(scope: dict) -> str:
+    """What the effect acted on, in one short phrase.
+
+    Falls back to the raw keys rather than an empty string: knowing an effect had a scope we
+    cannot summarise is more useful than being shown nothing.
+    """
+    for key in ("app_name", "name", "repo", "host", "target", "run_id", "id"):
+        value = scope.get(key)
+        if value:
+            return str(value)[:60]
+    return ", ".join(sorted(scope)[:3])[:60] if scope else ""
