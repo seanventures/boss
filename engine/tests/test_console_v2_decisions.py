@@ -324,3 +324,88 @@ def test_a_malformed_transcript_yields_no_turns_rather_than_crashing():
     for bad in ("not json", {"transcript": "nope"}, {"other": []}, None, 42):
         out = panel_sessions(FakeConn([dict(meeting("m1"), transcript=bad)]), "p")
         assert out["sessions"][0]["turns"] == [], bad
+
+
+# --------------------------------------------------------------------------- #
+# The deliberation lives in the MINUTES
+#
+# Reading only the transcript found nothing on twenty real sessions and reported "no transcript
+# recorded" — while the reasoning sat in the other artifact. Real BOSS meetings write minutes
+# carrying round1_perspectives, round2_debate and a synthesis; the transcript path is only
+# taken by simulated meetings.
+# --------------------------------------------------------------------------- #
+MINUTES = {
+    "round1_perspectives": {
+        "Product Manager": "Freemium wins discovery.",
+        "CFO": "Free processing costs $0.14/user.",
+    },
+    "round2_debate": {
+        "Product Manager": "Cap the free tier at three reports.",
+        "CFO": "Then I can model break-even.",
+    },
+    "synthesis": "Freemium with a paid deep-report upsell.",
+}
+
+
+def test_the_deliberation_is_read_from_the_minutes():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes=MINUTES)]), "p")
+    turns = out["sessions"][0]["turns"]
+    assert len(turns) == 4
+    assert {t["speaker"] for t in turns} == {"Product Manager", "CFO"}
+
+
+def test_both_rounds_are_kept_and_labelled():
+    """Two rounds is richer than the reference's one, and which round an argument came from
+    changes what it means — round 2 is a response."""
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes=MINUTES)]), "p")
+    phases = [t["phase"] for t in out["sessions"][0]["turns"]]
+    assert phases[:2] == ["round 1", "round 1"]
+    assert phases[2:] == ["round 2", "round 2"]
+
+
+def test_the_synthesis_is_the_verdict():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes=MINUTES)]), "p")
+    assert out["sessions"][0]["synthesis"] == "Freemium with a paid deep-report upsell."
+
+
+def test_minutes_stored_as_json_text_are_still_read():
+    import json as _json
+
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes=_json.dumps(MINUTES))]), "p")
+    assert len(out["sessions"][0]["turns"]) == 4
+
+
+def test_a_transcript_wins_when_one_exists():
+    """A simulated meeting has a real transcript; it should not be replaced by the minutes."""
+    out = panel_sessions(FakeConn([dict(
+        meeting("m1"),
+        transcript={"transcript": [{"speaker": "fixture", "message": "phase recorded"}]},
+        minutes=MINUTES,
+    )]), "p")
+    assert [t["speaker"] for t in out["sessions"][0]["turns"]] == ["fixture"]
+
+
+def test_no_stance_is_inferred_from_the_minutes():
+    """A guessed vote on the record is worse than no vote."""
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes=MINUTES)]), "p")
+    assert all(t["stance"] is None for t in out["sessions"][0]["turns"])
+
+
+def test_an_empty_argument_is_dropped():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes={
+        "round1_perspectives": {"PM": "", "CFO": "Real point."},
+    })]), "p")
+    assert [t["speaker"] for t in out["sessions"][0]["turns"]] == ["CFO"]
+
+
+def test_malformed_minutes_yield_nothing_rather_than_crashing():
+    for bad in ("not json", {"round1_perspectives": "nope"}, {}, None, 7):
+        out = panel_sessions(FakeConn([dict(meeting("m1"), minutes=bad)]), "p")
+        assert out["sessions"][0]["turns"] == [], bad
+        assert out["sessions"][0]["synthesis"] is None
+
+
+def test_a_meeting_with_neither_artifact_says_nothing_rather_than_guessing():
+    out = panel_sessions(FakeConn([meeting("m1")]), "p")
+    assert out["sessions"][0]["turns"] == []
+    assert out["sessions"][0]["synthesis"] is None

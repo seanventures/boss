@@ -196,8 +196,8 @@ function PanelDetail({ p }: { p: V2Panel }) {
       {/* WHAT WAS SAID. */}
       {p.turns.length === 0 ? (
         <p className="v2-empty" data-testid={`v2-panel-noturns-${p.id}`}>
-          No transcript was recorded for this panel, so what was said is not available — only
-          the outcome below.
+          No deliberation was recorded for this panel, so what was argued is not available —
+          only the outcome below.
         </p>
       ) : (
         <ol className="v2-turns" data-testid={`v2-panel-turns-${p.id}`}>
@@ -210,9 +210,16 @@ function PanelDetail({ p }: { p: V2Panel }) {
       {/* The outcome, and any recorded objection. Dissent is never folded into the decision: a
           panel that agreed and a panel that overruled an objection produce the same decision
           and are not the same event. */}
-      {p.decisions.length > 0 || p.dissent.length > 0 ? (
+      {p.synthesis || p.decisions.length > 0 || p.dissent.length > 0 ? (
         <div className="v2-verdict" data-testid={`v2-panel-verdict-${p.id}`}>
           <span className="v2-verdict-label v2-mono">PANEL VERDICT</span>
+          {/* What the panel agreed, in its own words. The `decisions` column is empty on every
+              real meeting; the synthesis is where the outcome actually is. */}
+          {p.synthesis ? (
+            <p className="v2-verdict-text" data-testid={`v2-panel-synthesis-${p.id}`}>
+              {p.synthesis}
+            </p>
+          ) : null}
           {p.decisions.length > 0 ? (
             <p className="v2-verdict-text" data-testid={`v2-panel-decisions-${p.id}`}>
               {p.decisions.join(" · ")}

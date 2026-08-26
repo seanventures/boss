@@ -90,9 +90,12 @@ export type V2Panel = {
   has_minutes: boolean;
   completed_at: string | null;
   created_at: string | null;
-  /** What was actually said, per speaker. The console has never shown this — a panel whose
-   *  reasoning is invisible is indistinguishable from a coin toss with minutes attached. */
+  /** What was actually said, per speaker, across both rounds. Read from the MINUTES, where a
+   *  real BOSS meeting keeps its reasoning — the transcript path is only taken by simulated
+   *  meetings, and reading it alone reported "no transcript" on twenty real sessions. */
   turns: V2Turn[];
+  /** What the panel agreed, in its own words. */
+  synthesis: string | null;
 };
 
 export type PanelFeed = {

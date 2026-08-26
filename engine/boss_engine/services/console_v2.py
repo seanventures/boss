@@ -762,6 +762,58 @@ def _transcript_turns(raw: Any) -> list[dict[str, Any]]:
     return out[:40]
 
 
+#: The rounds a meeting's minutes record, in order. Each is {panelist: what they argued}.
+_ROUNDS = (("round1_perspectives", "round 1"), ("round2_debate", "round 2"))
+
+
+def _as_content(raw: Any) -> dict:
+    if isinstance(raw, str):
+        import json as _json
+
+        try:
+            raw = _json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _minutes_turns(raw: Any) -> list[dict[str, Any]]:
+    """Per-panelist argument, from the MINUTES.
+
+    This is where a real BOSS meeting keeps its reasoning: two rounds, each a mapping of
+    panelist to what they argued. Richer than the reference's single round, and it was sitting
+    unread while the screen said "no transcript recorded".
+    """
+    content = _as_content(raw)
+    out: list[dict[str, Any]] = []
+    for key, phase in _ROUNDS:
+        block = content.get(key)
+        if not isinstance(block, dict):
+            continue
+        for speaker, text in block.items():
+            if not isinstance(text, str) or not text.strip():
+                continue
+            out.append({
+                "speaker": str(speaker),
+                "phase": phase,
+                "text": text.strip()[:4000],
+                # BOSS does not record a position per panelist. None, never inferred from the
+                # words: a guessed vote on the record is worse than no vote.
+                "stance": None,
+            })
+    return out[:40]
+
+
+def _minutes_synthesis(raw: Any) -> Optional[str]:
+    """What the panel agreed, in its own words."""
+    content = _as_content(raw)
+    for key in ("synthesis", "output_text", "summary"):
+        value = content.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:4000]
+    return None
+
+
 def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str, Any]:
     """The panels debating something right now, and what they concluded.
 
@@ -786,11 +838,19 @@ def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str,
             SELECT m.id, m.title, m.purpose, m.status, m.participants, m.decisions,
                    m.dissent_records, m.minutes_artifact_id, m.transcript_artifact_id,
                    m.blocked_state, m.completed_at, m.created_at,
-                   t.content AS transcript
+                   t.content AS transcript,
+                   mi.content AS minutes
             FROM meetings m
-            -- The transcript lives in artifacts.content, so it joins rather than needing a
+            -- The deliberation lives in artifacts.content, so it joins rather than needing a
             -- second call per session. One query, whatever the session count.
+            --
+            -- BOTH artifacts, because they hold different things and only one of them exists.
+            -- Real meetings write MINUTES, which carry round1_perspectives, round2_debate and a
+            -- synthesis; the transcript path is only taken by simulated meetings. Reading the
+            -- transcript alone found nothing on twenty real sessions and reported "no
+            -- transcript recorded" while the reasoning sat in the other artifact.
             LEFT JOIN artifacts t ON t.id = m.transcript_artifact_id
+            LEFT JOIN artifacts mi ON mi.id = m.minutes_artifact_id
             WHERE m.project_id = :p
             ORDER BY m.created_at DESC
             LIMIT :lim
@@ -837,7 +897,13 @@ def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str,
             # the same thing as {speaker, message, phase} turns, and the console has never
             # displayed them. A panel whose reasoning is invisible is indistinguishable from a
             # coin toss with minutes attached.
-            "turns": _transcript_turns(row.get("transcript")),
+            "turns": (
+                _transcript_turns(row.get("transcript"))
+                or _minutes_turns(row.get("minutes"))
+            ),
+            # The agreed outcome, as the panel wrote it. Distinct from `decisions`, which is a
+            # column that these meetings leave empty.
+            "synthesis": _minutes_synthesis(row.get("minutes")),
             "completed_at": row["completed_at"].isoformat() if row.get("completed_at") else None,
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         })

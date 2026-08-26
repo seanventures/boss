@@ -159,6 +159,7 @@ const panel = (over: Partial<V2Panel> = {}): V2Panel => ({
   completed_at: "2026-08-26T12:00:00Z",
   created_at: "2026-08-26T11:00:00Z",
   turns: [],
+  synthesis: null,
   ...over,
 });
 
@@ -284,6 +285,16 @@ describe("panels", () => {
     const out = withPanels(panels());
     expect(out).not.toMatch(/TALLY/);
     expect(out).not.toMatch(/FOR \d+\s+AGAINST/);
+  });
+
+  it("shows the panel's own synthesis as the verdict", () => {
+    // The `decisions` column is empty on every real meeting; the synthesis is where the
+    // outcome actually is.
+    const out = withPanels(panels({
+      sessions: [panel({ decisions: [], synthesis: "Freemium with a paid upsell." })],
+    }));
+    expect(out).toContain('data-testid="v2-panel-synthesis-m1"');
+    expect(out).toMatch(/Freemium with a paid upsell/);
   });
 
   it("the decisions queue still renders without panels", () => {
