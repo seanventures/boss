@@ -1,7 +1,7 @@
 import { Shell } from "../../../components/v2/Shell";
 import { DecisionsScreen } from "../../../components/v2/DecisionsScreen";
 import { fetchCompanyOverview } from "../../../lib/v2/overview";
-import { fetchDecisionQueue } from "../../../lib/v2/decisions";
+import { fetchDecisionQueue, fetchPanels } from "../../../lib/v2/decisions";
 import { resolveProjectId } from "../../../lib/client";
 import { fetchOrgs } from "../../../lib/orgs";
 
@@ -21,15 +21,16 @@ export default async function V2Decisions({ searchParams }: Params) {
   const projectId = resolveProjectId(selected?.project_id);
 
   // Both at once: the shell needs the company strip, the screen needs the queue.
-  const [overview, queue] = await Promise.all([
+  const [overview, queue, panels] = await Promise.all([
     fetchCompanyOverview(projectId),
     fetchDecisionQueue(projectId),
+    fetchPanels(projectId),
   ]);
   if (selected?.org_name) overview.company.name = selected.org_name;
 
   return (
     <Shell active="panels" overview={overview} orgId={selected?.org_id}>
-      <DecisionsScreen queue={queue} />
+      <DecisionsScreen queue={queue} panels={panels} />
     </Shell>
   );
 }

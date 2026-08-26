@@ -5,7 +5,7 @@ import Link from "next/link";
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React from "react";
 
-import type { DecisionQueue, V2Decision } from "../../lib/v2/decisions";
+import type { DecisionQueue, PanelFeed, V2Decision, V2Panel } from "../../lib/v2/decisions";
 
 /**
  * Decisions — every gate waiting on a human.
@@ -21,7 +21,7 @@ import type { DecisionQueue, V2Decision } from "../../lib/v2/decisions";
  * sits at the top — that is the number worth interrupting someone for.
  */
 
-export function DecisionsScreen({ queue }: { queue: DecisionQueue }) {
+export function DecisionsScreen({ queue, panels }: { queue: DecisionQueue; panels?: PanelFeed }) {
   if (!queue.apiReachable) {
     return (
       <section className="v2-screen" data-testid="v2-decisions-unreachable">
@@ -66,7 +66,102 @@ export function DecisionsScreen({ queue }: { queue: DecisionQueue }) {
           ))}
         </ul>
       )}
+
+      {panels ? <Panels panels={panels} /> : null}
     </section>
+  );
+}
+
+/**
+ * The panels, as they actually are.
+ *
+ * The reference streams a scripted debate with a live vote tally. BOSS's panels are real and
+ * produce real minutes, but they are NOT watched live — so this shows where each one has got
+ * to rather than animating turns that are not arriving. A fake live feed would be the most
+ * convincing lie in this console.
+ */
+function Panels({ panels }: { panels: PanelFeed }) {
+  if (!panels.apiReachable) {
+    return (
+      <>
+        <h2 className="v2-ws-h">Panels</h2>
+        <p className="v2-empty" data-testid="v2-panels-unreachable">
+          Could not reach the control plane
+          {panels.blockedReason ? ` (${panels.blockedReason})` : ""}.
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <h2 className="v2-ws-h">Panels</h2>
+      {/* Says plainly that this is not a live feed. */}
+      <p className="v2-org-isolated-note" data-testid="v2-panels-not-streamed">
+        {panels.stream_note}
+      </p>
+
+      {panels.sessions.length === 0 ? (
+        <p className="v2-empty" data-testid="v2-panels-none">
+          No panels have convened for this company yet.
+        </p>
+      ) : (
+        <ul className="v2-rows" data-testid="v2-panels-list">
+          {panels.sessions.map((p) => (
+            <PanelRow key={p.id} p={p} />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function PanelRow({ p }: { p: V2Panel }) {
+  const state = p.blocked ? "STUCK" : p.deliberating ? "RUNNING" : "DONE";
+  return (
+    <li className="v2-row" data-testid={`v2-panel-${p.id}`} data-status={state}>
+      <span className="v2-status v2-row-status" data-status={state}>
+        <span className="v2-dot" data-status={state} aria-hidden />
+        {p.blocked ? "blocked" : p.deliberating ? "debating" : "concluded"}
+      </span>
+
+      <span className="v2-row-main">
+        <span className="v2-row-title">{p.title}</span>
+        {p.purpose ? <span className="v2-row-desc">{p.purpose}</span> : null}
+
+        {/* A blocked panel needs someone. Showing it as running or concluded loses that. */}
+        {p.blocked && p.blocked_reason ? (
+          <span className="v2-run-error" data-testid={`v2-panel-blocked-${p.id}`}>
+            {p.blocked_reason}
+          </span>
+        ) : null}
+
+        {p.decisions.length > 0 ? (
+          <span className="v2-row-desc" data-testid={`v2-panel-decisions-${p.id}`}>
+            {p.decisions.join(" · ")}
+          </span>
+        ) : null}
+
+        {/* Dissent, never folded into the decision. A panel that agreed and a panel that
+            overruled an objection produce the same decision and are not the same event. */}
+        {p.dissent.length > 0 ? (
+          <span className="v2-panel-dissent" data-testid={`v2-panel-dissent-${p.id}`}>
+            dissent: {p.dissent.join(" · ")}
+          </span>
+        ) : null}
+
+        <span className="v2-row-meta v2-mono">
+          <span>{p.panelists.join(", ") || "no panelists recorded"}</span>
+          {p.has_minutes ? (
+            <span data-testid={`v2-panel-minutes-${p.id}`}>minutes recorded</span>
+          ) : (
+            <span className="v2-row-meta-dim" data-testid={`v2-panel-nominutes-${p.id}`}>
+              no minutes yet
+            </span>
+          )}
+        </span>
+      </span>
+    </li>
   );
 }
 

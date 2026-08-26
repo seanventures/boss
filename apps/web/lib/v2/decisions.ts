@@ -57,3 +57,59 @@ export async function fetchDecisionQueue(projectId: string): Promise<DecisionQue
     return emptyQueue(projectId, String((e as Error)?.message ?? e));
   }
 }
+
+
+/**
+ * Panels — who is debating what, and what they concluded.
+ *
+ * `streamed` is false and stays false: BOSS's panels produce real minutes but are not watched
+ * live. The screen must not animate a debate nobody is watching.
+ */
+export type V2Panel = {
+  id: string;
+  title: string;
+  purpose: string;
+  status: string;
+  deliberating: boolean;
+  panelists: string[];
+  decisions: string[];
+  /** Recorded objections. A panel that agreed and a panel that overruled an objection produce
+   *  the same decision and are not the same event. */
+  dissent: string[];
+  blocked: boolean;
+  blocked_reason: string | null;
+  has_minutes: boolean;
+  completed_at: string | null;
+  created_at: string | null;
+};
+
+export type PanelFeed = {
+  project_id: string;
+  sessions: V2Panel[];
+  deliberating: number;
+  blocked: number;
+  streamed: boolean;
+  stream_note: string;
+  apiReachable: boolean;
+  blockedReason?: string;
+};
+
+export function emptyPanels(projectId: string, reason: string): PanelFeed {
+  return {
+    project_id: projectId, sessions: [], deliberating: 0, blocked: 0,
+    streamed: false, stream_note: "", apiReachable: false, blockedReason: reason,
+  };
+}
+
+export async function fetchPanels(projectId: string): Promise<PanelFeed> {
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/console/v2/panels?project_id=${encodeURIComponent(projectId)}`,
+      { headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) return emptyPanels(projectId, `API returned ${r.status}`);
+    return { ...(await r.json()), apiReachable: true };
+  } catch (e) {
+    return emptyPanels(projectId, String((e as Error)?.message ?? e));
+  }
+}

@@ -525,3 +525,8 @@
   padding: 2px 8px; border-radius: var(--v2-radius-sm);
 }
 .v2-card-chat:hover { color: var(--v2-mint); border-color: var(--v2-mint); }
+
+.v2-panel-dissent {
+  display: block; margin-top: 4px;
+  font-size: 12px; color: var(--v2-amber);
+}

@@ -165,3 +165,88 @@ def test_an_empty_queue_is_reported_as_empty_not_as_an_error():
     assert out["items"] == []
     assert out["total"] == 0
     assert out["auto_resolving"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Panels
+#
+# The reference streams a scripted debate — agents speaking in turn, votes tallying, a verdict.
+# BOSS's panels are real and produce real minutes, but they are NOT streamed. Animating a
+# debate that nobody is watching would be the most convincing lie in the console.
+# --------------------------------------------------------------------------- #
+from boss_engine.services.console_v2 import panel_sessions  # noqa: E402
+
+
+def meeting(mid, *, title="Pricing panel", status="completed", participants=None,
+            decisions=None, dissent=None, blocked=None, minutes="art_1", age_min=0):
+    return {
+        "id": mid,
+        "title": title,
+        "purpose": "Decide the pricing model.",
+        "status": status,
+        "participants": participants if participants is not None else [{"role": "cpo"}, {"role": "cto"}],
+        "decisions": decisions if decisions is not None else [{"summary": "Go freemium"}],
+        "dissent_records": dissent or [],
+        "minutes_artifact_id": minutes,
+        "transcript_artifact_id": None,
+        "blocked_state": blocked,
+        "completed_at": NOW - timedelta(minutes=age_min),
+        "created_at": NOW - timedelta(minutes=age_min + 5),
+    }
+
+
+def test_the_payload_says_panels_are_not_streamed():
+    """So the screen cannot animate a debate that is not being watched."""
+    out = panel_sessions(FakeConn([meeting("m1")]), "p")
+    assert out["streamed"] is False
+    assert "not streamed" in out["stream_note"]
+
+
+def test_a_running_panel_is_marked_deliberating():
+    out = panel_sessions(FakeConn([meeting("m1", status="running")]), "p")
+    assert out["sessions"][0]["deliberating"] is True
+    assert out["deliberating"] == 1
+
+
+def test_a_completed_panel_is_not_deliberating():
+    out = panel_sessions(FakeConn([meeting("m1", status="completed")]), "p")
+    assert out["sessions"][0]["deliberating"] is False
+
+
+def test_dissent_is_carried_separately_from_the_decision():
+    """A panel that agreed and a panel that overruled an objection produce the same decision
+    and are not the same event. BOSS records this and v1 never showed it."""
+    out = panel_sessions(FakeConn([meeting(
+        "m1",
+        decisions=[{"summary": "Ship it"}],
+        dissent=[{"note": "Legal objected: consent copy unresolved"}],
+    )]), "p")
+    session = out["sessions"][0]
+    assert session["decisions"] == ["Ship it"]
+    assert "Legal objected" in session["dissent"][0]
+
+
+def test_a_blocked_panel_is_neither_running_nor_concluded():
+    """Showing it as either loses the fact that it needs someone."""
+    out = panel_sessions(FakeConn([meeting(
+        "m1", status="blocked", blocked={"reason": "waiting on the PRD"},
+    )]), "p")
+    session = out["sessions"][0]
+    assert session["blocked"] is True
+    assert "waiting on the PRD" in session["blocked_reason"]
+    assert out["blocked"] == 1
+
+
+def test_a_panel_with_no_minutes_says_so():
+    out = panel_sessions(FakeConn([meeting("m1", minutes=None)]), "p")
+    assert out["sessions"][0]["has_minutes"] is False
+
+
+def test_panelists_are_listed():
+    out = panel_sessions(FakeConn([meeting("m1", participants=[{"role": "cpo"}, "cto"])]), "p")
+    assert out["sessions"][0]["panelists"] == ["cpo", "cto"]
+
+
+def test_the_title_is_cleaned_like_everywhere_else():
+    out = panel_sessions(FakeConn([meeting("m1", title="Shorty — Re-build PRD")]), "p")
+    assert out["sessions"][0]["title"] == "Shorty"

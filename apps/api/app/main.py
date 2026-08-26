@@ -11737,6 +11737,22 @@ def console_v2_decisions_endpoint(project_id: str, limit: int = 60) -> dict:
         return decision_queue(connection, project_id, limit=max(1, min(int(limit), 200)))
 
 
+@app.get("/v1/console/v2/panels")
+def console_v2_panels_endpoint(project_id: str, limit: int = 20) -> dict:
+    """The panels debating something, and what they concluded.
+
+    Not streamed, and the payload says so. BOSS's panels are real and produce real minutes but
+    they are not watched live -- animating a debate nobody is watching would be the most
+    convincing lie in the console.
+    """
+    from boss_engine.services.console_v2 import panel_sessions
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return panel_sessions(connection, project_id, limit=max(1, min(int(limit), 100)))
+
+
 @app.get("/v1/console/v2/receipts")
 def console_v2_receipts_endpoint(project_id: str, limit: int = 60, hours: int = 24) -> dict:
     """What BOSS actually did in the window, with the evidence attached.

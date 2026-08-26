@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { DecisionsScreen } from "../components/v2/DecisionsScreen";
-import type { DecisionQueue, V2Decision } from "../lib/v2/decisions";
+import type { DecisionQueue, PanelFeed, V2Decision, V2Panel } from "../lib/v2/decisions";
 
 /**
  * The Decisions screen.
@@ -133,5 +133,95 @@ describe("enough to act on", () => {
     // Duplicating an approval control before the parity check has run would ship two paths to
     // one irreversible act.
     expect(html(queue())).toContain('data-testid="v2-decision-open-dec_1"');
+  });
+});
+
+
+// --------------------------------------------------------------------------- //
+// Panels
+//
+// The reference streams a scripted debate with a live vote tally. BOSS's panels are real and
+// produce real minutes, but they are NOT watched live. A fake live feed would be the most
+// convincing lie in this console.
+// --------------------------------------------------------------------------- //
+const panel = (over: Partial<V2Panel> = {}): V2Panel => ({
+  id: "m1",
+  title: "Pricing panel",
+  purpose: "Decide the pricing model.",
+  status: "completed",
+  deliberating: false,
+  panelists: ["cpo", "cto"],
+  decisions: ["Go freemium"],
+  dissent: [],
+  blocked: false,
+  blocked_reason: null,
+  has_minutes: true,
+  completed_at: "2026-08-26T12:00:00Z",
+  created_at: "2026-08-26T11:00:00Z",
+  ...over,
+});
+
+const panels = (over: Partial<PanelFeed> = {}): PanelFeed => ({
+  project_id: "boss-dogfood",
+  sessions: [panel()],
+  deliberating: 0,
+  blocked: 0,
+  streamed: false,
+  stream_note: "BOSS panels are not streamed. A meeting runs and its minutes land when it completes.",
+  apiReachable: true,
+  ...over,
+});
+
+const withPanels = (p: PanelFeed) =>
+  renderToStaticMarkup(<DecisionsScreen queue={queue()} panels={p} />);
+
+describe("panels", () => {
+  it("says it is not a live feed", () => {
+    // Animating turns that are not arriving would be the most convincing lie here.
+    const out = withPanels(panels());
+    expect(out).toContain('data-testid="v2-panels-not-streamed"');
+    expect(out).toMatch(/not streamed/);
+  });
+
+  it("shows dissent separately from the decision", () => {
+    // A panel that agreed and a panel that overruled an objection produce the same decision
+    // and are not the same event. BOSS records this and v1 never displayed it.
+    const out = withPanels(panels({
+      sessions: [panel({ decisions: ["Ship it"], dissent: ["Legal objected: consent copy"] })],
+    }));
+    expect(out).toContain('data-testid="v2-panel-dissent-m1"');
+    expect(out).toMatch(/Legal objected/);
+  });
+
+  it("a unanimous panel shows no dissent line", () => {
+    expect(withPanels(panels())).not.toContain('data-testid="v2-panel-dissent-m1"');
+  });
+
+  it("a blocked panel says why, and is neither debating nor concluded", () => {
+    const out = withPanels(panels({
+      sessions: [panel({ blocked: true, blocked_reason: "waiting on the PRD", deliberating: false })],
+      blocked: 1,
+    }));
+    expect(out).toContain('data-testid="v2-panel-blocked-m1"');
+    expect(out).toMatch(/blocked/);
+    expect(out).toMatch(/waiting on the PRD/);
+  });
+
+  it("a panel with no minutes says so", () => {
+    // "Concluded" with nothing written down is not the same as concluded.
+    expect(withPanels(panels({ sessions: [panel({ has_minutes: false })] })))
+      .toContain('data-testid="v2-panel-nominutes-m1"');
+  });
+
+  it("an unreachable panel feed does not read as no panels", () => {
+    expect(withPanels(panels({ apiReachable: false, sessions: [] })))
+      .toContain('data-testid="v2-panels-unreachable"');
+  });
+
+  it("the decisions queue still renders without panels", () => {
+    // Panels are additive; the queue must not depend on them.
+    const out = renderToStaticMarkup(<DecisionsScreen queue={queue()} />);
+    expect(out).toContain('data-testid="v2-decisions"');
+    expect(out).not.toContain('data-testid="v2-panels-list"');
   });
 });

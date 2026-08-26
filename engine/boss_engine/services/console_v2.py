@@ -672,3 +672,88 @@ def _scope_label(scope: dict) -> str:
         if value:
             return str(value)[:60]
     return ", ".join(sorted(scope)[:3])[:60] if scope else ""
+
+
+def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str, Any]:
+    """The panels debating something right now, and what they concluded.
+
+    THE ARTIFACT'S LIVE DELIBERATION, HONESTLY
+    ------------------------------------------
+    The reference streams a scripted debate — agents speaking in turn, votes tallying, a verdict
+    the operator ratifies or vetoes. BOSS's panels are real and produce real minutes, but they
+    are not streamed: a meeting runs, and its transcript and decisions land when it completes.
+
+    So this shows what BOSS actually has — who is on the panel, whether it is still running,
+    what it decided, and any recorded dissent — rather than animating a debate that is not
+    being watched. A fake live feed would be the most convincing lie in the console.
+
+    DISSENT IS SHOWN
+    ----------------
+    A panel that agreed and a panel that overruled an objection produce the same decision, and
+    they are not the same event. BOSS records dissent_records and v1 never displayed them.
+    """
+    rows = [dict(r) for r in connection.execute(
+        sql(
+            """
+            SELECT id, title, purpose, status, participants, decisions,
+                   dissent_records, minutes_artifact_id, transcript_artifact_id,
+                   blocked_state, completed_at, created_at
+            FROM meetings
+            WHERE project_id = :p
+            ORDER BY created_at DESC
+            LIMIT :lim
+            """
+        ),
+        {"p": project_id, "lim": int(limit)},
+    ).mappings().all()]
+
+    sessions = []
+    for row in rows:
+        status = str(row.get("status") or "")
+        decisions = row.get("decisions") or []
+        dissent = row.get("dissent_records") or []
+        blocked = row.get("blocked_state") or None
+        sessions.append({
+            "id": row["id"],
+            "title": _clean_title(str(row.get("title") or "")) or str(row.get("title") or ""),
+            "purpose": str(row.get("purpose") or "")[:300],
+            "status": status,
+            "deliberating": status in ("scheduled", "running", "in_progress"),
+            "panelists": [
+                str(p.get("role") or p.get("name") or p) if isinstance(p, dict) else str(p)
+                for p in (row.get("participants") or [])
+            ][:12],
+            "decisions": [
+                str(d.get("summary") or d.get("text") or d) if isinstance(d, dict) else str(d)
+                for d in decisions
+            ][:8],
+            # Never rolled into the decision count. A panel that agreed and a panel that
+            # overruled an objection are different events with the same output.
+            "dissent": [
+                str(d.get("note") or d.get("summary") or d) if isinstance(d, dict) else str(d)
+                for d in dissent
+            ][:8],
+            # A blocked panel is neither running nor concluded, and showing it as either loses
+            # the fact that it needs someone.
+            "blocked": bool(blocked),
+            "blocked_reason": (
+                str(blocked.get("reason") or blocked)[:200] if isinstance(blocked, dict)
+                else (str(blocked)[:200] if blocked else None)
+            ),
+            "has_minutes": bool(row.get("minutes_artifact_id")),
+            "completed_at": row["completed_at"].isoformat() if row.get("completed_at") else None,
+            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        })
+
+    return {
+        "project_id": project_id,
+        "sessions": sessions,
+        "deliberating": sum(1 for s in sessions if s["deliberating"]),
+        "blocked": sum(1 for s in sessions if s["blocked"]),
+        # Stated so the screen never animates a debate nobody is watching.
+        "streamed": False,
+        "stream_note": (
+            "BOSS panels are not streamed. A meeting runs and its minutes land when it "
+            "completes; this shows where each one has got to."
+        ),
+    }
