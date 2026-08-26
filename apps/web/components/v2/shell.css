@@ -437,3 +437,13 @@
 .v2-stage-name { color: var(--v2-ink); }
 .v2-stage-role { color: var(--v2-dim); }
 .v2-stage-gate { color: var(--v2-amber); margin-left: auto; }
+
+/* Autonomy control */
+.v2-autonomy[data-mode="Full auto"] { border-left: 2px solid var(--v2-amber); padding-left: 10px; }
+.v2-autonomy-toggle { margin-top: 8px; width: 100%; }
+.v2-autonomy-confirm {
+  margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
+  font-size: 11.5px; color: var(--v2-amber); line-height: 1.45;
+}
+.v2-autonomy-confirm p { margin: 0; }
+.v2-autonomy-note { margin: 6px 0 0; font-size: 11px; color: var(--v2-muted); }

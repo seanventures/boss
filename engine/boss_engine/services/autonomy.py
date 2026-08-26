@@ -229,3 +229,138 @@ def describe(policy: AutonomyPolicy) -> dict[str, Any]:
         "set_by": policy.set_by,
         "set_at": policy.set_at,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Applying the policy
+#
+# Separated from evaluate() so the judgement stays pure and testable, and so the only place
+# that writes an approval is small enough to read in one sitting.
+# --------------------------------------------------------------------------- #
+
+def load_policy(connection, project_id: str) -> AutonomyPolicy:
+    """The project's policy. A missing row is Supervised."""
+    from sqlalchemy import text as _sql
+
+    row = connection.execute(
+        _sql(
+            """
+            SELECT mode, threshold_usd, max_risk_tier, set_by, set_at
+            FROM console_autonomy
+            WHERE project_id = :p
+            """
+        ),
+        {"p": project_id},
+    ).mappings().first()
+    return policy_from_row(dict(row) if row else None)
+
+
+def set_policy(connection, project_id: str, *, mode: str, actor: str,
+               threshold_usd: Optional[float] = None,
+               max_risk_tier: Optional[int] = None) -> AutonomyPolicy:
+    """Change the mode. Requires an actor, always.
+
+    An autonomy change with no owner is the one kind this system must never accept: it is the
+    act that makes every later act unattributable.
+    """
+    from sqlalchemy import text as _sql
+
+    if not str(actor or "").strip():
+        raise ValueError("an autonomy change requires an actor")
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+
+    current = load_policy(connection, project_id)
+    threshold = current.threshold_usd if threshold_usd is None else float(threshold_usd)
+    tier = current.max_risk_tier if max_risk_tier is None else int(max_risk_tier)
+
+    connection.execute(
+        _sql(
+            """
+            INSERT INTO console_autonomy
+              (project_id, mode, threshold_usd, max_risk_tier, set_by, set_at)
+            VALUES (:p, :m, :t, :r, :a, now())
+            ON CONFLICT (project_id) DO UPDATE SET
+              mode = EXCLUDED.mode,
+              threshold_usd = EXCLUDED.threshold_usd,
+              max_risk_tier = EXCLUDED.max_risk_tier,
+              set_by = EXCLUDED.set_by,
+              set_at = now()
+            """
+        ),
+        {"p": project_id, "m": mode, "t": threshold, "r": tier, "a": actor},
+    )
+    return load_policy(connection, project_id)
+
+
+def apply_policy(connection, project_id: str, *, limit: int = 25) -> dict[str, Any]:
+    """Approve the gates that qualify, and say why each other one did not.
+
+    THE REFUSALS ARE RETURNED TOO. A run that reports only what it approved is unreviewable:
+    the operator cannot tell whether the policy is working, too tight, or silently doing
+    nothing because every gate is missing a cost.
+
+    Bounded per call. An unbounded loop here would, on a bad policy, approve everything pending
+    before anyone could look — and the whole point of a threshold is that it is a brake.
+    """
+    from sqlalchemy import text as _sql
+
+    policy = load_policy(connection, project_id)
+    if not policy.enabled:
+        return {"mode": policy.mode, "approved": [], "declined": [],
+                "note": "supervised — nothing is auto-approved"}
+
+    rows = [dict(r) for r in connection.execute(
+        _sql(
+            """
+            SELECT id, question, risk_tier, cost_summary, status
+            FROM decisions
+            WHERE project_id = :p AND status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT :lim
+            """
+        ),
+        {"p": project_id, "lim": int(limit)},
+    ).mappings().all()]
+
+    approved, declined = [], []
+    for row in rows:
+        verdict = evaluate(row, policy)
+        if not verdict.approve:
+            declined.append({"id": row["id"], "question": str(row.get("question") or "")[:160],
+                             "reason": verdict.reason})
+            continue
+
+        record = verdict.as_record(policy)
+        connection.execute(
+            _sql(
+                """
+                UPDATE decisions
+                SET status = 'approved',
+                    approved_by = :actor,
+                    approved_at = now(),
+                    resolution_note = :note
+                WHERE id = :id AND project_id = :p AND status = 'pending'
+                """
+            ),
+            {
+                "id": row["id"], "p": project_id,
+                # Named so the trail never reads as a person. "approved by ceo" and "approved
+                # by the policy ceo turned on" are different facts.
+                "actor": f"autonomy:{policy.mode}",
+                "note": f"AUTO-APPROVED (no human reviewed this): {verdict.reason}",
+            },
+        )
+        approved.append({"id": row["id"], "question": str(row.get("question") or "")[:160],
+                         "reason": verdict.reason, "record": record})
+
+    return {
+        "mode": policy.mode,
+        "threshold_usd": policy.threshold_usd,
+        "approved": approved,
+        "declined": declined,
+        "note": (
+            f"{len(approved)} auto-approved, {len(declined)} left for you"
+            if approved or declined else "no pending gates"
+        ),
+    }

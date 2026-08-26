@@ -33,7 +33,14 @@ export type CompanyOverview = {
   burn: { spent_usd: number; cap_usd: number | null };
   gates: number;
   projects: V2Project[];
-  autonomy: { mode: string; detail: string; modes_available: string[] };
+  autonomy: {
+    mode: string;
+    detail: string;
+    modes_available: string[];
+    threshold_usd?: number;
+    set_by?: string | null;
+    set_at?: string | null;
+  };
   apiReachable: boolean;
   blockedReason?: string;
 };

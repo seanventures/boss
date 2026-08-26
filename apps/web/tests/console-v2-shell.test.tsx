@@ -104,7 +104,16 @@ describe("the v2 shell", () => {
   it("shows burn, gates and autonomy in the chrome", () => {
     expect(shell).toContain("v2-burn");
     expect(shell).toContain("v2-gates");
-    expect(shell).toContain("v2-autonomy");
+    // The autonomy block was extracted into its own component when the switch became real, so
+    // the shell MOUNTS it rather than containing the testid. Asserting on the string was a
+    // test about where code lives, not about what the chrome shows.
+    expect(shell).toContain("<AutonomyControl");
+    expect(shell).toMatch(/initial=\{overview\.autonomy\}/);
+  });
+
+  it("passes an actor to the autonomy control", () => {
+    // The one control that reduces human oversight must never be able to act anonymously.
+    expect(shell).toMatch(/actor="[a-z_]+"/);
   });
 
   it("only colours the gate count when a gate is waiting", () => {

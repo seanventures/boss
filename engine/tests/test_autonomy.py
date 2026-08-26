@@ -188,3 +188,155 @@ def test_supervised_is_described_plainly():
     d = describe(AutonomyPolicy())
     assert d["mode"] == "Supervised"
     assert "Full auto" in d["modes_available"]
+
+
+# --------------------------------------------------------------------------- #
+# Applying the policy — the only place an approval is written
+# --------------------------------------------------------------------------- #
+class FakeConn:
+    def __init__(self, policy_row=None, pending=()):
+        self.policy_row = policy_row
+        self.pending = list(pending)
+        self.updates = []
+        self.statements = []
+
+    def execute(self, statement, params=None):
+        raw = str(statement)
+        self.statements.append((raw, dict(params or {})))
+        low = raw.lower()
+        conn = self
+        if "update decisions" in low:
+            self.updates.append(dict(params or {}))
+            rows = []
+        elif "from console_autonomy" in low:
+            rows = [conn.policy_row] if conn.policy_row else []
+        elif "insert into console_autonomy" in low:
+            rows = []
+        else:
+            rows = conn.pending
+        captured = [r for r in rows if r]
+
+        class _R:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return [dict(r) for r in captured]
+
+            def first(self):
+                return dict(captured[0]) if captured else None
+
+        return _R()
+
+
+def pending(did, question="Approve model spend?", usd=12.0, tier=1):
+    return {"id": did, "question": question, "risk_tier": tier,
+            "cost_summary": {"usd": usd}, "status": "pending"}
+
+
+def test_supervised_is_inert_not_merely_restrictive():
+    """It must not even LOOK at the pending gates.
+
+    An earlier version of this test asserted only that nothing was approved, which passed with
+    the enabled-check deleted — because evaluate() independently refuses under Supervised. Two
+    independent refusals is good design and a bad test: it proved the second one worked while
+    claiming to prove the first.
+
+    The observable difference is that Supervised never reads the decisions table at all.
+    """
+    from boss_engine.services.autonomy import apply_policy
+
+    conn = FakeConn(pending=[pending("d1")])
+    out = apply_policy(conn, "p")
+    assert out["approved"] == []
+    assert conn.updates == []
+    assert not [s for s, _ in conn.statements if "FROM decisions" in s], (
+        "supervised mode must not query pending gates at all"
+    )
+
+
+def test_evaluate_refuses_under_supervised_even_if_reached():
+    """The second of the two independent refusals, tested on its own so neither can hide the
+    other's failure."""
+    assert evaluate(gate(usd=1.0), AutonomyPolicy()).approve is False
+
+
+AUTO_ROW = {"mode": FULL_AUTO, "threshold_usd": 500.0, "max_risk_tier": 1,
+            "set_by": "ceo", "set_at": None}
+
+
+def test_a_qualifying_gate_is_approved_and_marked_as_unreviewed():
+    from boss_engine.services.autonomy import apply_policy
+
+    conn = FakeConn(policy_row=AUTO_ROW, pending=[pending("d1", usd=12.0)])
+    out = apply_policy(conn, "p")
+    assert [a["id"] for a in out["approved"]] == ["d1"]
+    update = conn.updates[0]
+    # Named so the trail can never read as a person: "approved by ceo" and "approved by the
+    # policy ceo turned on" are different facts.
+    assert update["actor"] == "autonomy:full_auto"
+    assert "no human reviewed this" in update["note"]
+
+
+def test_the_update_cannot_resolve_an_already_resolved_gate():
+    """A concurrent human approval must win; the UPDATE is guarded on status."""
+    from boss_engine.services.autonomy import apply_policy
+
+    conn = FakeConn(policy_row=AUTO_ROW, pending=[pending("d1")])
+    apply_policy(conn, "p")
+    update_sql = [s for s, _ in conn.statements if "UPDATE decisions" in s][0]
+    assert "status = 'pending'" in update_sql
+
+
+def test_refusals_are_returned_with_their_reasons():
+    """A run reporting only what it approved is unreviewable: the operator cannot tell whether
+    the policy is working, too tight, or silently doing nothing."""
+    from boss_engine.services.autonomy import apply_policy
+
+    conn = FakeConn(policy_row=AUTO_ROW, pending=[
+        pending("d1", question="Deploy to production?"),
+        pending("d2", usd=9_999.0),
+    ])
+    out = apply_policy(conn, "p")
+    assert out["approved"] == []
+    assert {d["id"] for d in out["declined"]} == {"d1", "d2"}
+    assert all(d["reason"] for d in out["declined"])
+    assert conn.updates == []
+
+
+def test_the_run_is_bounded():
+    """An unbounded loop would, on a bad policy, approve everything pending before anyone could
+    look — and the point of a threshold is that it is a brake."""
+    from boss_engine.services.autonomy import apply_policy
+
+    conn = FakeConn(policy_row=AUTO_ROW, pending=[])
+    apply_policy(conn, "p", limit=5)
+    select = [p for s, p in conn.statements if "FROM decisions" in s][0]
+    assert select["lim"] == 5
+
+
+def test_setting_the_mode_requires_an_actor():
+    """An autonomy change with no owner is the one kind this system must never accept: it is
+    the act that makes every later act unattributable."""
+    from boss_engine.services.autonomy import set_policy
+
+    with pytest.raises(ValueError, match="actor"):
+        set_policy(FakeConn(), "p", mode=FULL_AUTO, actor="")
+
+
+def test_setting_an_unknown_mode_is_refused():
+    from boss_engine.services.autonomy import set_policy
+
+    with pytest.raises(ValueError, match="mode"):
+        set_policy(FakeConn(), "p", mode="yolo", actor="ceo")
+
+
+def test_changing_the_mode_records_who_did_it():
+    from boss_engine.services.autonomy import set_policy
+
+    conn = FakeConn()
+    set_policy(conn, "p", mode=FULL_AUTO, actor="ceo", threshold_usd=250)
+    insert = [p for s, p in conn.statements if "INSERT INTO console_autonomy" in s][0]
+    assert insert["a"] == "ceo"
+    assert insert["m"] == FULL_AUTO
+    assert insert["t"] == 250

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { AutonomyControl } from "./AutonomyControl";
 import { ConsoleToggle } from "./ConsoleToggle";
 import type { CompanyOverview } from "../../lib/v2/overview";
 
@@ -160,16 +161,15 @@ export function Shell({
             ))}
           </nav>
 
-          {/* Autonomy. Reported, not faked: BOSS implements one mode today, and offering a
-              switch that changes nothing would be worse than showing the state plainly. */}
-          <div className="v2-autonomy" data-testid="v2-autonomy">
-            <span className="v2-label">Autonomy</span>
-            <span className="v2-autonomy-mode">
-              <span className="v2-dot" data-status="RUNNING" aria-hidden />
-              {overview.autonomy.mode}
-            </span>
-            <p className="v2-autonomy-detail">{overview.autonomy.detail}</p>
-          </div>
+          {/* Autonomy. A REAL switch now: Full auto lets small, reversible, well-understood
+              gates approve themselves, and nothing else. See services/autonomy.py for what it
+              must still refuse — the design question was never "how do I auto-approve a gate"
+              but "what must remain impossible after I do". */}
+          <AutonomyControl
+            projectId={overview.company.id}
+            actor="executive_console"
+            initial={overview.autonomy}
+          />
         </aside>
 
         <main className="v2-main">{children}</main>

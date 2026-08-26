@@ -5571,3 +5571,19 @@ CREATE INDEX IF NOT EXISTS idx_deadletters_project_created
   ON deadletters(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_project_created
   ON jobs(project_id, created_at DESC);
+
+
+-- Project-level gate autonomy: whether small, reversible, well-understood gates may approve
+-- themselves. Distinct from `autonomy_changes`, which is per-ROLE capability.
+--
+-- Supervised is the default and is never implied: a project with no row here is supervised,
+-- and Full auto has to be turned on, by someone, on purpose. The row records who and when,
+-- because reducing human oversight is itself an act with an owner.
+CREATE TABLE IF NOT EXISTS console_autonomy (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'supervised',
+  threshold_usd DOUBLE PRECISION NOT NULL DEFAULT 500,
+  max_risk_tier INTEGER NOT NULL DEFAULT 1,
+  set_by TEXT,
+  set_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

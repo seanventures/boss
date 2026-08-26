@@ -11831,6 +11831,68 @@ def console_v2_settings_endpoint(project_id: str) -> dict:
         return settings(connection, project_id)
 
 
+@app.get("/v1/console/v2/autonomy")
+def console_v2_autonomy_get(project_id: str) -> dict:
+    """The project's gate-autonomy policy. A project with no row is Supervised."""
+    from boss_engine.services.autonomy import describe, load_policy
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return describe(load_policy(connection, project_id))
+
+
+@app.post("/v1/console/v2/autonomy")
+def console_v2_autonomy_set(payload: dict = Body(...)) -> dict:
+    """Change the mode. Requires an actor, always.
+
+    An autonomy change with no owner is the one kind this system must never accept: it is the
+    act that makes every later act unattributable.
+    """
+    from boss_engine.services.autonomy import describe, set_policy
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
+    mode = str(payload.get("mode") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not actor:
+        raise HTTPException(status_code=400, detail="actor is required for an autonomy change")
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    try:
+        with begin(engine) as connection:
+            policy = set_policy(
+                connection, project_id,
+                mode=mode, actor=actor,
+                threshold_usd=payload.get("threshold_usd"),
+                max_risk_tier=payload.get("max_risk_tier"),
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return describe(policy)
+
+
+@app.post("/v1/console/v2/autonomy/apply")
+def console_v2_autonomy_apply(payload: dict = Body(...)) -> dict:
+    """Run the policy over the pending gates, and report the refusals as well as the approvals.
+
+    A run that reports only what it approved is unreviewable: the operator cannot tell whether
+    the policy is working, too tight, or silently doing nothing because every gate is missing a
+    cost.
+    """
+    from boss_engine.services.autonomy import apply_policy
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return apply_policy(connection, project_id, limit=int(payload.get("limit") or 25))
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.
