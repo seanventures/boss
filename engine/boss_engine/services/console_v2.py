@@ -380,3 +380,94 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
                      "detail": "Spend & deploys pause for you.",
                      "modes_available": ["Supervised"]},
     }
+
+
+def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any]:
+    """One app: every run in its lineage, where it stands, and what can be done to it.
+
+    ONE call, like company_overview. The v1 equivalent of this screen was assembled from the
+    whole 82-feed page render, so opening one app cost the same as opening everything.
+
+    The lineage is the unit, not the run. Judging an app by its newest run is what made BOSS
+    refuse to deploy something whose completed build was sitting two rows down in the same
+    lineage, so `deployable` is answered from the lineage and the reason is returned with it —
+    a disabled button with no reason is what sends people to the API to find out why.
+    """
+    rows = [dict(r) for r in connection.execute(
+        sql(
+            """
+            SELECT id, title, status, phase, spec, state, usage, finalize_ctx,
+                   pull_request_url, pull_request_number, error, created_at, updated_at
+            FROM code_task_runs
+            WHERE project_id = :p
+              AND created_at > now() - interval '180 days'
+            ORDER BY created_at DESC
+            LIMIT 400
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all()]
+
+    lineage = [r for r in rows if _lineage_key(r) == app_id]
+    if not lineage:
+        # NOT an empty app. An id that matches nothing and an app with no runs are different
+        # facts, and rendering them alike sends the operator looking for work that was never
+        # there.
+        return {"found": False, "app_id": app_id, "project_id": project_id}
+
+    lineage.sort(key=lambda r: r["created_at"], reverse=True)
+    title = ""
+    for r in lineage:
+        title = _clean_title(str(r.get("title") or ""))
+        if title:
+            break
+
+    stage, status = _stage_of(lineage)
+    micros = sum(int((r.get("usage") or {}).get("cost_usd_micros") or 0) for r in lineage)
+    spec = lineage[0].get("spec") or {}
+
+    runs = [
+        {
+            "id": r["id"],
+            "status": str(r.get("status") or ""),
+            "phase": str(r.get("phase") or ""),
+            "attempt": int((r.get("finalize_ctx") or {}).get("attempt") or 1),
+            "turns": int((r.get("state") or {}).get("turns") or 0),
+            "spend_usd": round(int((r.get("usage") or {}).get("cost_usd_micros") or 0) / 1e6, 4),
+            "pull_request_number": r.get("pull_request_number"),
+            "pull_request_url": r.get("pull_request_url"),
+            # The failure text, because "failed" without it is a dead end on the card.
+            "error": str(r.get("error") or "")[:400] or None,
+            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+        }
+        for r in lineage
+    ]
+
+    shipped = [r for r in lineage if str(r.get("status")) in _DONE_STATES]
+    reviewed = [r for r in shipped if r.get("pull_request_url")]
+
+    return {
+        "found": True,
+        "app_id": app_id,
+        "project_id": project_id,
+        "title": title or "Untitled app",
+        "description": str(spec.get("instructions") or "")[:400],
+        "repo": f"{spec.get('owner') or '?'}/{spec.get('repo') or '?'}",
+        "stage": stage,
+        "status": status,
+        "pct": STAGE_PCT.get(stage, 0),
+        "spend_usd": round(micros / 1_000_000, 2),
+        "runs": runs,
+        # Say whether it can ship AND why not, together. A disabled Deploy with no reason is
+        # what sends people to the API to find out.
+        "deployable": bool(reviewed),
+        "deployable_reason": (
+            "" if reviewed
+            else "nothing reviewed yet — a run must complete and open a PR before it can ship"
+        ),
+        "latest_run_id": lineage[0]["id"],
+        "phases": [
+            {"id": name, "reached": STAGES.index(name) <= STAGES.index(stage), "label": name.title()}
+            for name in STAGES
+        ],
+    }

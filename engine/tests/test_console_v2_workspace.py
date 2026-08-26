@@ -1,0 +1,186 @@
+"""The v2 project workspace: one app, one call.
+
+The v1 equivalent of this screen was assembled from the whole 82-feed page render, so opening
+one app cost the same as opening everything. These pin the properties that make the one-call
+version trustworthy rather than merely fast.
+"""
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from boss_engine.services.console_v2 import project_workspace
+
+NOW = datetime(2026, 8, 26, tzinfo=timezone.utc)
+
+
+class FakeConn:
+    """Returns the seeded rows for the workspace query."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.statements = []
+
+    def execute(self, statement, params=None):
+        self.statements.append((" ".join(str(statement).split()), dict(params or {})))
+        conn = self
+
+        class _R:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return [dict(r) for r in conn.rows]
+
+        return _R()
+
+
+def run(rid, *, title="Shorty — a URL shortener", status="completed", pr=None, age_min=0,
+        cost=0, turns=0, err=None, phase="done", **ctx):
+    return {
+        "id": rid,
+        "title": title,
+        "status": status,
+        "phase": phase,
+        "spec": {"instructions": "Build it", "owner": "paramg", "repo": "boss-sandbox"},
+        "state": {"turns": turns},
+        "usage": {"cost_usd_micros": cost},
+        "finalize_ctx": ctx or None,
+        "pull_request_url": f"https://github.com/paramg/boss-sandbox/pull/{pr}" if pr else None,
+        "pull_request_number": pr,
+        "error": err,
+        "created_at": NOW - timedelta(minutes=age_min),
+        "updated_at": NOW - timedelta(minutes=age_min),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# One call
+# --------------------------------------------------------------------------- #
+def test_the_whole_screen_is_one_query():
+    """82 feeds per render is what made v1 unusable. A second query here is the pattern
+    creeping back."""
+    conn = FakeConn([run("crun_1", app_id="app_1")])
+    project_workspace(conn, "proj", "app_1")
+    assert len(conn.statements) == 1
+
+
+# --------------------------------------------------------------------------- #
+# Missing is not empty
+# --------------------------------------------------------------------------- #
+def test_an_unknown_app_is_reported_as_not_found():
+    """An id that matches nothing and an app with no runs are different facts. Rendering them
+    alike sends the operator looking for work that was never there."""
+    out = project_workspace(FakeConn([run("crun_1", app_id="app_1")]), "proj", "app_missing")
+    assert out["found"] is False
+    assert "runs" not in out
+
+
+# --------------------------------------------------------------------------- #
+# The lineage is the unit
+# --------------------------------------------------------------------------- #
+def test_every_run_in_the_lineage_is_shown():
+    conn = FakeConn([
+        run("crun_3", age_min=1, app_id="app_1", attempt=3),
+        run("crun_2", age_min=2, app_id="app_1", attempt=2),
+        run("crun_1", age_min=3, app_id="app_1", attempt=1),
+        run("crun_other", age_min=1, app_id="app_2"),
+    ])
+    out = project_workspace(conn, "proj", "app_1")
+    assert [r["id"] for r in out["runs"]] == ["crun_3", "crun_2", "crun_1"]
+    assert [r["attempt"] for r in out["runs"]] == [3, 2, 1]
+
+
+def test_newest_first():
+    conn = FakeConn([
+        run("crun_old", age_min=99, app_id="app_1"),
+        run("crun_new", age_min=1, app_id="app_1"),
+    ])
+    out = project_workspace(conn, "proj", "app_1")
+    assert out["runs"][0]["id"] == "crun_new"
+    assert out["latest_run_id"] == "crun_new"
+
+
+def test_spend_is_the_lineage_total_not_the_newest_run():
+    """Every attempt cost money. Showing only the last one understates what the app cost by
+    however many retries it took."""
+    conn = FakeConn([
+        run("crun_2", age_min=1, app_id="app_1", cost=1_500_000),
+        run("crun_1", age_min=2, app_id="app_1", cost=2_250_000),
+    ])
+    assert project_workspace(conn, "proj", "app_1")["spend_usd"] == 3.75
+
+
+# --------------------------------------------------------------------------- #
+# Deployability, answered from the lineage
+# --------------------------------------------------------------------------- #
+def test_a_completed_run_in_the_lineage_makes_the_app_deployable():
+    """Judging by the NEWEST run made BOSS refuse to deploy something whose completed build was
+    sitting two rows down in the same lineage. That is the bug this whole shape exists for."""
+    conn = FakeConn([
+        run("crun_2", age_min=1, app_id="app_1", status="cancelled"),
+        run("crun_1", age_min=2, app_id="app_1", status="completed", pr=111),
+    ])
+    out = project_workspace(conn, "proj", "app_1")
+    assert out["deployable"] is True
+    assert out["deployable_reason"] == ""
+
+
+def test_an_app_with_nothing_reviewed_says_why_it_cannot_ship():
+    """A disabled button with no reason is what sends people to the API to find out."""
+    conn = FakeConn([run("crun_1", app_id="app_1", status="running")])
+    out = project_workspace(conn, "proj", "app_1")
+    assert out["deployable"] is False
+    assert "PR" in out["deployable_reason"]
+
+
+def test_a_completed_run_without_a_pr_is_not_shippable():
+    """Nothing was reviewed, so there is nothing to merge."""
+    conn = FakeConn([run("crun_1", app_id="app_1", status="completed", pr=None)])
+    assert project_workspace(conn, "proj", "app_1")["deployable"] is False
+
+
+# --------------------------------------------------------------------------- #
+# A failure must be readable on the card
+# --------------------------------------------------------------------------- #
+def test_a_failed_run_carries_its_reason():
+    """"failed" with no text is a dead end — the operator's only move is to go and read logs."""
+    conn = FakeConn([run("crun_1", app_id="app_1", status="failed",
+                         err="health gate rejected: /healthz returned 502")])
+    out = project_workspace(conn, "proj", "app_1")
+    assert "502" in out["runs"][0]["error"]
+
+
+def test_a_successful_run_has_no_error_text():
+    conn = FakeConn([run("crun_1", app_id="app_1", status="completed", pr=1)])
+    assert project_workspace(conn, "proj", "app_1")["runs"][0]["error"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Presentation the screen depends on
+# --------------------------------------------------------------------------- #
+def test_the_title_is_a_product_name():
+    conn = FakeConn([run("crun_1", app_id="app_1", title="Shorty — Re-build PRD")])
+    assert project_workspace(conn, "proj", "app_1")["title"] == "Shorty"
+
+
+def test_phases_report_how_far_the_app_has_got():
+    conn = FakeConn([run("crun_1", app_id="app_1", status="completed", pr=42)])
+    out = project_workspace(conn, "proj", "app_1")
+    reached = [p["id"] for p in out["phases"] if p["reached"]]
+    assert reached == ["DISCOVERY", "BUILD", "REVIEW", "SHIPPED"]
+
+
+def test_an_early_app_has_not_reached_the_later_phases():
+    conn = FakeConn([run("crun_1", app_id="app_1", status="running")])
+    out = project_workspace(conn, "proj", "app_1")
+    assert [p["id"] for p in out["phases"] if p["reached"]] == ["DISCOVERY", "BUILD"]
+
+
+def test_the_pr_number_is_carried_so_the_link_can_be_built():
+    """A card once linked to github.com/paramg/boss-sandbox/pull/111 for a PR that was not
+    there. The number and the URL travel together, from the run that owns them."""
+    conn = FakeConn([run("crun_1", app_id="app_1", status="completed", pr=111)])
+    r = project_workspace(conn, "proj", "app_1")["runs"][0]
+    assert r["pull_request_number"] == 111
+    assert r["pull_request_url"].endswith("/pull/111")

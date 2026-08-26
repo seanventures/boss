@@ -11702,6 +11702,24 @@ def console_v2_overview_endpoint(project_id: str, limit: int = 40) -> dict:
         return company_overview(connection, project_id, limit=max(1, min(int(limit), 100)))
 
 
+@app.get("/v1/console/v2/workspace")
+def console_v2_workspace_endpoint(project_id: str, app_id: str) -> dict:
+    """One app's whole workspace in ONE call: its lineage, where it stands, what it cost.
+
+    The v1 equivalent of this screen was assembled from the full 82-feed page render, so
+    opening a single app cost the same as opening everything.
+
+    Returns found=False rather than 404 for an unknown app: the screen distinguishes "no such
+    app" from "an app with no runs", and both are ordinary answers rather than errors.
+    """
+    from boss_engine.services.console_v2 import project_workspace
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return project_workspace(connection, project_id, app_id)
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.

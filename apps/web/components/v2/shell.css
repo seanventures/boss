@@ -142,3 +142,101 @@
   .v2-autonomy { display: none; }
   .v2-row-progress { flex-basis: 120px; }
 }
+
+/* ---------------------------------------------------------------------------
+   Project workspace
+   --------------------------------------------------------------------------- */
+.v2-back {
+  display: inline-block;
+  margin-bottom: 18px;
+  color: var(--v2-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+.v2-back:hover { color: var(--v2-ink); }
+
+.v2-ws-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--v2-muted);
+}
+.v2-ws-facts b { color: var(--v2-ink); font-weight: 500; }
+
+/* The four phases, as a track. `reached` is data, never colour alone: the label is always
+   readable and the state is in the attribute, so it survives greyscale. */
+.v2-phases {
+  display: flex;
+  gap: 0;
+  list-style: none;
+  margin: 26px 0 18px;
+  padding: 0;
+}
+.v2-phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  position: relative;
+  padding-right: 12px;
+}
+.v2-phase::after {
+  content: "";
+  position: absolute;
+  left: 14px; right: 0; top: 5px;
+  height: 1px;
+  background: var(--v2-idle);
+}
+.v2-phase:last-child { flex: 0; }
+.v2-phase:last-child::after { display: none; }
+.v2-phase[data-reached="true"]::after { background: var(--v2-mint); }
+
+.v2-phase-dot {
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--v2-panel);
+  border: 1px solid var(--v2-idle);
+  flex: none;
+  z-index: 1;
+}
+.v2-phase[data-reached="true"] .v2-phase-dot {
+  background: var(--v2-mint);
+  border-color: var(--v2-mint);
+}
+.v2-phase-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--v2-dim);
+  background: var(--v2-canvas);
+  padding-right: 8px;
+  z-index: 1;
+}
+.v2-phase[data-reached="true"] .v2-phase-label { color: var(--v2-ink); }
+
+.v2-ws-ship {
+  font-size: 12px;
+  color: var(--v2-amber);
+  margin: 0 0 26px;
+}
+.v2-ws-ship[data-deployable="true"] { color: var(--v2-green); }
+
+.v2-ws-h {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--v2-muted);
+  margin: 0 0 10px;
+  font-weight: 500;
+}
+
+.v2-ws-run { padding: 12px 14px; }
+.v2-run-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--v2-red);
+}
