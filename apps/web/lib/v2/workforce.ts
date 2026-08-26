@@ -16,12 +16,15 @@ export type V2Agent = {
   role: string;
   status: V2AgentStatus;
   task: string;
-  /** The model its recent calls ACTUALLY used. Null when nothing ran — a configured model that
-   *  never ran is a claim, not a fact. */
   model: string | null;
-  tokens: number;
-  spend_usd: number;
-  calls: number;
+  /** ABSENT, NOT ZERO. BOSS records project_id/code_task_run_id/stage on an LLM call and
+   *  run_id/role_key on a step, with no join between them — so per-agent cost cannot be
+   *  computed. A zero would read as "this agent costs nothing" rather than "nobody knows".
+   *  An earlier version faked it with a time-window join and showed two agents the same
+   *  $61.3802. */
+  tokens: number | null;
+  spend_usd: number | null;
+  calls: number | null;
   autonomy_level: number;
   trust_score: number;
   successful_runs: number;
@@ -45,6 +48,8 @@ export type Workforce = {
   agents: V2Agent[];
   handoffs: V2Handoff[];
   counts: Record<string, number>;
+  spend_attributed?: boolean;
+  spend_note?: string;
   apiReachable: boolean;
   blockedReason?: string;
 };

@@ -25,7 +25,8 @@ import json
 import pathlib
 import sys
 
-from ..services.console_driver import DriverConfig, learn
+from ..services.console_driver import DriverConfig, learn, observe_screen, probe_links
+from ..services.console_screen_check import check, summarise as summarise_screens
 from ..services.console_test_agent import Baseline, compare, defect_coverage, summarise
 
 #: The v1 areas worth recording first. Deliberately the five the operator called core, plus
@@ -139,6 +140,74 @@ def _coverage(args: argparse.Namespace) -> int:
     return 1 if uncovered else 0
 
 
+#: The v2 screens and the root element each must render. A screen missing from here is one
+#: nobody checks, so this list is the definition of "all the screens" for the checker.
+V2_SCREENS = {
+    "/v2": "v2-projects",
+    "/v2/hive": "v2-hive",
+    "/v2/factory": "v2-workforce",
+    "/v2/org": "v2-org",
+    "/v2/panels": "v2-decisions",
+    "/v2/timeline": "v2-receipts",
+    "/v2/boss": None,
+    "/v2/infra": None,
+    "/v2/settings": None,
+}
+
+
+def _screens(args: argparse.Namespace) -> int:
+    """Check every screen actually works: rendered, styled, no crash, no dead links.
+
+    This is the half the request recorder could not do. It found nothing about styling because
+    a page fetches the same things whether or not a stylesheet loaded, so an unstyled screen
+    was invisible to it and visible to the operator — the wrong way round.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise ImportError(
+            "the screen checker needs Playwright: pip install playwright==1.60.0 && "
+            "python -m playwright install chromium"
+        ) from exc
+
+    origin = args.url.rstrip("/")
+    query = f"?org={args.org}" if args.org else ""
+    paths = args.paths.split(",") if args.paths else list(V2_SCREENS)
+
+    results = {}
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=not args.headed)
+        page = browser.new_page()
+        for i, path in enumerate(paths, start=1):
+            print(f"[{i}/{len(paths)}] {path}", file=sys.stderr, flush=True)
+            observation = observe_screen(page, f"{path}{query}", origin)
+            probe_links(page, observation, origin)
+            findings = check(observation, expect_testid=V2_SCREENS.get(path))
+            results[path] = findings
+            for f in findings:
+                if f.severity != "OK":
+                    print(f"    {f.severity}: {f.rule} — {f.detail}", file=sys.stderr, flush=True)
+        browser.close()
+
+    result = summarise_screens(results)
+    print(f"\n{result['screens']} screens checked")
+    print(f"  broken   : {len(result['broken'])}")
+    print(f"  suspect  : {len(result['suspect'])}")
+    print(f"  unrefuted: {len(result['unrefuted'])}")
+    for path, details in result["broken"].items():
+        print(f"\nBROKEN {path}")
+        for d in details:
+            print(f"       {d}")
+    for path, details in result["suspect"].items():
+        print(f"\nsuspect {path}")
+        for d in details:
+            print(f"        {d}")
+
+    if args.out:
+        pathlib.Path(args.out).write_text(json.dumps(result, indent=1), encoding="utf-8")
+    return 0 if result["passed"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="console_test", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -163,6 +232,14 @@ def main(argv: list[str] | None = None) -> int:
     vp.add_argument("--area-map", help="JSON {v1_area: expected_v2_area} for MOVED reporting")
     vp.add_argument("--out", help="write the JSON report here")
     vp.set_defaults(fn=_verify)
+
+    sp = sub.add_parser("screens", help="check every screen renders, is styled, and works")
+    sp.add_argument("--url", required=True, help="console origin, e.g. https://boss.example")
+    sp.add_argument("--org", help="org id to pass as ?org=")
+    sp.add_argument("--paths", help="comma-separated paths (default: every v2 screen)")
+    sp.add_argument("--headed", action="store_true", help="watch it run")
+    sp.add_argument("--out", help="write the JSON report here")
+    sp.set_defaults(fn=_screens)
 
     cp = sub.add_parser("coverage", help="can this baseline catch known defects?")
     cp.add_argument("--baseline", required=True)

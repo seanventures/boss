@@ -68,7 +68,16 @@ export function Shell({
           {overview.company.name}
         </button>
 
-        <Link href={`/v2/new${q}`} className="v2-primary" data-testid="v2-new-project">
+        {/* POINTS AT THE THING THAT ACTUALLY STARTS A PROJECT.
+            This linked to /v2/new, a route that does not exist, so the console's primary
+            call to action 404ed. The v2 launch flow is not built yet; Ask BOSS on the current
+            console is, and it is one click away rather than a dead end. */}
+        <Link
+          href={`/?area=overview${orgId ? `&org=${encodeURIComponent(orgId)}` : ""}`}
+          className="v2-primary"
+          data-testid="v2-new-project"
+          title="Describe an outcome in Ask BOSS — the v2 launch flow has not moved yet"
+        >
           New project
         </Link>
 

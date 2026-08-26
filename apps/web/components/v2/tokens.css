@@ -1,3 +1,10 @@
+/* THE FONTS, ACTUALLY FETCHED.
+   --v2-font-display named Space Grotesk and nothing ever loaded it, so every v2
+   screen silently rendered in v1's Manrope. Declaring a font is not loading one,
+   and the difference is invisible to anything that only checks which requests a
+   page made -- which is how it survived to production. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
 /*
  * Console v2 design tokens.
  *

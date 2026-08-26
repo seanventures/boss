@@ -118,23 +118,39 @@ def test_the_counts_match_the_agents_listed():
 # --------------------------------------------------------------------------- #
 # Facts, not configuration
 # --------------------------------------------------------------------------- #
-def test_the_model_shown_is_the_one_actually_used():
-    """A configured model that never ran is a claim. A recorded one is a fact."""
-    out = workforce(FakeConn(
-        roles=[role("coder")], steps=[step("coder")],
-        spend=[{"role_key": "coder", "micros": 1_250_000, "tokens": 4200,
-                "model": "claude-opus-5", "calls": 3}],
-    ), "p")
-    a = out["agents"][0]
-    assert a["model"] == "claude-opus-5"
-    assert a["spend_usd"] == 1.25
-    assert a["tokens"] == 4200
+def test_per_agent_spend_is_absent_rather_than_invented():
+    """A number is either true or absent.
 
+    An earlier version joined llm_calls to steps on a TIME WINDOW, which attributed every call
+    in a 31-minute window to every role active in it. It shipped, and the live screen
+    immediately showed CTO and QA Lead with exactly $61.3802 each -- the same money, twice.
 
-def test_an_agent_with_no_recorded_calls_claims_no_model():
+    llm_calls records project_id, code_task_run_id and stage; steps record run_id and role_key.
+    There is no join, and the vocabularies do not even overlap. So there is no honest per-agent
+    cost, and None says that where 0 would say "this agent costs nothing".
+    """
     out = workforce(FakeConn(roles=[role("coder")], steps=[step("coder")]), "p")
-    assert out["agents"][0]["model"] is None
-    assert out["agents"][0]["spend_usd"] == 0
+    a = out["agents"][0]
+    assert a["spend_usd"] is None
+    assert a["tokens"] is None
+    assert a["calls"] is None
+
+
+def test_the_payload_says_why_spend_is_missing():
+    """A screen cannot quietly render a zero in its place if the payload states the reason."""
+    out = workforce(FakeConn(roles=[role("coder")]), "p")
+    assert out["spend_attributed"] is False
+    assert "does not record which agent" in out["spend_note"]
+
+
+def test_no_query_joins_calls_to_steps_by_time():
+    """The mechanism of the bug, forbidden directly. A window join looks reasonable and is
+    guaranteed to double-count whenever two agents work at once -- which is the normal case."""
+    conn = FakeConn(roles=[role("coder")])
+    workforce(conn, "p")
+    for sql_text, _ in conn.statements:
+        low = " ".join(sql_text.lower().split())
+        assert "join llm_calls" not in low, "per-agent spend cannot be joined by time"
 
 
 def test_violations_are_surfaced_rather_than_buried():

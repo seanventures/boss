@@ -110,28 +110,21 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         {"p": project_id, "h": int(hours)},
     ).mappings().all()]
 
-    # Spend and the model actually used, per role. Joined through the step's run so the number
-    # belongs to the agent that spent it rather than being apportioned.
-    spend = {r["role_key"]: dict(r) for r in connection.execute(
-        sql(
-            """
-            SELECT s.role_key,
-                   COALESCE(sum(c.cost_usd_micros), 0) AS micros,
-                   COALESCE(sum(c.total_tokens), 0) AS tokens,
-                   (array_agg(c.model ORDER BY c.created_at DESC))[1] AS model,
-                   count(*) AS calls
-            FROM agent_process_steps s
-            JOIN llm_calls c ON c.project_id = s.project_id
-                            AND c.created_at BETWEEN s.created_at - interval '1 minute'
-                                                 AND s.created_at + interval '30 minutes'
-            WHERE s.project_id = :p
-              AND s.created_at > now() - make_interval(hours => :h)
-            GROUP BY s.role_key
-            """
-        ),
-        {"p": project_id, "h": int(hours)},
-    ).mappings().all()}
-
+    # NO PER-AGENT SPEND. NOT BECAUSE IT IS HARD -- BECAUSE IT IS NOT RECORDED.
+    #
+    # An earlier version of this joined llm_calls to steps on a time window, which attributed
+    # every call in a 31-minute window to every role active in it. Shipped, and the live screen
+    # immediately showed CTO and QA Lead with exactly $61.3802 each -- the same money, twice.
+    #
+    # llm_calls carries project_id, code_task_run_id and stage; agent_process_steps carries
+    # run_id and role_key. There is no join between them, and the two vocabularies do not even
+    # overlap (steps say accept_prd/review_prd/build; calls say spec/implement/review_code). So
+    # a per-agent cost here can only be invented.
+    #
+    # The rule this screen holds every other number to is that a number is either true or
+    # absent. This one is absent, and the screen says why rather than showing a zero that reads
+    # as "this agent costs nothing".
+    spend: dict[str, dict] = {}
     agents = []
     for role in roles:
         key = role["role_key"]
@@ -144,12 +137,13 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "role": _humanise(key),
             "status": status,
             "task": task,
-            # The model it actually used, not one it is configured with. A configured model that
-            # never ran is a claim; a recorded one is a fact.
+            # Absent, not zero. See the note above the (empty) spend lookup: BOSS does not
+            # record which agent an llm_call belongs to, and a zero would read as "this agent
+            # costs nothing" rather than "nobody knows".
             "model": cost.get("model") or None,
-            "tokens": int(cost.get("tokens") or 0),
-            "spend_usd": round(int(cost.get("micros") or 0) / 1_000_000, 4),
-            "calls": int(cost.get("calls") or 0),
+            "tokens": None,
+            "spend_usd": None,
+            "calls": None,
             "autonomy_level": int(role.get("autonomy_level") or 0),
             "trust_score": int(role.get("trust_score") or 0),
             "successful_runs": int(role.get("successful_runs") or 0),
@@ -179,6 +173,12 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             for h in handoffs
         ],
         "counts": _counts(agents),
+        # Stated in the payload so a screen cannot quietly render a zero in its place.
+        "spend_attributed": False,
+        "spend_note": (
+            "BOSS does not record which agent an LLM call belongs to, so per-agent cost cannot "
+            "be shown. Project spend is on the Projects screen."
+        ),
     }
 
 

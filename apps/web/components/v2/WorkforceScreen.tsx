@@ -25,10 +25,6 @@ import type { V2Agent, Workforce } from "../../lib/v2/workforce";
 const FILTERS = ["ALL", "WORKING", "STUCK", "IDLE"] as const;
 type Filter = (typeof FILTERS)[number];
 
-function money(n: number): string {
-  return "$" + (n < 10 ? n.toFixed(2) : Math.round(n).toLocaleString());
-}
-
 function ago(seconds: number | null): string {
   if (seconds === null) return "not seen in this window";
   if (seconds < 90) return `${Math.round(seconds)}s ago`;
@@ -99,6 +95,14 @@ export function WorkforceScreen({ workforce }: { workforce: Workforce }) {
         </div>
       </header>
 
+      {/* Said once, at the top, rather than a dash on every row. BOSS does not record which
+          agent an LLM call belongs to, and the screen refuses to imply otherwise. */}
+      {workforce.spend_attributed === false && workforce.agents.length > 0 ? (
+        <p className="v2-org-isolated-note" data-testid="v2-workforce-no-spend">
+          {workforce.spend_note}
+        </p>
+      ) : null}
+
       {workforce.agents.length === 0 ? (
         <p className="v2-empty" data-testid="v2-workforce-none">
           No agent roles are defined for this company yet.
@@ -108,9 +112,9 @@ export function WorkforceScreen({ workforce }: { workforce: Workforce }) {
           No agents are {filter.toLowerCase()} right now.
         </p>
       ) : (
-        <ul className="v2-rows" data-testid="v2-workforce-list">
+        <ul className="v2-cards" data-testid="v2-workforce-list">
           {shown.map((a) => (
-            <AgentRow key={a.id} a={a} />
+            <AgentCard key={a.id} a={a} />
           ))}
         </ul>
       )}
@@ -118,57 +122,57 @@ export function WorkforceScreen({ workforce }: { workforce: Workforce }) {
   );
 }
 
-function AgentRow({ a }: { a: V2Agent }) {
+/**
+ * An agent is a THING with its own state, so it gets a card rather than a ledger row.
+ *
+ * The card is the reference's own: a panel with a 2px left accent carrying the status colour,
+ * measured out of the rendered artifact DOM rather than approximated.
+ */
+function AgentCard({ a }: { a: V2Agent }) {
   return (
-    <li className="v2-row v2-agent" data-testid={`v2-agent-${a.id}`} data-status={a.status}>
-      <span className="v2-status v2-row-status" data-status={a.status}>
+    <li className="v2-card" data-testid={`v2-agent-${a.id}`} data-status={a.status}>
+      <div className="v2-card-head">
+        <span className="v2-card-name">{a.name}</span>
+        <span className="v2-card-role">{a.role}</span>
+      </div>
+
+      <span className="v2-status" data-status={a.status}>
         <span className="v2-dot" data-status={a.status} aria-hidden />
         {a.status}
       </span>
 
-      <span className="v2-row-main">
-        <span className="v2-row-title">
-          {a.name}
-          <span className="v2-row-meta-dim"> · {a.role}</span>
-        </span>
-        <span className="v2-row-desc">{a.task}</span>
+      <p className="v2-card-task">{a.task}</p>
 
-        <span className="v2-row-meta v2-mono">
-          {/* The model it ACTUALLY used. Absent when nothing ran, rather than showing a
-              configured model that never executed. */}
-          {a.model ? (
-            <span data-testid={`v2-agent-model-${a.id}`}>{a.model}</span>
-          ) : (
-            <span className="v2-row-meta-dim" data-testid={`v2-agent-nomodel-${a.id}`}>
-              no calls recorded
-            </span>
-          )}
-          {"  "}
-          <b>{money(a.spend_usd)}</b>
-          {"  "}
-          <span className="v2-row-meta-dim">trust</span> {a.trust_score}
-          {"  "}
-          <span className="v2-row-meta-dim">{ago(a.last_seen_seconds)}</span>
-          {/* Violations are surfaced, never buried. BOSS has recorded these all along and v1
-              never showed them; an agent with violations is the one worth looking at. */}
+      <div className="v2-card-meta">
+        {/* The model it ACTUALLY used. Absent when nothing ran, rather than showing a
+            configured model that never executed. */}
+        {a.model ? (
+          <span data-testid={`v2-agent-model-${a.id}`}>{a.model}</span>
+        ) : (
+          <span data-testid={`v2-agent-nomodel-${a.id}`}>no calls recorded</span>
+        )}
+        <span>
+          trust <b>{a.trust_score}</b>
+        </span>
+        <span>{ago(a.last_seen_seconds)}</span>
+      </div>
+
+      {/* Violations are surfaced, never buried. BOSS has recorded these all along and v1 never
+          showed them; an agent with violations is the one worth looking at. */}
+      {a.violations > 0 || a.hidden_failures > 0 ? (
+        <div className="v2-card-meta">
           {a.violations > 0 ? (
-            <>
-              {"  "}
-              <span className="v2-wf-violations" data-testid={`v2-agent-violations-${a.id}`}>
-                {a.violations} violation{a.violations === 1 ? "" : "s"}
-              </span>
-            </>
+            <span className="v2-wf-violations" data-testid={`v2-agent-violations-${a.id}`}>
+              {a.violations} violation{a.violations === 1 ? "" : "s"}
+            </span>
           ) : null}
           {a.hidden_failures > 0 ? (
-            <>
-              {"  "}
-              <span className="v2-wf-violations" data-testid={`v2-agent-hidden-${a.id}`}>
-                {a.hidden_failures} hidden failure{a.hidden_failures === 1 ? "" : "s"}
-              </span>
-            </>
+            <span className="v2-wf-violations" data-testid={`v2-agent-hidden-${a.id}`}>
+              {a.hidden_failures} hidden failure{a.hidden_failures === 1 ? "" : "s"}
+            </span>
           ) : null}
-        </span>
-      </span>
+        </div>
+      ) : null}
     </li>
   );
 }

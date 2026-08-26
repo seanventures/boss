@@ -1,6 +1,16 @@
 /* Console v2 shell. Layout only — every colour, font and radius comes from tokens.css. */
 
-.v2-shell { display: flex; flex-direction: column; min-height: 100vh; }
+/* The v2 typeface is set HERE, on the shell root, because the app-wide body rule belongs
+   to v1 and would otherwise win by simply being later. Declaring --v2-font-display was never
+   enough: nothing applied it, so every screen rendered in Manrope. */
+.v2-shell {
+  display: flex; flex-direction: column; min-height: 100vh;
+  font-family: var(--v2-font-display);
+  background: var(--v2-canvas);
+  color: var(--v2-ink);
+  font-size: 13px;
+}
+.v2-shell .v2-mono, .v2-shell code { font-family: var(--v2-font-mono); }
 
 /* ── Top bar ───────────────────────────────────────────────────────────── */
 .v2-topbar {
@@ -76,11 +86,11 @@
   padding: 10px 0;
 }
 .v2-nav-item {
-  display: flex; align-items: center; gap: 8px;
-  padding: 9px 16px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px;
   border-left: 2px solid transparent;
   text-decoration: none; color: var(--v2-muted);
-  font-size: .9rem; font-weight: 500;
+  font-size: 13px; font-weight: 600;
 }
 .v2-nav-item:hover { color: var(--v2-ink); background: rgba(255,255,255,.02); }
 .v2-nav-item[data-active="true"] {
@@ -117,17 +127,34 @@
 
 /* ── Project rows ──────────────────────────────────────────────────────── */
 .v2-rows { list-style: none; margin: 0; padding: 0; }
-.v2-row { border-bottom: 1px solid var(--v2-border); }
+/* MEASURED OFF THE REFERENCE, NOT ESTIMATED.
+   Read out of the rendered artifact DOM (docs/product/console-v2-reference/artifact.html):
+   row separator #141B2B and not #1E2940, 15px padding, 18px gap, centre-aligned; status chip
+   64px of 10px mono; title 14px/700; description 12px #8D9AB5; meta 10.5px #5A6785 at 16px
+   gaps. An earlier pass used rounded rem values that came out ~15% larger throughout, which
+   is the difference between "in the style of" and "the style". */
+.v2-row { border-bottom: 1px solid var(--v2-surface); }
 .v2-row-link {
-  display: flex; align-items: flex-start; gap: 22px;
-  padding: 18px 4px; text-decoration: none; color: inherit;
+  display: flex; align-items: center; gap: 18px;
+  padding: 15px 4px; text-decoration: none; color: inherit;
 }
 .v2-row-link:hover { background: rgba(255,255,255,.02); }
-.v2-row-status { flex: 0 0 92px; padding-top: 3px; }
-.v2-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.v2-row-title { font-size: 1rem; font-weight: 700; color: var(--v2-ink); }
-.v2-row-desc { color: var(--v2-muted); font-size: .86rem; line-height: 1.45; }
-.v2-row-meta { color: var(--v2-muted); font-size: .74rem; }
+.v2-row-status {
+  flex: 0 0 64px;
+  font-family: var(--v2-font-mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+.v2-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.v2-row-title { font-size: 14px; font-weight: 700; color: var(--v2-ink); }
+.v2-row-desc { color: var(--v2-muted); font-size: 12px; margin-top: 2px; line-height: 1.45; }
+.v2-row-meta {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  margin-top: 6px;
+  font-family: var(--v2-font-mono);
+  font-size: 10.5px;
+  color: var(--v2-dim);
+}
 .v2-row-meta b { color: var(--v2-ink); }
 .v2-row-meta-dim { color: var(--v2-dim); }
 .v2-row-progress { flex: 0 0 190px; display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
@@ -331,3 +358,56 @@
 /* Org chart */
 .v2-org-row { align-items: flex-start; }
 .v2-org-isolated-note { color: var(--v2-dim); font-size: 12px; margin: 0 0 10px; }
+
+
+/* ---------------------------------------------------------------------------
+   Cards
+   ---------------------------------------------------------------------------
+   The reference's own card: a panel with a 2px left accent carrying the status
+   colour. Same shape as the active sidebar item, which is where it was measured.
+
+   Used where each item is a THING with its own state — an agent, a host, a
+   workflow. Rows stay rows where the list is a ledger to scan, which is what
+   the reference does for Projects.
+   --------------------------------------------------------------------------- */
+.v2-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.v2-card {
+  background: var(--v2-panel);
+  border-left: 2px solid var(--v2-idle);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.v2-card[data-status="WORKING"], .v2-card[data-status="RUNNING"] { border-left-color: var(--v2-mint); }
+.v2-card[data-status="STUCK"] { border-left-color: var(--v2-amber); }
+.v2-card[data-status="AT GATE"], .v2-card[data-status="GATED"] { border-left-color: var(--v2-purple); }
+.v2-card[data-status="DONE"] { border-left-color: var(--v2-green); }
+
+.v2-card-head {
+  display: flex; align-items: baseline; gap: 8px; justify-content: space-between;
+}
+.v2-card-name { font-size: 14px; font-weight: 700; color: var(--v2-ink); }
+.v2-card-role {
+  font-family: var(--v2-font-mono);
+  font-size: 9.5px; letter-spacing: .06em; color: var(--v2-dim);
+  text-transform: uppercase; white-space: nowrap;
+}
+.v2-card-task {
+  color: var(--v2-muted); font-size: 12px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.v2-card-meta {
+  display: flex; flex-wrap: wrap; gap: 14px;
+  margin-top: 2px;
+  font-family: var(--v2-font-mono); font-size: 10px; color: var(--v2-dim);
+}
+.v2-card-meta b { color: var(--v2-ink); font-weight: 500; }

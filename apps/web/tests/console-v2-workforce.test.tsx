@@ -22,9 +22,9 @@ const agent = (over: Partial<V2Agent> = {}): V2Agent => ({
   status: "WORKING",
   task: "implement",
   model: "claude-opus-5",
-  tokens: 4200,
-  spend_usd: 1.25,
-  calls: 3,
+  tokens: null,
+  spend_usd: null,
+  calls: null,
   autonomy_level: 1,
   trust_score: 50,
   successful_runs: 4,
@@ -76,7 +76,7 @@ describe("Workforce", () => {
 
   it("says so when nothing ran, rather than showing a configured model", () => {
     // A configured model that never executed is a claim about intent, not about work.
-    const out = wfHtml(wf({ agents: [agent({ model: null, calls: 0, spend_usd: 0 })] }));
+    const out = wfHtml(wf({ agents: [agent({ model: null })] }));
     expect(out).toContain('data-testid="v2-agent-nomodel-coder"');
     expect(out).toMatch(/no calls recorded/);
   });
@@ -94,6 +94,17 @@ describe("Workforce", () => {
 
   it("a clean agent shows no violation badge", () => {
     expect(wfHtml(wf())).not.toContain('data-testid="v2-agent-violations-coder"');
+  });
+
+  it("never shows a per-agent cost, because BOSS does not record one", () => {
+    // A time-window join faked this once and put the same $61.3802 on two different agents.
+    // A zero would read as "this agent costs nothing" rather than "nobody knows".
+    const out = wfHtml(wf({
+      spend_attributed: false,
+      spend_note: "BOSS does not record which agent an LLM call belongs to.",
+    }));
+    expect(out).toContain('data-testid="v2-workforce-no-spend"');
+    expect(out).not.toMatch(/\$0\.00/);
   });
 
   it("an unreachable API shows no counts", () => {

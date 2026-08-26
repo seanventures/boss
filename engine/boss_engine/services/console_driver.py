@@ -355,3 +355,97 @@ def _slowest(events: list[dict[str, Any]]) -> int:
         elif key in starts:
             worst = max(worst, e["t"] - starts.pop(key))
     return int(worst * 1000)
+
+
+# --------------------------------------------------------------------------- #
+# Screen health
+#
+# The half of the agent that was missing. Everything above records what a control DID; this
+# records whether the screen WORKS — rendered, styled, not crashed, not silently empty, no
+# dead links. The operator found an unstyled screen by looking at it, which is the job this is
+# supposed to take off them.
+# --------------------------------------------------------------------------- #
+
+def observe_screen(page, path: str, base_origin: str, *,
+                   settle_ms: int = 4_000) -> "ScreenObservation":
+    """Load one screen and read back everything the health rules need.
+
+    Pure observation: no judgement here, so the rules stay testable without a browser and
+    cannot be quietly influenced by what the page happened to do.
+    """
+    from .console_screen_check import ScreenObservation
+
+    errors: list[str] = []
+    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    page.on("pageerror", lambda e: errors.append(str(e)))
+
+    started = time.time()
+    response = page.goto(f"{base_origin}{path}", wait_until="domcontentloaded", timeout=60_000)
+    ttfb_ms = int((time.time() - started) * 1000)
+    page.wait_for_timeout(settle_ms)
+
+    testids = page.eval_on_selector_all(
+        "[data-testid]", "els => els.map(e => e.getAttribute('data-testid'))") or []
+
+    links = page.eval_on_selector_all(
+        "a[href]",
+        "els => els.map(e => [ (e.innerText||'').trim(), e.getAttribute('href') ])") or []
+
+    # The accessible name, not the tag's text: a button labelled only by aria-label is named,
+    # and one labelled by neither is not.
+    buttons = page.eval_on_selector_all(
+        "button, [role=button]",
+        "els => els.map(e => ((e.innerText||'') + ' ' + (e.getAttribute('aria-label')||'')).trim())",
+    ) or []
+
+    text = page.eval_on_selector("body", "e => e.innerText") or ""
+
+    # Computed styles from the BODY, which is what proves a stylesheet is in force. Reading the
+    # class list would only prove the markup asked for styling, not that any arrived.
+    computed = page.evaluate(
+        """() => {
+            const s = getComputedStyle(document.body);
+            return {
+              'background-color': s.backgroundColor,
+              'font-family': s.fontFamily,
+              'color': s.color,
+            };
+        }"""
+    ) or {}
+
+    return ScreenObservation(
+        path=path,
+        status=response.status if response else 0,
+        ttfb_ms=ttfb_ms,
+        html=page.content()[:400_000],
+        testids=[t for t in testids if t],
+        links=[(str(a), str(b)) for a, b in links],
+        buttons=[str(b) for b in buttons],
+        text=text,
+        console_errors=errors[:20],
+        computed={k: str(v) for k, v in computed.items()},
+    )
+
+
+def probe_links(page, observation: "ScreenObservation", base_origin: str,
+                *, limit: int = 25) -> None:
+    """Follow every internal link far enough to know whether it exists.
+
+    Fills observation.link_status in place. External links are skipped: this checks OUR routes,
+    and a flaky third-party site must not fail our run.
+    """
+    seen: dict[str, int] = {}
+    for _label, href in observation.links:
+        if len(seen) >= limit:
+            break
+        if not href.startswith("/"):
+            continue
+        path = href.split("#")[0]
+        if not path or path in seen:
+            continue
+        try:
+            response = page.request.get(f"{base_origin}{path}", timeout=30_000)
+            seen[path] = response.status
+        except Exception:  # noqa: BLE001 - an unreachable link is a finding, not a crash
+            seen[path] = 0
+    observation.link_status = seen

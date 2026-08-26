@@ -115,6 +115,33 @@ describe("the shell is consistent", () => {
   });
 });
 
+describe("no link goes nowhere", () => {
+  it("every internal href in a v2 component resolves to a route on disk", () => {
+    // The console's own primary call to action -- "New project" -- pointed at /v2/new, which
+    // does not exist. A request recorder cannot see this; a link check can, mechanically.
+    const routes = new Set(
+      ALL_PAGES.map((p) => {
+        const rel = p.split("/app/")[1].replace(/\/page\.tsx$/, "");
+        return "/" + rel;
+      }),
+    );
+    routes.add("/");                                   // the v1 console
+    const offenders: string[] = [];
+    for (const path of ALL_COMPONENTS) {
+      const src = readFileSync(path, "utf8");
+      for (const m of src.matchAll(/href=\{?`?(\/[^`"'${}\s?]*)/g)) {
+        const target = m[1].replace(/\/$/, "") || "/";
+        // Dynamic segments are checked by their template, not their instance.
+        if (target.includes("[") || target.startsWith("/api")) continue;
+        const known = routes.has(target)
+          || [...routes].some((r) => r.includes("[") && target.startsWith(r.split("/[")[0]));
+        if (!known) offenders.push(`${path.split("/").pop()} -> ${target}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("style", () => {
   it("every v2 component uses the token palette rather than raw hexes", () => {
     // The artifact prescribes an exact palette. A stray hex is how a redesign drifts back into
