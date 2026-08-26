@@ -1000,7 +1000,11 @@ class AgentProcessService:
     ) -> dict[str, Any]:
         scope = self._scope(connection, project_id)
         dedupe_key = f"agent_process:{run_id}:{step_key}"
-        receipt, _created = self.receipts.create_or_reuse(
+        # RECORDED, NOT STARTED. Every caller already has the step's result in hand -- the
+        # payload carries its status and verdict -- so the effect is over by the time this
+        # runs. Leaving it open recorded eleven finished steps per process run as permanently
+        # in progress. See receipts.record_completed.
+        receipt, _created = self.receipts.record_completed(
             connection,
             scope["org_id"],
             scope["workspace_id"],

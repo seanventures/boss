@@ -42,7 +42,6 @@ DEFERRED_BY_DESIGN = {
 #:
 #: A new offender fails the test. Removing one from this list is the fix.
 KNOWN_OPEN = {
-    "agent_process.py::_record_process_receipt",
     "canaries.py::_canary_exactly_once",
     "canonical.py::_record_meeting_run_receipt",
     "code_task_service.py::_release",
@@ -117,6 +116,8 @@ def test_the_six_live_offenders_are_actually_fixed():
         "process_manager.py::_ensure_receipt",
         "metatron_captain.py::watch_once",
         "metatron_captain.py::overwatch_once",
+        # Eleven steps per process run, every one recorded as permanently in progress.
+        "agent_process.py::_record_process_receipt",
     }
     open_now = {
         f"{filename}::{func}"

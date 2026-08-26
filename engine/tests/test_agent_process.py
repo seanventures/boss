@@ -171,14 +171,37 @@ def test_start_and_handoff_receipts_use_stable_dedupe_keys():
     svc.receipts.create_or_reuse = fake_create
     svc._scope = lambda conn, project_id: {"org_id": "org1", "workspace_id": "ws1", "project_id": project_id}
 
+    # A receipt for a step that has already run is CLOSED when it is written, so this now does
+    # touch the connection. `None` was fine when it only created and forgot.
+    marked = []
+
+    class _Conn:
+        def execute(self, statement, params=None):
+            marked.append(dict(params or {}))
+
+            class _R:
+                def mappings(self):
+                    return self
+
+                def first(self):
+                    return None
+
+            return _R()
+
+    conn = _Conn()
+
     start = svc._record_process_receipt(
-        None, project_id="p1", run_id="aprun_1", step_key="start",
+        conn, project_id="p1", run_id="aprun_1", step_key="start",
         payload={"simulated": True},
     )
     handoff = svc._record_process_receipt(
-        None, project_id="p1", run_id="aprun_1", step_key="intake_prd",
+        conn, project_id="p1", run_id="aprun_1", step_key="intake_prd",
         payload={"status": "succeeded"},
     )
+
+    # Not just created: CLOSED. Eleven of these per process run were sitting at in_progress
+    # forever, which is what made 88% of the receipt trail unreadable.
+    assert len(marked) == 2, "each step's receipt must be marked, not left open"
     assert start["id"] == "rcpt_1"
     assert handoff["id"] == "rcpt_2"
     assert [item["dedupe_key"] for item in calls] == [
