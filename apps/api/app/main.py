@@ -11758,6 +11758,38 @@ def console_v2_receipts_endpoint(project_id: str, limit: int = 60, hours: int = 
         )
 
 
+@app.get("/v1/console/v2/workforce")
+def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
+    """Every agent, what it is doing, and what it has cost.
+
+    One call for three screens -- Workforce, Hive and Org Chart -- so their counts cannot drift
+    apart the way v1's did. "Agents active 0/21" came from counting roles that owned a task
+    when only 23 of 187 tasks had an owner at all, so the number described the data model.
+    """
+    from boss_engine.services.console_v2_workforce import workforce
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return workforce(connection, project_id, hours=max(1, min(int(hours), 24 * 30)))
+
+
+@app.get("/v1/console/v2/org")
+def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
+    """Who hands work to whom, counted.
+
+    BOSS has no declared reporting line, so this is derived from observed handoffs rather than
+    invented. The payload says so, and the screen repeats it: a derived shape presented as a
+    declared structure would be a picture of an organisation that does not exist.
+    """
+    from boss_engine.services.console_v2_workforce import org_chart
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.

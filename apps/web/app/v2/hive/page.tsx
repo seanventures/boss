@@ -1,6 +1,7 @@
 import { Shell } from "../../../components/v2/Shell";
-import { NotMovedYet } from "../../../components/v2/NotMovedYet";
+import { HiveScreen } from "../../../components/v2/HiveScreen";
 import { fetchCompanyOverview } from "../../../lib/v2/overview";
+import { fetchWorkforce } from "../../../lib/v2/workforce";
 import { resolveProjectId } from "../../../lib/client";
 import { fetchOrgs } from "../../../lib/orgs";
 
@@ -17,17 +18,17 @@ export default async function V2Section({ searchParams }: Params) {
 
   const orgs = await fetchOrgs();
   const selected = orgId ? orgs.items.find((o) => o.org_id === orgId) : orgs.items[0];
-  const overview = await fetchCompanyOverview(resolveProjectId(selected?.project_id));
+  const projectId = resolveProjectId(selected?.project_id);
+
+  const [overview, data] = await Promise.all([
+    fetchCompanyOverview(projectId),
+    fetchWorkforce(projectId),
+  ]);
   if (selected?.org_name) overview.company.name = selected.org_name;
 
   return (
     <Shell active="hive" overview={overview} orgId={selected?.org_id}>
-      <NotMovedYet
-        title="Hive"
-        summary="Every agent at work right now: what it is doing, which run it belongs to, and what it has spent."
-        v1Area="agent"
-        orgId={selected?.org_id}
-      />
+      <HiveScreen workforce={data} />
     </Shell>
   );
 }

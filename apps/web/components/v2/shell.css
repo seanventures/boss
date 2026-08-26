@@ -313,3 +313,21 @@
 .v2-notmoved-what { color: var(--v2-ink); font-size: 14px; max-width: 62ch; margin: 0 0 18px; }
 .v2-notmoved-where { color: var(--v2-muted); font-size: 13px; margin: 0 0 26px; }
 .v2-notmoved-note { color: var(--v2-dim); font-size: 12px; max-width: 62ch; }
+
+/* Workforce */
+.v2-wf-stuck { color: var(--v2-amber); font-weight: 500; }
+.v2-wf-violations { color: var(--v2-red); }
+.v2-agent { align-items: flex-start; }
+
+/* Hive */
+.v2-hive-svg { width: 100%; max-width: 560px; height: auto; margin: 0 auto 28px; display: block; }
+.v2-hive-edge { stroke: var(--v2-border-strong); opacity: 0.85; }
+.v2-hive-node { fill: var(--v2-panel); stroke: var(--v2-idle); stroke-width: 1.5; }
+.v2-hive-node[data-status="WORKING"] { stroke: var(--v2-mint); }
+.v2-hive-node[data-status="STUCK"] { stroke: var(--v2-amber); }
+.v2-hive-node[data-status="AT GATE"] { stroke: var(--v2-purple); }
+.v2-hive-label { fill: var(--v2-muted); font-size: 10px; font-family: var(--v2-font-mono); }
+
+/* Org chart */
+.v2-org-row { align-items: flex-start; }
+.v2-org-isolated-note { color: var(--v2-dim); font-size: 12px; margin: 0 0 10px; }

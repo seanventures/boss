@@ -1,6 +1,7 @@
 import { Shell } from "../../../components/v2/Shell";
-import { NotMovedYet } from "../../../components/v2/NotMovedYet";
+import { OrgScreen } from "../../../components/v2/OrgScreen";
 import { fetchCompanyOverview } from "../../../lib/v2/overview";
+import { fetchOrgChart } from "../../../lib/v2/workforce";
 import { resolveProjectId } from "../../../lib/client";
 import { fetchOrgs } from "../../../lib/orgs";
 
@@ -17,17 +18,17 @@ export default async function V2Section({ searchParams }: Params) {
 
   const orgs = await fetchOrgs();
   const selected = orgId ? orgs.items.find((o) => o.org_id === orgId) : orgs.items[0];
-  const overview = await fetchCompanyOverview(resolveProjectId(selected?.project_id));
+  const projectId = resolveProjectId(selected?.project_id);
+
+  const [overview, data] = await Promise.all([
+    fetchCompanyOverview(projectId),
+    fetchOrgChart(projectId),
+  ]);
   if (selected?.org_name) overview.company.name = selected.org_name;
 
   return (
     <Shell active="org" overview={overview} orgId={selected?.org_id}>
-      <NotMovedYet
-        title="Org Chart"
-        summary="Which agent role owns which work, and where a task goes when nobody has claimed it."
-        v1Area="org"
-        orgId={selected?.org_id}
-      />
+      <OrgScreen chart={data} />
     </Shell>
   );
 }
