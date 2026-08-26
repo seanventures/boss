@@ -32,6 +32,7 @@ completed run sat in the same lineage. Everything here groups by lineage for tha
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from sqlalchemy import text as sql
@@ -46,6 +47,25 @@ RUNNING, GATED, DONE, STUCK, IDLE = "RUNNING", "GATED", "DONE", "STUCK", "IDLE"
 
 _DONE_STATES = ("completed", "succeeded", "passed")
 _FAILED_STATES = ("failed", "error")
+
+# BOSS's own housekeeping, which is not a product an operator has a view on.
+#
+# v1 filters these out of Factory and v2 must too — without it the first thing on the new
+# Projects screen was "Captain: QUALITY IMPROVE PASS", "Follow-up: deferred review findings"
+# and "List the exact names of the tools you can call", three of which are BOSS talking to
+# itself. A console whose headline list is dominated by internal chatter teaches the operator
+# to ignore the list.
+#
+# Kept in step with INTERNAL_RUN in apps/web/app/code-tasks-ui.tsx.
+_INTERNAL_TITLE = re.compile(
+    r"^\s*(captain:|quality improve pass|goldeneye profile check|follow-up:\s*deferred review"
+    r"|list the exact names|ceo command:|\[boss-\d+)",
+    re.I,
+)
+
+
+def _is_internal(title: str) -> bool:
+    return bool(_INTERNAL_TITLE.match(title or ""))
 
 
 def _lineage_key(row: dict) -> str:
@@ -110,7 +130,7 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
     rows = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT id, title, status, phase, spec, usage, finalize_ctx,
+            SELECT id, title, status, phase, spec, state, usage, finalize_ctx,
                    pull_request_url, pull_request_number, created_at, updated_at
             FROM code_task_runs
             WHERE project_id = :p
@@ -125,6 +145,8 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
     # Group into apps (lineages), newest first by most recent activity.
     apps: dict[str, list[dict]] = {}
     for row in rows:
+        if _is_internal(str(row.get("title") or "")):
+            continue
         apps.setdefault(_lineage_key(row), []).append(row)
 
     projects = []

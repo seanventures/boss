@@ -89,3 +89,42 @@ def test_autonomy_reports_only_modes_that_exist():
     switch that changes nothing is worse than an honest label."""
     src = inspect.getsource(console_v2.company_overview)
     assert '"modes_available": ["Supervised"]' in src
+
+
+@pytest.mark.parametrize("title", [
+    "Captain: QUALITY IMPROVE PASS. Measure again",
+    "quality improve pass",
+    "Goldeneye profile check",
+    "Follow-up: deferred review findings — Web app",
+    "List the exact names of the tools you can call",
+    "CEO command: run these with query_db",
+])
+def test_boss_housekeeping_is_not_shown_as_a_project(title):
+    """The first render of the v2 Projects screen was dominated by BOSS talking to itself.
+    A headline list full of internal chatter teaches the operator to ignore the list."""
+    assert console_v2._is_internal(title)
+
+
+@pytest.mark.parametrize("title", [
+    "Living Colors",
+    "Invoice-Chaser",
+    "Build a link shortener with click analytics",
+    "Shorty — Re-build",
+])
+def test_real_apps_are_not_filtered_out(title):
+    """The filter must stay narrow: an over-broad rule silently hides real work, which is worse
+    than the noise it removes."""
+    assert not console_v2._is_internal(title)
+
+
+def test_every_column_the_shape_reads_is_actually_selected():
+    """`steps` reads state.turns, and `state` was missing from the SELECT — so it silently fell
+    back to counting runs and looked plausible. A field read but never fetched is the quietest
+    kind of wrong number, and this is the second time this week (deployment_target_id was the
+    first)."""
+    from engine.tests._source import code_only
+    src = code_only(console_v2.company_overview)
+    select = src[src.upper().index("SELECT"):src.upper().index("FROM CODE_TASK_RUNS")]
+    for column in ("id", "title", "status", "spec", "state", "usage", "finalize_ctx",
+                   "pull_request_url", "pull_request_number", "created_at", "updated_at"):
+        assert column in select, f"the shape reads {column} but the query does not select it"
