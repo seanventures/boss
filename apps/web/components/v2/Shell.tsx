@@ -12,16 +12,27 @@ import type { CompanyOverview } from "../../lib/v2/overview";
  * is where agents argue, `factory` is the workforce, `timeline` is the audit trail.
  */
 
+/**
+ * The nine screens, and honestly which of them exist yet.
+ *
+ * `built: false` is not decoration. Six of these pointed at routes that did not exist, so the
+ * nav offered six links that 404 — which is the same defect the operator opened this whole
+ * effort with ("fake buttons"), reproduced in the replacement for the console that had them.
+ *
+ * An unbuilt entry still navigates, to a page that says what will live there and links to the
+ * v1 area that has it today. That is the difference between a placeholder and a dead end: the
+ * feature stays reachable while it is being moved.
+ */
 export const V2_NAV = [
-  { id: "missions", label: "Projects", href: "/v2" },
-  { id: "hive", label: "Hive", href: "/v2/hive" },
-  { id: "factory", label: "Workforce", href: "/v2/factory" },
-  { id: "org", label: "Org Chart", href: "/v2/org" },
-  { id: "panels", label: "Decisions", href: "/v2/panels" },
-  { id: "boss", label: "Workflows", href: "/v2/boss" },
-  { id: "timeline", label: "Receipts", href: "/v2/timeline" },
-  { id: "infra", label: "Infra & Models", href: "/v2/infra" },
-  { id: "settings", label: "Settings", href: "/v2/settings" },
+  { id: "missions", label: "Projects", href: "/v2", built: true, v1Area: "code_tasks" },
+  { id: "hive", label: "Hive", href: "/v2/hive", built: false, v1Area: "agent" },
+  { id: "factory", label: "Workforce", href: "/v2/factory", built: false, v1Area: "work" },
+  { id: "org", label: "Org Chart", href: "/v2/org", built: false, v1Area: "org" },
+  { id: "panels", label: "Decisions", href: "/v2/panels", built: true, v1Area: "decisions" },
+  { id: "boss", label: "Workflows", href: "/v2/boss", built: false, v1Area: "delivery" },
+  { id: "timeline", label: "Receipts", href: "/v2/timeline", built: true, v1Area: "activity" },
+  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: false, v1Area: "monitoring" },
+  { id: "settings", label: "Settings", href: "/v2/settings", built: false, v1Area: "capabilities" },
 ] as const;
 
 export type V2NavId = (typeof V2_NAV)[number]["id"];
@@ -122,11 +133,19 @@ export function Shell({
                 href={`${item.href}${q}`}
                 className="v2-nav-item"
                 data-active={item.id === active}
+                data-built={item.built}
                 data-testid={`v2-nav-${item.id}`}
               >
                 {item.label}
                 {item.id === "panels" && gates > 0 ? (
                   <span className="v2-mono v2-nav-badge">{gates}</span>
+                ) : null}
+                {/* Says which sections are not moved yet, so nothing here reads as broken.
+                    A word, not only a colour. */}
+                {!item.built ? (
+                  <span className="v2-mono v2-nav-soon" data-testid={`v2-soon-${item.id}`}>
+                    v1
+                  </span>
                 ) : null}
               </Link>
             ))}

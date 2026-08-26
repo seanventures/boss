@@ -295,3 +295,21 @@
 .v2-rec-open { color: var(--v2-amber); }
 .v2-rec-failed { color: var(--v2-red); }
 .v2-rec[data-unfinished="true"] { border-left: 2px solid var(--v2-amber); }
+
+/* A section that has not moved to v2 yet. Marked, never hidden: hiding it would lose the
+   feature, and an unmarked link that goes somewhere unexpected is worse than a label. */
+.v2-nav-soon {
+  margin-left: auto;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--v2-border-strong);
+  color: var(--v2-dim);
+}
+.v2-nav-item[data-built="false"] { color: var(--v2-muted); }
+
+/* Not-moved-yet */
+.v2-notmoved-what { color: var(--v2-ink); font-size: 14px; max-width: 62ch; margin: 0 0 18px; }
+.v2-notmoved-where { color: var(--v2-muted); font-size: 13px; margin: 0 0 26px; }
+.v2-notmoved-note { color: var(--v2-dim); font-size: 12px; max-width: 62ch; }
