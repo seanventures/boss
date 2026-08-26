@@ -488,3 +488,83 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
             for name in STAGES
         ],
     }
+
+
+#: Decisions that are still the operator's to make. Anything else has been answered.
+_OPEN_DECISION = ("pending", "delegated", "revision_requested")
+
+
+def decision_queue(connection, project_id: str, *, limit: int = 60) -> dict[str, Any]:
+    """Every gate waiting on a human, and what happens if nobody answers.
+
+    THE DEADLINE IS THE POINT
+    -------------------------
+    A gate has a `deadline_at` and a `default_action`, which means an unanswered decision does
+    NOT simply wait — it resolves itself, one way or the other, and the work either proceeds
+    unreviewed or is dropped. A queue that shows the question but not that consequence is how a
+    gate silently kills work: the operator reads a list of things they could get to later, not
+    a list of things that are about to be decided for them.
+
+    So every row says what will happen and when, and the ones with no default say THAT, because
+    "waits for you indefinitely" and "proceeds in two hours" are opposite facts.
+    """
+    rows = [dict(r) for r in connection.execute(
+        sql(
+            """
+            SELECT id, task_id, question, recommendation, options, risk_tier,
+                   cost_summary, deadline_at, default_action, status,
+                   delegated_to, created_at
+            FROM decisions
+            WHERE project_id = :p
+              AND status = ANY(:open)
+            ORDER BY
+              -- Soonest deadline first, and a gate with no deadline never outranks one that
+              -- is about to fire on its own.
+              deadline_at ASC NULLS LAST,
+              risk_tier DESC,
+              created_at ASC
+            LIMIT :lim
+            """
+        ),
+        {"p": project_id, "open": list(_OPEN_DECISION), "lim": int(limit)},
+    ).mappings().all()]
+
+    items = []
+    for r in rows:
+        default = str(r.get("default_action") or "").strip()
+        deadline = r.get("deadline_at")
+        options = r.get("options") or []
+        items.append({
+            "id": r["id"],
+            "task_id": r.get("task_id"),
+            "question": str(r.get("question") or "")[:400],
+            "recommendation": (r.get("recommendation") or {}).get("summary")
+            or (r.get("recommendation") or {}).get("text") or "",
+            "options": [
+                str(o.get("label") or o.get("id") or o) if isinstance(o, dict) else str(o)
+                for o in options
+            ][:6],
+            "risk_tier": int(r.get("risk_tier") or 1),
+            "status": str(r.get("status") or ""),
+            "delegated_to": r.get("delegated_to"),
+            "deadline_at": deadline.isoformat() if deadline else None,
+            "default_action": default or None,
+            # Said in words, because a bare timestamp beside a bare verb does not read as a
+            # consequence. This is the sentence the operator actually needs.
+            "if_ignored": (
+                f"{default} automatically" if default and deadline
+                else f"{default} when it expires" if default
+                else "waits for you — nothing happens on its own"
+            ),
+            "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+        })
+
+    expiring = [i for i in items if i["deadline_at"] and i["default_action"]]
+    return {
+        "project_id": project_id,
+        "items": items,
+        "total": len(items),
+        # Counted separately because it is a different kind of urgent: these are decisions that
+        # will be made without you.
+        "auto_resolving": len(expiring),
+    }

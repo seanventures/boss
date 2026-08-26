@@ -11720,6 +11720,23 @@ def console_v2_workspace_endpoint(project_id: str, app_id: str) -> dict:
         return project_workspace(connection, project_id, app_id)
 
 
+@app.get("/v1/console/v2/decisions")
+def console_v2_decisions_endpoint(project_id: str, limit: int = 60) -> dict:
+    """Every gate waiting on a human, soonest-to-expire first.
+
+    A decision carries a deadline and a default action, so an unanswered gate does not wait --
+    it resolves itself, and the work either proceeds unreviewed or is dropped. The queue says
+    what will happen and when, per row, because "waits for you" and "approves in two hours" are
+    opposite facts that render identically as a pending row.
+    """
+    from boss_engine.services.console_v2 import decision_queue
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return decision_queue(connection, project_id, limit=max(1, min(int(limit), 200)))
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.
