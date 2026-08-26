@@ -391,7 +391,21 @@
 
 /* The halo. Pulses ONLY while an agent is working — a graph where everything
    pulses says nothing. */
-.v2-hive-halo { fill: var(--v2-idle); opacity: .12; }
+/* The pulse itself. Without these keyframes the `animation:` line below is a no-op that CSS
+   accepts in silence -- the halo simply sat still, which looks exactly like an agent that is
+   idle. Motion here means "this agent is working right now", so its absence was a lie. */
+@keyframes v2-pulse {
+  0%, 100% { opacity: .10; transform: scale(1); }
+  50%      { opacity: .30; transform: scale(1.08); }
+}
+
+.v2-hive-halo {
+  fill: var(--v2-idle); opacity: .12;
+  /* An SVG element scales about the VIEWPORT origin by default, so scale(1.08) would throw the
+     halo down and right across the canvas instead of breathing in place. */
+  transform-box: fill-box;
+  transform-origin: center;
+}
 .v2-hive-halo[data-status="WORKING"] {
   fill: var(--v2-mint); opacity: .16;
   animation: v2-pulse 2.4s ease-in-out infinite;
