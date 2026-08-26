@@ -37,12 +37,18 @@ DEFAULT_AREAS = (
 
 
 def _learn(args: argparse.Namespace) -> int:
+    def progress(note: str) -> None:
+        # stderr, unbuffered: a walk takes minutes, and a tool that says nothing until it
+        # finishes is indistinguishable from one that has hung.
+        print(note, file=sys.stderr, flush=True)
+
     baseline = learn(
         DriverConfig(
             base_url=args.url,
             areas=tuple(args.areas.split(",")) if args.areas else DEFAULT_AREAS,
             allow_writes=args.allow_writes,
             headless=not args.headed,
+            on_progress=None if args.quiet else progress,
         ),
         api_origin=args.api_origin,
     )
@@ -88,6 +94,10 @@ def _verify(args: argparse.Namespace) -> int:
             areas=tuple(args.areas.split(",")) if args.areas else DEFAULT_AREAS,
             allow_writes=args.allow_writes,
             headless=not args.headed,
+            on_progress=(
+                None if args.quiet
+                else lambda note: print(note, file=sys.stderr, flush=True)
+            ),
         ),
         api_origin=args.api_origin,
     )
@@ -141,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--allow-writes", action="store_true",
                         help="press controls that change state — a scratch project only")
     common.add_argument("--headed", action="store_true", help="watch it run")
+    common.add_argument("--quiet", action="store_true",
+                        help="suppress per-area progress on stderr")
 
     lp = sub.add_parser("learn", parents=[common], help="record what a console does")
     lp.add_argument("--out", default="baselines/v1.json")

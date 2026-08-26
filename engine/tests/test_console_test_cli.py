@@ -213,3 +213,73 @@ def test_the_verify_report_can_be_written_for_ci(tmp_path, stub):
 def test_a_command_is_required():
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+# --------------------------------------------------------------------------- #
+# A long walk must not go silent
+#
+# The first live baseline ran for minutes with no output at all, which is indistinguishable
+# from a hang — the same complaint the operator made about BOSS itself ("it says it will
+# monitor and update and I don't see any waiting signal, it just quits").
+# --------------------------------------------------------------------------- #
+def test_the_walk_reports_progress_by_default(tmp_path, stub):
+    stub["returns"] = _baseline()
+    cli.main(["learn", "--url", "http://x", "--out", str(tmp_path / "b.json")])
+    assert stub["config"].on_progress is not None
+
+
+def test_progress_can_be_silenced_for_a_script(tmp_path, stub):
+    stub["returns"] = _baseline()
+    cli.main(["learn", "--url", "http://x", "--out", str(tmp_path / "b.json"), "--quiet"])
+    assert stub["config"].on_progress is None
+
+
+def test_progress_goes_to_stderr_so_it_cannot_corrupt_the_report(tmp_path, stub, capsys):
+    """The report on stdout is piped and parsed. Progress notes mixed into it would break any
+    caller that reads the output."""
+    notes = []
+    stub["returns"] = _baseline()
+
+    def fake_learn(config, api_origin=None):
+        stub["config"] = config
+        config.on_progress("walking discovery")
+        return stub["returns"]
+
+    import boss_engine.cli.console_test as mod
+    original = mod.learn
+    mod.learn = fake_learn
+    try:
+        cli.main(["learn", "--url", "http://x", "--out", str(tmp_path / "b.json")])
+    finally:
+        mod.learn = original
+
+    captured = capsys.readouterr()
+    assert "walking discovery" in captured.err
+    assert "walking discovery" not in captured.out
+
+
+def test_verify_reports_progress_too(tmp_path, stub):
+    """Verify walks the same way and takes just as long."""
+    base = tmp_path / "v1.json"
+    base.write_text(_baseline().to_json())
+    stub["returns"] = _baseline(console="v2")
+    cli.main(["verify", "--baseline", str(base), "--url", "http://x/v2"])
+    assert stub["config"].on_progress is not None
+
+
+def test_the_driver_says_which_area_it_is_on_and_how_many_are_left():
+    """"still working" is not progress. An operator needs to know whether to wait."""
+    from engine.tests._source import code_only
+    from boss_engine.services import console_driver as cd
+
+    src = code_only(cd.learn)
+    assert "len(config.areas)" in src
+    assert "server action(s) on load" in src
+
+
+def test_a_slow_control_is_reported_as_it_happens():
+    """The slow control IS the finding. Holding it until the end wastes the wait."""
+    from engine.tests._source import code_only
+    from boss_engine.services import console_driver as cd
+
+    assert "elapsed_ms > 5_000" in code_only(cd.learn)

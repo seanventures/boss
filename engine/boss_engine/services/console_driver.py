@@ -52,7 +52,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .console_test_agent import Baseline, Control, Request
 
@@ -88,6 +88,11 @@ _CONTROL_SELECTOR = "button, a[href], [role=button], input[type=submit]"
 class DriverConfig:
     base_url: str
     areas: tuple[str, ...]
+    #: Called with a one-line progress note as the walk proceeds. A tool that goes silent for
+    #: ten minutes is indistinguishable from one that has hung -- the operator made exactly
+    #: this complaint about BOSS ("it says it will monitor and update and I don't see any
+    #: waiting signal"), and this driver had the same defect.
+    on_progress: Optional[Callable[[str], None]] = None
     allow_writes: bool = False
     headless: bool = True
     settle_ms: int = SETTLE_MS
@@ -197,7 +202,12 @@ def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
             page.goto(area_url(area), wait_until="domcontentloaded", timeout=config.settle_ms)
             page.wait_for_timeout(config.load_settle_ms)
 
-        for area in config.areas:
+        def say(note: str) -> None:
+            if config.on_progress:
+                config.on_progress(note)
+
+        for index, area in enumerate(config.areas, start=1):
+            say(f"[{index}/{len(config.areas)}] {area}: loading")
             goto_area(area)
 
             # What the page fetched merely by existing. This is how "one feed costing 13s that
@@ -219,6 +229,8 @@ def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
 
             count = min(len(page.query_selector_all(_CONTROL_SELECTOR)),
                         config.max_controls_per_area)
+            say(f"[{index}/{len(config.areas)}] {area}: {actions} server action(s) on load, "
+                f"{count} control(s) to walk")
 
             for idx in range(count):
                 label = "(unknown)"
@@ -289,6 +301,10 @@ def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
                     inventory.requests = _dedupe(reqs)
                     # Both timings, because the gap between them is itself a defect: "Set
                     # target" settled in 115s while its own call took under a second.
+                    if elapsed_ms > 5_000:
+                        # Say it as it happens. A slow control is the finding, and waiting
+                        # until the end to mention it wastes the operator's attention.
+                        say(f"    {label[:40]!r} took {elapsed_ms / 1000:.1f}s")
                     inventory.state_after = {
                         "elapsed_ms": elapsed_ms,
                         "slowest_request_ms": _slowest(seen.events),
@@ -300,6 +316,9 @@ def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
                     controls.append(Control(
                         area=area, label=label,
                         note=f"could not exercise: {type(exc).__name__}: {str(exc)[:120]}"))
+
+            say(f"[{index}/{len(config.areas)}] {area}: done "
+                f"({len([c for c in controls if c.area == area])} recorded)")
 
         browser.close()
 
