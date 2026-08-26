@@ -267,6 +267,13 @@ function Turn({ t, panel, index }: { t: V2Turn; panel: string; index: number }) 
       <div className="v2-turn-text">
         <Markdown text={t.text} />
       </div>
+      {/* Said, not hidden. Reading a clipped argument as a complete one means judging reasoning
+          that was never shown. */}
+      {t.truncated ? (
+        <p className="v2-turn-clipped v2-mono" data-testid={`v2-turn-clipped-${panel}-${index}`}>
+          argument continues — clipped for this view
+        </p>
+      ) : null}
     </li>
   );
 }

@@ -409,3 +409,70 @@ def test_a_meeting_with_neither_artifact_says_nothing_rather_than_guessing():
     out = panel_sessions(FakeConn([meeting("m1")]), "p")
     assert out["sessions"][0]["turns"] == []
     assert out["sessions"][0]["synthesis"] is None
+
+
+# --- clipping a long argument -------------------------------------------------------------
+#
+# A panelist's argument is bounded before it travels, and both halves of that matter: the cut
+# must not break the markdown it lands in, and the reader must be told the cut happened.
+
+def test_a_cut_never_leaves_an_unclosed_emphasis():
+    """This is the live bug: text[:limit] landed inside **...** and shipped a bare **.
+
+    The renderer then showed two literal asterisks against half a word, because that is exactly
+    what the string said.
+    """
+    # The ** opener must land JUST INSIDE the 4000-char budget and its partner outside it.
+    # An earlier version of this test used filler so long that the cut never reached any
+    # emphasis at all, so it asserted "balanced" about text that contained none -- and passed
+    # against the very bug it was written for.
+    head = "filler sentence. " * 230                        # 3910 chars
+    bold = "**" + "Responsibilities are the risk. " * 8 + "**"
+    assert len(head) < 4000 < len(head + bold), (len(head), len(head + bold))
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes={
+        "round1_perspectives": {"PM": head + bold},
+    })]), "p")
+    text = out["sessions"][0]["turns"][0]["text"]
+    assert text.count("**") % 2 == 0, text[-80:]
+    assert not text.endswith("**")
+
+
+def test_an_unclosed_code_fence_is_cut_back_too():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes={
+        "round1_perspectives": {"PM": "x " * 2200 + "```python\nrun()"},
+    })]), "p")
+    assert out["sessions"][0]["turns"][0]["text"].count("```") % 2 == 0
+
+
+def test_a_clipped_argument_says_so_and_a_whole_one_does_not():
+    """Silence would read as an argument that finished, so the reader would judge reasoning
+    they were never shown."""
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes={
+        "round1_perspectives": {"Long": "word " * 2000, "Short": "Brief but complete."},
+    })]), "p")
+    by = {t["speaker"]: t for t in out["sessions"][0]["turns"]}
+    assert by["Long"]["truncated"] is True
+    assert by["Short"]["truncated"] is False
+    assert by["Short"]["text"] == "Brief but complete."
+
+
+def test_a_cut_lands_on_a_boundary_not_mid_word():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes={
+        "round1_perspectives": {"PM": "alpha bravo charlie " * 400},
+    })]), "p")
+    text = out["sessions"][0]["turns"][0]["text"]
+    assert text.split()[-1] in ("alpha", "bravo", "charlie"), text[-40:]
+
+
+def test_clipping_does_not_quietly_drop_most_of_the_argument():
+    """A boundary search that walked back too far would satisfy every test above by shipping
+    almost nothing.
+
+    The realistic shape of that failure is an early paragraph break: one short opening line,
+    then five thousand words. Searching back for the last \\n\\n before the limit must not
+    land on that first break and throw the argument away.
+    """
+    out = panel_sessions(FakeConn([dict(meeting("m1"), minutes={
+        "round1_perspectives": {"PM": "Short opener.\n\n" + "word " * 3000},
+    })]), "p")
+    assert len(out["sessions"][0]["turns"][0]["text"]) >= 2000

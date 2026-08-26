@@ -72,6 +72,9 @@ export type V2Turn = {
   /** null unless the transcript recorded one. BOSS does not, and inventing FOR/AGAINST would
    *  put words in an agent's mouth on the record. */
   stance: "FOR" | "AGAINST" | null;
+  /** True when the argument was longer than travels to the console. Shown, because an argument
+   *  cut in silence reads as an argument that finished. */
+  truncated?: boolean;
 };
 
 export type V2Panel = {

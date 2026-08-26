@@ -299,6 +299,20 @@ describe("panels", () => {
     expect(out).not.toMatch(/\*\*Cost\*\*/);
   });
 
+  it("says when an argument was clipped, and stays silent when it was not", () => {
+    // A clipped argument that looks complete means the reader judges reasoning they were never
+    // shown. The engine cuts on a boundary and reports the cut; the screen has to surface it.
+    const out = withPanels(panels({
+      sessions: [panel({ turns: [
+        { speaker: "cto", phase: "round 1", text: "Long one.", stance: null, truncated: true },
+        { speaker: "cfo", phase: "round 1", text: "Whole one.", stance: null },
+      ] })],
+    }));
+    const clipped = out.match(/v2-turn-clipped-[^"]+/g) ?? [];
+    expect(clipped).toHaveLength(1);
+    expect(out).toContain("argument continues");
+  });
+
   it("shows the panel's own synthesis as the verdict", () => {
     // The `decisions` column is empty on every real meeting; the synthesis is where the
     // outcome actually is.

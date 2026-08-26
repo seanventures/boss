@@ -751,10 +751,12 @@ def _transcript_turns(raw: Any) -> list[dict[str, Any]]:
         text = next((str(turn[k]) for k in _TURN_TEXT if turn.get(k)), "")
         if not text:
             continue
+        clipped, cut = _clip(text)
         out.append({
             "speaker": speaker or "(unattributed)",
             "phase": str(turn.get("phase") or ""),
-            "text": text[:1200],
+            "text": clipped,
+            "truncated": cut,
             # BOSS does not record a stance per turn. None, never a guess: inventing FOR or
             # AGAINST would put words in an agent's mouth on the record.
             "stance": turn.get("stance") if turn.get("stance") in ("FOR", "AGAINST") else None,
@@ -764,6 +766,46 @@ def _transcript_turns(raw: Any) -> list[dict[str, Any]]:
 
 #: The rounds a meeting's minutes record, in order. Each is {panelist: what they argued}.
 _ROUNDS = (("round1_perspectives", "round 1"), ("round2_debate", "round 2"))
+
+#: How much of one panelist's argument travels to the console. Long enough for a real argument;
+#: bounded so twenty panels stay one response.
+_TURN_LIMIT = 4000
+
+#: Markdown markers that come in pairs. Longest first, so ``` is settled before `.
+_PAIRED = ("```", "**", "`")
+
+
+def _balance_markup(text: str) -> str:
+    """Drop a markdown marker the cut left unclosed.
+
+    Truncation counts characters; markdown pairs them. Cutting mid-emphasis leaves an opening **
+    with no partner, and the renderer -- correctly -- shows it as two literal asterisks against a
+    fragment of a word. Cutting back to the orphan removes the fragment as well, which is right:
+    half of an unfinished bold phrase is noise, not information.
+    """
+    for marker in _PAIRED:
+        if text.count(marker) % 2:
+            text = text[: text.rfind(marker)]
+    return text
+
+
+def _clip(text: str, limit: int = _TURN_LIMIT) -> tuple[str, bool]:
+    """Shorten to `limit`, on a boundary, without breaking the markup. Says whether it cut.
+
+    The flag is the point. An argument silently truncated reads as an argument that finished,
+    so the reader draws conclusions about reasoning that was never shown to them.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text, False
+    head = text[:limit]
+    # Prefer the largest structural boundary that does not throw away most of the budget.
+    for sep in ("\n\n", "\n", ". ", " "):
+        idx = head.rfind(sep)
+        if idx >= limit // 2:
+            head = head[:idx]
+            break
+    return _balance_markup(head).rstrip(), True
 
 
 def _as_content(raw: Any) -> dict:
@@ -793,10 +835,12 @@ def _minutes_turns(raw: Any) -> list[dict[str, Any]]:
         for speaker, text in block.items():
             if not isinstance(text, str) or not text.strip():
                 continue
+            clipped, cut = _clip(text)
             out.append({
                 "speaker": str(speaker),
                 "phase": phase,
-                "text": text.strip()[:4000],
+                "text": clipped,
+                "truncated": cut,
                 # BOSS does not record a position per panelist. None, never inferred from the
                 # words: a guessed vote on the record is worse than no vote.
                 "stance": None,
@@ -810,7 +854,7 @@ def _minutes_synthesis(raw: Any) -> Optional[str]:
     for key in ("synthesis", "output_text", "summary"):
         value = content.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()[:4000]
+            return _clip(value)[0]
     return None
 
 

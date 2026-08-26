@@ -765,6 +765,8 @@
 .v2-turn-stance[data-stance="FOR"] { color: var(--v2-green); }
 .v2-turn-stance[data-stance="AGAINST"] { color: var(--v2-red); }
 .v2-turn-text { margin: 4px 0 0; font-size: 12.5px; color: var(--v2-muted); line-height: 1.55; }
+/* Quiet: a fact about the view, not about the argument. */
+.v2-turn-clipped { margin: 4px 0 0; font-size: 10.5px; color: var(--v2-dim); letter-spacing: 0.02em; }
 
 .v2-verdict {
   margin-top: 20px; border: 1px solid var(--v2-green); padding: 14px 16px;
