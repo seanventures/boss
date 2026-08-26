@@ -123,6 +123,9 @@ _ARTIFACT = r"PRD|Product Requirements Document|Spec|Specification|Design|Overvi
 #: being built, and leaving them in is what split one app into several rows on the screen.
 _RUN_BOOKKEEPING = (
     (re.compile(r"\s*[·•]\s*retry\s*\d+\s*$", re.I), ""),
+    # "Re-build of `paramg/boss-sandbox` Simple T — List": where the code goes, not what the
+    # product is called.
+    (re.compile(r"^\s*re-?build\s+of\s+`?[\w.-]+/[\w.-]+`?\s*", re.I), ""),
     (re.compile(r"^\s*\[?\s*\d+\s*/\s*\d+\s*\]\s*"), ""),
     (re.compile(r"\s*\(attempt\s*\d+\)\s*$", re.I), ""),
 )
@@ -148,7 +151,10 @@ _CATEGORY = re.compile(
 #: markdown H1 -- "# BugBox - Product Requirements Document (PRD)" -- and NOT the document type
 #: that follows it. That distinction is the operator's complaint in one line: the PRD heading
 #: names the artifact; the name inside it names the product.
-_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s*(.+)$")
+#:
+#: MULTILINE matters: a run title arrives flattened to one line, but a spec brief is real
+#: markdown with newlines, and without it `$` demands end-of-string and matches neither.
+_MARKDOWN_HEADING = re.compile(r"^#{1,6}[ \t]*(.+)$", re.M)
 
 #: When the heading names only the document, the PRD states the product separately:
 #: "# Product Requirements Document (PRD)  **Project:** Lightweight Self-hosted Bookmarks".
@@ -185,7 +191,10 @@ def _name_from_document(body: str) -> str:
     product is named by a field inside it. Taking the heading there would put "Product
     Requirements Document" on the card, which is the exact complaint this is answering.
     """
-    heading = _MARKDOWN_HEADING.match(body.strip())
+    body = (body or "").strip()
+    if not body:
+        return ""
+    heading = _MARKDOWN_HEADING.match(body)
     if heading:
         # The pasted markdown is flattened to one line, so the heading runs on into the body.
         # Cut at the first bold field or sentence marker.
@@ -335,6 +344,14 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
             title = _clean_title(str(r.get("title") or ""))
             if title:
                 break
+        if not title:
+            # A title that is only an artifact type ("📄 Product Requirements Document") says
+            # nothing, but its BRIEF is usually the PRD itself, whose heading names the
+            # product. Looking there beats labelling the card "Untitled app".
+            for r in runs:
+                title = _name_from_document(str((r.get("spec") or {}).get("instructions") or ""))
+                if title:
+                    break
         stage, status = _stage_of(runs)
         micros = sum(int((r.get("usage") or {}).get("cost_usd_micros") or 0) for r in runs)
         steps = sum(int((r.get("state") or {}).get("turns") or 0) for r in runs) or len(runs)

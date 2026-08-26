@@ -302,3 +302,35 @@ def test_a_long_name_is_cut_at_a_word_and_marked():
 
 def test_a_name_that_fits_gains_no_ellipsis():
     assert _clean_title("Leads Capture Tool v1") == "Leads Capture Tool v1"
+
+
+# --------------------------------------------------------------------------- #
+# The last two on the live screen
+# --------------------------------------------------------------------------- #
+def test_a_rebuild_directive_names_the_app_not_the_repo():
+    """Live: "Re-build of `paramg/boss-sandbox` Simple T — List". The repo is where the code
+    goes, not what the product is called."""
+    got = _clean_title("Re-build of `paramg/boss-sandbox` Simple T — List")
+    assert "boss-sandbox" not in got
+    assert "Re-build" not in got
+    assert got.startswith("Simple T")
+
+
+def test_a_rebuild_of_a_named_app_keeps_the_name():
+    assert _clean_title("Re-build of `paramg/boss-sandbox` Shorty") == "Shorty"
+
+
+def test_the_brief_is_the_last_resort_for_a_name():
+    """Live: a run titled "📄 Product Requirements Document" — the artifact type and nothing
+    else. Its BRIEF holds the actual PRD, whose H1 names the product. Looking there beats
+    labelling the card "Untitled app"."""
+    from boss_engine.services.console_v2 import _name_from_document
+    brief = "# Bookmarks — Product Requirements Document (PRD)\n\n**Version:** 1.0"
+    assert _name_from_document(brief) == "Bookmarks"
+
+
+def test_a_brief_with_no_name_in_it_yields_nothing():
+    """Better to admit we do not know than to put the first line of a brief on a card as if it
+    were a product name."""
+    from boss_engine.services.console_v2 import _name_from_document
+    assert _name_from_document("Please build something nice for the team.") == ""
