@@ -97,20 +97,35 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     ).mappings().all()]
     latest = {s["role_key"]: s for s in steps}
 
-    # Handoffs: who passed work to whom, and how often. This is the org chart's real edge set.
+    # Handoffs: who passed work to whom, and how often. The org chart's real edge set.
+    #
+    # `handoff_from` HOLDS A STEP KEY, NOT A ROLE KEY.
+    #
+    # It is written as run.current_steps[0] (agent_process.py), so it names the step the work
+    # came FROM. Reading it as a role produced edges from a non-existent agent called
+    # "intake_prd" -- the Hive dropped every edge because the id matched no node, and the Org
+    # Chart drew them anyway, confidently, from an agent that does not exist.
+    #
+    # So it is resolved through the step it names, in the same run, to the role that actually
+    # ran it. A self-join, and the only correct reading of this column.
     handoffs = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT handoff_from AS source, role_key AS target,
-                   count(*) AS times, max(created_at) AS last_at,
-                   (array_agg(action ORDER BY created_at DESC))[1] AS last_action
-            FROM agent_process_steps
-            WHERE project_id = :p
-              AND handoff_from IS NOT NULL
-              AND handoff_from <> ''
-              AND handoff_from <> role_key
-              AND created_at > now() - make_interval(hours => :h)
-            GROUP BY handoff_from, role_key
+            SELECT prev.role_key AS source, s.role_key AS target,
+                   count(*) AS times, max(s.created_at) AS last_at,
+                   (array_agg(s.action ORDER BY s.created_at DESC))[1] AS last_action
+            FROM agent_process_steps s
+            JOIN agent_process_steps prev
+              ON prev.run_id = s.run_id
+             AND prev.step_key = s.handoff_from
+             AND prev.project_id = s.project_id
+            WHERE s.project_id = :p
+              AND s.handoff_from IS NOT NULL
+              AND s.handoff_from <> ''
+              -- An agent handing work to itself is a step, not a relationship.
+              AND prev.role_key <> s.role_key
+              AND s.created_at > now() - make_interval(hours => :h)
+            GROUP BY prev.role_key, s.role_key
             ORDER BY count(*) DESC
             LIMIT 60
             """

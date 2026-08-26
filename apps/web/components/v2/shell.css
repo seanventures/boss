@@ -43,6 +43,10 @@
   padding: 7px 16px; border-radius: var(--v2-radius-sm);
   background: var(--v2-mint); color: #06231D;
   font-weight: 700; font-size: 12.5px; text-decoration: none;
+  /* Buttons do not inherit font-family. This was a Link, and when it became a <button> to open
+     the launch modal it silently fell back to Arial on every screen — invisible in review,
+     obvious to the checker. Every interactive element in this file states its face. */
+  font-family: var(--v2-font-display);
 }
 .v2-primary:hover { filter: brightness(1.07); }
 
@@ -132,6 +136,7 @@
   border: 0; background: none; cursor: pointer; padding: 2px 0;
   border-bottom: 1px solid transparent;
   color: var(--v2-dim); font-size: 10.5px; letter-spacing: .1em;
+  font-family: var(--v2-font-mono);
 }
 .v2-tab[data-active="true"] { color: var(--v2-mint); border-bottom-color: var(--v2-mint); }
 
@@ -506,6 +511,7 @@
 .v2-chat-close {
   margin-left: auto; background: none; border: none; cursor: pointer;
   color: var(--v2-muted); font-size: 18px; line-height: 1; padding: 0 4px;
+  font-family: var(--v2-font-display);
 }
 .v2-chat-close:hover { color: var(--v2-ink); }
 .v2-chat-context {

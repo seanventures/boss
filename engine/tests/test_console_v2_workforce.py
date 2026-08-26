@@ -35,7 +35,7 @@ class FakeConn:
         low = raw.lower()
         if "from roles" in low:
             rows = self.data["roles"]
-        elif "handoff_from as source" in low:
+        elif "prev.role_key as source" in low:
             rows = self.data["handoffs"]
         elif "from llm_calls" in low or "join llm_calls" in low:
             rows = self.data["spend"]
@@ -207,8 +207,8 @@ def test_a_self_handoff_is_not_an_edge():
     a loop on every node."""
     conn = FakeConn(roles=[role("a")])
     org_chart(conn, "p")
-    handoff_sql = [s for s, _ in conn.statements if "handoff_from as source" in s.lower()][0]
-    assert "handoff_from <> role_key" in handoff_sql
+    handoff_sql = [s for s, _ in conn.statements if "prev.role_key as source" in s.lower()][0]
+    assert "prev.role_key <> s.role_key" in handoff_sql
 
 
 def test_the_org_chart_looks_back_further_than_a_day():
@@ -281,3 +281,42 @@ def test_an_agent_with_no_step_has_no_project_or_artefact():
     assert agent["project"] is None
     assert agent["last_touched"] is None
     assert agent["last_seen_seconds"] is None
+
+
+# --------------------------------------------------------------------------- #
+# handoff_from is a STEP key, not a role key
+#
+# It is written as run.current_steps[0], so it names the step the work came FROM. Reading it as
+# a role produced edges from a non-existent agent called "intake_prd": the Hive dropped every
+# edge because the id matched no node, and the Org Chart drew them anyway, confidently, from an
+# agent that does not exist.
+# --------------------------------------------------------------------------- #
+def test_the_handoff_query_resolves_the_step_to_the_role_that_ran_it():
+    conn = FakeConn(roles=[role("a")])
+    workforce(conn, "p")
+    handoff_sql = " ".join(
+        s for s, _ in conn.statements if "prev.role_key as source" in s.lower()
+    )
+    assert handoff_sql, "no handoff query at all"
+    # The self-join, which is the only correct reading of this column.
+    assert "prev.step_key = s.handoff_from" in handoff_sql
+    assert "prev.run_id = s.run_id" in handoff_sql
+
+
+def test_the_handoff_query_never_reads_the_column_as_a_role():
+    """The bug, forbidden directly: `handoff_from AS source` names a step and would put a step
+    key where an agent id belongs."""
+    conn = FakeConn(roles=[role("a")])
+    workforce(conn, "p")
+    for sql_text, _ in conn.statements:
+        normalised = " ".join(sql_text.lower().split())
+        assert "handoff_from as source" not in normalised
+
+
+def test_a_handoff_stays_inside_its_own_run():
+    """Two runs can use the same step keys. Joining without run_id would invent handoffs
+    between agents that never worked together."""
+    conn = FakeConn(roles=[role("a")])
+    workforce(conn, "p")
+    handoff_sql = [s for s, _ in conn.statements if "prev.role_key as source" in s.lower()][0]
+    assert "prev.run_id = s.run_id" in handoff_sql

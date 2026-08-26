@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { cssOnly } from "./_helpers/source";
+
 import { V2_NAV } from "../components/v2/Shell";
 
 /**
@@ -151,6 +153,42 @@ describe("style", () => {
       const hexes = src.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [];
       expect(hexes, `${path.split("/").pop()} hardcodes ${hexes.join(", ")}`).toHaveLength(0);
     }
+  });
+
+  it("every interactive element states its font face", () => {
+    // Buttons, inputs and textareas do NOT inherit font-family. The top bar's "New project"
+    // was a Link; when it became a <button> to open the launch modal it silently fell back to
+    // Arial on every screen — invisible in review, caught only because the checker measures.
+    //
+    // The class list is DERIVED from the components rather than guessed from names: an earlier
+    // version matched on the name and flagged containers like .v2-tabs, which render no text
+    // and cannot fall back to anything.
+    // Comments stripped: a check for `font-family` was satisfied by the comment saying
+    // "buttons do not inherit font-family", so deleting the declaration still passed.
+    const css = cssOnly(resolve(COMPONENTS, "shell.css"));
+    // Per ELEMENT, not per class: .v2-btn-quiet is a modifier worn beside .v2-btn, which does
+    // state a face. Checking classes independently flags the modifier for a gap that is not
+    // there.
+    const elements: string[][] = [];
+    for (const path of ALL_COMPONENTS) {
+      const src = readFileSync(path, "utf8");
+      for (const [, cls] of src.matchAll(
+        /<(?:button|input|textarea)[^>]*className="([^"]+)"/g,
+      )) {
+        const names = cls.split(/\s+/).filter((n) => n.startsWith("v2-"));
+        if (names.length) elements.push(names);
+      }
+    }
+    expect(elements.length, "found no interactive elements to check").toBeGreaterThan(3);
+
+    const statesFace = (name: string) => {
+      const rule = css.match(new RegExp(`\\.${name}\\s*\\{([^}]*)\\}`));
+      return Boolean(rule && /font-family|font:\s*inherit/.test(rule[1]));
+    };
+    const offenders = elements
+      .filter((names) => !names.some(statesFace))
+      .map((names) => names.join("."));
+    expect([...new Set(offenders)]).toEqual([]);
   });
 
   it("the token file is the single place colours are defined", () => {

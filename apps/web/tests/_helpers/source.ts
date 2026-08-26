@@ -19,3 +19,15 @@ export function codeOnly(path: string): string {
     // JSX comments are block comments already handled above, but {/* ... */} leaves braces.
     .replace(/\{\s*\}/g, " ");
 }
+
+
+/**
+ * CSS with its comments removed.
+ *
+ * Same trap as codeOnly, and it caught me twice: a check for `font-family` in a rule was
+ * satisfied by the COMMENT saying "buttons do not inherit font-family", so deleting the
+ * declaration still passed. A test that greps source must never see prose.
+ */
+export function cssOnly(path: string): string {
+  return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
+}
