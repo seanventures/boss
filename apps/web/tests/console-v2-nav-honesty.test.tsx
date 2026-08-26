@@ -47,7 +47,7 @@ describe("every nav entry goes somewhere real", () => {
   it("the built ones are the ones actually built", () => {
     // If this drifts, the nav either hides a finished screen or promises an unfinished one.
     const built = V2_NAV.filter((n) => n.built).map((n) => n.id).sort();
-    expect(built).toEqual(["factory", "hive", "missions", "org", "panels", "timeline"]);
+    expect(built).toEqual(["boss", "factory", "hive", "infra", "missions", "org", "panels", "settings", "timeline"]);
   });
 });
 

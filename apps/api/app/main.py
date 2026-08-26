@@ -11790,6 +11790,47 @@ def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
         return org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
 
 
+@app.get("/v1/console/v2/workflows")
+def console_v2_workflows_endpoint(project_id: str) -> dict:
+    """The processes this company runs, and the stages inside them."""
+    from boss_engine.services.console_v2_platform import workflows
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return workflows(connection, project_id)
+
+
+@app.get("/v1/console/v2/infra")
+def console_v2_infra_endpoint(project_id: str) -> dict:
+    """Hosts, deployment targets, model spend and integrations.
+
+    Fleet load is absent rather than invented: BOSS records host verification, not utilisation,
+    and a fabricated percentage is indistinguishable from a real one.
+    """
+    from boss_engine.services.console_v2_platform import infra
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return infra(connection, project_id)
+
+
+@app.get("/v1/console/v2/settings")
+def console_v2_settings_endpoint(project_id: str) -> dict:
+    """What is configured -- and what this deployment simply does not have, with reasons.
+
+    A settings screen that renders an empty SSO form implies SSO is configurable here and
+    merely unconfigured. That is a different and false claim.
+    """
+    from boss_engine.services.console_v2_platform import settings
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return settings(connection, project_id)
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.

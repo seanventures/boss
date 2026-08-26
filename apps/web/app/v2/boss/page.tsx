@@ -1,6 +1,7 @@
 import { Shell } from "../../../components/v2/Shell";
-import { NotMovedYet } from "../../../components/v2/NotMovedYet";
+import { WorkflowsScreen } from "../../../components/v2/WorkflowsScreen";
 import { fetchCompanyOverview } from "../../../lib/v2/overview";
+import { fetchWorkflows } from "../../../lib/v2/platform";
 import { resolveProjectId } from "../../../lib/client";
 import { fetchOrgs } from "../../../lib/orgs";
 
@@ -17,17 +18,17 @@ export default async function V2Section({ searchParams }: Params) {
 
   const orgs = await fetchOrgs();
   const selected = orgId ? orgs.items.find((o) => o.org_id === orgId) : orgs.items[0];
-  const overview = await fetchCompanyOverview(resolveProjectId(selected?.project_id));
+  const projectId = resolveProjectId(selected?.project_id);
+
+  const [overview, view] = await Promise.all([
+    fetchCompanyOverview(projectId),
+    fetchWorkflows(projectId),
+  ]);
   if (selected?.org_name) overview.company.name = selected.org_name;
 
   return (
     <Shell active="boss" overview={overview} orgId={selected?.org_id}>
-      <NotMovedYet
-        title="Workflows"
-        summary="The delivery pipeline end to end: verdict, staging, health gate, production, rollout — with the evidence behind each step."
-        v1Area="delivery"
-        orgId={selected?.org_id}
-      />
+      <WorkflowsScreen view={view} />
     </Shell>
   );
 }

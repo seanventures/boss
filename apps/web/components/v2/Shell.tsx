@@ -29,10 +29,10 @@ export const V2_NAV = [
   { id: "factory", label: "Workforce", href: "/v2/factory", built: true, v1Area: "work" },
   { id: "org", label: "Org Chart", href: "/v2/org", built: true, v1Area: "org" },
   { id: "panels", label: "Decisions", href: "/v2/panels", built: true, v1Area: "decisions" },
-  { id: "boss", label: "Workflows", href: "/v2/boss", built: false, v1Area: "delivery" },
+  { id: "boss", label: "Workflows", href: "/v2/boss", built: true, v1Area: "delivery" },
   { id: "timeline", label: "Receipts", href: "/v2/timeline", built: true, v1Area: "activity" },
-  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: false, v1Area: "monitoring" },
-  { id: "settings", label: "Settings", href: "/v2/settings", built: false, v1Area: "capabilities" },
+  { id: "infra", label: "Infra & Models", href: "/v2/infra", built: true, v1Area: "monitoring" },
+  { id: "settings", label: "Settings", href: "/v2/settings", built: true, v1Area: "capabilities" },
 ] as const;
 
 export type V2NavId = (typeof V2_NAV)[number]["id"];

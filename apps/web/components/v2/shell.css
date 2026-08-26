@@ -422,3 +422,18 @@
   font-family: var(--v2-font-mono); font-size: 10px; color: var(--v2-dim);
 }
 .v2-card-meta b { color: var(--v2-ink); font-weight: 500; }
+
+/* Workflow stages */
+.v2-stages {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.v2-stage {
+  display: flex; align-items: baseline; gap: 8px;
+  font-family: var(--v2-font-mono); font-size: 10.5px; color: var(--v2-muted);
+  padding-left: 10px; border-left: 1px solid var(--v2-border);
+}
+.v2-stage[data-gated="true"] { border-left-color: var(--v2-amber); }
+.v2-stage-name { color: var(--v2-ink); }
+.v2-stage-role { color: var(--v2-dim); }
+.v2-stage-gate { color: var(--v2-amber); margin-left: auto; }
