@@ -2,13 +2,13 @@
 
     # 1. Learn what today's console does (safe: presses nothing that changes state)
     python -m boss_engine.cli.console_test learn \\
-        --url https://boss.local.sean.network/?org=org_boss \\
+        --url https://console.example/?org=ORG \\
         --out baselines/v1.json
 
     # 2. After migrating, check v2 still does it
     python -m boss_engine.cli.console_test verify \\
         --baseline baselines/v1.json \\
-        --url https://boss.local.sean.network/v2?org=org_boss
+        --url https://console.example/v2?org=ORG
 
     # 3. Ask whether the baseline is even capable of catching known bugs
     python -m boss_engine.cli.console_test coverage --baseline baselines/v1.json

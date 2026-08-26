@@ -3,7 +3,7 @@
 WHY THIS IS ONE MODULE AND NOT EIGHTY-TWO FEEDS
 -----------------------------------------------
 The v1 console fetches 82 endpoints per render and shows nothing until the slowest answers.
-Measured on goldeneye: TTFB 24s on the overview area, and 13.2s of it was a single audit
+Measured in production: TTFB 24s on the overview area, and 13.2s of it was a single audit
 export that only one area displayed. Rendering all fifty areas cost 1ms — the waiting was
 everything.
 
@@ -174,7 +174,7 @@ def _strip_artifact(text: str) -> str:
 def _name_from_document(body: str) -> str:
     """The product name out of a PRD that was pasted into the run title.
 
-    30 runs on goldeneye were titled "Web app - <the entire PRD>", so the name was sitting in
+    30 runs in production were titled "Web app - <the entire PRD>", so the name was sitting in
     the markdown H1 all along:
 
         # BugBox - Product Requirements Document (PRD)  *Version 1.0*   -> BugBox

@@ -208,7 +208,8 @@ def _default_issue_url(tracker: str, issue_key: str) -> Optional[str]:
     if t == "linear":
         return f"https://linear.app/issue/{issue_key}"
     if t == "plane":
-        return f"https://plane.local.sean.network/browse/{issue_key}"
+        # Placeholder host, like jira.example above: a real deployment sets plane_base_url.
+        return f"https://plane.example/browse/{issue_key}"
     return None
 
 

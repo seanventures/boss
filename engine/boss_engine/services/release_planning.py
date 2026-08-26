@@ -1012,11 +1012,10 @@ class ReleasePlanningService:
                 # Plane issue deep links commonly: {project_url}/issues/{key}
                 if "/projects/" in base:
                     return f"{base}/issues/{issue_key}"
-                workspace = getattr(self.settings, "plane_workspace", "goldeneye")
+                workspace = getattr(self.settings, "plane_workspace", "default")
                 return f"{base}/{workspace}/browse/{issue_key}"
-            return (
-                f"https://plane.local.sean.network/goldeneye/browse/{issue_key}"
-            )
+            # No configured Plane host: a placeholder, never one operator's private box.
+            return f"https://plane.example/browse/{issue_key}"
         if tracker == "jira":
             return None  # needs site host
         if tracker == "github":
