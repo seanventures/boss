@@ -9,6 +9,7 @@ import { groupRunsIntoApps } from "./app-grouping";
 import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
+import { forgetRunDeployment, loadRunDeployment } from "../lib/run-deployments";
 import { operatorPreviewOpenHref } from "../lib/code-tasks";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
@@ -26,7 +27,6 @@ import {
   overrideCodeTaskAction,
   followUpCodeTaskAction,
   conveneMeetingAction,
-  runDeploymentsAction,
 } from "./actions";
 import { LiveDeployment } from "./deploy-ui";
 import { Markdown } from "./markdown";
@@ -943,16 +943,33 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // render and the card would flash "not bound" at every app on load.
   const [loaded, setLoaded] = useState(false);
 
+  // A BATCHED ROUTE HANDLER, NOT A PER-CARD SERVER ACTION.
+  //
+  // This was `runDeploymentsAction(run.id, ...)`, called from every card's mount effect. A
+  // Server Action re-renders the whole route to reply, so a list of forty apps cost forty
+  // renders of a page that takes tens of seconds to render. Measured on the live Factory area
+  // with no interaction at all: 82 invocations of this one action, 64.5s of action time, and
+  // the page was not quiet for 74 seconds.
+  //
+  // Same reasoning as loadHostsOnce above; this is the per-card path that was missed, because
+  // one extra call per card looks cheap right up until there are forty cards.
   const load = useCallback(async () => {
-    const r = await runDeploymentsAction(run.id, appIdentity(run).name);
-    if (r.ok) {
-      const d = (r.data as any) ?? {};
-      setDeploys((d.deployments ?? []) as any[]);
-      setLinked(d.linked_host ?? null);
-      setTargetId(d.linked_target_id ?? null);
-      setLoaded(true);
-    }
+    const d = await loadRunDeployment(run.id, appIdentity(run).name);
+    // `error` means nobody answered, which is NOT the same as "this app has no deployments".
+    // Treating them alike is what once showed a deployed app as never deployed, so a failed
+    // lookup leaves the previous state and `loaded` false rather than asserting absence.
+    if (d.error) return;
+    setDeploys((d.deployments ?? []) as any[]);
+    setLinked(d.linked_host ?? null);
+    setTargetId(d.linked_target_id ?? null);
+    setLoaded(true);
   }, [run]);
+
+  // Polling must see the world as it is now, not the batch window's 2.5s-old answer.
+  const reload = useCallback(async () => {
+    forgetRunDeployment(run.id);
+    await load();
+  }, [run.id, load]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -964,9 +981,9 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   useEffect(() => { if (latest) setStarting(false); }, [latest]);
   useEffect(() => {
     if (!live) return;
-    const t = window.setInterval(() => { void load(); }, 4000);
+    const t = window.setInterval(() => { void reload(); }, 4000);
     return () => window.clearInterval(t);
-  }, [live, load]);
+  }, [live, reload]);
 
   // No deployment yet. That is either "no destination" (offer to link one) or "linked but
   // never shipped" (offer the first deploy). Rendering nothing here is what left an already
@@ -1013,7 +1030,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                       setNote(r.ok ? null : (r.error ?? "deploy failed"));
                       if (r.ok) setStarting(true);
                       setRetrying(false);
-                      await load();
+                      await reload();
                     }}>
               <RocketLaunch size={15} weight="fill" aria-hidden />{" "}
               {retrying || starting ? "Deploying…" : "Deploy now"}
@@ -1034,7 +1051,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                       const r = await retireTarget(targetId);
                       setNote(r.ok ? "target retired — pick a new one below" : (r.error ?? "could not retire"));
                       setRetrying(false);
-                      await load();
+                      await reload();
                     }}>
               Unbind target
             </button>
@@ -1083,7 +1100,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                     const r = await appDeployOp({ op: "retry", actor, deployment_run_id: latest.id });
                     setNote(r.ok ? "retry started" : (r.error ?? "retry failed"));
                     setRetrying(false);
-                    await load();
+                    await reload();
                   }}>
             <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}
             {retrying ? "Retrying…" : "Retry"}
@@ -1106,7 +1123,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                     setNote(r.ok ? "target retired — set a new one to deploy again"
                                  : (r.error ?? "could not retire"));
                     setRetrying(false);
-                    await load();
+                    await reload();
                   }}>
             Unbind target
           </button>
