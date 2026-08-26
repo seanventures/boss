@@ -209,7 +209,25 @@ def compare(baseline: Baseline, observed: Baseline,
     return findings
 
 
-def summarise(findings: list[Finding]) -> dict[str, Any]:
+def _area_name(area: str) -> str:
+    """Last path segment, so "/v2/panels" and "panels" are the same screen."""
+    return area.rstrip("/").rsplit("/", 1)[-1] or area
+
+
+def crawl_gaps(observed: Baseline, area_map: dict[str, str]) -> list[str]:
+    """v2 screens the parity map says must carry v1 features, which this crawl never visited.
+
+    Without this, a verify run over a subset of v2 reports every feature belonging to an
+    unvisited screen as MISSING. A smoke run against /v2/panels alone produced 29 MISSING and
+    10 BROKEN -- a picture of catastrophic feature loss, entirely manufactured by not having
+    looked at the other nine screens. The tool has to know the difference between "v2 does not
+    do this" and "I did not check".
+    """
+    visited = {_area_name(c.area) for c in observed.controls}
+    return sorted({dest for dest in set(area_map.values()) if dest not in visited})
+
+
+def summarise(findings: list[Finding], gaps: Optional[list[str]] = None) -> dict[str, Any]:
     counts = {MISSING: 0, BROKEN: 0, MOVED: 0, OK: 0, UNVERIFIABLE: 0}
     for f in findings:
         counts[f.verdict] = counts.get(f.verdict, 0) + 1
@@ -223,7 +241,11 @@ def summarise(findings: list[Finding]) -> dict[str, Any]:
             "total": len(findings),
             "unverifiable": counts[UNVERIFIABLE],
         },
-        "passed": not any(f.is_failure() for f in findings),
+        # A run that did not visit every destination cannot conclude anything about the
+        # features that live there, in either direction. Neither pass nor fail: inconclusive.
+        "inconclusive": bool(gaps),
+        "unvisited": list(gaps or []),
+        "passed": (not gaps) and not any(f.is_failure() for f in findings),
         "failures": [asdict(f) for f in findings if f.is_failure()],
     }
 

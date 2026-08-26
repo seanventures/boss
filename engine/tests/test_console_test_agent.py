@@ -9,7 +9,7 @@ import pytest
 
 from boss_engine.services import console_test_agent as cta
 from boss_engine.services.console_test_agent import (
-    BROKEN, MISSING, MOVED, OK, Baseline, Control, Request, compare, summarise,
+    BROKEN, MISSING, MOVED, OK, Baseline, Control, Finding, Request, compare, summarise,
 )
 
 
@@ -381,3 +381,50 @@ def test_a_path_area_is_navigated_as_a_path_not_as_a_query_parameter():
     base = "https://boss.example?org=org_boss"
     assert _area_url(base, "/v2/panels") == "https://boss.example/v2/panels?org=org_boss"
     assert _area_url(base, "overview") == "https://boss.example?org=org_boss&area=overview"
+
+
+# --- "I did not check" is not "v2 cannot do it" --------------------------------------------
+
+def _obs(*areas):
+    return Baseline(console="v2", captured_at="t", controls=[
+        Control(area=a, label="x", testid="x", requests=[]) for a in areas])
+
+
+def test_a_partial_crawl_is_inconclusive_not_a_pass_and_not_a_failure():
+    """A smoke run against /v2/panels alone reported 29 MISSING and 10 BROKEN -- a picture of
+    catastrophic feature loss manufactured entirely by not looking at the other nine screens."""
+    from boss_engine.services.console_test_agent import crawl_gaps
+
+    area_map = {"meetings": "panels", "delivery": "boss", "budget": "infra"}
+    gaps = crawl_gaps(_obs("/v2/panels"), area_map)
+    assert gaps == ["boss", "infra"]
+
+    result = summarise([Finding(verdict=MISSING, label="Deploy", v1_area="delivery")], gaps)
+    assert result["inconclusive"] is True
+    assert result["passed"] is False
+    assert result["unvisited"] == ["boss", "infra"]
+
+
+def test_a_complete_crawl_is_conclusive():
+    from boss_engine.services.console_test_agent import crawl_gaps
+
+    area_map = {"meetings": "panels", "delivery": "boss"}
+    gaps = crawl_gaps(_obs("/v2/panels", "/v2/boss"), area_map)
+    assert gaps == []
+    result = summarise([Finding(verdict=OK, label="x", v1_area="meetings")], gaps)
+    assert result["inconclusive"] is False
+    assert result["passed"] is True
+
+
+def test_a_complete_crawl_with_a_real_failure_still_fails():
+    """The guard must not become a way to pass by crawling everything and ignoring findings."""
+    result = summarise([Finding(verdict=MISSING, label="Deploy", v1_area="delivery")], [])
+    assert result["inconclusive"] is False
+    assert result["passed"] is False
+
+
+def test_area_names_match_whether_given_as_a_path_or_a_name():
+    from boss_engine.services.console_test_agent import crawl_gaps
+
+    assert crawl_gaps(_obs("panels"), {"meetings": "panels"}) == []
+    assert crawl_gaps(_obs("/v2/panels/"), {"meetings": "panels"}) == []

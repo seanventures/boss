@@ -36,6 +36,7 @@ from ..services.console_screen_check import (
     summarise as summarise_screens,
 )
 from ..services.console_test_agent import (
+    crawl_gaps,
     Baseline, compare, defect_coverage, slow_controls, summarise,
 )
 
@@ -139,7 +140,8 @@ def _verify(args: argparse.Namespace) -> int:
     )
     area_map = _load_area_map(args.area_map) if args.area_map else None
     findings = compare(baseline, observed, area_map)
-    result = summarise(findings)
+    gaps = crawl_gaps(observed, area_map) if area_map else []
+    result = summarise(findings, gaps)
 
     counts = result["counts"]
     cov = result["coverage"]
@@ -151,6 +153,13 @@ def _verify(args: argparse.Namespace) -> int:
     # statement about the blind spot, not about the migration.
     print(f"checked {cov['checked']} of {cov['total']} baseline controls "
           f"({cov['unverifiable']} not verifiable by behaviour)")
+    if result["inconclusive"]:
+        # Printed FIRST among the findings, because everything below it is unsafe to read as a
+        # conclusion: features living on an unvisited screen all look missing.
+        print("\nINCONCLUSIVE — these v2 screens were never visited, so anything they carry "
+              "is reported below as MISSING whether it exists or not:")
+        print(f"  {', '.join(result['unvisited'])}")
+        print("  re-run with --areas covering every screen named in the parity map.")
     for f in findings:
         if f.verdict == "MISSING":
             print(f"\nMISSING  {f.label}  (was in {f.v1_area})")
