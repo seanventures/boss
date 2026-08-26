@@ -222,6 +222,10 @@ KNOWN_V1_DEFECTS = [
         "symptom": "13.2s feed fetched by every area, displayed by one",
         "observable": "GET /v1/audit/export issued on areas that never render it",
         "detects_with": "request recording per area",
+        # FIXED: gated to the ops area. A baseline can no longer observe this, and that is the
+        # point of fixing it. Without this marker the coverage report says "widen the areas",
+        # which is advice to go looking for a bug that is not there.
+        "fixed": "gated to the ops area — the feed is no longer fetched where it is not shown",
     },
     {
         "id": "set-target-hangs",
@@ -263,5 +267,90 @@ def defect_coverage(baseline: Baseline) -> list[dict[str, Any]]:
         else:
             covered = any(c.state_after for c in baseline.controls)
             evidence = "post-action state recorded" if covered else "no state recorded"
-        out.append({**d, "covered": bool(covered), "evidence": evidence})
+        fixed = d.get("fixed")
+        out.append({
+            **d,
+            "covered": bool(covered),
+            "evidence": evidence,
+            # A defect that has been FIXED cannot be reproduced, and that is success rather
+            # than a gap in the baseline. Conflating the two turns a green result into an
+            # instruction to hunt something that is not there.
+            "status": (
+                "covered" if covered
+                else "fixed" if fixed
+                else "not-covered"
+            ),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Telling a slow control apart from a stalled harness
+# ---------------------------------------------------------------------------
+
+#: How many times slower than its own siblings a reading must be before it is treated as a
+#: measurement fault rather than a finding.
+OUTLIER_FACTOR = 20
+
+
+def slow_controls(baseline: Baseline, *, threshold_ms: int = 3_000) -> list[dict[str, Any]]:
+    """Controls that took a long time, each labelled as a finding or as an outlier.
+
+    THE FIRST BASELINE RECORDED A CONTROL AT 16.7 MINUTES.
+    The same control, on six other areas, took 2,020-2,029ms — and issued no requests at all.
+    Six identical readings and one enormous one is far better explained by the harness stalling
+    than by the console hanging, and reporting it as a defect would have sent someone hunting a
+    bug that was never there.
+
+    So a reading is compared against the same LABEL elsewhere. A control with no sibling is
+    reported plainly; one that is wildly out of line with its own siblings is reported as
+    suspect, with the comparison shown, so the reader can judge rather than being told.
+
+    This cannot distinguish the two cases by itself — nothing can, from one run. What it can do
+    is refuse to present a measurement fault as a finding.
+    """
+    by_label: dict[str, list[int]] = {}
+    for control in baseline.controls:
+        elapsed = int(control.state_after.get("elapsed_ms") or 0)
+        if elapsed:
+            by_label.setdefault(control.label, []).append(elapsed)
+
+    out: list[dict[str, Any]] = []
+    for control in baseline.controls:
+        elapsed = int(control.state_after.get("elapsed_ms") or 0)
+        if elapsed < threshold_ms:
+            continue
+        siblings = [m for m in by_label.get(control.label, []) if m != elapsed]
+        request_ms = int(control.state_after.get("slowest_request_ms") or 0)
+        median = sorted(siblings)[len(siblings) // 2] if siblings else None
+
+        if median is not None and elapsed > median * OUTLIER_FACTOR:
+            verdict = "outlier"
+            detail = (
+                f"the same control took {median}ms elsewhere ({len(siblings)} other readings) — "
+                "far more likely a stalled harness than a hung control"
+            )
+        elif request_ms and elapsed > request_ms * 3:
+            # The gap IS the defect: waiting far longer than any request took means the UI made
+            # you wait for something other than the work.
+            verdict = "finding"
+            detail = f"waited {elapsed}ms while its slowest request took {request_ms}ms"
+        elif request_ms:
+            verdict = "finding"
+            detail = f"its own request took {request_ms}ms"
+        else:
+            verdict = "unexplained"
+            detail = f"waited {elapsed}ms and issued no requests at all"
+
+        out.append({
+            "area": control.area,
+            "label": control.label,
+            "elapsed_ms": elapsed,
+            "request_ms": request_ms,
+            "siblings": siblings,
+            "verdict": verdict,
+            "detail": detail,
+        })
+
+    out.sort(key=lambda row: -row["elapsed_ms"])
     return out

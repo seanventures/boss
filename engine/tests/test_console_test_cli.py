@@ -148,10 +148,15 @@ def test_the_slow_report_separates_waiting_from_working(tmp_path, stub, capsys):
     cli.main(["learn", "--url", "http://x", "--out", str(tmp_path / "b.json")])
     out = capsys.readouterr().out
     assert "115000ms" in out and "800ms" in out
-    assert "waiting on something other than its own request" in out
-    # The genuinely slow API call is NOT flagged as a UI defect — different bug, different fix.
-    refresh_line = [ln for ln in out.splitlines() if "Refresh" in ln][0]
-    assert "waiting on something other" not in refresh_line
+    # The GAP, stated: waited far longer than any request took.
+    assert "while its slowest request took 800ms" in out
+    # The genuinely slow API call is described differently — it is the API that is slow, and
+    # that is a different bug with a different fix.
+    lines = out.splitlines()
+    refresh_at = next(i for i, ln in enumerate(lines) if "Refresh" in ln)
+    refresh_detail = lines[refresh_at + 1]
+    assert "its own request took 13200ms" in refresh_detail
+    assert "while its slowest request" not in refresh_detail
 
 
 def test_fast_controls_are_not_listed(tmp_path, stub, capsys):
@@ -172,8 +177,23 @@ def test_a_baseline_that_cannot_catch_known_bugs_is_reported_as_such(tmp_path, c
     rc = cli.main(["coverage", "--baseline", str(base)])
     out = capsys.readouterr().out
     assert rc == 1
-    assert "[NO ]" in out
+    assert "[NO  ]" in out
     assert "could not expose" in out
+
+
+def test_a_fixed_defect_is_not_reported_as_a_gap(tmp_path, capsys):
+    """The audit export cannot be observed any more because it was gated to the ops area.
+    Reporting that as "widen the areas" is advice to hunt a bug that is not there."""
+    base = tmp_path / "b.json"
+    base.write_text(_baseline(
+        _ctl("code_tasks", "Set target", state_after={"elapsed_ms": 5_000}),
+        _ctl("code_tasks", "Unbind target", ("DELETE", "/v1/deployment-targets/1", 200)),
+    ).to_json())
+    cli.main(["coverage", "--baseline", str(base)])
+    out = capsys.readouterr().out
+    assert "[n/a ]" in out
+    assert "fixed:" in out
+    assert "no longer be reproduced because they were fixed" in out
 
 
 def test_a_real_baseline_covers_the_known_defects(tmp_path, capsys):

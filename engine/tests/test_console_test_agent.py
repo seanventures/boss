@@ -143,3 +143,131 @@ def test_a_real_recording_covers_the_known_defects():
     assert cov["set-target-hangs"]["covered"], "cannot see a control that hangs"
     assert cov["unbind-missing"]["covered"], "cannot see a missing control"
     assert cov["wrong-app-deployed"]["covered"], "cannot see the wrong app being acted on"
+
+
+# --------------------------------------------------------------------------- #
+# Telling a slow control apart from a stalled harness
+#
+# The first real baseline recorded a control at 16.7 MINUTES. The same control, on six other
+# areas, took 2,020-2,029ms — and issued no requests at all. Six identical readings and one
+# enormous one is far better explained by the harness stalling than by the console hanging, and
+# reporting it as a defect would have sent someone hunting a bug that was never there.
+# --------------------------------------------------------------------------- #
+from boss_engine.services.console_test_agent import (  # noqa: E402
+    OUTLIER_FACTOR,
+    defect_coverage,
+    slow_controls,
+)
+
+
+def _timed(area, label, elapsed_ms, request_ms=0):
+    return Control(area=area, label=label,
+                   state_after={"elapsed_ms": elapsed_ms, "slowest_request_ms": request_ms})
+
+
+def _base(*controls):
+    return Baseline(console="v1", captured_at="2026-08-26T00:00:00+00:00", controls=list(controls))
+
+
+def test_a_reading_wildly_out_of_line_with_its_siblings_is_an_outlier():
+    """The real case, reproduced: one 16.7-minute reading beside six two-second ones."""
+    controls = [_timed(f"area{i}", "Jump to ⌘K", 2_020) for i in range(6)]
+    controls.append(_timed("monitoring", "Jump to ⌘K", 1_004_869))
+    rows = slow_controls(_base(*controls))
+    worst = rows[0]
+    assert worst["verdict"] == "outlier"
+    assert "stalled harness" in worst["detail"]
+    assert "2020ms elsewhere" in worst["detail"]
+
+
+def test_a_consistently_slow_control_is_a_finding_not_an_outlier():
+    """If every reading is slow, the control is slow. That is the thing to fix."""
+    rows = slow_controls(_base(
+        _timed("a", "Refresh", 9_000, request_ms=8_500),
+        _timed("b", "Refresh", 9_200, request_ms=8_700),
+    ))
+    assert all(r["verdict"] == "finding" for r in rows)
+
+
+def test_waiting_far_longer_than_the_request_is_the_defect():
+    """"Set target" settled in 115s while its own call took under a second. The GAP is the bug,
+    and reporting only the total would blame the API."""
+    rows = slow_controls(_base(_timed("code_tasks", "Set target", 115_000, request_ms=800)))
+    assert rows[0]["verdict"] == "finding"
+    assert "while its slowest request took 800ms" in rows[0]["detail"]
+
+
+def test_a_slow_control_with_no_requests_at_all_is_unexplained_not_a_finding():
+    """Nothing was measured, so nothing is proven. Calling it a finding would assert a cause
+    the data does not support."""
+    rows = slow_controls(_base(_timed("monitoring", "Factory", 4_997)))
+    assert rows[0]["verdict"] == "unexplained"
+    assert "issued no requests" in rows[0]["detail"]
+
+
+def test_a_control_with_no_siblings_is_never_called_an_outlier():
+    """One reading cannot be out of line with itself. Guessing here would hide a real hang."""
+    rows = slow_controls(_base(_timed("a", "Only once", 900_000)))
+    assert rows[0]["verdict"] != "outlier"
+
+
+def test_the_outlier_bar_is_high_enough_that_ordinary_variance_is_not_dismissed():
+    """A control that is merely three times slower on one area is a finding, not noise — the
+    danger of this whole mechanism is explaining away a real defect."""
+    controls = [_timed(f"a{i}", "Open", 1_000, request_ms=900) for i in range(5)]
+    controls.append(_timed("slow", "Open", 4_000, request_ms=3_800))
+    rows = slow_controls(_base(*controls))
+    assert [r["verdict"] for r in rows] == ["finding"]
+    assert OUTLIER_FACTOR >= 10
+
+
+def test_fast_controls_are_not_reported():
+    assert slow_controls(_base(_timed("a", "Quick", 120, request_ms=90))) == []
+
+
+def test_rows_come_back_slowest_first():
+    rows = slow_controls(_base(
+        _timed("a", "Mid", 5_000, request_ms=4_000),
+        _timed("b", "Worst", 20_000, request_ms=19_000),
+    ))
+    assert [r["label"] for r in rows] == ["Worst", "Mid"]
+
+
+# --------------------------------------------------------------------------- #
+# A fixed defect is not a coverage gap
+# --------------------------------------------------------------------------- #
+def test_a_defect_that_was_fixed_is_reported_as_such_not_as_a_gap():
+    """The baseline cannot observe the audit export any more, and that is the POINT — it was
+    gated to the ops area. Reporting it as "not covered, widen the areas" is advice to hunt a
+    bug that is not there, which is how a green result becomes busywork."""
+    b = _base(_timed("code_tasks", "Set target", 5_000, request_ms=100))
+    rows = {r["id"]: r for r in defect_coverage(b)}
+    audit = rows["audit-export-on-every-page"]
+    assert audit["status"] == "fixed"
+    assert audit["covered"] is False
+    assert "gated to the ops area" in audit["fixed"]
+
+
+def test_a_genuine_gap_is_still_a_gap():
+    """The marker must not become a way to make any uncovered defect look fine."""
+    empty = Baseline(console="v1", captured_at="2026-08-26T00:00:00+00:00", controls=[])
+    rows = {r["id"]: r for r in defect_coverage(empty)}
+    assert rows["unbind-missing"]["status"] == "not-covered"
+    assert rows["set-target-hangs"]["status"] == "not-covered"
+
+
+def test_covered_beats_fixed():
+    """If a baseline CAN still observe it, that is the more useful fact."""
+    b = Baseline(
+        console="v1", captured_at="2026-08-26T00:00:00+00:00",
+        controls=[Control(area="overview", label="(page load)",
+                          requests=[Request("GET", "/v1/audit/export", 200)],
+                          state_after={"elapsed_ms": 10})],
+    )
+    rows = {r["id"]: r for r in defect_coverage(b)}
+    assert rows["audit-export-on-every-page"]["status"] == "covered"
+
+
+def test_every_known_defect_reports_a_status():
+    b = _base(_timed("a", "x", 100))
+    assert all(r["status"] in {"covered", "fixed", "not-covered"} for r in defect_coverage(b))

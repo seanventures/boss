@@ -27,7 +27,9 @@ import sys
 
 from ..services.console_driver import DriverConfig, learn, observe_screen, probe_links
 from ..services.console_screen_check import check, summarise as summarise_screens
-from ..services.console_test_agent import Baseline, compare, defect_coverage, summarise
+from ..services.console_test_agent import (
+    Baseline, compare, defect_coverage, slow_controls, summarise,
+)
 
 #: The v1 areas worth recording first. Deliberately the five the operator called core, plus
 #: the two where this week's defects actually lived.
@@ -71,19 +73,18 @@ def _learn(args: argparse.Namespace) -> int:
         for c in surprises[:5]:
             print(f"    {c.area}/{c.label}: {c.note}")
 
-    slow = sorted(
-        (c for c in baseline.controls if c.state_after.get("elapsed_ms", 0) > 3000),
-        key=lambda c: -c.state_after["elapsed_ms"],
-    )[:5]
-    if slow:
-        print("  slowest controls:")
-        for c in slow:
-            waited = c.state_after["elapsed_ms"]
-            req = c.state_after.get("slowest_request_ms", 0)
-            # The gap is the interesting number: waiting far longer than any request took
-            # means the UI made you wait for something other than the work.
-            gap = " <- waiting on something other than its own request" if waited > req * 3 else ""
-            print(f"    {waited:6}ms  (slowest request {req}ms)  {c.area}/{c.label}{gap}")
+    # Slow controls, each labelled as a finding or as a measurement fault.
+    #
+    # The first real baseline recorded one control at 16.7 MINUTES while the same control took
+    # ~2s on six other areas. Reporting that as a console defect would have sent someone
+    # hunting a bug that was never there, so the comparison is shown and the reader judges.
+    rows = slow_controls(baseline)
+    if rows:
+        print("  slow controls:")
+        for row in rows[:8]:
+            marker = {"outlier": "?", "unexplained": "·"}.get(row["verdict"], "!")
+            print(f"    {marker} {row['elapsed_ms']:>8}ms  {row['area']}/{row['label'][:30]}")
+            print(f"        {row['detail']}")
     return 0
 
 
@@ -129,15 +130,22 @@ def _coverage(args: argparse.Namespace) -> int:
     """Is this baseline even capable of catching the bugs we already know about?"""
     baseline = Baseline.from_json(pathlib.Path(args.baseline).read_text(encoding="utf-8"))
     rows = defect_coverage(baseline)
+    marks = {"covered": "yes ", "fixed": "n/a ", "not-covered": "NO  "}
     for r in rows:
-        mark = "yes" if r["covered"] else "NO "
-        print(f"  [{mark}] {r['id']:32} {r['evidence']}")
-    uncovered = [r for r in rows if not r["covered"]]
-    if uncovered:
-        print(f"\n{len(uncovered)} known defect(s) this baseline could not expose.")
+        print(f"  [{marks[r['status']]}] {r['id']:32} {r['evidence']}")
+        if r["status"] == "fixed":
+            # Not a gap. The baseline cannot observe this because it no longer happens.
+            print(f"         fixed: {r['fixed']}")
+
+    gaps = [r for r in rows if r["status"] == "not-covered"]
+    fixed = [r for r in rows if r["status"] == "fixed"]
+    if fixed:
+        print(f"\n{len(fixed)} defect(s) can no longer be reproduced because they were fixed.")
+    if gaps:
+        print(f"\n{len(gaps)} known defect(s) this baseline could not expose.")
         print("A baseline that cannot reproduce a bug we found by hand will not catch its")
         print("unknown siblings — widen the areas or enable --allow-writes on a scratch project.")
-    return 1 if uncovered else 0
+    return 1 if gaps else 0
 
 
 #: The v2 screens and the root element each must render. A screen missing from here is one

@@ -1,0 +1,2050 @@
+{
+ "captured_at": "2026-08-26T08:10:45.425184+00:00",
+ "console": "v1",
+ "controls": [
+  {
+   "area": "overview",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 13 server action(s)",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b%2Cprev_62e195ddaf5f4113a450",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 17,
+    "server_actions": 13,
+    "slowest_request_ms": 5952
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2112,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2042,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 1,
+    "slowest_request_ms": 1444
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2054,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=discovery",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2055,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=meetings",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2048,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=code_tasks",
+    "server_actions": 0,
+    "slowest_request_ms": 94
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2045,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=decisions",
+    "server_actions": 0,
+    "slowest_request_ms": 80
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2041,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=delivery",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2040,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=monitoring",
+    "server_actions": 0,
+    "slowest_request_ms": 82
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2049,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2020,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 673
+   },
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "v2",
+   "note": "could not exercise: TimeoutError: ElementHandle.click: Timeout 5000ms exceeded.\nCall log:\n  - attempting click action\n    - waiting for element to be visi",
+   "requests": [],
+   "state_after": {},
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "(unknown)",
+   "note": "could not exercise: Error: Page.query_selector_all: Execution context was destroyed, most likely because of a navigation",
+   "requests": [],
+   "state_after": {},
+   "testid": null
+  },
+  {
+   "area": "overview",
+   "kind": "link",
+   "label": "Org Chart",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/v2/org?org=org_boss",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "/v2/org?org=org_boss"
+   },
+   "testid": "v2-nav-org"
+  },
+  {
+   "area": "overview",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2029,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 13 server action(s)",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b%2Cprev_62e195ddaf5f4113a450",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 18,
+    "server_actions": 13,
+    "slowest_request_ms": 2148
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2052,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=overview",
+    "server_actions": 0,
+    "slowest_request_ms": 361
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2039,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2019,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2039,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=meetings",
+    "server_actions": 1,
+    "slowest_request_ms": 1126
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2042,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=code_tasks",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2043,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=decisions",
+    "server_actions": 1,
+    "slowest_request_ms": 1009
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2059,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=delivery",
+    "server_actions": 1,
+    "slowest_request_ms": 461
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2048,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=monitoring",
+    "server_actions": 1,
+    "slowest_request_ms": 1153
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2041,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 1,
+    "slowest_request_ms": 633
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2018,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 176
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "v2",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2238,
+    "navigated_to": "https://boss.local.sean.network/v2?org=org_boss",
+    "server_actions": 1,
+    "slowest_request_ms": 358
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "BO BOSS SWITCH",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2822,
+    "navigated_to": "https://boss.local.sean.network/?pick=1",
+    "server_actions": 0,
+    "slowest_request_ms": 1155
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Live",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2017,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "discovery",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2019,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 113
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 13 server action(s)",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b%2Cprev_62e195ddaf5f4113a450",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 17,
+    "server_actions": 13,
+    "slowest_request_ms": 1121
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2066,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=overview",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2037,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 0,
+    "slowest_request_ms": 126
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2046,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=discovery",
+    "server_actions": 0,
+    "slowest_request_ms": 146
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2017,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 78
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2052,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=code_tasks",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2055,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=decisions",
+    "server_actions": 0,
+    "slowest_request_ms": 83
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2064,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=delivery",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2042,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=monitoring",
+    "server_actions": 0,
+    "slowest_request_ms": 74
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2048,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 0,
+    "slowest_request_ms": 82
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2017,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "v2",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 3506,
+    "navigated_to": "https://boss.local.sean.network/v2?org=org_boss",
+    "server_actions": 1,
+    "slowest_request_ms": 1451
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "BO BOSS SWITCH",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2522,
+    "navigated_to": "https://boss.local.sean.network/?pick=1",
+    "server_actions": 0,
+    "slowest_request_ms": 754
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Live",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2021,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "meetings",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2023,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 13 server action(s)",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b%2Cprev_62e195ddaf5f4113a450",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 19,
+    "server_actions": 13,
+    "slowest_request_ms": 2938
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2047,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=overview",
+    "server_actions": 1,
+    "slowest_request_ms": 174
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2042,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 0,
+    "slowest_request_ms": 79
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2063,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=discovery",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2056,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=meetings",
+    "server_actions": 0,
+    "slowest_request_ms": 187
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2023,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2044,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=decisions",
+    "server_actions": 1,
+    "slowest_request_ms": 1071
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2041,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=delivery",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2047,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=monitoring",
+    "server_actions": 0,
+    "slowest_request_ms": 198
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2049,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2021,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 81
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "v2",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 3108,
+    "navigated_to": "https://boss.local.sean.network/v2?org=org_boss",
+    "server_actions": 0,
+    "slowest_request_ms": 1068
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "BO BOSS SWITCH",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2809,
+    "navigated_to": "https://boss.local.sean.network/?pick=1",
+    "server_actions": 0,
+    "slowest_request_ms": 779
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Live",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2027,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "code_tasks",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2020,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 315
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 13 server action(s)",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b%2Cprev_62e195ddaf5f4113a450",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 17,
+    "server_actions": 13,
+    "slowest_request_ms": 1594
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2041,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=overview",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2038,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 0,
+    "slowest_request_ms": 79
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2032,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=discovery",
+    "server_actions": 0,
+    "slowest_request_ms": 330
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2044,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=meetings",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2045,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=code_tasks",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2021,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 268
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2034,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=delivery",
+    "server_actions": 1,
+    "slowest_request_ms": 412
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2042,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=monitoring",
+    "server_actions": 0,
+    "slowest_request_ms": 80
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2040,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 0,
+    "slowest_request_ms": 124
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2021,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "v2",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 6521,
+    "navigated_to": "https://boss.local.sean.network/v2?org=org_boss",
+    "server_actions": 0,
+    "slowest_request_ms": 4491
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "BO BOSS SWITCH",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2805,
+    "navigated_to": "https://boss.local.sean.network/?pick=1",
+    "server_actions": 0,
+    "slowest_request_ms": 771
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Live",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2020,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 95
+   },
+   "testid": null
+  },
+  {
+   "area": "decisions",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2021,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 14 server action(s)",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 20,
+    "server_actions": 14,
+    "slowest_request_ms": 3151
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2054,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=overview",
+    "server_actions": 1,
+    "slowest_request_ms": 219
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2068,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 1,
+    "slowest_request_ms": 92
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2044,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=discovery",
+    "server_actions": 1,
+    "slowest_request_ms": 93
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2146,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=meetings",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2052,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=code_tasks",
+    "server_actions": 1,
+    "slowest_request_ms": 91
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2044,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=decisions",
+    "server_actions": 0,
+    "slowest_request_ms": 77
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2079,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 79
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2057,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=monitoring",
+    "server_actions": 0,
+    "slowest_request_ms": 275
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2039,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 0,
+    "slowest_request_ms": 77
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2022,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 176
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "v2",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2396,
+    "navigated_to": "https://boss.local.sean.network/v2?org=org_boss",
+    "server_actions": 0,
+    "slowest_request_ms": 368
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "BO BOSS SWITCH",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2612,
+    "navigated_to": "https://boss.local.sean.network/?pick=1",
+    "server_actions": 0,
+    "slowest_request_ms": 582
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Live",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2015,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "delivery",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2023,
+    "navigated_to": "",
+    "server_actions": 1,
+    "slowest_request_ms": 678
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "load",
+   "label": "(page load)",
+   "note": "issued by rendering the area, before any interaction; 13 server action(s)",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/preview-gates?preview_ids=prev_25af84fd722b4333863a%2Cprev_50ee1310d73d4d6d91b8%2Cprev_35cab290113f45568f34%2Cprev_0e5947e6498f4d4baeac%2Cprev_abacd768ef6b4f47b7e9%2Cprev_b5aaddfd62c24abebb89%2Cprev_b73e72599c4343059423%2Cprev_d8c9d6d9a3d24aff9955%2Cprev_1b70439347d94640ac0b",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/activity?project_id=boss-dogfood&sort=created_at&order=desc&limit=50",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/deployment-hosts?project_id=boss-dogfood",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "request_count": 17,
+    "server_actions": 13,
+    "slowest_request_ms": 2264
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "link",
+   "label": "Skip to decision inbox",
+   "note": "link: destination recorded, not followed",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "#decision-inbox",
+     "status": null
+    }
+   ],
+   "state_after": {
+    "href": "#decision-inbox"
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Command Center",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2039,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=overview",
+    "server_actions": 1,
+    "slowest_request_ms": 108
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "SSO SSO",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2041,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=enterprise",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Discovery",
+   "note": "",
+   "requests": [
+    {
+     "method": "POST",
+     "path": "(server-action)",
+     "status": 200
+    },
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2032,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=discovery",
+    "server_actions": 1,
+    "slowest_request_ms": 104
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Meetings",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2039,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=meetings",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Factory",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 4997,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=code_tasks",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Approvals 3",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2036,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=decisions",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "CI/CD",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2038,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=delivery",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Observability",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2021,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 122
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Budget",
+   "note": "",
+   "requests": [
+    {
+     "method": "GET",
+     "path": "/api/run-deployments?run_ids=crun_d6331fc5630a47d893a8%2Ccrun_b50c87bbd7e24a0d865c%2Ccrun_dad37a91c4b0470480fd%2Ccrun_588a7ed765f349448245%2Ccrun_280bfa83a69741a194b3%2Ccrun_61dd282bdfc74060b006%2Ccrun_a57b42adc0884dc4bfda%2Ccrun_74c88113207e481096e6%2Ccrun_4d26eaab849f446f808d%2Ccrun_d1d3ff567db646f9945b%2Ccrun_c73d7cc0530c42289eba%2Ccrun_4683537e96ff41d1b404%2Ccrun_d0f67becce96419cb41c%2Ccrun_4cbbba9000ba4c24bef9%2Ccrun_b6a1bf93b4314b558fae%2Ccrun_55c9b5adb6b44df49c19%2Ccrun_709872b1a58b41389894%2Ccrun_ba1d00b74852411d8600%2Ccrun_6b3132a47ca74026bec7%2Ccrun_25d8a9622c1f48b2b98f&app_names=Untitled%20app%2CInvoice%E2%80%90Chaser%2CLiving%20Colors%2CRe%E2%80%90build%20of%20%60paramg%2Fboss-sandbox%60%20Simple%20T%2CList%20the%20exact%20names%20of%20the%20tools%20you%20can%20call%2CDeployment%20For%20Run%20Crun_a57b42adc0884dc4bfda%2CShorty%2CAuto-repair%2C(actor-share%20test)%2CLightweight%20Self%E2%80%90%2CSimple%20Todo%20List%2CBugbox%2CHookWatch%2CApproveIt%2C%2Fhealthz%20endpoint%20before%20LinkNest%2COfficial%20BugBox%2CHookWatch%20Canary%2CApproveIt%20Canary%2CBugBox%20Canary%20%2388%2CSealed-e2e-canary",
+     "status": 200
+    }
+   ],
+   "state_after": {
+    "elapsed_ms": 2035,
+    "navigated_to": "https://boss.local.sean.network/?org=org_boss&area=budget",
+    "server_actions": 0,
+    "slowest_request_ms": 71
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "v1",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 2024,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "v2",
+   "note": "could not exercise: TimeoutError: ElementHandle.click: Timeout 5000ms exceeded.\nCall log:\n  - attempting click action\n    - waiting for element to be visi",
+   "requests": [],
+   "state_after": {},
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "(unknown)",
+   "note": "could not exercise: Error: Page.query_selector_all: Execution context was destroyed, most likely because of a navigation",
+   "requests": [],
+   "state_after": {},
+   "testid": null
+  },
+  {
+   "area": "monitoring",
+   "kind": "button",
+   "label": "Jump to \u2318K",
+   "note": "",
+   "requests": [],
+   "state_after": {
+    "elapsed_ms": 1004869,
+    "navigated_to": "",
+    "server_actions": 0,
+    "slowest_request_ms": 0
+   },
+   "testid": null
+  }
+ ]
+}
