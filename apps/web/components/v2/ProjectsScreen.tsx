@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+// esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
+// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+import React, { useMemo, useState } from "react";
 
 import type { CompanyOverview, V2Project } from "../../lib/v2/overview";
 

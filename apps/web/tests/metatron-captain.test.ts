@@ -81,8 +81,17 @@ describe("Metatron Captain island", () => {
     );
     expect(pageSource).toContain("<MetatronCaptain");
     expect(pageSource).toContain("Status Query");
-    expect(pageSource).toContain("Ask Metatron");
-    expect(pageSource).toContain('name="q"');
+    // Renamed to Ask BOSS and moved to the top of the page: the operator asked for the
+    // product's own name on its primary entry point, not an internal codename. Asserting the
+    // OLD name here is what kept this test red after the rename shipped.
+    expect(pageSource).toContain("<AskBossHero");
+    expect(pageSource).not.toContain("Ask Metatron");
+    // The old composer posted a form field named "q". The hero is a controlled component that
+    // sends through its own handler, so the property to protect is that there is still a box to
+    // type into — not the name of a field that no longer exists.
+    const hero = readFileSync(resolve(__dirname, "../app/ask-boss-hero.tsx"), "utf8");
+    expect(hero).toContain('className="askboss-input"');
+    expect(hero).toMatch(/placeholder="Ask a question, or describe something to build/);
     expect(pageSource.split("<MetatronCaptain").length - 1).toBe(1);
 
     const mount = pageSource.slice(

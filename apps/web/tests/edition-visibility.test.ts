@@ -309,9 +309,14 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(page).toContain("IdentityProvidersCatalogView");
     expect(page).not.toMatch(/Account Connect is (included|available) in Community/i);
     expect(page).not.toMatch(/Community includes (hosted )?Account Connect/i);
+    // The help card no longer talks about editions at all: it was rewritten from
+    // design-partner setup into "what you can do here". It cannot mis-sell a paid surface to
+    // a Community reader if it never names one, which is a stronger guarantee than the old
+    // "mentions both Community and Cloud" and does not rot when the copy changes again.
     expect(help).not.toMatch(/Account Connect/i);
-    expect(help).toMatch(/Community/);
-    expect(help).toMatch(/Cloud/);
+    expect(help).not.toMatch(/hosted marketplace/i);
+    expect(help).not.toMatch(/enterprise clusters/i);
+    expect(help).not.toMatch(/included in (Cloud|Enterprise)/i);
     expect(skills).toMatch(/Hosted marketplace stays\s+hidden on Community/);
     expect(isCommunitySurfaceVisible("community", "sso_identity")).toBe(true);
     expect(isPaidSurfaceVisible("community", "account_connect")).toBe(false);

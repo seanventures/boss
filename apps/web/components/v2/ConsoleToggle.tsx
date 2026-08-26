@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+// esbuild uses the classic JSX runtime here (no vitest config, tsconfig jsx=preserve),
+// so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
+import React, { useCallback, useEffect, useState } from "react";
 
 /**
  * Switch between the current console and v2.

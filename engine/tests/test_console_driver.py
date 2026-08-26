@@ -214,3 +214,30 @@ def test_a_server_action_is_not_flagged_as_an_unexpected_write():
     from engine.tests._source import code_only
     src = code_only(cd.learn)
     assert "r.path != SERVER_ACTION" in src
+
+
+# --------------------------------------------------------------------------- #
+# Links are read, not followed
+# --------------------------------------------------------------------------- #
+def test_a_link_records_its_destination_without_navigating():
+    """Clicking a nav link leaves the area, so the walk had to reload the page — at ten seconds
+    a load, that made a full baseline take hours. A link's destination is its behaviour and is
+    readable from the DOM."""
+    from engine.tests._source import code_only
+    src = code_only(cd.learn)
+    assert 'inventory.requests = [Request("GET", _norm_path(href, api_origin))]' in src
+    assert "not followed" in src
+
+
+def test_a_destination_compares_across_the_redesign():
+    """v2 sits on the same origin but different paths; the origin is stripped either way so a
+    link that moved from /?area=discovery to /v2/discovery is comparable at all."""
+    assert _norm_path("https://boss.local/v2/hive?org=x", None) == "/v2/hive?org=x"
+    assert _norm_path("/?org=x&area=discovery", None) == "/?org=x&area=discovery"
+
+
+def test_a_links_query_string_does_not_defeat_matching():
+    """Request.key() drops the query, so ?org= and cache-busters cannot make two recordings of
+    the same destination look different."""
+    from boss_engine.services.console_test_agent import Request as R
+    assert R("GET", "/v2/hive?org=a").key() == R("GET", "/v2/hive?org=b").key()

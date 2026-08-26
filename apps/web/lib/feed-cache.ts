@@ -41,11 +41,23 @@ type Entry = { at: number; response: Response };
  * Every control-plane GET already passes through here, so this is the one place that can see
  * all of them without touching 173 call sites.
  */
-const timings = new Map<string, { ms: number; at: number }>();
+// ON globalThis, NOT IN MODULE SCOPE.
+//
+// Next gives a route handler and a page separate server bundles, so each gets its own copy of
+// this module and its own Map. The page filled one; /api/render-timing read the other, which
+// was always empty — the instrumentation looked like it proved the feeds were fast when it was
+// simply never seeing them. One process, one table.
+type Timing = { ms: number; at: number; count: number };
 
-export function slowestFeeds(limit = 15): Array<{ url: string; ms: number }> {
-  return [...timings.entries()]
-    .map(([url, v]) => ({ url, ms: v.ms }))
+function timings(): Map<string, Timing> {
+  const g = globalThis as unknown as { __bossFeedTimings?: Map<string, Timing> };
+  if (!g.__bossFeedTimings) g.__bossFeedTimings = new Map();
+  return g.__bossFeedTimings;
+}
+
+export function slowestFeeds(limit = 15): Array<{ url: string; ms: number; count: number }> {
+  return [...timings().entries()]
+    .map(([url, v]) => ({ url, ms: v.ms, count: v.count }))
     .sort((a, b) => b.ms - a.ms)
     .slice(0, limit);
 }
@@ -107,8 +119,18 @@ export function installFeedCache(apiUrl: string): void {
     const started = Date.now();
     const promise = original(input as RequestInfo, init)
       .then((response) => {
-        timings.set(key.replace(apiUrl, ""), { ms: Date.now() - started, at: Date.now() });
-        if (timings.size > 300) timings.clear();
+        const path = key.replace(apiUrl, "");
+        const table = timings();
+        const prev = table.get(path);
+        // Keep the WORST time seen and how often it was asked for. An average would hide the
+        // one 13-second call inside forty fast ones, and it is the slow one that holds the
+        // Promise.all barrier and therefore the page.
+        table.set(path, {
+          ms: Math.max(prev?.ms ?? 0, Date.now() - started),
+          at: Date.now(),
+          count: (prev?.count ?? 0) + 1,
+        });
+        if (table.size > 300) table.clear();
         // Only successful responses are reusable. Caching a 500 for five seconds would turn a
         // blip into an outage that outlives it.
         if (response.ok) {

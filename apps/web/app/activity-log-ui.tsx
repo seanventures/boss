@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState, useTransition } from "react";
 
 import { formatDateTime } from "../lib/datetime";
-import { loadActivityLogAction } from "./activity-log-actions";
+import { fetchActivityLog } from "../lib/activity-log-client";
 
 /**
  * Local types matching GET /v1/activity.
@@ -166,7 +166,10 @@ export function ActivityLog({
   useEffect(() => {
     let alive = true;
     startTransition(async () => {
-      const result = await loadActivityLogAction(projectId, {
+      // A ROUTE HANDLER, NOT A SERVER ACTION. This call took 25.3 seconds on the live
+      // console -- about 14s of query and the rest a full re-render of the route, which is
+      // what a Server Action ships alongside its return value. See lib/activity-log-client.ts.
+      const result = await fetchActivityLog(projectId, {
         q: debouncedSearch || undefined,
         kind: kind || undefined,
         status: status || undefined,

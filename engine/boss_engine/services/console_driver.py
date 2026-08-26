@@ -240,11 +240,25 @@ def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
                     if not label or len(label) > 80:
                         continue
                     testid = el.get_attribute("data-testid")
+                    href = el.get_attribute("href")
 
                     inventory = Control(
                         area=area, label=label, testid=testid,
-                        kind="link" if el.get_attribute("href") else "button",
+                        kind="link" if href else "button",
                     )
+
+                    if href:
+                        # A LINK IS NOT CLICKED. Its destination IS its behaviour, and it is
+                        # readable without navigating — which matters twice over: clicking it
+                        # leaves the area (so the walk had to reload the page, at ten seconds a
+                        # time, to keep the next control's area label honest), and a
+                        # destination compares across the redesign far better than whatever
+                        # the target page happened to fetch.
+                        inventory.requests = [Request("GET", _norm_path(href, api_origin))]
+                        inventory.state_after = {"href": _norm_path(href, api_origin)}
+                        inventory.note = "link: destination recorded, not followed"
+                        controls.append(inventory)
+                        continue
 
                     if not config.allow_writes and not _is_control_safe(label):
                         # Recorded as present but not exercised. Its existence is still the
