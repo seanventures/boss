@@ -227,10 +227,34 @@ def crawl_gaps(observed: Baseline, area_map: dict[str, str]) -> list[str]:
     return sorted({dest for dest in set(area_map.values()) if dest not in visited})
 
 
-def summarise(findings: list[Finding], gaps: Optional[list[str]] = None) -> dict[str, Any]:
+def observability(observed: Baseline) -> dict[str, Any]:
+    """Whether this console can be checked by watching the network at all.
+
+    Measured, not assumed. A server-rendered console fetches during render, so the browser sees
+    no requests and every control looks like it does nothing -- which is indistinguishable from
+    a control that has been removed. Against v2 this is not a near-miss: ten routes, 295
+    controls, ZERO client-side requests. Reporting 111 MISSING off that would be describing the
+    rendering architecture and calling it feature loss.
+
+    v1 fetched from the browser, so the same method works there. The difference is the console,
+    not the code.
+    """
+    with_traffic = sum(1 for c in observed.controls if c.behaviour())
+    return {
+        "controls": len(observed.controls),
+        "with_observable_traffic": with_traffic,
+        # Nothing at all means the method cannot see this console, rather than that the console
+        # does nothing.
+        "observable": with_traffic > 0,
+    }
+
+
+def summarise(findings: list[Finding], gaps: Optional[list[str]] = None,
+              observed: Optional[Baseline] = None) -> dict[str, Any]:
     counts = {MISSING: 0, BROKEN: 0, MOVED: 0, OK: 0, UNVERIFIABLE: 0}
     for f in findings:
         counts[f.verdict] = counts.get(f.verdict, 0) + 1
+    obs = observability(observed) if observed is not None else None
     checked = counts[OK] + counts[MOVED] + counts[MISSING] + counts[BROKEN]
     return {
         "counts": counts,
@@ -243,9 +267,11 @@ def summarise(findings: list[Finding], gaps: Optional[list[str]] = None) -> dict
         },
         # A run that did not visit every destination cannot conclude anything about the
         # features that live there, in either direction. Neither pass nor fail: inconclusive.
-        "inconclusive": bool(gaps),
+        "inconclusive": bool(gaps) or (obs is not None and not obs["observable"]),
         "unvisited": list(gaps or []),
-        "passed": (not gaps) and not any(f.is_failure() for f in findings),
+        "observability": obs,
+        "passed": (not gaps) and (obs is None or obs["observable"])
+                  and not any(f.is_failure() for f in findings),
         "failures": [asdict(f) for f in findings if f.is_failure()],
     }
 

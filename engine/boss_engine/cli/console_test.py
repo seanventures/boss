@@ -141,7 +141,7 @@ def _verify(args: argparse.Namespace) -> int:
     area_map = _load_area_map(args.area_map) if args.area_map else None
     findings = compare(baseline, observed, area_map)
     gaps = crawl_gaps(observed, area_map) if area_map else []
-    result = summarise(findings, gaps)
+    result = summarise(findings, gaps, observed)
 
     counts = result["counts"]
     cov = result["coverage"]
@@ -153,7 +153,14 @@ def _verify(args: argparse.Namespace) -> int:
     # statement about the blind spot, not about the migration.
     print(f"checked {cov['checked']} of {cov['total']} baseline controls "
           f"({cov['unverifiable']} not verifiable by behaviour)")
-    if result["inconclusive"]:
+    obs = result.get("observability") or {}
+    if obs and not obs.get("observable"):
+        print(f"\nINCONCLUSIVE — this console issued no client-side requests at all "
+              f"({obs['controls']} controls, 0 with observable traffic).")
+        print("  It renders on the server, so watching the browser cannot tell a control that")
+        print("  was removed from one that simply does its work before the page arrives.")
+        print("  Every finding below is an artefact of that, not evidence of feature loss.")
+    elif result["inconclusive"]:
         # Printed FIRST among the findings, because everything below it is unsafe to read as a
         # conclusion: features living on an unvisited screen all look missing.
         print("\nINCONCLUSIVE — these v2 screens were never visited, so anything they carry "

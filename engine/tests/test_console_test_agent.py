@@ -428,3 +428,57 @@ def test_area_names_match_whether_given_as_a_path_or_a_name():
 
     assert crawl_gaps(_obs("panels"), {"meetings": "panels"}) == []
     assert crawl_gaps(_obs("/v2/panels/"), {"meetings": "panels"}) == []
+
+
+# --- a console the method cannot see ---------------------------------------------------------
+
+def test_a_console_with_no_client_traffic_is_inconclusive_not_a_wall_of_missing():
+    """Measured against the live v2: ten routes, 295 controls, ZERO client-side requests.
+
+    v2 renders on the server, so the browser never sees a fetch. A control that does its work
+    before the page arrives is indistinguishable, to this method, from a control that was
+    deleted. Reporting 111 MISSING off that describes the rendering architecture and calls it
+    feature loss.
+    """
+    from boss_engine.services.console_test_agent import observability
+
+    v1 = Baseline(console="v1", captured_at="t", controls=[
+        Control(area="overview", label="Refresh", testid="r",
+                requests=[Request(method="GET", path="/v1/dashboard")]),
+    ])
+    v2 = Baseline(console="v2", captured_at="t", controls=[
+        Control(area="/v2", label="Refresh", testid="r", requests=[]),
+        Control(area="/v2", label="Open", testid="o", requests=[]),
+    ])
+    obs = observability(v2)
+    assert obs == {"controls": 2, "with_observable_traffic": 0, "observable": False}
+
+    result = summarise(compare(v1, v2), [], v2)
+    assert result["inconclusive"] is True
+    assert result["passed"] is False
+
+
+def test_a_console_that_does_fetch_from_the_browser_is_still_judged_normally():
+    """The guard must not excuse every failure. v1 fetches client-side, so the method works."""
+    from boss_engine.services.console_test_agent import observability
+
+    v1 = Baseline(console="v1", captured_at="t", controls=[
+        Control(area="overview", label="Refresh", testid="r",
+                requests=[Request(method="GET", path="/v1/dashboard")]),
+    ])
+    observed = Baseline(console="v2", captured_at="t", controls=[
+        Control(area="company", label="Reload", testid="x",
+                requests=[Request(method="GET", path="/v1/nothing-alike")]),
+    ])
+    assert observability(observed)["observable"] is True
+    result = summarise(compare(v1, observed), [], observed)
+    assert result["inconclusive"] is False
+    assert result["passed"] is False        # a real MISSING still fails
+    assert result["counts"][MISSING] == 1
+
+
+def test_omitting_the_observed_baseline_leaves_the_old_behaviour_intact():
+    """summarise() is called without it in places that only have findings."""
+    result = summarise([Finding(verdict=OK, label="x", v1_area="a")])
+    assert result["observability"] is None
+    assert result["passed"] is True
