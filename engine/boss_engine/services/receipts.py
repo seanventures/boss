@@ -188,6 +188,56 @@ class ReceiptService:
             },
         )
 
+    def record_completed(
+        self,
+        connection: Connection,
+        org_id: str,
+        workspace_id: str,
+        project_id: str,
+        dedupe_key: str,
+        effect_kind: str,
+        effect_scope: dict,
+        payload: dict,
+        *,
+        provider_ref: Optional[str] = None,
+        created_by_job_id: Optional[str] = None,
+        data_boundary: str = "internal",
+    ) -> tuple[dict, bool]:
+        """Record an effect that has ALREADY happened, closed in one step.
+
+        Most callers here are not starting something and waiting on it -- they have already
+        done the work and are writing it down, with the outcome in the payload. Those were
+        using create_or_reuse and never closing the receipt, so a completed effect was recorded
+        as permanently in progress.
+
+        Measured on the live console when the Receipts screen first ran: 1,428 of 1,606
+        receipts in 24 hours sat at in_progress, and exactly one effect kind of seven ever
+        called mark_succeeded. At 88% noise a receipt can no longer answer the only question it
+        exists for -- did this effect actually happen? -- which is precisely what the "the API
+        restarted while this deployment was running" investigation needed it for.
+
+        Use create_or_reuse + mark_succeeded/mark_failed when the effect genuinely resolves
+        later. Use this when it is already done.
+        """
+        receipt, created = self.create_or_reuse(
+            connection,
+            org_id,
+            workspace_id,
+            project_id,
+            dedupe_key,
+            effect_kind,
+            effect_scope,
+            payload,
+            created_by_job_id=created_by_job_id,
+            data_boundary=data_boundary,
+        )
+        # Only on first write. Re-marking a reused receipt would overwrite the result of the
+        # effect that actually ran with the payload of the one that was deduped away.
+        if created:
+            self.mark_succeeded(connection, receipt["id"], provider_ref, payload)
+            receipt = {**receipt, "status": "succeeded", "provider_ref": provider_ref}
+        return receipt, created
+
     def mark_failed(self, connection: Connection, receipt_id: str, error: dict) -> None:
         connection.execute(
             text(

@@ -652,7 +652,10 @@ class ProcessManagerService:
         ids = self._scope(connection, project_id)
         minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
         dedupe = f"process_manager:{project_id}:{minute}:{action}"
-        return self.receipts.create_or_reuse(
+        # RECORDED, NOT STARTED. By the time this is called the tick has already run and the
+        # payload carries its outcome, so the receipt is closed in the same step. Leaving it
+        # open recorded finished work as permanently in progress -- see receipts.record_completed.
+        return self.receipts.record_completed(
             connection,
             ids["org_id"],
             ids["workspace_id"],
