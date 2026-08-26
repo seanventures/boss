@@ -149,9 +149,9 @@ V2_SCREENS = {
     "/v2/org": "v2-org",
     "/v2/panels": "v2-decisions",
     "/v2/timeline": "v2-receipts",
-    "/v2/boss": None,
-    "/v2/infra": None,
-    "/v2/settings": None,
+    "/v2/boss": "v2-workflows",
+    "/v2/infra": "v2-infra",
+    "/v2/settings": "v2-settings",
 }
 
 

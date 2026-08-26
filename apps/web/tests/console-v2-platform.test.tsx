@@ -29,6 +29,8 @@ const wf = (over: Partial<WorkflowsView> = {}): WorkflowsView => ({
   }],
   versioned: false,
   version_note: "BOSS keeps one active spec per process. There are no versions to deploy.",
+  gates_recorded: true,
+  gates_note: "",
   apiReachable: true,
   ...over,
 });
@@ -87,6 +89,21 @@ describe("Workflows", () => {
       workflows: [{ ...wf().workflows[0], runs_30d: 0, running_now: 0, last_run_at: null }],
     }));
     expect(out).toContain('data-testid="v2-workflow-neverrun-prd_to_ship"');
+  });
+
+  it("says gating is unknown rather than claiming nothing stops for you", () => {
+    // The live template has eleven steps and records gating on none of them. Counting them as
+    // 0 asserts that nothing stops, when the spec simply does not say.
+    const out = html(wf({
+      gates_recorded: false,
+      gates_note: "These specs do not record which stages stop for a human.",
+      workflows: [{
+        ...wf().workflows[0],
+        stages: [{ key: "a", action: "accept_prd", role: "pm", gated: null }],
+      }],
+    }));
+    expect(out).toContain('data-testid="v2-workflows-gates-unknown"');
+    expect(out).not.toMatch(/stops? for you/);
   });
 
   it("an unreachable API is not an empty company", () => {

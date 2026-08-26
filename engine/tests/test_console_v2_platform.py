@@ -213,3 +213,34 @@ def test_a_repo_with_missing_parts_still_renders():
         {"owner": None, "repo": "orphan", "runs": 1, "prs": 0, "last_run_at": None},
     ]), "p")
     assert out["repos"][0]["name"] == "?/orphan"
+
+
+def test_gating_is_unknown_when_the_spec_never_records_it():
+    """The live template has eleven steps and not one carries a gating field.
+
+    Reporting "0 stages stop for you" from that asserts that nothing does, when the spec simply
+    does not say — BOSS's human gate lives in `decisions`, not on a step. Same absence-vs-zero
+    mistake as per-agent spend and "Verified today: 100".
+    """
+    out = workflows(FakeConn(templates=[{
+        "id": "t", "process_key": "k", "name": "n", "description": "", "status": "active",
+        "created_by": "x", "updated_at": NOW, "runs_30d": 0, "running_now": 0, "last_run_at": None,
+        "spec": {"steps": [{"id": "a", "action": "accept_prd", "role": "pm"},
+                           {"id": "b", "action": "build", "role": "coder"}]},
+    }]), "p")
+    assert out["gates_recorded"] is False
+    assert "do not record" in out["gates_note"]
+    assert all(s["gated"] is None for s in out["workflows"][0]["stages"])
+
+
+def test_gating_is_reported_when_the_spec_does_record_it():
+    """One step carrying the field is enough to make False meaningful for the others."""
+    out = workflows(FakeConn(templates=[{
+        "id": "t", "process_key": "k", "name": "n", "description": "", "status": "active",
+        "created_by": "x", "updated_at": NOW, "runs_30d": 0, "running_now": 0, "last_run_at": None,
+        "spec": {"steps": [{"id": "a", "action": "x", "gated": False},
+                           {"id": "b", "action": "y", "gated": True}]},
+    }]), "p")
+    assert out["gates_recorded"] is True
+    assert out["gates_note"] == ""
+    assert [s["gated"] for s in out["workflows"][0]["stages"]] == [False, True]

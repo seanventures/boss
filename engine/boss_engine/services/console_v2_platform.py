@@ -62,6 +62,22 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
     ).mappings().all()]
 
     items = []
+    # WHETHER GATING IS RECORDED AT ALL, ACROSS EVERY TEMPLATE.
+    #
+    # The live template has eleven steps and not one carries a gating field. Reporting "0
+    # stages stop for you" from that asserts that nothing does -- when the spec simply does not
+    # say. BOSS's human gate lives in `decisions`, not on a step, so the absence is about the
+    # spec's vocabulary rather than about the process.
+    #
+    # Same absence-vs-zero mistake as per-agent spend and "Verified today: 100": a field that
+    # was never populated must not be rendered as a measured zero.
+    gates_recorded = False
+    for row in rows:
+        for step in ((row.get("spec") or {}).get("steps") or []):
+            if isinstance(step, dict) and ("gated" in step or "requires_approval" in step):
+                gates_recorded = True
+                break
+
     for row in rows:
         spec = row.get("spec") or {}
         steps = spec.get("steps") or spec.get("stages") or []
@@ -80,8 +96,12 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
                     "key": str(s.get("id") or s.get("key") or f"step-{i}"),
                     "action": str(s.get("action") or ""),
                     "role": str(s.get("role") or ", ".join(s.get("roles") or [])),
-                    # A stage that stops for a human is the important one on this screen.
-                    "gated": bool(s.get("gated") or s.get("requires_approval")),
+                    # None, not False, when the spec has no gating vocabulary at all: the
+                    # screen must be able to tell "does not stop" from "does not say".
+                    "gated": (
+                        bool(s.get("gated") or s.get("requires_approval"))
+                        if gates_recorded else None
+                    ),
                 }
                 for i, s in enumerate(steps)
                 if isinstance(s, dict)
@@ -92,6 +112,13 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
         "project_id": project_id,
         "workflows": items,
         # Stated so the screen does not have to guess whether to draw a version control.
+        "gates_recorded": gates_recorded,
+        "gates_note": (
+            ""
+            if gates_recorded
+            else "These specs do not record which stages stop for a human. BOSS's approval "
+                 "gates live under Decisions."
+        ),
         "versioned": False,
         "version_note": (
             "BOSS keeps one active spec per process. There are no versions to deploy or roll "

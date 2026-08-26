@@ -30,10 +30,12 @@ export function WorkflowsScreen({ view }: { view: WorkflowsView }) {
     );
   }
 
-  const gates = view.workflows.reduce(
-    (n, w) => n + w.stages.filter((s) => s.gated).length,
-    0,
-  );
+  // Only countable when the spec records gating at all. Counting `=== true` over a spec that
+  // never mentions gates yields 0, which reads as "nothing stops for you" — an assertion the
+  // data does not support.
+  const gates = view.gates_recorded
+    ? view.workflows.reduce((n, w) => n + w.stages.filter((s) => s.gated === true).length, 0)
+    : null;
 
   return (
     <section className="v2-screen" data-testid="v2-workflows">
@@ -41,7 +43,9 @@ export function WorkflowsScreen({ view }: { view: WorkflowsView }) {
         <h1 className="v2-screen-title">Workflows</h1>
         <p className="v2-screen-sub">
           {view.workflows.length} process{view.workflows.length === 1 ? "" : "es"}
-          {gates > 0 ? ` · ${gates} stage${gates === 1 ? " stops" : "s stop"} for you` : ""}
+          {gates !== null && gates > 0
+            ? ` · ${gates} stage${gates === 1 ? " stops" : "s stop"} for you`
+            : ""}
         </p>
       </header>
 
@@ -49,6 +53,14 @@ export function WorkflowsScreen({ view }: { view: WorkflowsView }) {
       <p className="v2-org-isolated-note" data-testid="v2-workflows-versioning">
         {view.version_note}
       </p>
+
+      {/* Said when the spec has no gating vocabulary, so the screen never implies that nothing
+          stops for a human when it simply does not know. */}
+      {!view.gates_recorded && view.workflows.length > 0 ? (
+        <p className="v2-org-isolated-note" data-testid="v2-workflows-gates-unknown">
+          {view.gates_note}
+        </p>
+      ) : null}
 
       {view.workflows.length === 0 ? (
         <p className="v2-empty" data-testid="v2-workflows-none">
@@ -93,7 +105,7 @@ function WorkflowCard({ w }: { w: V2Workflow }) {
             >
               <span className="v2-stage-name">{s.action || s.key}</span>
               {s.role ? <span className="v2-stage-role">{s.role}</span> : null}
-              {s.gated ? (
+              {s.gated === true ? (
                 <span className="v2-stage-gate" data-testid={`v2-stage-gated-${w.key}-${s.key}`}>
                   waits for you
                 </span>
