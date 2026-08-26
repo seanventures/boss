@@ -492,3 +492,27 @@ def measure_type_scale(page, spec: dict) -> dict[str, dict[str, str]]:
         }""",
         selectors,
     ) or {}
+
+
+def measure_structure(page, spec: dict, path: str) -> dict[str, str]:
+    """Computed values for a screen's structural rules.
+
+    Read from the live element rather than from the markup: a stylesheet rule is invisible to a
+    grep, and an earlier version reported dashed edges as undashed for exactly that reason.
+    """
+    rules = ((spec.get("structure") or {}).get(path) or {}).get("computed") or []
+    if not rules:
+        return {}
+    probes = [{"selector": r["selector"], "property": r["property"]} for r in rules]
+    return page.evaluate(
+        """(probes) => {
+            const out = {};
+            for (const {selector, property} of probes) {
+              const el = document.querySelector(selector);
+              if (!el) continue;
+              out[`${selector}::${property}`] = String(getComputedStyle(el)[property] ?? "");
+            }
+            return out;
+        }""",
+        probes,
+    ) or {}

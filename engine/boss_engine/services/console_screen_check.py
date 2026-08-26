@@ -264,7 +264,7 @@ def check_style(measured: dict[str, Any], spec: dict[str, Any], *,
 
 
 def check_structure(html: str, testids: list[str], spec: dict[str, Any],
-                    path: str) -> list[Finding]:
+                    path: str, computed: Optional[dict[str, str]] = None) -> list[Finding]:
     """Structural expectations for a specific screen.
 
     Used where a screen has a SHAPE the reference cares about — the Hive is rings with halos
@@ -282,10 +282,30 @@ def check_structure(html: str, testids: list[str], spec: dict[str, Any],
                 BROKEN, "missing-structure",
                 f"{path}: nothing matching {prefix!r} — {rules.get('note', '')}",
             ))
-    for marker in rules.get("svg_must_have") or []:
-        if marker not in html:
+    # Markup rules are for things that ARE in the markup — a path's `d`, for instance.
+    for rule in rules.get("markup") or []:
+        pattern = str(rule.get("pattern") or "")
+        attribute = str(rule.get("in_attribute") or "")
+        if attribute:
+            values = re.findall(rf'{re.escape(attribute)}="([^"]*)"', html)
+            if values and not any(pattern in v for v in values):
+                out.append(Finding(
+                    SUSPECT, "shape",
+                    f"{path}: no {attribute}= carries {pattern!r} — {rule.get('why', '')}",
+                ))
+        elif pattern and pattern not in html:
+            out.append(Finding(
+                SUSPECT, "shape", f"{path}: no {pattern!r} — {rule.get('why', '')}"))
+
+    # Anything set by a stylesheet must be read from the COMPUTED style. Grepping the HTML for
+    # "stroke-dasharray" reported dashed edges as undashed, because the rule is in the CSS.
+    for rule in rules.get("computed") or []:
+        key = f"{rule['selector']}::{rule['property']}"
+        value = str((computed or {}).get(key) or "")
+        forbidden = [str(v) for v in (rule.get("must_not_be") or [])]
+        if value and forbidden and value in forbidden:
             out.append(Finding(
                 SUSPECT, "shape",
-                f"{path}: no {marker!r} in the markup — {rules.get('note', '')}",
+                f"{path}: {rule['property']} is {value!r} — {rule.get('why', '')}",
             ))
     return out

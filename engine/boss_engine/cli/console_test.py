@@ -26,7 +26,8 @@ import pathlib
 import sys
 
 from ..services.console_driver import (
-    DriverConfig, learn, measure_type_scale, observe_screen, probe_links,
+    DriverConfig, learn, measure_structure, measure_type_scale, observe_screen,
+    probe_links,
 )
 from ..services.console_screen_check import (
     check,
@@ -216,7 +217,10 @@ def _screens(args: argparse.Namespace) -> int:
                 # Does it match the reference, not just work? This is the comparison the
                 # operator kept having to do by eye, screen by screen.
                 findings += check_style(measure_type_scale(page, spec), spec, path=f"{path} ")
-                findings += check_structure(observation.html, observation.testids, spec, path)
+                findings += check_structure(
+                    observation.html, observation.testids, spec, path,
+                    computed=measure_structure(page, spec, path),
+                )
             results[path] = [f for f in findings if f.severity != "OK"] or findings
             for f in findings:
                 if f.severity != "OK":

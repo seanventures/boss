@@ -75,9 +75,29 @@
     "v2-hive-halo-",
     "v2-hive-edge-"
    ],
-   "svg_must_have": [
-    "stroke-dasharray",
-    "Q"
+   "computed": [
+    {
+     "selector": "[data-testid^='v2-hive-edge-']",
+     "property": "strokeDasharray",
+     "must_not_be": [
+      "none",
+      ""
+     ],
+     "why": "edges are dashed"
+    },
+    {
+     "selector": "[data-testid^='v2-hive-node-'] circle.v2-hive-node",
+     "property": "fill",
+     "must_not_be": [],
+     "why": "nodes are rings: dark fill, coloured stroke"
+    }
+   ],
+   "markup": [
+    {
+     "pattern": "Q",
+     "in_attribute": "d",
+     "why": "edges are quadratic curves"
+    }
    ]
   }
  }

@@ -242,3 +242,77 @@ def test_the_driver_samples_the_app_root_not_the_document_body():
     src = code_only(cd.observe_screen)
     assert "querySelector('.v2-shell')" in src
     assert "h1, h2" in src
+
+
+# --------------------------------------------------------------------------- #
+# A structural rule set by a stylesheet must be READ from the computed style
+#
+# An earlier version grepped the HTML for "stroke-dasharray" and reported the Hive's edges as
+# undashed while they were dashed — the rule lives in the CSS. A check that reports a problem
+# which is not there trains the reader to ignore the output, which costs more than the check is
+# worth.
+# --------------------------------------------------------------------------- #
+from boss_engine.services.console_screen_check import check_structure  # noqa: E402
+
+HIVE_SPEC = {
+    "structure": {
+        "/v2/hive": {
+            "note": "rings with halos and dashed curves",
+            "requires": ["v2-hive-edge-"],
+            "computed": [
+                {"selector": "[data-testid^='v2-hive-edge-']", "property": "strokeDasharray",
+                 "must_not_be": ["none", ""], "why": "edges are dashed"},
+            ],
+            "markup": [{"pattern": "Q", "in_attribute": "d", "why": "edges are curves"}],
+        }
+    }
+}
+EDGE_KEY = "[data-testid^='v2-hive-edge-']::strokeDasharray"
+
+
+def test_a_dash_applied_by_css_is_not_reported_as_missing():
+    findings = check_structure(
+        '<path d="M0 0 Q10 10 20 0" data-testid="v2-hive-edge-a-b"></path>',
+        ["v2-hive-edge-a-b"], HIVE_SPEC, "/v2/hive",
+        computed={EDGE_KEY: "5px, 5px"},
+    )
+    assert findings == []
+
+
+def test_an_undashed_edge_is_still_caught():
+    findings = check_structure(
+        '<path d="M0 0 Q10 10 20 0" data-testid="v2-hive-edge-a-b"></path>',
+        ["v2-hive-edge-a-b"], HIVE_SPEC, "/v2/hive",
+        computed={EDGE_KEY: "none"},
+    )
+    assert [f.rule for f in findings] == ["shape"]
+    assert "dashed" in findings[0].detail
+
+
+def test_a_straight_edge_is_caught_by_the_markup_rule():
+    """The `d` attribute IS in the markup, so it is checked there."""
+    findings = check_structure(
+        '<path d="M0 0 L20 0" data-testid="v2-hive-edge-a-b"></path>',
+        ["v2-hive-edge-a-b"], HIVE_SPEC, "/v2/hive",
+        computed={EDGE_KEY: "5px, 5px"},
+    )
+    assert any("curves" in f.detail for f in findings)
+
+
+def test_a_missing_element_is_still_broken():
+    findings = check_structure("<svg></svg>", [], HIVE_SPEC, "/v2/hive", computed={})
+    assert any(f.rule == "missing-structure" for f in findings)
+
+
+def test_an_unmeasurable_rule_is_not_reported_as_a_failure():
+    """No computed value means the probe found no element — which the `requires` rule already
+    covers. Reporting it twice would double-count one problem."""
+    findings = check_structure(
+        '<path d="M0 0 Q1 1 2 0" data-testid="v2-hive-edge-a-b"></path>',
+        ["v2-hive-edge-a-b"], HIVE_SPEC, "/v2/hive", computed={},
+    )
+    assert findings == []
+
+
+def test_a_screen_with_no_structural_rules_is_left_alone():
+    assert check_structure("<div></div>", [], HIVE_SPEC, "/v2/timeline") == []
