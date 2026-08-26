@@ -13,6 +13,13 @@ export type V2Stage = {
   key: string;
   action: string;
   role: string;
+  /** PANEL / PARALLEL / JOIN / SEQUENTIAL, derived from the spec's own kind, next and
+   *  wait_for. The spec is a DAG and was being read as a flat list. */
+  kind: "PANEL" | "PARALLEL" | "JOIN" | "SEQUENTIAL";
+  next: string[];
+  waits_for: string[];
+  /** The entry point cannot reach this stage, so it will never run. */
+  unreachable: boolean;
   /** null when the spec has no gating vocabulary at all — "does not stop" and "does not say"
    *  are different facts, and the live template records neither field on any of its steps. */
   gated: boolean | null;
@@ -29,6 +36,10 @@ export type V2Workflow = {
   running_now: number;
   last_run_at: string | null;
   stages: V2Stage[];
+  /** Counted from the stages, never estimated. */
+  panels: number;
+  parallel_points: number;
+  roles: string[];
 };
 
 export type WorkflowsView = {
@@ -38,6 +49,9 @@ export type WorkflowsView = {
   version_note: string;
   gates_recorded: boolean;
   gates_note: string;
+  /** False: BOSS has no template-editing API, so the reference's + Add stage / Deploy version /
+   *  remove-stage controls would be three buttons that cannot act. */
+  editable: boolean;
   apiReachable: boolean;
   blockedReason?: string;
 };
@@ -97,7 +111,7 @@ async function get<T>(path: string, projectId: string, empty: T): Promise<T> {
 export function fetchWorkflows(projectId: string): Promise<WorkflowsView> {
   return get("workflows", projectId, {
     project_id: projectId, workflows: [], versioned: false, version_note: "",
-    gates_recorded: false, gates_note: "", apiReachable: false,
+    gates_recorded: false, gates_note: "", editable: false, apiReachable: false,
   });
 }
 

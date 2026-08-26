@@ -616,3 +616,73 @@
   margin: 0 0 14px; font-size: 12px; color: var(--v2-amber); line-height: 1.45;
 }
 .v2-ungoverned-tag { color: var(--v2-amber); }
+
+/* ---------------------------------------------------------------------------
+   Workflows — list on the left, the selected process on the right.
+   A process is a thing you pick and then study, which is why the reference
+   splits it and why one column of `step_key role_name` was a data dump.
+   --------------------------------------------------------------------------- */
+.v2-wf-split { display: grid; grid-template-columns: 320px 1fr; gap: 28px; align-items: start; }
+@media (max-width: 900px) { .v2-wf-split { grid-template-columns: 1fr; } }
+
+.v2-wf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.v2-wf-card {
+  width: 100%; text-align: left; cursor: pointer;
+  background: var(--v2-panel); border: 1px solid var(--v2-border);
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
+  font-family: var(--v2-font-display); color: inherit;
+}
+.v2-wf-card[data-selected="true"] { border-color: var(--v2-mint); }
+.v2-wf-card:hover { border-color: var(--v2-muted); }
+.v2-wf-card-head { display: flex; align-items: baseline; gap: 8px; }
+.v2-wf-status {
+  margin-left: auto; font-family: var(--v2-font-mono); font-size: 9.5px;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--v2-mint);
+}
+.v2-wf-status[data-status="draft"] { color: var(--v2-dim); }
+.v2-wf-card-desc { font-size: 12px; color: var(--v2-muted); line-height: 1.45; }
+.v2-wf-card-meta { font-size: 10px; color: var(--v2-dim); }
+
+.v2-wf-detail { border: 1px solid var(--v2-border); padding: 20px 22px; min-width: 0; }
+.v2-wf-detail-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.v2-wf-detail-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--v2-ink); }
+.v2-wf-key { font-size: 10px; color: var(--v2-dim); letter-spacing: .06em; }
+.v2-wf-running { margin-left: auto; font-size: 10px; color: var(--v2-mint); }
+.v2-wf-detail-desc { margin: 12px 0 0; font-size: 12.5px; color: var(--v2-muted); line-height: 1.5; }
+.v2-wf-note { margin: 10px 0 22px; font-size: 10px; color: var(--v2-dim); line-height: 1.6; }
+
+/* Numbered stage rows: the number sits OUTSIDE the card, as the reference has it. */
+.v2-wf-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.v2-wf-stage-row { display: flex; gap: 14px; align-items: stretch; }
+.v2-wf-stage-n { flex: 0 0 24px; padding-top: 14px; font-size: 11px; color: var(--v2-dim); }
+.v2-wf-stage {
+  flex: 1 1 auto; min-width: 0;
+  background: var(--v2-panel);
+  border-left: 2px solid var(--v2-idle);
+  padding: 13px 16px; display: flex; flex-direction: column; gap: 6px;
+}
+.v2-wf-stage[data-kind="PANEL"] { border-left-color: var(--v2-purple); }
+.v2-wf-stage[data-kind="PARALLEL"] { border-left-color: var(--v2-mint); }
+.v2-wf-stage[data-kind="JOIN"] { border-left-color: var(--v2-green); }
+.v2-wf-stage[data-unreachable="true"] { border-left-color: var(--v2-red); opacity: .75; }
+
+.v2-wf-stage-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.v2-wf-stage-name { font-size: 14px; font-weight: 700; color: var(--v2-ink); }
+.v2-wf-kind {
+  font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--v2-dim);
+}
+.v2-wf-kind[data-kind="PANEL"] { color: var(--v2-purple); }
+.v2-wf-kind[data-kind="PARALLEL"] { color: var(--v2-mint); }
+.v2-wf-kind[data-kind="JOIN"] { color: var(--v2-green); }
+.v2-wf-kind[data-kind="GATE"] { color: var(--v2-amber); }
+.v2-wf-kind[data-kind="UNREACHABLE"] { color: var(--v2-red); }
+
+.v2-wf-stage-flow { margin: 0; font-size: 10px; color: var(--v2-dim); }
+.v2-wf-owner {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10px; color: var(--v2-muted);
+}
+.v2-wf-owner-dot { width: 5px; height: 5px; background: var(--v2-idle); flex: none; }
+.v2-wf-owner-dot[data-kind="PANEL"] { background: var(--v2-purple); }
+.v2-wf-owner-dot[data-kind="PARALLEL"] { background: var(--v2-mint); }
+.v2-wf-owner-dot[data-kind="JOIN"] { background: var(--v2-green); }

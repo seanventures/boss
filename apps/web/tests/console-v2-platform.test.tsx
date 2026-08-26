@@ -16,6 +16,12 @@ import type { InfraView, SettingsView, WorkflowsView } from "../lib/v2/platform"
  * decorative — which then applies to the controls that DO work.
  */
 
+const stage = (over: Partial<import("../lib/v2/platform").V2Stage> = {}) => ({
+  key: "intake", action: "accept_prd", role: "product_manager",
+  kind: "SEQUENTIAL" as const, next: [], waits_for: [], unreachable: false, gated: null,
+  ...over,
+});
+
 const wf = (over: Partial<WorkflowsView> = {}): WorkflowsView => ({
   project_id: "boss-dogfood",
   workflows: [{
@@ -23,14 +29,20 @@ const wf = (over: Partial<WorkflowsView> = {}): WorkflowsView => ({
     description: "Panel, build, review, ship.", status: "active", created_by: "ceo",
     runs_30d: 4, running_now: 1, last_run_at: "2026-08-26T00:00:00Z",
     stages: [
-      { key: "intake", action: "accept_prd", role: "cpo", gated: false },
-      { key: "ship", action: "deploy", role: "devops", gated: true },
+      stage({ key: "intake", action: "accept_prd", kind: "PARALLEL",
+              next: ["rev_a", "rev_b", "rev_c"] }),
+      stage({ key: "improve", action: "improve_prd", kind: "JOIN",
+              waits_for: ["rev_a", "rev_b", "rev_c"], next: ["certify"] }),
+      stage({ key: "certify", action: "certify_spec", role: "chief_architect", kind: "PANEL" }),
     ],
+    panels: 1, parallel_points: 1,
+    roles: ["chief_architect", "product_manager"],
   }],
   versioned: false,
   version_note: "BOSS keeps one active spec per process. There are no versions to deploy.",
-  gates_recorded: true,
-  gates_note: "",
+  gates_recorded: false,
+  gates_note: "These specs do not record which stages stop for a human.",
+  editable: false,
   apiReachable: true,
   ...over,
 });
@@ -62,48 +74,99 @@ const settings = (over: Partial<SettingsView> = {}): SettingsView => ({
 describe("Workflows", () => {
   const html = (v: WorkflowsView) => renderToStaticMarkup(<WorkflowsScreen view={v} />);
 
-  it("marks the stages that stop for a human", () => {
-    // That is the thing an operator needs from this screen: where the process will wait.
+  it("puts the process list beside the selected process", () => {
+    // A process is a thing you pick and then study. One column of `step_key role_name` was a
+    // data dump, not a screen.
     const out = html(wf());
-    expect(out).toContain('data-testid="v2-stage-gated-prd_to_ship-ship"');
-    expect(out).toMatch(/waits for you/);
-    expect(out).toMatch(/1 stage stops for you/);
+    expect(out).toContain('data-testid="v2-workflows-list"');
+    expect(out).toContain('data-testid="v2-workflow-detail-prd_to_ship"');
   });
 
-  it("says workflows are not versioned instead of drawing a version control", () => {
-    // The reference offers "Deploy version". Here that button would do nothing.
+  it("numbers the stages", () => {
     const out = html(wf());
-    expect(out).toContain('data-testid="v2-workflows-versioning"');
-    expect(out).toMatch(/no versions/i);
+    expect(out).toMatch(/>01</);
+    expect(out).toMatch(/>02</);
+  });
+
+  it("says what each stage DOES, derived from the spec's own graph", () => {
+    // PARALLEL / JOIN / PANEL come from kind, next and wait_for. Reading the spec as a flat
+    // list rendered eleven identical rows and lost the fact that three run at once.
+    const out = html(wf());
+    // The badge's TEXT, not the data-kind attribute. An unscoped match passes against
+    // data-kind="PARALLEL" even when the badge renders empty — which it did, and which a
+    // reader would see as an unlabelled stage.
+    const badges = [...out.matchAll(/<span class="v2-wf-kind v2-mono"[^>]*>([^<]*)<\/span>/g)]
+      .map((m) => m[1].trim())
+      .filter(Boolean);
+    expect(badges).toContain("PARALLEL");
+    expect(badges).toContain("JOIN");
+    expect(badges).toContain("PANEL");
+  });
+
+  it("describes the flow in words, not just a badge", () => {
+    const out = html(wf());
+    expect(out).toMatch(/starts 3 branches in parallel/);
+    expect(out).toMatch(/waits for 3 branches/);
+  });
+
+  it("shows the owner of each stage as a chip", () => {
+    const out = html(wf());
+    expect(out).toContain('data-testid="v2-stage-owner-prd_to_ship-intake"');
+    expect(out).toContain("product_manager");
+  });
+
+  it("marks a stage the entry point can never reach", () => {
+    // A stage that cannot run is worth seeing, not hiding.
+    const out = html(wf({
+      workflows: [{ ...wf().workflows[0],
+        stages: [stage({ key: "orphan", unreachable: true })] }],
+    }));
+    expect(out).toContain('data-testid="v2-stage-unreachable-prd_to_ship-orphan"');
+  });
+
+  it("draws no editing controls, because there is no editing API", () => {
+    // The reference has "+ Add stage", "Deploy version" and an × per stage. Three buttons that
+    // cannot act would teach the operator the console is decorative.
+    const out = html(wf());
+    expect(out).not.toMatch(/Add stage/);
     expect(out).not.toMatch(/Deploy version/);
+    expect(out).toContain('data-testid="v2-workflows-versioning"');
+  });
+
+  it("says gating is unknown rather than claiming nothing stops for you", () => {
+    // The live template has eleven steps and records gating on none of them.
+    const out = html(wf());
+    expect(out).toMatch(/do not record which stages stop for a human/);
+    expect(out).not.toMatch(/HUMAN GATE/);
+  });
+
+  it("shows a human gate when the spec does record one", () => {
+    const out = html(wf({
+      gates_recorded: true,
+      gates_note: "",
+      workflows: [{ ...wf().workflows[0], stages: [stage({ key: "signoff", gated: true })] }],
+    }));
+    expect(out).toContain('data-testid="v2-stage-gated-prd_to_ship-signoff"');
+    expect(out).toMatch(/HUMAN GATE/);
+  });
+
+  it("summarises each process with counted numbers", () => {
+    const out = html(wf());
+    expect(out).toMatch(/3 stages/);
+    expect(out).toMatch(/1 panel/);
+    expect(out).toMatch(/4 runs \/ 30d/);
+  });
+
+  it("a process that has never run says so", () => {
+    const out = html(wf({
+      workflows: [{ ...wf().workflows[0], runs_30d: 0, running_now: 0, last_run_at: null }],
+    }));
+    expect(out).toMatch(/never run/);
   });
 
   it("a process with no stages says so rather than rendering an empty list", () => {
     const out = html(wf({ workflows: [{ ...wf().workflows[0], stages: [] }] }));
     expect(out).toContain('data-testid="v2-workflow-nostages-prd_to_ship"');
-  });
-
-  it("a process that has never run says so", () => {
-    // "0 runs" and "never run" read differently; the second is a fact about the process.
-    const out = html(wf({
-      workflows: [{ ...wf().workflows[0], runs_30d: 0, running_now: 0, last_run_at: null }],
-    }));
-    expect(out).toContain('data-testid="v2-workflow-neverrun-prd_to_ship"');
-  });
-
-  it("says gating is unknown rather than claiming nothing stops for you", () => {
-    // The live template has eleven steps and records gating on none of them. Counting them as
-    // 0 asserts that nothing stops, when the spec simply does not say.
-    const out = html(wf({
-      gates_recorded: false,
-      gates_note: "These specs do not record which stages stop for a human.",
-      workflows: [{
-        ...wf().workflows[0],
-        stages: [{ key: "a", action: "accept_prd", role: "pm", gated: null }],
-      }],
-    }));
-    expect(out).toContain('data-testid="v2-workflows-gates-unknown"');
-    expect(out).not.toMatch(/stops? for you/);
   });
 
   it("an unreachable API is not an empty company", () => {

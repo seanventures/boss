@@ -244,3 +244,102 @@ def test_gating_is_reported_when_the_spec_does_record_it():
     assert out["gates_recorded"] is True
     assert out["gates_note"] == ""
     assert [s["gated"] for s in out["workflows"][0]["stages"]] == [False, True]
+
+
+# --------------------------------------------------------------------------- #
+# The spec is a DAG, not a list
+#
+# It records `kind`, `next` and `wait_for`. An earlier version read only the array order and
+# rendered eleven identical lines, losing the fact that three reviews run at once and one step
+# waits for all of them. The shape was in the data the whole time.
+# --------------------------------------------------------------------------- #
+def _template(steps, entry=None, **over):
+    base = {
+        "id": "t", "process_key": "k", "name": "n", "description": "",
+        "status": "active", "created_by": "x", "updated_at": NOW,
+        "runs_30d": 0, "running_now": 0, "last_run_at": None,
+        "spec": {"entry": entry, "steps": steps},
+    }
+    base.update(over)
+    return base
+
+
+PRD_STEPS = [
+    {"id": "intake", "kind": "role", "role": "pm", "action": "accept_prd",
+     "next": ["rev_a", "rev_b", "rev_c"]},
+    {"id": "rev_a", "kind": "role", "role": "architect", "action": "review_prd", "next": ["improve"]},
+    {"id": "rev_b", "kind": "role", "role": "cto", "action": "review_prd", "next": ["improve"]},
+    {"id": "rev_c", "kind": "role", "role": "vp", "action": "review_prd", "next": ["improve"]},
+    {"id": "improve", "kind": "role", "role": "pm", "action": "improve_prd",
+     "wait_for": ["rev_a", "rev_b", "rev_c"], "next": ["certify"]},
+    {"id": "certify", "kind": "panel", "role": "architect", "action": "certify_spec"},
+]
+
+
+def _stages(steps, entry=None):
+    out = workflows(FakeConn(templates=[_template(steps, entry)]), "p")
+    return {s["key"]: s for s in out["workflows"][0]["stages"]}
+
+
+def test_a_fan_out_is_parallel():
+    """Three reviews that start together are not three sequential steps."""
+    assert _stages(PRD_STEPS, "intake")["intake"]["kind"] == "PARALLEL"
+
+
+def test_a_fan_in_is_a_join():
+    """A step that waits for three others is where the branches come back together."""
+    assert _stages(PRD_STEPS, "intake")["improve"]["kind"] == "JOIN"
+
+
+def test_a_panel_stays_a_panel_whatever_its_edges():
+    assert _stages(PRD_STEPS, "intake")["certify"]["kind"] == "PANEL"
+
+
+def test_a_plain_step_is_sequential():
+    assert _stages(PRD_STEPS, "intake")["rev_a"]["kind"] == "SEQUENTIAL"
+
+
+def test_stages_come_back_in_execution_order_not_array_order():
+    """Array order is authoring order and can differ from what runs."""
+    shuffled = [PRD_STEPS[5], PRD_STEPS[4], PRD_STEPS[1], PRD_STEPS[0], PRD_STEPS[2], PRD_STEPS[3]]
+    out = workflows(FakeConn(templates=[_template(shuffled, "intake")]), "p")
+    keys = [s["key"] for s in out["workflows"][0]["stages"]]
+    assert keys[0] == "intake"
+    assert keys.index("improve") > keys.index("rev_a")
+
+
+def test_a_step_unreachable_from_the_entry_is_shown_and_marked():
+    """A stage that cannot run is worth seeing, not hiding."""
+    steps = PRD_STEPS + [{"id": "orphan", "kind": "role", "role": "x", "action": "y"}]
+    stages = _stages(steps, "intake")
+    assert "orphan" in stages
+    assert stages["orphan"]["unreachable"] is True
+    assert stages["intake"]["unreachable"] is False
+
+
+def test_a_spec_with_no_entry_still_renders_every_step():
+    """Hand-written or older specs must not vanish."""
+    stages = _stages(PRD_STEPS, entry=None)
+    assert len(stages) == len(PRD_STEPS)
+
+
+def test_the_summary_counts_are_counted_not_estimated():
+    out = workflows(FakeConn(templates=[_template(PRD_STEPS, "intake")]), "p")
+    wf = out["workflows"][0]
+    assert len(wf["stages"]) == 6
+    assert wf["panels"] == 1
+    assert wf["parallel_points"] == 1
+    assert wf["roles"] == ["architect", "cto", "pm", "vp"]
+
+
+def test_each_stage_carries_where_control_goes_next():
+    stages = _stages(PRD_STEPS, "intake")
+    assert stages["intake"]["next"] == ["rev_a", "rev_b", "rev_c"]
+    assert stages["improve"]["waits_for"] == ["rev_a", "rev_b", "rev_c"]
+
+
+def test_the_payload_says_the_template_cannot_be_edited():
+    """The reference has + Add stage, Deploy version and a remove control. BOSS has no editing
+    API, so they must be absent rather than drawn as buttons that cannot act."""
+    out = workflows(FakeConn(templates=[]), "p")
+    assert out["editable"] is False

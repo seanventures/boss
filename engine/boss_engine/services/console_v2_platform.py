@@ -35,13 +35,67 @@ from typing import Any
 from sqlalchemy import text as sql
 
 
-def workflows(connection, project_id: str) -> dict[str, Any]:
-    """The processes this company runs, and the stages inside them.
+#: What a stage DOES, derived from the spec rather than labelled by hand.
+#:
+#: The spec records `kind`, `next` and `wait_for` — which is a DAG, not a list. An earlier
+#: version read only the array order and rendered eleven identical lines, losing the fact that
+#: three reviews run at once and one step waits for all of them. The shape was in the data the
+#: whole time.
+PANEL, PARALLEL, JOIN, SEQUENTIAL = "PANEL", "PARALLEL", "JOIN", "SEQUENTIAL"
 
-    The artifact offers 'Deploy version' and a version number. BOSS's templates are not
-    versioned — there is one active spec per process_key — so that control is absent rather
-    than rendered as a button that does nothing. Saying "not versioned" is more useful than a
-    fake 1.3.
+
+def _stage_kind(step: dict) -> str:
+    """PANEL, PARALLEL, JOIN or SEQUENTIAL — in that order of precedence.
+
+    A panel is a panel whatever its edges. Otherwise a fan-out is PARALLEL, a fan-in is JOIN,
+    and anything else runs on its own.
+    """
+    if str(step.get("kind") or "") == "panel":
+        return PANEL
+    if len(step.get("next") or []) > 1:
+        return PARALLEL
+    if len(step.get("wait_for") or []) > 1:
+        return JOIN
+    return SEQUENTIAL
+
+
+def _order_steps(steps: list[dict], entry: Optional[str]) -> list[dict]:
+    """Execution order, walking the graph from its entry point.
+
+    The array order is authoring order and can differ from what actually runs. Falls back to the
+    array when the graph is incomplete rather than dropping steps: a spec written by hand or by
+    an older version must still render.
+    """
+    by_id = {str(s.get("id")): s for s in steps if isinstance(s, dict) and s.get("id")}
+    if not by_id:
+        return [s for s in steps if isinstance(s, dict)]
+
+    ordered: list[dict] = []
+    seen: set[str] = set()
+    queue = [entry] if entry and entry in by_id else [next(iter(by_id))]
+    while queue:
+        key = queue.pop(0)
+        if key in seen or key not in by_id:
+            continue
+        seen.add(key)
+        ordered.append(by_id[key])
+        queue.extend(str(n) for n in (by_id[key].get("next") or []))
+
+    # Anything the walk never reached is unreachable from the entry — shown, not hidden, because
+    # a step that cannot run is worth seeing.
+    for key, step in by_id.items():
+        if key not in seen:
+            step = {**step, "_unreachable": True}
+            ordered.append(step)
+    return ordered
+
+
+def workflows(connection, project_id: str) -> dict[str, Any]:
+    """The processes this company runs, their stages, and how those stages fit together.
+
+    The reference offers 'Deploy version' and a version number. BOSS's templates are not
+    versioned -- there is one active spec per process_key -- so that control is absent rather
+    than rendered as a button that does nothing.
     """
     rows = [dict(r) for r in connection.execute(
         sql(
@@ -61,16 +115,6 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
         {"p": project_id},
     ).mappings().all()]
 
-    items = []
-    # WHETHER GATING IS RECORDED AT ALL, ACROSS EVERY TEMPLATE.
-    #
-    # The live template has eleven steps and not one carries a gating field. Reporting "0
-    # stages stop for you" from that asserts that nothing does -- when the spec simply does not
-    # say. BOSS's human gate lives in `decisions`, not on a step, so the absence is about the
-    # spec's vocabulary rather than about the process.
-    #
-    # Same absence-vs-zero mistake as per-agent spend and "Verified today: 100": a field that
-    # was never populated must not be rendered as a measured zero.
     gates_recorded = False
     for row in rows:
         for step in ((row.get("spec") or {}).get("steps") or []):
@@ -78,9 +122,31 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
                 gates_recorded = True
                 break
 
+    items = []
     for row in rows:
         spec = row.get("spec") or {}
-        steps = spec.get("steps") or spec.get("stages") or []
+        raw_steps = spec.get("steps") or spec.get("stages") or []
+        ordered = _order_steps([s for s in raw_steps if isinstance(s, dict)], spec.get("entry"))
+
+        stages = []
+        for step in ordered:
+            kind = _stage_kind(step)
+            stages.append({
+                "key": str(step.get("id") or step.get("key") or ""),
+                "action": str(step.get("action") or ""),
+                "role": str(step.get("role") or ", ".join(step.get("roles") or [])),
+                "kind": kind,
+                # Where control goes next, and what this stage waits on. This is the structure
+                # the reference conveys with its PARALLEL / SEQUENTIAL badges, and BOSS has it.
+                "next": [str(n) for n in (step.get("next") or [])],
+                "waits_for": [str(w) for w in (step.get("wait_for") or [])],
+                "unreachable": bool(step.get("_unreachable")),
+                "gated": (
+                    bool(step.get("gated") or step.get("requires_approval"))
+                    if gates_recorded else None
+                ),
+            })
+
         items.append({
             "id": row["id"],
             "key": row["process_key"],
@@ -91,27 +157,16 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
             "runs_30d": int(row.get("runs_30d") or 0),
             "running_now": int(row.get("running_now") or 0),
             "last_run_at": row["last_run_at"].isoformat() if row.get("last_run_at") else None,
-            "stages": [
-                {
-                    "key": str(s.get("id") or s.get("key") or f"step-{i}"),
-                    "action": str(s.get("action") or ""),
-                    "role": str(s.get("role") or ", ".join(s.get("roles") or [])),
-                    # None, not False, when the spec has no gating vocabulary at all: the
-                    # screen must be able to tell "does not stop" from "does not say".
-                    "gated": (
-                        bool(s.get("gated") or s.get("requires_approval"))
-                        if gates_recorded else None
-                    ),
-                }
-                for i, s in enumerate(steps)
-                if isinstance(s, dict)
-            ],
+            "stages": stages,
+            # The reference's summary line. Counted, never estimated.
+            "panels": sum(1 for s in stages if s["kind"] == PANEL),
+            "parallel_points": sum(1 for s in stages if s["kind"] == PARALLEL),
+            "roles": sorted({s["role"] for s in stages if s["role"]}),
         })
 
     return {
         "project_id": project_id,
         "workflows": items,
-        # Stated so the screen does not have to guess whether to draw a version control.
         "gates_recorded": gates_recorded,
         "gates_note": (
             ""
@@ -124,6 +179,9 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
             "BOSS keeps one active spec per process. There are no versions to deploy or roll "
             "back — editing a template changes it for the next run."
         ),
+        # No editing API exists, so the reference's + Add stage / Deploy version / remove-stage
+        # controls are absent rather than drawn as buttons that cannot act.
+        "editable": False,
     }
 
 
