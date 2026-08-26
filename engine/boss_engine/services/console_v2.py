@@ -57,45 +57,129 @@ _FAILED_STATES = ("failed", "error")
 # to ignore the list.
 #
 # Kept in step with INTERNAL_RUN in apps/web/app/code-tasks-ui.tsx.
+#
+# The live screen listed 40 rows; 22 of them were BOSS benchmarking itself — five bakeoff
+# harnesses times five exercises, plus the QA benchmark suite. The pattern set below was
+# extended from what was actually on screen, not from what seemed likely.
 _INTERNAL_TITLE = re.compile(
-    r"^\s*(captain:|quality improve pass|goldeneye profile check|follow-up:\s*deferred review"
-    r"|list the exact names|ceo command:|\[boss-\d+)",
+    r"^\s*\[?\s*(?:"
+    r"captain:|quality improve pass|goldeneye profile check|follow-up:\s*deferred review"
+    r"|list the exact names|ceo command:|boss-\d+"
+    # BOSS's own model bakeoffs and end-to-end exercises: "[bakeoff:qwen_all#1] URL slug
+    # generator", "[boss:coding e2e test] Add a greet() helper", "QA benchmark: BugBox".
+    r"|bakeoff:|boss:coding|qa benchmark:|smoke test:|regression:"
+    # Notices ABOUT a run rather than a thing to build.
+    r"|the deployment for run\b|this is the discovery task\b"
+    r")",
+    re.I,
+)
+
+#: A title that is a question, or a message addressed to BOSS, is not a product. These reached
+#: the Projects screen because Ask BOSS records the operator's words as the run title.
+_NOT_A_PRODUCT = re.compile(
+    r"^\s*(?:what|who|when|where|why|how|can you|could you|do you|does|is there|are there)\b"
+    r"|^\s*\w+\s+test\)"          # "workspace test) what's the status of this task?"
+    r"|\?\s*$",                   # anything ending in a question mark
     re.I,
 )
 
 
 def _is_internal(title: str) -> bool:
-    return bool(_INTERNAL_TITLE.match(title or ""))
+    t = title or ""
+    return bool(_INTERNAL_TITLE.match(t) or _NOT_A_PRODUCT.search(t))
 
 
 def _lineage_key(row: dict) -> str:
     """Which app a run belongs to.
 
-    finalize_ctx.root_run_id is the real lineage marker; app_id is the newer one; a run with
-    neither is its own app. Falling back to the title would merge unrelated apps that happen
-    to share a prefix, which is how one app's deployment once appeared on another's card.
+    finalize_ctx.app_id is the explicit marker and root_run_id is the older one. Both are
+    authoritative when present.
+
+    When neither is set the run falls back to its cleaned NAME, and the distinction matters:
+    matching on the raw title would merge unrelated apps that happen to share a prefix (which
+    is how one app's deployment once appeared on another's card), but "Living Colors" and
+    "Shorty" each appeared TWICE on the live screen as separate apps, because their raw titles
+    differed by a retry suffix and an artifact type. An exact match on the extracted name is
+    narrow enough to be safe and wide enough to fix that.
+
+    A run with no usable name stays its own app — guessing would be worse than a duplicate.
     """
     ctx = row.get("finalize_ctx") or {}
-    return str(ctx.get("app_id") or ctx.get("root_run_id") or row["id"])
+    explicit = ctx.get("app_id") or ctx.get("root_run_id")
+    if explicit:
+        return str(explicit)
+    name = _clean_title(str(row.get("title") or ""))
+    return f"name:{name.casefold()}" if name else str(row["id"])
+
+
+#: Names of artefacts, which are never names of products.
+_ARTIFACT = r"PRD|Product Requirements Document|Spec|Specification|Design|Overview"
+
+#: Bookkeeping about a particular RUN. "retry 2" and "[1/6]" describe an attempt, not the thing
+#: being built, and leaving them in is what split one app into several rows on the screen.
+_RUN_BOOKKEEPING = (
+    (re.compile(r"\s*[·•]\s*retry\s*\d+\s*$", re.I), ""),
+    (re.compile(r"^\s*\[?\s*\d+\s*/\s*\d+\s*\]\s*"), ""),
+    (re.compile(r"\s*\(attempt\s*\d+\)\s*$", re.I), ""),
+)
+
+#: "Build 'Living Colors' — a VIBRANT..." — the operator's directive with the name quoted
+#: inside it. This is the shape Ask BOSS produces, and it is where the real name lives.
+_QUOTED_NAME = re.compile(
+    r"\b(?:build|create|make|re-?build)\s+[\"'\u2018\u201c]([^\"'\u2019\u201d]{2,60})"
+    r"[\"'\u2019\u201d]",
+    re.I,
+)
 
 
 def _clean_title(raw: str) -> str:
-    """A product name, never a document type.
+    """A product NAME — not a document type, not a directive, not a run's bookkeeping.
 
-    A card once read "Product Requirements Document" — what the artifact IS, not what the
-    product is called. Strip the decoration and the boilerplate; if nothing survives, say so
-    rather than labelling every app with the name of a document.
+    Three things kept ending up on cards that are none of them:
+
+      "Product Requirements Document"  what the artifact IS, not what the product is called;
+      "Web app — Build 'Living Colors' — a VIBRANT, COLORFUL site"   an instruction;
+      "Shorty — self-hosted URL shortener · retry 2"                 an attempt number.
+
+    The last one matters beyond tidiness: two decorations of one name are two rows on the
+    Projects screen, so "Shorty — Re-build PRD" and "Shorty — self-hosted URL shortener" showed
+    up as separate apps. Cleaning them to the same string is what lets them merge.
+
+    Returns "" when nothing survives, so the caller can say it does not know rather than
+    labelling every app with the name of a document.
     """
-    import re
-
-    t = (raw or "").strip()
+    t = (raw or "").strip().split("\n")[0].strip()
+    # Leading emoji/punctuation decoration.
     t = re.sub(r"^[\s\W_]*(?:\ud83d[\udcc4-\udcdd]|\U0001F4C4|\U0001F4DD)?[\s\W_]*", "", t)
-    t = re.sub(r"^(?:PRD|Product Requirements Document|Spec|Specification)\s*[:\-–—]\s*", "",
-               t, flags=re.I)
-    t = re.sub(r"\s*[-–—]\s*(?:PRD|Product Requirements Document)\b.*$", "", t, flags=re.I)
-    t = t.split("\n")[0].strip()
-    if re.fullmatch(r"(?:product requirements document|prd|spec|specification|design|overview)"
-                    r"[\s:–—-]*", t, flags=re.I):
+
+    for pattern, repl in _RUN_BOOKKEEPING:
+        t = pattern.sub(repl, t)
+
+    # A quoted name inside a directive wins outright — it is the one place the operator said
+    # what the thing is CALLED rather than what it should do.
+    quoted = _QUOTED_NAME.search(t)
+    if quoted:
+        return quoted.group(1).strip()[:80]
+
+    t = re.sub(rf"^(?:{_ARTIFACT})\s*[:\-\u2013\u2014]\s*", "", t, flags=re.I)
+    # "Product Requirements Document — Shorty": the artifact type led, so the name trails.
+    lead_artifact = re.match(rf"^(?:{_ARTIFACT})\s*[\u2013\u2014-]\s*(.+)$", t, re.I)
+    if lead_artifact:
+        t = lead_artifact.group(1).strip()
+    # "Shorty — Re-build PRD": the artifact type trails, so the name leads.
+    t = re.sub(rf"\s*[\u2013\u2014-]\s*(?:re-?build\s+)?(?:{_ARTIFACT})\b.*$", "", t, flags=re.I)
+
+    # "Name — description" / "Name — hardened: ...". Only when the head looks like a NAME:
+    # short, and not a sentence. "Add multi-currency support: let users pick..." must survive
+    # whole, because there the head is the work itself.
+    dashed = re.split(r"\s+[\u2013\u2014]\s+", t, maxsplit=1)
+    if len(dashed) == 2:
+        head = dashed[0].strip()
+        if head and len(head) <= 40 and len(head.split()) <= 5:
+            t = head
+
+    t = t.strip(" -\u2013\u2014:·")
+    if re.fullmatch(rf"(?:{_ARTIFACT})[\s:\u2013\u2014-]*", t, flags=re.I):
         return ""
     return t[:80]
 

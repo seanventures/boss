@@ -27,15 +27,27 @@ def test_projects_are_lineages_not_runs():
     assert "_lineage_key" in src
 
 
-def test_the_lineage_key_never_falls_back_to_a_title():
-    """Two unrelated apps sharing a title prefix would merge — which is how one app's
-    deployment once appeared on another's card."""
-    # code_only strips comments AND docstrings. Without it this matched the docstring that
-    # explains why titles are unusable — the seventh time a test in this repo has asserted on
-    # prose. If you are reaching for inspect.getsource, reach for code_only instead.
-    from engine.tests._source import code_only
-    assert "title" not in code_only(console_v2._lineage_key), (
-        "lineage grouping must not use the title")
+def test_the_lineage_key_never_merges_two_different_apps():
+    """Two unrelated apps must never share a card — that is how one app's deployment once
+    appeared on another's.
+
+    This used to forbid the lineage key from touching the title at all, which was a blunt way
+    to state it. The refined rule is that a RAW title may not be used but an extracted product
+    name may: on the live screen "Shorty" and "Living Colors" each appeared TWICE as separate
+    apps because their raw titles differed only by a retry suffix and an artifact type. So the
+    property is stated directly instead: same app merges, different apps do not.
+    """
+    def run(run_id, title, **ctx):
+        return {"id": run_id, "title": title, "finalize_ctx": ctx or None}
+
+    key = console_v2._lineage_key
+    # A shared PREFIX is not a shared app.
+    assert key(run("c1", "Shorty — a URL shortener")) != key(run("c2", "Shorty Pro — the paid one"))
+    assert key(run("c1", "Coaching HTTP service (F1+F2)")) != key(run("c2", "Coaching Moments engine (F1)"))
+    # An explicit lineage always wins over any name similarity.
+    assert key(run("c1", "Shorty", app_id="app_1")) != key(run("c2", "Shorty", app_id="app_2"))
+    # And a title too generic to identify anything never merges.
+    assert key(run("c1", "PRD")) != key(run("c2", "Spec"))
 
 
 @pytest.mark.parametrize("raw,expected", [
