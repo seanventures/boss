@@ -5559,3 +5559,15 @@ CREATE TABLE IF NOT EXISTS secret_material (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The activity log unions five sources newest-first per project. `events` had the index for
+-- that; the others did not, so bounding their queries would still have meant a sequential scan
+-- and a sort. Same shape as idx_events_project_created, for the same reader.
+CREATE INDEX IF NOT EXISTS idx_receipts_project_created
+  ON receipts(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_process_steps_project_created
+  ON agent_process_steps(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deadletters_project_created
+  ON deadletters(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_project_created
+  ON jobs(project_id, created_at DESC);

@@ -35,6 +35,12 @@ JOB_STATUSES = ("queued", "running", "succeeded", "failed", "deadlettered")
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
 
+#: Rows per source when a Python-side filter or a non-recency sort is in play and the exact
+#: bound does not apply. Generous enough that ordinary searches are unaffected, bounded enough
+#: that one request cannot load a project's entire history. When a source hits it, the response
+#: says so -- see `truncated_note`.
+FILTERED_SCAN_CAP = 5_000
+
 _FAILED_MARKERS = ("fail", "error", "deadletter", "rejected", "blocked")
 _WAITING_MARKERS = ("waiting", "queued", "lease")
 _STUCK_MARKERS = ("stuck", "stalled", "timeout", "expired")
@@ -356,6 +362,7 @@ def _load_events(
     *,
     since: Any,
     until: Any,
+    cap: int,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -364,8 +371,10 @@ def _load_events(
         SELECT id, event_type, actor, entity_type, entity_id, data, created_at
         FROM events
         WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
         """,
-        {"project_id": project_id, **params},
+        {"project_id": project_id, "cap": cap, **params},
     )
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -393,6 +402,7 @@ def _load_process_steps(
     *,
     since: Any,
     until: Any,
+    cap: int,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -401,8 +411,10 @@ def _load_process_steps(
         SELECT id, run_id, step_key, role_key, action, status, handoff_from, created_at
         FROM agent_process_steps
         WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
         """,
-        {"project_id": project_id, **params},
+        {"project_id": project_id, "cap": cap, **params},
     )
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -437,6 +449,7 @@ def _load_jobs(
     *,
     since: Any,
     until: Any,
+    cap: int,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     status_list = ", ".join(f"'{name}'" for name in JOB_STATUSES)
@@ -447,8 +460,10 @@ def _load_jobs(
         FROM jobs
         WHERE project_id = :project_id
           AND status IN ({status_list}){extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
         """,
-        {"project_id": project_id, **params},
+        {"project_id": project_id, "cap": cap, **params},
     )
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -476,6 +491,7 @@ def _load_deadletters(
     *,
     since: Any,
     until: Any,
+    cap: int,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -484,8 +500,10 @@ def _load_deadletters(
         SELECT id, source_kind, source_id, status, created_at
         FROM deadletters
         WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
         """,
-        {"project_id": project_id, **params},
+        {"project_id": project_id, "cap": cap, **params},
     )
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -517,6 +535,7 @@ def _load_receipts(
     *,
     since: Any,
     until: Any,
+    cap: int,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -525,8 +544,10 @@ def _load_receipts(
         SELECT id, effect_kind, status, created_at
         FROM receipts
         WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
         """,
-        {"project_id": project_id, **params},
+        {"project_id": project_id, "cap": cap, **params},
     )
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -547,6 +568,28 @@ def _load_receipts(
             )
         )
     return items
+
+
+def _count_all(connection: Connection, project_id: str, *, since: Any, until: Any) -> int:
+    """Total activity rows for the project, across every source.
+
+    Counted rather than inferred from the page. `total` was `len(items)` back when every row
+    was loaded; with the sources bounded, that number would be the page size wearing a total's
+    name -- the same mistake as the console's "Verified today: 100", which was reporting its
+    own fetch limit as a fact about the world.
+    """
+    extra, params = _time_clauses(since, until)
+    total = 0
+    for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts"):
+        rows = _fetch_rows(
+            connection,
+            f"SELECT count(*) AS n FROM {table} WHERE project_id = :project_id{extra}",
+            {"project_id": project_id, **params},
+        )
+        # A source whose table is absent contributes nothing; _fetch_rows returns [] for it.
+        for row in rows:
+            total += int(row.get("n") or 0)
+    return total
 
 
 _SOURCE_LOADERS = (
@@ -600,9 +643,40 @@ class ActivityLogService:
         actor_filter = _text(actor)
         entity_type_filter = _text(entity_type)
 
+        # HOW MANY ROWS EACH SOURCE MAY RETURN.
+        #
+        # Every source query used to be unbounded: the five of them loaded 46,774 rows on the
+        # dogfood project to display fifty, decoding 33,646 JSONB event payloads in Python on
+        # the way. /v1/activity took 14.3 seconds while /v1/dashboard took 0.6.
+        #
+        # The bound cannot simply be `limit`, because the filters and the sort below run in
+        # Python, over rows this method has already loaded. So there are two cases:
+        #
+        #   EXACT   — no filters, newest-first. The page can only contain rows from each
+        #             source's own newest (offset + limit), so that bound changes no answer.
+        #   CAPPED  — anything else. A filter can match a row arbitrarily far back, and a sort
+        #             by status or kind has no relationship to recency, so the cap is a real
+        #             limitation. It is declared in the response rather than hidden: a filtered
+        #             search that silently stops at 5,000 rows would report "no failures" for a
+        #             project that has them, which is worse than being slow.
+        filters_active = bool(
+            needle or kind_filter or status_filter or actor_filter or entity_type_filter
+        )
+        exact = (
+            not filters_active
+            and parsed_sort == "created_at"
+            and parsed_order == "desc"
+        )
+        cap = (parsed_offset + parsed_limit) if exact else FILTERED_SCAN_CAP
+
         items: list[dict[str, Any]] = []
+        source_counts: list[int] = []
         for loader in _SOURCE_LOADERS:
-            items.extend(loader(connection, project, since=since, until=until))
+            loaded = loader(connection, project, since=since, until=until, cap=cap)
+            source_counts.append(len(loaded))
+            items.extend(loaded)
+        # A source that returned exactly its cap probably had more to give.
+        capped = not exact and any(count >= cap for count in source_counts)
 
         if needle:
             items = [item for item in items if _matches_q(item, needle)]
@@ -630,11 +704,33 @@ class ActivityLogService:
             reverse=reverse,
         )
 
-        total = len(items)
         page = items[parsed_offset : parsed_offset + parsed_limit]
+
+        # `total` used to be len(items), which was only true because every row was loaded.
+        # Now the sources are bounded, so it is counted where it can be counted and declared
+        # as a floor where it cannot. Reporting a bounded length as a total would tell an
+        # operator there are 50 events when there are 33,646.
+        if exact:
+            total = _count_all(connection, project, since=since, until=until)
+            total_is_exact = True
+        else:
+            total = len(items)
+            total_is_exact = not capped
+
         return {
             "items": page,
             "total": total,
+            "total_is_exact": total_is_exact,
             "limit": parsed_limit,
             "offset": parsed_offset,
+            **(
+                {}
+                if total_is_exact
+                else {
+                    "truncated_note": (
+                        f"Searched the most recent {FILTERED_SCAN_CAP} rows per source. "
+                        "There may be older matches — narrow the time range to reach them."
+                    )
+                }
+            ),
         }
