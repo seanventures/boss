@@ -339,3 +339,63 @@ instead of into checking whether buttons still work.
 
 Answers to §11.1–11.6. Phases 0 and 1 need only Q3/Q4 and can begin immediately; the rest
 depend on the autonomy and multi-company rulings.
+
+---
+
+## Progress log
+
+Written as the work happened, so the next person reading this knows what is real and what is
+still a plan. Every measurement below was taken against the live console, not estimated.
+
+### Done
+
+| Phase | What shipped | Evidence |
+|---|---|---|
+| 0 | Tokens, Shell, console toggle, Projects screen | `/v2` TTFB 0.52s vs v1's 20-31s |
+| 1 | Console test agent: pure comparison core + Playwright driver + CLI | 64 tests, mutation-verified |
+| 2 | Project workspace `/v2/missions/[id]` | one call, TTFB 0.58s |
+| 3 | Per-app controls: deploy, unbind, retry | 23 behavioural tests on the decision logic |
+| 4 | Decisions `/v2/panels` | leads with what happens if ignored |
+| 5 | Receipts `/v2/timeline` | window counts, never page sizes |
+| — | Nav honesty: every entry goes somewhere real | 17 tests |
+| — | Cross-cutting surface rules applied to every page | 31 tests |
+
+### Not done
+
+Hive, Workforce, Org Chart, Workflows, Infra & Models, Settings. Each has a page that says what
+will live there and links to the v1 area that has it today — the feature is reachable, it has
+just not moved.
+
+The Learn baseline has not been captured against a stable console. Two attempts were abandoned
+because the console was redeployed mid-walk, which would have produced a baseline describing
+two different consoles.
+
+### Performance fixed along the way
+
+These were not migration work, but the migration could not be judged without them — a v2 screen
+being fast means nothing if v1 was only slow because of a defect.
+
+| | before | after |
+|---|---|---|
+| Factory area: server actions on load | 111 | 21 |
+| Factory area: total action time | 64.5s | 15.4s |
+| Factory area: document ready | 44.1s | 10.7s |
+| `/v1/activity` | 14.3s | 0.48s |
+| v1 overview TTFB | 20-31s | 5.4s |
+
+Causes, in order of size: per-card Server Actions (82 route re-renders from one lookup called
+once per app card), an unbounded activity query reading ~300,000 rows to display 50, and a
+13.2s audit export fetched by every area and displayed by one.
+
+### Rules this migration is held to
+
+Stated here because they are enforced by `tests/console-v2-surface.test.ts` and will fail a
+build, not because they are aspirations.
+
+1. **One screen, one call.** v1 issued 82 requests per render and showed nothing until the
+   slowest answered.
+2. **No Server Actions on a reply path.** A Server Action re-renders the whole route to reply.
+3. **An outage is not an empty result.** Every screen distinguishes them.
+4. **A number says what it counts.** "Verified today: 100" was a page size.
+5. **A blocked control says why.** A disabled button with no reason sends people to the API.
+6. **Nothing in the nav is fake.** Every entry navigates somewhere real.
