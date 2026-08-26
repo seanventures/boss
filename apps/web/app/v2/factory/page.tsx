@@ -28,7 +28,7 @@ export default async function V2Section({ searchParams }: Params) {
 
   return (
     <Shell active="factory" overview={overview} orgId={selected?.org_id}>
-      <WorkforceScreen workforce={data} />
+      <WorkforceScreen workforce={data} projectId={projectId} />
     </Shell>
   );
 }

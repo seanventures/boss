@@ -5,6 +5,7 @@
 import React, { useMemo, useState } from "react";
 
 import type { V2Agent, Workforce } from "../../lib/v2/workforce";
+import { AgentChat } from "./AgentChat";
 
 /**
  * Workforce — every agent, what it is doing, and what it costs.
@@ -32,8 +33,19 @@ function ago(seconds: number | null): string {
   return `${Math.round(seconds / 3600)}h ago`;
 }
 
-export function WorkforceScreen({ workforce }: { workforce: Workforce }) {
+export function WorkforceScreen({
+  workforce,
+  projectId,
+  actor = "executive_console",
+}: {
+  workforce: Workforce;
+  projectId?: string;
+  /** Never defaulted at the call site into something invented — "operator" produced
+   *  "Authenticated principal 'ceo' is not allowed to act as 'operator'". */
+  actor?: string;
+}) {
   const [filter, setFilter] = useState<Filter>("ALL");
+  const [chatWith, setChatWith] = useState<V2Agent | null>(null);
 
   const shown = useMemo(
     () =>
@@ -114,10 +126,20 @@ export function WorkforceScreen({ workforce }: { workforce: Workforce }) {
       ) : (
         <ul className="v2-cards" data-testid="v2-workforce-list">
           {shown.map((a) => (
-            <AgentCard key={a.id} a={a} />
+            <AgentCard key={a.id} a={a} onChat={() => setChatWith(a)} />
           ))}
         </ul>
       )}
+
+      {/* Talk to the agent about the work it is actually doing. */}
+      {chatWith && projectId ? (
+        <AgentChat
+          agent={chatWith}
+          projectId={projectId}
+          actor={actor}
+          onClose={() => setChatWith(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -128,12 +150,21 @@ export function WorkforceScreen({ workforce }: { workforce: Workforce }) {
  * The card is the reference's own: a panel with a 2px left accent carrying the status colour,
  * measured out of the rendered artifact DOM rather than approximated.
  */
-function AgentCard({ a }: { a: V2Agent }) {
+function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
   return (
     <li className="v2-card" data-testid={`v2-agent-${a.id}`} data-status={a.status}>
       <div className="v2-card-head">
         <span className="v2-card-name">{a.name}</span>
         <span className="v2-card-role">{a.role}</span>
+        <button
+          type="button"
+          className="v2-card-chat"
+          onClick={onChat}
+          aria-label={`Chat with ${a.name}`}
+          data-testid={`v2-agent-chat-${a.id}`}
+        >
+          ask
+        </button>
       </div>
 
       <span className="v2-status" data-status={a.status}>
