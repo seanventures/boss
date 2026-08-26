@@ -12,6 +12,17 @@
 }
 .v2-shell .v2-mono, .v2-shell code { font-family: var(--v2-font-mono); }
 
+/* v1's global `h1..h6 { font-family: var(--display) }` wins inside the v2 tree by being a
+   plain element selector on a later stylesheet, so every v2 heading rendered in Sora while
+   the surrounding prose was correct. Two fonts on one screen is not a smaller bug than none.
+   Scoped, so this cannot leak back out into v1. */
+.v2-shell h1, .v2-shell h2, .v2-shell h3,
+.v2-shell h4, .v2-shell h5, .v2-shell h6 {
+  font-family: var(--v2-font-display);
+  letter-spacing: normal;
+  color: var(--v2-ink);
+}
+
 /* ── Top bar ───────────────────────────────────────────────────────────── */
 .v2-topbar {
   display: flex; align-items: center; gap: 14px;

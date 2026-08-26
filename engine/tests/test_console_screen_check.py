@@ -189,3 +189,56 @@ def test_suspect_findings_do_not_fail_the_run_but_are_reported():
     result = summarise({"/v2": check(obs(ttfb_ms=4_000))})
     assert result["passed"] is True
     assert "/v2" in result["suspect"]
+
+
+# --------------------------------------------------------------------------- #
+# The probe has to look at the right element
+#
+# The first version read document.body and reported the wrong font on every screen —
+# correctly, but about the wrong element. v2 scopes its styling to .v2-shell; body still
+# belongs to the console being replaced. The check was measuring v1.
+# --------------------------------------------------------------------------- #
+def test_a_heading_in_the_wrong_font_is_caught():
+    """A global h1..h6 rule from the other console wins inside the subtree by being a plain
+    element selector on a later stylesheet. The prose was right and every heading was Sora, and
+    checking a single element could never have shown it."""
+    out = check(obs(computed={
+        "background-color": "rgb(9, 13, 23)",
+        "font-family": '"Space Grotesk", sans-serif',
+        "heading-font-family": "Sora, Manrope, sans-serif",
+        "scoped-to": ".v2-shell",
+    }))
+    fonts = [f for f in out if f.rule == "wrong-font"]
+    assert len(fonts) == 1
+    assert "heading" in fonts[0].detail
+
+
+def test_both_fonts_correct_raises_nothing():
+    out = check(obs(computed={
+        "background-color": "rgb(9, 13, 23)",
+        "font-family": '"Space Grotesk", sans-serif',
+        "heading-font-family": '"Space Grotesk", sans-serif',
+        "scoped-to": ".v2-shell",
+    }))
+    assert "wrong-font" not in rules(out)
+
+
+def test_the_finding_says_which_element_it_measured():
+    """"the font is wrong" is not actionable when two consoles share a page."""
+    out = check(obs(computed={
+        "background-color": "rgb(9, 13, 23)",
+        "font-family": "Manrope",
+        "heading-font-family": "Manrope",
+        "scoped-to": ".v2-shell",
+    }))
+    details = " ".join(f.detail for f in out if f.rule == "wrong-font")
+    assert ".v2-shell" in details
+
+
+def test_the_driver_samples_the_app_root_not_the_document_body():
+    from engine.tests._source import code_only
+    from boss_engine.services import console_driver as cd
+
+    src = code_only(cd.observe_screen)
+    assert "querySelector('.v2-shell')" in src
+    assert "h1, h2" in src

@@ -157,12 +157,17 @@ def check(obs: ScreenObservation, *, expect_testid: Optional[str] = None,
             BROKEN, "unstyled",
             f"page background is {background or 'unset'} — the stylesheet is not in force",
         ))
-    font = (obs.computed.get("font-family") or "").lower()
-    if font and "space grotesk" not in font and "grotesk" not in font:
-        out.append(Finding(
-            SUSPECT, "wrong-font",
-            f"body font is {font!r}, not the console's Space Grotesk",
-        ))
+    # Both the prose font AND a heading, because a global h1..h6 rule from the console this
+    # replaces wins inside the subtree by being a plain element selector on a later stylesheet.
+    # Checking one element could never have caught that -- and did not.
+    scope = obs.computed.get("scoped-to") or "root"
+    for key, what in (("font-family", scope), ("heading-font-family", f"{scope} heading")):
+        font = (obs.computed.get(key) or "").lower()
+        if font and "grotesk" not in font:
+            out.append(Finding(
+                SUSPECT, "wrong-font",
+                f"{what} font is {font!r}, not the console's Space Grotesk",
+            ))
 
     # 8. Console errors.
     if obs.console_errors:

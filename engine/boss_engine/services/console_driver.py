@@ -400,15 +400,27 @@ def observe_screen(page, path: str, base_origin: str, *,
 
     text = page.eval_on_selector("body", "e => e.innerText") or ""
 
-    # Computed styles from the BODY, which is what proves a stylesheet is in force. Reading the
-    # class list would only prove the markup asked for styling, not that any arrived.
+    # COMPUTED STYLES FROM THE APP ROOT, NOT FROM BODY.
+    #
+    # This read document.body and reported the wrong font on every screen -- correctly, but
+    # about the wrong element: v2 scopes its styling to .v2-shell, and body still belongs to
+    # v1. The check was measuring the console this app is REPLACING.
+    #
+    # A heading is sampled too, because a global `h1..h6` rule from the other console wins
+    # inside the subtree by being a plain element selector on a later stylesheet -- which is
+    # exactly what was happening, and body alone could never have shown it.
     computed = page.evaluate(
         """() => {
-            const s = getComputedStyle(document.body);
+            const root = document.querySelector('.v2-shell') || document.body;
+            const heading = root.querySelector('h1, h2') || root;
+            const s = getComputedStyle(root);
+            const h = getComputedStyle(heading);
             return {
               'background-color': s.backgroundColor,
               'font-family': s.fontFamily,
               'color': s.color,
+              'heading-font-family': h.fontFamily,
+              'scoped-to': root === document.body ? 'body' : '.v2-shell',
             };
         }"""
     ) or {}
