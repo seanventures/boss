@@ -205,3 +205,87 @@ def summarise(results: dict[str, list[Finding]]) -> dict[str, Any]:
         "unrefuted": sorted(set(results) - set(broken) - set(suspect)),
         "passed": not broken,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Does it match the reference?
+#
+# The checks above ask whether a screen WORKS. These ask whether it looks like the thing it is
+# replacing — which the operator kept having to check by eye, screen by screen, and which is
+# entirely mechanical once the reference's own numbers are written down.
+#
+# The type scale in style-spec.json was read out of the reference's rendered DOM. An earlier
+# pass used rounded rem values that came out 15-60% large throughout: the screen title was
+# 28.5px where the reference is 18px. That is the difference between "in the style of" and
+# "the style", and it is invisible to every other check here.
+# --------------------------------------------------------------------------- #
+
+def check_style(measured: dict[str, Any], spec: dict[str, Any], *,
+                path: str = "") -> list[Finding]:
+    """Compare a screen's computed styles against the reference's own numbers.
+
+    `measured` is {role: {"font_size": "...", "font_weight": "...", "font_family": "..."}} as
+    read from the live DOM; roles missing from the page are skipped rather than failed, because
+    not every screen has every element.
+    """
+    out: list[Finding] = []
+    scale = spec.get("type_scale") or {}
+    fonts = spec.get("fonts") or {}
+
+    for role, want in scale.items():
+        got = measured.get(role)
+        if not got:
+            continue
+        want_size = str(want.get("font_size") or "")
+        got_size = str(got.get("font_size") or "")
+        if want_size and got_size and got_size != want_size:
+            out.append(Finding(
+                SUSPECT, "type-scale",
+                f"{path}{role}: {got_size} where the reference is {want_size}",
+            ))
+        want_weight = str(want.get("font_weight") or "")
+        got_weight = str(got.get("font_weight") or "")
+        if want_weight and got_weight and got_weight != want_weight:
+            out.append(Finding(
+                SUSPECT, "type-weight",
+                f"{path}{role}: weight {got_weight} where the reference is {want_weight}",
+            ))
+
+        family = str(got.get("font_family") or "").lower()
+        display = str(fonts.get("display") or "").lower()
+        mono = str(fonts.get("mono") or "").lower()
+        if family and display and mono and display not in family and mono not in family:
+            out.append(Finding(
+                SUSPECT, "type-family",
+                f"{path}{role}: {family[:40]!r} is neither the display nor the mono face",
+            ))
+
+    return out
+
+
+def check_structure(html: str, testids: list[str], spec: dict[str, Any],
+                    path: str) -> list[Finding]:
+    """Structural expectations for a specific screen.
+
+    Used where a screen has a SHAPE the reference cares about — the Hive is rings with halos
+    and dashed curves, and an implementation of filled discs on one circle passes every other
+    check in this file while looking like a different diagram.
+    """
+    rules = (spec.get("structure") or {}).get(path)
+    if not rules:
+        return []
+
+    out: list[Finding] = []
+    for prefix in rules.get("requires") or []:
+        if not any(t.startswith(prefix) or t == prefix for t in testids):
+            out.append(Finding(
+                BROKEN, "missing-structure",
+                f"{path}: nothing matching {prefix!r} — {rules.get('note', '')}",
+            ))
+    for marker in rules.get("svg_must_have") or []:
+        if marker not in html:
+            out.append(Finding(
+                SUSPECT, "shape",
+                f"{path}: no {marker!r} in the markup — {rules.get('note', '')}",
+            ))
+    return out

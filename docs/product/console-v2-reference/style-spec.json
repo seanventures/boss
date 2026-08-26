@@ -1,0 +1,84 @@
+{
+ "_source": "docs/product/console-v2-reference/artifact.html, rendered DOM",
+ "_why": "Measured, not estimated. An earlier pass used rounded rem values that came out 15-60% large throughout \u2014 the screen title was 28.5px where the reference is 18px. A type scale read off the real thing is the difference between 'in the style of' and 'the style'.",
+ "type_scale": {
+  "screen-title": {
+   "selector": ".v2-screen-title",
+   "font_size": "18px",
+   "font_weight": "700"
+  },
+  "screen-sub": {
+   "selector": ".v2-screen-sub",
+   "font_size": "12px",
+   "font_weight": "400"
+  },
+  "brand": {
+   "selector": ".v2-brand",
+   "font_size": "15px",
+   "font_weight": "700"
+  },
+  "primary-cta": {
+   "selector": ".v2-primary",
+   "font_size": "12.5px",
+   "font_weight": "700"
+  },
+  "row-title": {
+   "selector": ".v2-row-title",
+   "font_size": "14px",
+   "font_weight": "700"
+  },
+  "row-meta": {
+   "selector": ".v2-row-meta",
+   "font_size": "10.5px",
+   "font_weight": "400"
+  },
+  "nav-item": {
+   "selector": ".v2-nav-item",
+   "font_size": "13px",
+   "font_weight": "600"
+  },
+  "filter-tab": {
+   "selector": ".v2-tab",
+   "font_size": "10.5px",
+   "font_weight": "400"
+  },
+  "card-name": {
+   "selector": ".v2-card-name",
+   "font_size": "14px",
+   "font_weight": "700"
+  },
+  "eyebrow": {
+   "selector": ".v2-label",
+   "font_size": "9px",
+   "font_weight": "400"
+  }
+ },
+ "palette": {
+  "canvas": "rgb(9, 13, 23)",
+  "panel": "rgb(14, 20, 34)",
+  "surface": "rgb(20, 27, 43)",
+  "border": "rgb(30, 41, 64)",
+  "ink": "rgb(230, 237, 245)",
+  "muted": "rgb(141, 154, 181)",
+  "dim": "rgb(90, 103, 133)",
+  "mint": "rgb(79, 227, 193)"
+ },
+ "fonts": {
+  "display": "Space Grotesk",
+  "mono": "IBM Plex Mono"
+ },
+ "structure": {
+  "/v2/hive": {
+   "note": "rings with halos and dashed curves, not filled discs on one circle",
+   "requires": [
+    "v2-hive-graph",
+    "v2-hive-halo-",
+    "v2-hive-edge-"
+   ],
+   "svg_must_have": [
+    "stroke-dasharray",
+    "Q"
+   ]
+  }
+ }
+}

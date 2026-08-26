@@ -461,3 +461,34 @@ def probe_links(page, observation: "ScreenObservation", base_origin: str,
         except Exception:  # noqa: BLE001 - an unreachable link is a finding, not a crash
             seen[path] = 0
     observation.link_status = seen
+
+
+def measure_type_scale(page, spec: dict) -> dict[str, dict[str, str]]:
+    """Computed font-size/weight/family for each role in the style spec.
+
+    Reads the FIRST element matching each role's selector. Roles absent from a screen come back
+    missing rather than empty, so the comparison can skip them instead of failing a screen for
+    not having a filter tab.
+    """
+    selectors = {
+        role: rule["selector"]
+        for role, rule in (spec.get("type_scale") or {}).items()
+        if rule.get("selector")
+    }
+    return page.evaluate(
+        """(selectors) => {
+            const out = {};
+            for (const [role, sel] of Object.entries(selectors)) {
+              const el = document.querySelector(sel);
+              if (!el) continue;
+              const s = getComputedStyle(el);
+              out[role] = {
+                font_size: s.fontSize,
+                font_weight: s.fontWeight,
+                font_family: s.fontFamily,
+              };
+            }
+            return out;
+        }""",
+        selectors,
+    ) or {}

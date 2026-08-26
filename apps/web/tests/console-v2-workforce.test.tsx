@@ -145,13 +145,63 @@ describe("Hive", () => {
         { source: "a", target: "c", times: 1, last_action: null, last_at: null },
       ],
     }));
-    // The whole <line> element: stroke-width renders BEFORE data-testid, so matching forward
-    // from the testid finds the attribute on the NEXT element or nothing at all.
     const element = (id: string) =>
-      out.match(new RegExp(`<line[^>]*data-testid="${id}"[^>]*>`))![0];
+      out.match(new RegExp(`<path[^>]*data-testid="${id}"[^>]*>`))![0];
     const width = (s: string) => Number(s.match(/stroke-width="([\d.]+)"/)![1]);
     expect(width(element("v2-hive-edge-a-b")))
       .toBeGreaterThan(width(element("v2-hive-edge-a-c")));
+  });
+
+  it("edges are curves, not straight lines", () => {
+    // The reference offsets the control point 28px perpendicular to the chord. Straight lines
+    // read as a mesh; these read as flows, and beside the real thing the difference is the
+    // whole character of the diagram.
+    const out = hiveHtml(wf({
+      agents: [agent({ id: "a" }), agent({ id: "b" })],
+      handoffs: [{ source: "a", target: "b", times: 2, last_action: null, last_at: null }],
+    }));
+    const path = out.match(/<path[^>]*data-testid="v2-hive-edge-a-b"[^>]*>/)![0];
+    const d = path.match(/d="M([\d.-]+) ([\d.-]+) Q([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)"/);
+    expect(d, "edge should be a quadratic path").toBeTruthy();
+    const [x1, y1, cx, cy, x2, y2] = d!.slice(1).map(Number);
+
+    // The CONTROL POINT must sit off the chord. Checking only that a "Q" is present passes a
+    // degenerate curve whose control point is the midpoint — which draws a straight line, and
+    // which survived an earlier version of this test.
+    const mx = (x1 + x2) / 2;
+    const my = (y1 + y2) / 2;
+    const offset = Math.hypot(cx - mx, cy - my);
+    expect(offset, "control point is on the chord — this draws a straight line").toBeGreaterThan(20);
+
+    expect(out).not.toMatch(/<line[^>]*v2-hive-edge/);
+  });
+
+  it("every node has a halo", () => {
+    // A ring with a halo, not a filled disc. The halo is what makes status readable at a
+    // glance across the whole graph.
+    const out = hiveHtml(wf({ agents: [agent({ id: "a" }), agent({ id: "b" })] }));
+    expect(out).toContain('data-testid="v2-hive-halo-a"');
+    expect(out).toContain('data-testid="v2-hive-halo-b"');
+  });
+
+  it("the busiest agent takes the middle", () => {
+    // Position means something: the hub is earned by traffic, not assigned alphabetically.
+    const out = hiveHtml(wf({
+      agents: [agent({ id: "quiet", name: "Quiet" }), agent({ id: "hub", name: "Hub" })],
+      handoffs: [{ source: "quiet", target: "hub", times: 9, last_action: null, last_at: null }],
+    }));
+    const hub = out.match(/<g[^>]*data-testid="v2-hive-node-hub"[\s\S]*?<circle[^>]*class="v2-hive-node"[^>]*>/)![0];
+    expect(hub).toContain('data-ring="hub"');
+  });
+
+  it("agents sit on two rings, not one circle", () => {
+    // The outer ring is offset 0.35 rad from the inner one, which is why the reference reads
+    // as scattered rather than concentric. One circle of evenly spaced dots is a different
+    // picture.
+    const many = Array.from({ length: 9 }, (_, i) => agent({ id: `a${i}`, name: `A${i}` }));
+    const out = hiveHtml(wf({ agents: many }));
+    expect(out).toMatch(/data-ring="inner"/);
+    expect(out).toMatch(/data-ring="outer"/);
   });
 
   it("an edge to an agent that is not on the graph is dropped, not drawn to nowhere", () => {

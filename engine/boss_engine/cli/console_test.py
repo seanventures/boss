@@ -25,8 +25,15 @@ import json
 import pathlib
 import sys
 
-from ..services.console_driver import DriverConfig, learn, observe_screen, probe_links
-from ..services.console_screen_check import check, summarise as summarise_screens
+from ..services.console_driver import (
+    DriverConfig, learn, measure_type_scale, observe_screen, probe_links,
+)
+from ..services.console_screen_check import (
+    check,
+    check_structure,
+    check_style,
+    summarise as summarise_screens,
+)
 from ..services.console_test_agent import (
     Baseline, compare, defect_coverage, slow_controls, summarise,
 )
@@ -148,6 +155,12 @@ def _coverage(args: argparse.Namespace) -> int:
     return 1 if gaps else 0
 
 
+#: The reference's measured type scale and structural expectations.
+_DEFAULT_SPEC = (
+    pathlib.Path(__file__).resolve().parents[3]
+    / "docs" / "product" / "console-v2-reference" / "style-spec.json"
+)
+
 #: The v2 screens and the root element each must render. A screen missing from here is one
 #: nobody checks, so this list is the definition of "all the screens" for the checker.
 V2_SCREENS = {
@@ -180,6 +193,14 @@ def _screens(args: argparse.Namespace) -> int:
 
     origin = args.url.rstrip("/")
     query = f"?org={args.org}" if args.org else ""
+
+    # The reference's own numbers. Absent means the style comparison is skipped rather than
+    # silently passing — a check that cannot run must not report success.
+    spec_path = pathlib.Path(args.spec) if args.spec else _DEFAULT_SPEC
+    spec = json.loads(spec_path.read_text(encoding="utf-8")) if spec_path.exists() else {}
+    if not spec:
+        print(f"no style spec at {spec_path} — style comparison skipped",
+              file=sys.stderr, flush=True)
     paths = args.paths.split(",") if args.paths else list(V2_SCREENS)
 
     results = {}
@@ -191,7 +212,12 @@ def _screens(args: argparse.Namespace) -> int:
             observation = observe_screen(page, f"{path}{query}", origin)
             probe_links(page, observation, origin)
             findings = check(observation, expect_testid=V2_SCREENS.get(path))
-            results[path] = findings
+            if spec:
+                # Does it match the reference, not just work? This is the comparison the
+                # operator kept having to do by eye, screen by screen.
+                findings += check_style(measure_type_scale(page, spec), spec, path=f"{path} ")
+                findings += check_structure(observation.html, observation.testids, spec, path)
+            results[path] = [f for f in findings if f.severity != "OK"] or findings
             for f in findings:
                 if f.severity != "OK":
                     print(f"    {f.severity}: {f.rule} — {f.detail}", file=sys.stderr, flush=True)
@@ -247,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--paths", help="comma-separated paths (default: every v2 screen)")
     sp.add_argument("--headed", action="store_true", help="watch it run")
     sp.add_argument("--out", help="write the JSON report here")
+    sp.add_argument("--spec", help="style spec to compare against (default: the reference's)")
     sp.set_defaults(fn=_screens)
 
     cp = sub.add_parser("coverage", help="can this baseline catch known defects?")
