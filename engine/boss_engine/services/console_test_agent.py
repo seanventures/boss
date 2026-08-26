@@ -117,6 +117,11 @@ MISSING = "MISSING"    # v1 could do it; v2 cannot
 BROKEN = "BROKEN"      # v2 has it; it does something else
 MOVED = "MOVED"        # same outcome, different place — informational
 OK = "OK"
+UNVERIFIABLE = "UNVERIFIABLE"   # issued no request; this method cannot speak to it either way
+
+#: Request keys that identify nothing. A Server Action POST carries no operation name, so every
+#: one of them looks alike to a behaviour diff.
+_OPAQUE = frozenset({"POST (server-action)"})
 
 
 @dataclass
@@ -154,9 +159,23 @@ def compare(baseline: Baseline, observed: Baseline,
         if not wb:
             # A control that issued no request is presentational; it cannot be verified this
             # way and must not be silently counted as passing.
+            # NOT "OK". Counting an unchecked control as a pass is how a parity report comes
+            # to say 111/111 while having actually tested 51 things.
             findings.append(Finding(
-                verdict=OK, label=want.label, v1_area=want.area,
+                verdict=UNVERIFIABLE, label=want.label, v1_area=want.area,
                 detail="no request recorded — not verifiable by behaviour"))
+            continue
+
+        # An opaque behaviour cannot identify a control. Next serialises every Server Action to
+        # a POST at the page's own URL, so eleven different v1 buttons all recorded the single
+        # key "POST (server-action)" -- and a match on that would let ONE v2 action stand in for
+        # all eleven. Saying so is the only honest verdict available.
+        if wb <= _OPAQUE:
+            findings.append(Finding(
+                verdict=UNVERIFIABLE, label=want.label, v1_area=want.area,
+                expected=sorted(wb),
+                detail="only behaviour is an opaque server action — indistinguishable from "
+                       "every other server action, so a match would prove nothing"))
             continue
 
         exact = by_behaviour.get(frozenset(wb))
@@ -191,11 +210,19 @@ def compare(baseline: Baseline, observed: Baseline,
 
 
 def summarise(findings: list[Finding]) -> dict[str, Any]:
-    counts = {MISSING: 0, BROKEN: 0, MOVED: 0, OK: 0}
+    counts = {MISSING: 0, BROKEN: 0, MOVED: 0, OK: 0, UNVERIFIABLE: 0}
     for f in findings:
         counts[f.verdict] = counts.get(f.verdict, 0) + 1
+    checked = counts[OK] + counts[MOVED] + counts[MISSING] + counts[BROKEN]
     return {
         "counts": counts,
+        # How much of the baseline this run could speak to at all. A caller that reports
+        # "no failures" without this number is reporting the size of its blind spot as success.
+        "coverage": {
+            "checked": checked,
+            "total": len(findings),
+            "unverifiable": counts[UNVERIFIABLE],
+        },
         "passed": not any(f.is_failure() for f in findings),
         "failures": [asdict(f) for f in findings if f.is_failure()],
     }

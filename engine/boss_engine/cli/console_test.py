@@ -96,6 +96,32 @@ def _learn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_area_map(path: str) -> dict[str, str]:
+    """Read the parity map. YAML is the source of truth -- it is the file humans maintain.
+
+    Entries with `to: null` are areas v2 deliberately dropped; they carry a why_dropped and are
+    omitted here so a deliberate removal is never described as a relocation.
+    """
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    if path.endswith((".yaml", ".yml")):
+        import yaml
+
+        raw = yaml.safe_load(text) or {}
+    else:
+        raw = json.loads(text)
+    out: dict[str, str] = {}
+    for area, entry in raw.items():
+        if isinstance(entry, dict):
+            # The documented schema: an area is a mapping with `to`. Scalars at the top level
+            # are file metadata (version, generated_for) -- reading those as areas invented two
+            # mappings named after the header.
+            if entry.get("to"):
+                out[area] = str(entry["to"])
+        elif isinstance(entry, str) and not path.endswith((".yaml", ".yml")):
+            out[area] = entry   # the flat {v1: v2} JSON form
+    return out
+
+
 def _verify(args: argparse.Namespace) -> int:
     baseline = Baseline.from_json(pathlib.Path(args.baseline).read_text(encoding="utf-8"))
     observed = learn(
@@ -111,15 +137,20 @@ def _verify(args: argparse.Namespace) -> int:
         ),
         api_origin=args.api_origin,
     )
-    area_map = json.loads(pathlib.Path(args.area_map).read_text()) if args.area_map else None
+    area_map = _load_area_map(args.area_map) if args.area_map else None
     findings = compare(baseline, observed, area_map)
     result = summarise(findings)
 
     counts = result["counts"]
+    cov = result["coverage"]
     print(f"MISSING {counts.get('MISSING', 0)}  "
           f"BROKEN {counts.get('BROKEN', 0)}  "
           f"MOVED {counts.get('MOVED', 0)}  "
           f"OK {counts.get('OK', 0)}")
+    # Printed on its own line and never omitted: "no failures" over a small checked set is a
+    # statement about the blind spot, not about the migration.
+    print(f"checked {cov['checked']} of {cov['total']} baseline controls "
+          f"({cov['unverifiable']} not verifiable by behaviour)")
     for f in findings:
         if f.verdict == "MISSING":
             print(f"\nMISSING  {f.label}  (was in {f.v1_area})")

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import re
 import time
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -116,6 +117,20 @@ def _norm_path(url: str, api_origin: Optional[str]) -> str:
     if api_origin and url.startswith(api_origin):
         return url[len(api_origin):] or "/"
     return re.sub(r"^https?://[^/]+", "", url) or "/"
+
+
+def _area_url(base_url: str, area: str) -> str:
+    """Where an area lives.
+
+    v1 is a single page switched by ``?area=``; v2 is nine routes. An area given as a path is
+    used as one, keeping the base URL's query (``?org=``). Without this, crawling v2 silently
+    loaded v1's shell nine times and the parity check compared the console against itself.
+    """
+    if area.startswith("/"):
+        split = urlsplit(base_url)
+        return urlunsplit((split.scheme, split.netloc, area, split.query, ""))
+    joiner = "&" if "?" in base_url else "?"
+    return f"{base_url}{joiner}area={area}"
 
 
 def _is_control_safe(label: str) -> bool:
@@ -194,8 +209,7 @@ def learn(config: DriverConfig, api_origin: Optional[str] = None) -> Baseline:
         page.on("response", on_response)
 
         def area_url(area: str) -> str:
-            joiner = "&" if "?" in config.base_url else "?"
-            return f"{config.base_url}{joiner}area={area}"
+            return _area_url(config.base_url, area)
 
         def goto_area(area: str) -> None:
             seen.clear()

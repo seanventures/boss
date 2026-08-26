@@ -271,3 +271,113 @@ def test_covered_beats_fixed():
 def test_every_known_defect_reports_a_status():
     b = _base(_timed("a", "x", 100))
     assert all(r["status"] in {"covered", "fixed", "not-covered"} for r in defect_coverage(b))
+
+
+# --- an unchecked control is not a passing control ----------------------------------------
+
+def test_a_control_that_issued_no_request_is_not_counted_as_a_pass():
+    """The agent matches by behaviour. A presentational control has none, so this method has
+    nothing to say about it -- in either direction.
+
+    Calling that OK is how a parity report comes to claim 111/111 while 60 of the 111 were
+    never actually exercised. The number has to carry its own blind spot.
+    """
+    from boss_engine.services.console_test_agent import UNVERIFIABLE
+
+    v1 = Baseline(console="v1", captured_at="t", controls=[
+        Control(area="overview", label="Legend", testid="legend", requests=[]),
+    ])
+    findings = compare(v1, Baseline(console="v2", captured_at="t", controls=[]))
+    assert findings[0].verdict == UNVERIFIABLE
+    result = summarise(findings)
+    assert result["counts"]["OK"] == 0
+    assert result["coverage"] == {"checked": 0, "total": 1, "unverifiable": 1}
+
+
+def test_coverage_counts_every_control_the_method_could_actually_speak_to():
+    from boss_engine.services.console_test_agent import UNVERIFIABLE
+
+    v1 = Baseline(console="v1", captured_at="t", controls=[
+        Control(area="overview", label="Refresh", testid="r",
+                requests=[Request(method="GET", path="/v1/dashboard")]),
+        Control(area="overview", label="Legend", testid="l", requests=[]),
+    ])
+    v2 = Baseline(console="v2", captured_at="t", controls=[
+        Control(area="company", label="Reload", testid="x",
+                requests=[Request(method="GET", path="/v1/dashboard")]),
+    ])
+    result = summarise(compare(v1, v2))
+    assert result["coverage"]["checked"] == 1
+    assert result["coverage"]["unverifiable"] == 1
+    assert result["counts"][UNVERIFIABLE] == 1
+
+
+def test_an_opaque_server_action_cannot_stand_in_for_another():
+    """Next serialises every Server Action to a POST at the page's own URL, so all of them share
+    one behaviour key. Matching on it would let a single v2 action satisfy every v1 button that
+    ever posted -- the most flattering possible wrong answer."""
+    from boss_engine.services.console_test_agent import UNVERIFIABLE
+
+    sa = [Request(method="POST", path="(server-action)")]
+    v1 = Baseline(console="v1", captured_at="t", controls=[
+        Control(area="delivery", label="Approve gate", testid="a", requests=list(sa)),
+        Control(area="delivery", label="Reject gate", testid="r", requests=list(sa)),
+    ])
+    # v2 has exactly one server action. It must not vouch for both.
+    v2 = Baseline(console="v2", captured_at="t", controls=[
+        Control(area="apps", label="Ship", testid="s", requests=list(sa)),
+    ])
+    findings = compare(v1, v2)
+    assert [f.verdict for f in findings] == [UNVERIFIABLE, UNVERIFIABLE]
+    assert summarise(findings)["coverage"]["checked"] == 0
+
+
+def test_a_control_that_also_issues_a_named_request_is_still_verified():
+    """The opaque rule must not swallow controls that ARE identifiable. A button that posts an
+    action AND fetches a named endpoint is distinguishable by that endpoint."""
+    reqs = [Request(method="POST", path="(server-action)"),
+            Request(method="GET", path="/v1/deployments")]
+    v1 = Baseline(console="v1", captured_at="t", controls=[
+        Control(area="delivery", label="Deploy", testid="d", requests=list(reqs))])
+    v2 = Baseline(console="v2", captured_at="t", controls=[
+        Control(area="apps", label="Ship it", testid="s", requests=list(reqs))])
+    assert compare(v1, v2)[0].verdict in (OK, MOVED)
+
+
+def test_the_parity_map_reader_ignores_file_metadata(tmp_path):
+    """`version:` and `generated_for:` are the file's header. Read as areas they become two
+    mappings named after the metadata, which then describe real findings as MOVED."""
+    from boss_engine.cli.console_test import _load_area_map
+
+    f = tmp_path / "parity.yaml"
+    f.write_text(
+        "version: 1\n"
+        "generated_for: feat/console-v2\n"
+        "meetings:\n  to: panels\n  what: reads minutes\n"
+        "budget:\n  to: null\n  why_dropped: no budget API\n",
+        encoding="utf-8")
+    m = _load_area_map(str(f))
+    assert m == {"meetings": "panels"}, m
+
+
+def test_a_deliberately_dropped_area_is_not_reported_as_relocated(tmp_path):
+    """`to: null` means v2 chose not to carry it. Mapping it anywhere would describe a decision
+    as a move."""
+    from boss_engine.cli.console_test import _load_area_map
+
+    f = tmp_path / "p.yaml"
+    f.write_text("budget:\n  to: null\n  why_dropped: no API\n", encoding="utf-8")
+    assert _load_area_map(str(f)) == {}
+
+
+def test_a_path_area_is_navigated_as_a_path_not_as_a_query_parameter():
+    """v1 is one page switched by ?area=; v2 is nine routes.
+
+    Without this, crawling v2 loaded v1's shell nine times over and the parity check compared
+    the console against itself -- which is why it could never find anything.
+    """
+    from boss_engine.services.console_driver import _area_url
+
+    base = "https://boss.example?org=org_boss"
+    assert _area_url(base, "/v2/panels") == "https://boss.example/v2/panels?org=org_boss"
+    assert _area_url(base, "overview") == "https://boss.example?org=org_boss&area=overview"
