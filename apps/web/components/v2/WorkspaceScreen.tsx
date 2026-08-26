@@ -6,6 +6,7 @@ import Link from "next/link";
 import React from "react";
 
 import type { V2Run, Workspace } from "../../lib/v2/workspace";
+import { DeployControls } from "./DeployControls";
 
 /**
  * One app: where it stands, every attempt it took to get there, and what it cost.
@@ -31,9 +32,14 @@ function money(n: number): string {
 export function WorkspaceScreen({
   workspace,
   orgId,
+  actor = "executive_console",
 }: {
   workspace: Workspace;
   orgId?: string;
+  /** Who is acting. NEVER invented: defaulting to "operator" got the API's refusal
+   *  "Authenticated principal 'ceo' is not allowed to act as 'operator'", which was right —
+   *  claiming a principal you are not is impersonation whether or not it was meant. */
+  actor?: string;
 }) {
   const q = orgId ? `?org=${encodeURIComponent(orgId)}` : "";
 
@@ -116,6 +122,21 @@ export function WorkspaceScreen({
           ? "Reviewed and ready to ship."
           : `Cannot ship yet — ${workspace.deployable_reason}`}
       </p>
+
+      {/* The four controls, on the app rather than buried in a list of runs. They issue the
+          same requests as the v1 card, deliberately: those handlers are already off the
+          Server-Action path, and reusing them is what lets the parity check report MOVED
+          instead of MISSING. */}
+      {workspace.latest_run_id ? (
+        <DeployControls
+          runId={workspace.latest_run_id}
+          appName={workspace.title ?? ""}
+          projectId={workspace.project_id}
+          actor={actor}
+          deployable={Boolean(workspace.deployable)}
+          deployableReason={workspace.deployable_reason ?? ""}
+        />
+      ) : null}
 
       <h2 className="v2-ws-h">Attempts</h2>
       {runs.length === 0 ? (
