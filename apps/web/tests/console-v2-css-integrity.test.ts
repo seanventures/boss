@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { cssOnly } from "./_helpers/source";
+import { codeOnly, cssOnly, tsxFiles } from "./_helpers/source";
 
 /**
  * Things CSS accepts in silence.
@@ -15,7 +15,15 @@ import { cssOnly } from "./_helpers/source";
  * exactly like correct output.
  */
 
-const CSS = cssOnly("components/v2/shell.css");
+/**
+ * BOTH v2 stylesheets, concatenated, because that is how the browser sees them: one document,
+ * one global namespace for @keyframes and custom properties. Checking shell.css alone is what
+ * produced the mistake this file exists to prevent -- v2-pulse looked undefined (it lives in
+ * tokens.css), so a second definition was added under the same name, which does not create a
+ * new animation but REPLACES the existing one for every element already using it.
+ */
+const FILES = ["components/v2/tokens.css", "components/v2/shell.css"];
+const CSS = FILES.map(cssOnly).join("\n");
 
 /** Names used by an `animation` / `animation-name` declaration. */
 function animationNames(css: string): string[] {
@@ -45,18 +53,49 @@ describe("v2 stylesheet integrity", () => {
     expect(used.filter((n) => !defined.has(n))).toEqual([]);
   });
 
-  it("anything that scales inside the SVG scales about its own centre", () => {
-    // An SVG element transforms about the VIEWPORT origin unless told otherwise, so a
-    // scale() meant to breathe in place instead throws the shape across the canvas.
-    for (const m of CSS.matchAll(/@keyframes\s+([\w-]+)\s*\{([^}]*\{[^}]*\}\s*)*\}/g)) {
-      if (!/transform:\s*scale/.test(m[0])) continue;
-      const users = [...CSS.matchAll(new RegExp(`([\\w.\\[\\]="'-]+)\\s*\\{[^}]*animation[^;}]*${m[1]}`, "g"))];
-      for (const u of users) {
-        const selector = u[1].replace(/\[[^\]]*\]/, "");
-        const block = CSS.match(new RegExp(`\\${selector}\\s*\\{[^}]*\\}`));
-        expect(block?.[0] ?? "", `${selector} scales but sets no transform-box`)
-          .toMatch(/transform-box:\s*fill-box/);
+  it("no two rules define the same animation name", () => {
+    // Not a style question. @keyframes is a single global namespace across every stylesheet on
+    // the page, so a duplicate name silently retargets every existing user of it -- here, the
+    // running-agent status dot, which lost its own motion and faded to opacity .1.
+    const names = [...CSS.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]);
+    const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+    expect(dupes).toEqual([]);
+    expect(names.length).toBeGreaterThan(1);
+  });
+
+  it("every SVG shape that scales sets transform-box", () => {
+    // An SVG element transforms about the VIEWPORT origin by default, so a scale() meant to
+    // breathe in place instead drags the shape across the canvas. HTML elements do not have
+    // this problem, so the rule must apply to SVG shapes only -- asserting it everywhere
+    // flagged the status dot, which is a <span>.
+    //
+    // Which classes are SVG is read from the components, not guessed from the class name.
+    const svgClasses = new Set<string>();
+    for (const file of tsxFiles("components/v2")) {
+      const src = codeOnly(file);
+      for (const m of src.matchAll(/<(circle|path|rect|ellipse|polygon|line|g|text)\b[^>]*className="([^"]+)"/g)) {
+        for (const c of m[2].split(/\s+/)) svgClasses.add(c);
       }
     }
+    expect(svgClasses.size).toBeGreaterThan(0);   // or this test proves nothing
+
+    const scaling = new Set(
+      [...CSS.matchAll(/@keyframes\s+([\w-]+)\s*\{(?:[^{}]|\{[^{}]*\})*\}/g)]
+        .filter((m) => /transform:\s*scale/.test(m[0]))
+        .map((m) => m[1]),
+    );
+
+    const offenders: string[] = [];
+    for (const cls of svgClasses) {
+      for (const m of CSS.matchAll(new RegExp(`\\.${cls}\\b[^{]*\\{([^}]*)\\}`, "g"))) {
+        const usesScaling = [...scaling].some((n) =>
+          new RegExp(`animation(?:-name)?:[^;}]*\\b${n}\\b`).test(m[1]));
+        if (!usesScaling) continue;
+        const own = [...CSS.matchAll(new RegExp(`\\.${cls}\\b[^{]*\\{([^}]*)\\}`, "g"))]
+          .map((x) => x[1]).join(" ");
+        if (!/transform-box:\s*fill-box/.test(own)) offenders.push(cls);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

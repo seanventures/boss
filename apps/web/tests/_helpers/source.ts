@@ -7,7 +7,7 @@
  *
  * The Python side has `code_only()` for the same reason. This is its counterpart.
  */
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 export function codeOnly(path: string): string {
   const raw = readFileSync(path, "utf8");
@@ -30,4 +30,14 @@ export function codeOnly(path: string): string {
  */
 export function cssOnly(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, " ");
+}
+
+/** Every .tsx under a directory, relative to apps/web. For checks that must scan components as
+ *  a set rather than name each file -- a rule that only covers the files someone remembered to
+ *  list goes stale the moment a screen is added. */
+export function tsxFiles(dir: string): string[] {
+  // Paths are relative to apps/web, matching how every other helper here is called.
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".tsx"))
+    .map((f) => `${dir}/${f}`);
 }

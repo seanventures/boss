@@ -391,10 +391,14 @@
 
 /* The halo. Pulses ONLY while an agent is working — a graph where everything
    pulses says nothing. */
-/* The pulse itself. Without these keyframes the `animation:` line below is a no-op that CSS
-   accepts in silence -- the halo simply sat still, which looks exactly like an agent that is
-   idle. Motion here means "this agent is working right now", so its absence was a lie. */
-@keyframes v2-pulse {
+/* Its OWN name. `v2-pulse` is already defined in tokens.css for the 7px status dot, and CSS
+   resolves duplicate @keyframes names globally by document order -- so redefining it here did
+   not add a halo animation, it silently replaced the DOT's animation everywhere, fading every
+   running agent's status dot to opacity .1. A duplicate keyframe name is not a local edit.
+
+   A 36px halo and a 7px dot want different motion anyway: the halo breathes outward, the dot
+   holds its size and dips in opacity. */
+@keyframes v2-halo-pulse {
   0%, 100% { opacity: .10; transform: scale(1); }
   50%      { opacity: .30; transform: scale(1.08); }
 }
@@ -408,7 +412,7 @@
 }
 .v2-hive-halo[data-status="WORKING"] {
   fill: var(--v2-mint); opacity: .16;
-  animation: v2-pulse 2.4s ease-in-out infinite;
+  animation: v2-halo-pulse 2.4s ease-in-out infinite;
 }
 .v2-hive-halo[data-status="STUCK"] { fill: var(--v2-amber); opacity: .2; }
 .v2-hive-halo[data-status="AT GATE"] { fill: var(--v2-purple); opacity: .18; }
