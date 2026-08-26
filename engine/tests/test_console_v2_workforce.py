@@ -218,3 +218,66 @@ def test_the_org_chart_looks_back_further_than_a_day():
     # The roles query takes no window; the windowed ones do.
     windows = [p["h"] for _, p in conn.statements if "h" in p]
     assert windows and all(h >= 168 for h in windows)
+
+
+# --------------------------------------------------------------------------- #
+# What the card actually needs
+#
+# The reference's agent card carries the project, the last artefact touched and a check-in
+# time. BOSS records all three and the first version simply did not read them, so the card was
+# thinner than the data behind it.
+# --------------------------------------------------------------------------- #
+def _step_with(**over):
+    base = step("coder")
+    base.update(over)
+    return base
+
+
+def test_the_card_says_which_work_the_agent_is_on():
+    out = workforce(FakeConn(
+        roles=[role("coder")],
+        steps=[_step_with(run_title="Shorty — Re-build PRD", run_status="running")],
+    ), "p")
+    # Cleaned the same way titles are everywhere else — an artefact type is not a project name.
+    assert out["agents"][0]["project"] == "Shorty"
+
+
+def test_the_card_says_what_was_last_touched():
+    out = workforce(FakeConn(
+        roles=[role("coder")],
+        steps=[_step_with(output={"artifact": "src/routes/shorten.ts"})],
+    ), "p")
+    assert out["agents"][0]["last_touched"] == "src/routes/shorten.ts"
+
+
+def test_a_pull_request_counts_as_something_touched():
+    out = workforce(FakeConn(
+        roles=[role("coder")],
+        steps=[_step_with(output={"pull_request_url": "https://github.com/x/y/pull/9"})],
+    ), "p")
+    assert "pull/9" in out["agents"][0]["last_touched"]
+
+
+def test_nothing_recorded_means_nothing_shown_not_a_plausible_filename():
+    """A plausible-looking path is worse than an admission, because it cannot be told apart
+    from a real one."""
+    out = workforce(FakeConn(roles=[role("coder")], steps=[_step_with(output={})]), "p")
+    assert out["agents"][0]["last_touched"] is None
+
+
+def test_a_malformed_output_does_not_break_the_card():
+    out = workforce(FakeConn(roles=[role("coder")], steps=[_step_with(output="not a dict")]), "p")
+    assert out["agents"][0]["last_touched"] is None
+
+
+def test_the_check_in_time_is_the_step_age():
+    out = workforce(FakeConn(roles=[role("coder")], steps=[step("coder", age_s=42)]), "p")
+    assert out["agents"][0]["last_seen_seconds"] == 42
+
+
+def test_an_agent_with_no_step_has_no_project_or_artefact():
+    out = workforce(FakeConn(roles=[role("idle_one")]), "p")
+    agent = out["agents"][0]
+    assert agent["project"] is None
+    assert agent["last_touched"] is None
+    assert agent["last_seen_seconds"] is None

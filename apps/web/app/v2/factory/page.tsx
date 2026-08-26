@@ -2,6 +2,7 @@ import { Shell } from "../../../components/v2/Shell";
 import { WorkforceScreen } from "../../../components/v2/WorkforceScreen";
 import { fetchCompanyOverview } from "../../../lib/v2/overview";
 import { fetchWorkforce } from "../../../lib/v2/workforce";
+import { fetchDecisionQueue } from "../../../lib/v2/decisions";
 import { resolveProjectId } from "../../../lib/client";
 import { fetchOrgs } from "../../../lib/orgs";
 
@@ -20,15 +21,16 @@ export default async function V2Section({ searchParams }: Params) {
   const selected = orgId ? orgs.items.find((o) => o.org_id === orgId) : orgs.items[0];
   const projectId = resolveProjectId(selected?.project_id);
 
-  const [overview, data] = await Promise.all([
+  const [overview, data, inbox] = await Promise.all([
     fetchCompanyOverview(projectId),
     fetchWorkforce(projectId),
+    fetchDecisionQueue(projectId),
   ]);
   if (selected?.org_name) overview.company.name = selected.org_name;
 
   return (
     <Shell active="factory" overview={overview} orgId={selected?.org_id}>
-      <WorkforceScreen workforce={data} projectId={projectId} />
+      <WorkforceScreen workforce={data} projectId={projectId} inbox={inbox} />
     </Shell>
   );
 }

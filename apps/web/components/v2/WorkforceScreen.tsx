@@ -5,6 +5,7 @@
 import React, { useMemo, useState } from "react";
 
 import type { V2Agent, Workforce } from "../../lib/v2/workforce";
+import type { DecisionQueue } from "../../lib/v2/decisions";
 import { AgentChat } from "./AgentChat";
 
 /**
@@ -36,10 +37,15 @@ function ago(seconds: number | null): string {
 export function WorkforceScreen({
   workforce,
   projectId,
+  inbox,
   actor = "executive_console",
 }: {
   workforce: Workforce;
   projectId?: string;
+  /** Gates waiting on a human. The reference puts these beside the agents, and it is right to:
+   *  an agent that is blocked and a gate that is blocking it are the same problem seen from
+   *  two ends. */
+  inbox?: DecisionQueue;
   /** Never defaulted at the call site into something invented — "operator" produced
    *  "Authenticated principal 'ceo' is not allowed to act as 'operator'". */
   actor?: string;
@@ -106,6 +112,46 @@ export function WorkforceScreen({
           ))}
         </div>
       </header>
+
+      {/* THE DECISION INBOX, beside the agents.
+          Answering still happens on Decisions: duplicating an approval control before the
+          parity check has run would be the fastest way to ship two paths to one irreversible
+          act. This says what is waiting and what happens if it is ignored. */}
+      {inbox && inbox.apiReachable && inbox.items.length > 0 ? (
+        <div className="v2-inbox" data-testid="v2-workforce-inbox">
+          <h2 className="v2-ws-h">
+            Waiting on you
+            {inbox.auto_resolving > 0 ? (
+              <span className="v2-dec-auto" data-testid="v2-workforce-inbox-auto">
+                {" "}
+                · {inbox.auto_resolving} will be decided without you
+              </span>
+            ) : null}
+          </h2>
+          <ul className="v2-rows">
+            {inbox.items.slice(0, 5).map((d) => (
+              <li className="v2-row" key={d.id} data-testid={`v2-inbox-${d.id}`}>
+                <span className="v2-row-main">
+                  <span className="v2-row-title">{d.question}</span>
+                  <span
+                    className="v2-dec-ignored v2-mono"
+                    data-will-fire={Boolean(d.deadline_at && d.default_action)}
+                  >
+                    {d.if_ignored}
+                  </span>
+                </span>
+                <a
+                  className="v2-dec-open v2-mono"
+                  href={`/v2/panels${projectId ? "" : ""}`}
+                  data-testid={`v2-inbox-open-${d.id}`}
+                >
+                  Review →
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {/* Said once, at the top, rather than a dash on every row. BOSS does not record which
           agent an LLM call belongs to, and the screen refuses to imply otherwise. */}
@@ -174,6 +220,24 @@ function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
 
       <p className="v2-card-task">{a.task}</p>
 
+      {/* WHICH WORK, and WHAT IT TOUCHED. Both were missing: BOSS records them and the card
+          simply did not read them, so it was thinner than the data behind it. */}
+      {a.project ? (
+        <div className="v2-card-meta">
+          <span data-testid={`v2-agent-project-${a.id}`}>
+            <span className="v2-row-meta-dim">on</span> {a.project}
+          </span>
+        </div>
+      ) : null}
+
+      {a.last_touched ? (
+        <div className="v2-card-meta">
+          <span className="v2-card-touched" data-testid={`v2-agent-touched-${a.id}`}>
+            <span className="v2-row-meta-dim">last touched</span> {a.last_touched}
+          </span>
+        </div>
+      ) : null}
+
       <div className="v2-card-meta">
         {/* The model it ACTUALLY used. Absent when nothing ran, rather than showing a
             configured model that never executed. */}
@@ -185,7 +249,8 @@ function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
         <span>
           trust <b>{a.trust_score}</b>
         </span>
-        <span>{ago(a.last_seen_seconds)}</span>
+        {/* Check-in. "42s ago" and "not seen in this window" are different facts. */}
+        <span data-testid={`v2-agent-checkin-${a.id}`}>{ago(a.last_seen_seconds)}</span>
       </div>
 
       {/* Violations are surfaced, never buried. BOSS has recorded these all along and v1 never

@@ -73,16 +73,24 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
 
     # The newest step per role. DISTINCT ON is exact here and avoids pulling every step for
     # every role just to take the first of each.
+    # The newest step per role, WITH what it touched and which run it belongs to.
+    #
+    # The reference's card shows the project, the last artefact touched and a check-in time.
+    # BOSS records all three -- run title, step output, step timestamp -- and the first version
+    # of this simply did not read them, so the card was thinner than the data.
     steps = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT DISTINCT ON (role_key)
-                   role_key, run_id, step_key, action, status, handoff_from, created_at,
-                   EXTRACT(EPOCH FROM (now() - created_at)) AS age_seconds
-            FROM agent_process_steps
-            WHERE project_id = :p
-              AND created_at > now() - make_interval(hours => :h)
-            ORDER BY role_key, created_at DESC
+            SELECT DISTINCT ON (s.role_key)
+                   s.role_key, s.run_id, s.step_key, s.action, s.status,
+                   s.handoff_from, s.output, s.created_at,
+                   EXTRACT(EPOCH FROM (now() - s.created_at)) AS age_seconds,
+                   r.title AS run_title, r.status AS run_status
+            FROM agent_process_steps s
+            LEFT JOIN agent_process_runs r ON r.id = s.run_id
+            WHERE s.project_id = :p
+              AND s.created_at > now() - make_interval(hours => :h)
+            ORDER BY s.role_key, s.created_at DESC
             """
         ),
         {"p": project_id, "h": int(hours)},
@@ -156,6 +164,13 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "hidden_failures": int(role.get("hidden_failure_count") or 0),
             "last_seen_seconds": int(step["age_seconds"]) if step and step.get("age_seconds") else None,
             "run_id": step.get("run_id") if step else None,
+            # WHICH PIECE OF WORK. The reference calls this the project; here it is the run the
+            # agent's newest step belongs to, which is the same question.
+            "project": _run_label(step) if step else None,
+            # WHAT IT LAST TOUCHED. Read out of the step's own output rather than guessed, and
+            # absent when the step recorded nothing -- "no artefact recorded" is a fact, and a
+            # plausible filename would not be.
+            "last_touched": _touched(step) if step else None,
         })
 
     return {
@@ -205,6 +220,38 @@ def _status_of(step: Optional[dict]) -> tuple[str, str]:
             return STUCK, f"{action} — running {int(age // 60)}m with no progress"
         return WORKING, action
     return IDLE, f"last: {action}"
+
+
+def _run_label(step: dict) -> Optional[str]:
+    """The work this agent is on, named the way the operator would name it."""
+    from .console_v2 import _clean_title
+
+    title = _clean_title(str(step.get("run_title") or ""))
+    return title or None
+
+
+#: Keys a step's output may use for the thing it produced or changed. Checked in order; the
+#: first that holds a string wins.
+_TOUCHED_KEYS = (
+    "artifact", "artifact_path", "path", "file", "document", "pr_url",
+    "pull_request_url", "output_path", "target",
+)
+
+
+def _touched(step: dict) -> Optional[str]:
+    """The last artefact this agent touched, if the step recorded one.
+
+    None rather than a guess. A plausible-looking filename is worse than an admission, because
+    it cannot be told apart from a real one.
+    """
+    output = step.get("output")
+    if not isinstance(output, dict):
+        return None
+    for key in _TOUCHED_KEYS:
+        value = output.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:80]
+    return None
 
 
 def _humanise(role_key: str) -> str:

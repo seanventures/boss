@@ -32,6 +32,8 @@ const agent = (over: Partial<V2Agent> = {}): V2Agent => ({
   hidden_failures: 0,
   last_seen_seconds: 42,
   run_id: "run_1",
+  project: "Shorty",
+  last_touched: "src/routes/shorten.ts",
   ...over,
 });
 
@@ -105,6 +107,26 @@ describe("Workforce", () => {
     }));
     expect(out).toContain('data-testid="v2-workforce-no-spend"');
     expect(out).not.toMatch(/\$0\.00/);
+  });
+
+  it("the card says which work the agent is on and what it last touched", () => {
+    // Both were missing. BOSS records them; the card simply did not read them, so it was
+    // thinner than the data behind it.
+    const out = wfHtml(wf());
+    expect(out).toContain('data-testid="v2-agent-project-coder"');
+    expect(out).toContain("Shorty");
+    expect(out).toContain('data-testid="v2-agent-touched-coder"');
+    expect(out).toContain("src/routes/shorten.ts");
+  });
+
+  it("shows a check-in time", () => {
+    expect(wfHtml(wf())).toContain('data-testid="v2-agent-checkin-coder"');
+  });
+
+  it("shows no artefact line when the step recorded nothing", () => {
+    // A plausible filename cannot be told apart from a real one.
+    expect(wfHtml(wf({ agents: [agent({ last_touched: null })] })))
+      .not.toContain('data-testid="v2-agent-touched-coder"');
   });
 
   it("an unreachable API shows no counts", () => {

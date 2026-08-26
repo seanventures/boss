@@ -5,7 +5,7 @@ import Link from "next/link";
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React from "react";
 
-import type { V2Run, Workspace } from "../../lib/v2/workspace";
+import type { V2Run, V2Step, Workspace } from "../../lib/v2/workspace";
 import { DeployControls } from "./DeployControls";
 
 /**
@@ -183,10 +183,28 @@ function RunRow({ run }: { run: V2Run }) {
           </span>
         ) : null}
 
+        {/* THE STEPS THIS ATTEMPT RAN — which stage, which model, how long, what it cost.
+            "attempt 3 — failed" and nothing else leaves reading logs as the only next move. */}
+        {run.steps.length > 0 ? (
+          <ol className="v2-steps" data-testid={`v2-run-steps-${run.id}`}>
+            {run.steps.map((s, i) => (
+              <RunStep key={`${s.stage}-${i}`} s={s} runId={run.id} index={i} />
+            ))}
+          </ol>
+        ) : null}
+
         <span className="v2-row-meta v2-mono">
           <b>{run.turns}</b> turns
           {"  "}
           <b>{money(run.spend_usd)}</b>
+          {run.latency_ms > 0 ? (
+            <>
+              {"  "}
+              <span data-testid={`v2-run-latency-${run.id}`}>
+                <b>{(run.latency_ms / 1000).toFixed(1)}s</b> model time
+              </span>
+            </>
+          ) : null}
           {run.pull_request_number ? (
             <>
               {"  "}
@@ -209,6 +227,38 @@ function RunRow({ run }: { run: V2Run }) {
           ) : null}
         </span>
       </span>
+    </li>
+  );
+}
+
+
+/**
+ * One step of an attempt.
+ *
+ * Latency is shown because it is what separates a slow model from a slow pipeline — a run that
+ * took ten minutes with nine seconds of model time was not waiting on the model.
+ */
+function RunStep({ s, runId, index }: { s: V2Step; runId: string; index: number }) {
+  return (
+    <li
+      className="v2-step"
+      data-ok={s.ok}
+      data-testid={`v2-step-${runId}-${index}`}
+    >
+      <span className="v2-step-name">{s.stage}</span>
+      {s.model ? <span className="v2-step-role">{s.model}</span> : null}
+      <span className="v2-step-timing">
+        {(s.latency_ms / 1000).toFixed(1)}s
+        {s.spend_usd > 0 ? ` · $${s.spend_usd.toFixed(2)}` : ""}
+        {s.calls > 1 ? ` · ${s.calls} calls` : ""}
+      </span>
+      {/* A run that failed at one step and succeeded at nine others is a different story from
+          one that failed everywhere. */}
+      {!s.ok ? (
+        <span className="v2-step-failed" data-testid={`v2-step-failed-${runId}-${index}`}>
+          failed
+        </span>
+      ) : null}
     </li>
   );
 }

@@ -583,3 +583,25 @@
   text-transform: uppercase;
   color: var(--v2-dim);
 }
+
+.v2-card-touched {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+
+.v2-inbox { margin-bottom: 26px; }
+
+/* Run steps */
+.v2-steps {
+  list-style: none; margin: 8px 0 4px; padding: 0;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.v2-step {
+  display: flex; align-items: baseline; gap: 10px;
+  font-family: var(--v2-font-mono); font-size: 10px; color: var(--v2-muted);
+  padding-left: 10px; border-left: 1px solid var(--v2-border);
+}
+.v2-step[data-ok="false"] { border-left-color: var(--v2-red); }
+.v2-step-name { color: var(--v2-ink); min-width: 110px; }
+.v2-step-role { color: var(--v2-dim); }
+.v2-step-timing { color: var(--v2-dim); margin-left: auto; }
+.v2-step-failed { color: var(--v2-red); }

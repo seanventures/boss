@@ -443,6 +443,46 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
     micros = sum(int((r.get("usage") or {}).get("cost_usd_micros") or 0) for r in lineage)
     spec = lineage[0].get("spec") or {}
 
+    # Per-run detail: the steps, who ran them, and what each cost.
+    #
+    # A card that says "attempt 3 — failed" and nothing else is a dead end: the only move left
+    # is to go and read logs. The operator asked for what v1 showed — latency, the steps, and
+    # which agent made the change — and BOSS records all of it.
+    run_ids = [r["id"] for r in lineage]
+    calls = {}
+    steps_by_run: dict[str, list] = {}
+    if run_ids:
+        for row in connection.execute(
+            sql(
+                """
+                SELECT code_task_run_id AS run_id, stage, model, engine,
+                       sum(total_tokens) AS tokens,
+                       sum(cost_usd_micros) AS micros,
+                       sum(latency_ms) AS latency_ms,
+                       count(*) AS calls,
+                       bool_and(ok) AS all_ok
+                FROM llm_calls
+                WHERE code_task_run_id = ANY(:ids)
+                GROUP BY code_task_run_id, stage, model, engine
+                ORDER BY code_task_run_id, min(created_at)
+                """
+            ),
+            {"ids": run_ids},
+        ).mappings().all():
+            steps_by_run.setdefault(row["run_id"], []).append({
+                # The stage IS the step: spec, plan, implement, review_code, check_tests.
+                "stage": str(row.get("stage") or "(unnamed)"),
+                "model": row.get("model"),
+                "engine": row.get("engine"),
+                "tokens": int(row.get("tokens") or 0),
+                "spend_usd": round(int(row.get("micros") or 0) / 1_000_000, 4),
+                # Latency, which is what the operator asked for and what tells a slow model
+                # apart from a slow pipeline.
+                "latency_ms": int(row.get("latency_ms") or 0),
+                "calls": int(row.get("calls") or 0),
+                "ok": bool(row.get("all_ok")),
+            })
+
     runs = [
         {
             "id": r["id"],
@@ -456,6 +496,9 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
             # The failure text, because "failed" without it is a dead end on the card.
             "error": str(r.get("error") or "")[:400] or None,
             "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+            # The steps this attempt actually ran, in order, each with its model and latency.
+            "steps": steps_by_run.get(r["id"], []),
+            "latency_ms": sum(s["latency_ms"] for s in steps_by_run.get(r["id"], [])),
         }
         for r in lineage
     ]

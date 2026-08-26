@@ -32,6 +32,11 @@ export type V2Agent = {
   hidden_failures: number;
   last_seen_seconds: number | null;
   run_id: string | null;
+  /** Which piece of work the agent is on — the run its newest step belongs to. */
+  project: string | null;
+  /** The last artefact it touched, read from the step's own output. Null when the step
+   *  recorded nothing: a plausible-looking filename cannot be told apart from a real one. */
+  last_touched: string | null;
 };
 
 export type V2Handoff = {

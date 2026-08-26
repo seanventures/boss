@@ -7,6 +7,18 @@ import { API_URL, authHeaders } from "../client";
  * a single app cost the same as opening everything. Budget here: TTFB <= 2s.
  */
 
+export type V2Step = {
+  /** The pipeline stage — spec, plan, implement, review_code, check_tests. */
+  stage: string;
+  model: string | null;
+  engine: string | null;
+  tokens: number;
+  spend_usd: number;
+  latency_ms: number;
+  calls: number;
+  ok: boolean;
+};
+
 export type V2Run = {
   id: string;
   status: string;
@@ -18,6 +30,11 @@ export type V2Run = {
   pull_request_url: string | null;
   error: string | null;
   created_at: string | null;
+  /** The steps this attempt ran, in order, each with the model that ran it and what it cost.
+   *  A card saying "failed" and nothing else is a dead end — the only move left is to go and
+   *  read logs. */
+  steps: V2Step[];
+  latency_ms: number;
 };
 
 export type V2Phase = { id: string; reached: boolean; label: string };

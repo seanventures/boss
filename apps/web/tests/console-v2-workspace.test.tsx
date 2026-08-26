@@ -25,6 +25,8 @@ const run = (over: Partial<V2Run> = {}): V2Run => ({
   pull_request_url: null,
   error: null,
   created_at: "2026-08-26T00:00:00Z",
+  steps: [],
+  latency_ms: 0,
   ...over,
 });
 
@@ -131,6 +133,57 @@ describe("v2 project workspace", () => {
     it("a successful attempt shows no error slot at all", () => {
       expect(html(ws({ runs: [run({ id: "crun_ok" })] })))
         .not.toContain('data-testid="v2-run-error-crun_ok"');
+    });
+  });
+
+  describe("what an attempt actually did", () => {
+    const withSteps = () =>
+      html(ws({
+        runs: [run({
+          id: "crun_s",
+          status: "failed",
+          latency_ms: 12_400,
+          steps: [
+            { stage: "spec", model: "claude-opus-5", engine: "claude_code", tokens: 4000,
+              spend_usd: 0.25, latency_ms: 3_000, calls: 1, ok: true },
+            { stage: "implement", model: "claude-sonnet-5", engine: "claude_code", tokens: 9000,
+              spend_usd: 0.9, latency_ms: 9_400, calls: 3, ok: false },
+          ],
+        })],
+      }));
+
+    it("lists the steps the attempt ran", () => {
+      // "attempt 3 — failed" and nothing else leaves reading logs as the only next move.
+      const out = withSteps();
+      expect(out).toContain('data-testid="v2-run-steps-crun_s"');
+      expect(out).toMatch(/spec/);
+      expect(out).toMatch(/implement/);
+    });
+
+    it("says which model ran each step", () => {
+      const out = withSteps();
+      expect(out).toContain("claude-opus-5");
+      expect(out).toContain("claude-sonnet-5");
+    });
+
+    it("shows latency per step and for the whole attempt", () => {
+      // What separates a slow model from a slow pipeline: a run that took ten minutes with
+      // nine seconds of model time was not waiting on the model.
+      const out = withSteps();
+      expect(out).toContain('data-testid="v2-run-latency-crun_s"');
+      expect(out).toMatch(/12\.4s/);
+      expect(out).toMatch(/9\.4s/);
+    });
+
+    it("marks the step that failed, not the whole run", () => {
+      // A run that failed at one step and succeeded at nine others is a different story.
+      expect(withSteps()).toContain('data-testid="v2-step-failed-crun_s-1"');
+      expect(withSteps()).not.toContain('data-testid="v2-step-failed-crun_s-0"');
+    });
+
+    it("shows no step list when nothing was recorded", () => {
+      expect(html(ws({ runs: [run({ id: "crun_bare" })] })))
+        .not.toContain('data-testid="v2-run-steps-crun_bare"');
     });
   });
 

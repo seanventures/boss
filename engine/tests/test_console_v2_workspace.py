@@ -15,22 +15,30 @@ NOW = datetime(2026, 8, 26, tzinfo=timezone.utc)
 
 
 class FakeConn:
-    """Returns the seeded rows for the workspace query."""
+    """Routes each query to its own rows by the table it names.
 
-    def __init__(self, rows):
+    An earlier version returned the SAME rows for every query, so when the workspace started
+    reading llm_calls it handed code-task rows to a query that wanted call rows. A fake that
+    answers everything identically will agree with any code, including wrong code.
+    """
+
+    def __init__(self, rows, calls=()):
         self.rows = rows
+        self.calls = list(calls)
         self.statements = []
 
     def execute(self, statement, params=None):
-        self.statements.append((" ".join(str(statement).split()), dict(params or {})))
-        conn = self
+        raw = str(statement)
+        self.statements.append((" ".join(raw.split()), dict(params or {})))
+        rows = self.calls if "llm_calls" in raw.lower() else self.rows
+        captured = rows
 
         class _R:
             def mappings(self):
                 return self
 
             def all(self):
-                return [dict(r) for r in conn.rows]
+                return [dict(r) for r in captured]
 
         return _R()
 
@@ -57,12 +65,32 @@ def run(rid, *, title="Shorty — a URL shortener", status="completed", pr=None,
 # --------------------------------------------------------------------------- #
 # One call
 # --------------------------------------------------------------------------- #
-def test_the_whole_screen_is_one_query():
-    """82 feeds per render is what made v1 unusable. A second query here is the pattern
-    creeping back."""
-    conn = FakeConn([run("crun_1", app_id="app_1")])
+def test_the_screen_costs_a_bounded_number_of_queries_and_never_one_per_run():
+    """82 feeds per render is what made v1 unusable, and 82 route re-renders came from one
+    lookup called once per card.
+
+    The rule is one CALL per screen, not one statement: a second aggregate is fine and is what
+    the receipts feed does. What must never appear is a query per item — that is the shape that
+    scales with the data and takes the page down when the project gets busy.
+    """
+    lineage = [run(f"crun_{i}", age_min=i, app_id="app_1") for i in range(12)]
+    conn = FakeConn(lineage)
     project_workspace(conn, "proj", "app_1")
-    assert len(conn.statements) == 1
+    assert len(conn.statements) <= 3, [s for s, _ in conn.statements]
+
+    conn_small = FakeConn([run("crun_1", app_id="app_1")])
+    project_workspace(conn_small, "proj", "app_1")
+    # Twelve runs must cost the same as one. If it does not, there is a per-item query.
+    assert len(conn.statements) == len(conn_small.statements)
+
+
+def test_the_step_query_asks_for_every_run_at_once():
+    """= ANY(:ids), not a loop."""
+    conn = FakeConn([run("crun_1", app_id="app_1"), run("crun_2", app_id="app_1")])
+    project_workspace(conn, "proj", "app_1")
+    call_sql = [s for s, _ in conn.statements if "llm_calls" in s.lower()]
+    assert call_sql, "no llm_calls query at all"
+    assert "= ANY(:ids)" in call_sql[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -184,3 +212,90 @@ def test_the_pr_number_is_carried_so_the_link_can_be_built():
     r = project_workspace(conn, "proj", "app_1")["runs"][0]
     assert r["pull_request_number"] == 111
     assert r["pull_request_url"].endswith("/pull/111")
+
+
+# --------------------------------------------------------------------------- #
+# Run detail: the steps, who ran them, and what each cost
+#
+# A card that says "attempt 3 — failed" and nothing else is a dead end: the only move left is
+# to go and read logs. BOSS records the stage, model, latency and cost of every call.
+# --------------------------------------------------------------------------- #
+def call(run_id, stage, *, model="claude-opus-5", latency=1200, micros=250_000,
+         tokens=4000, calls=1, ok=True, engine="claude_code"):
+    return {"run_id": run_id, "stage": stage, "model": model, "engine": engine,
+            "tokens": tokens, "micros": micros, "latency_ms": latency,
+            "calls": calls, "all_ok": ok}
+
+
+def test_a_run_lists_the_steps_it_actually_ran():
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "spec"), call("crun_1", "implement"), call("crun_1", "review_code")],
+    ), "proj", "app_1")
+    steps = out["runs"][0]["steps"]
+    assert [s["stage"] for s in steps] == ["spec", "implement", "review_code"]
+
+
+def test_each_step_carries_its_latency():
+    """What the operator asked for, and what tells a slow model apart from a slow pipeline."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "implement", latency=8_400)],
+    ), "proj", "app_1")
+    assert out["runs"][0]["steps"][0]["latency_ms"] == 8_400
+    assert out["runs"][0]["latency_ms"] == 8_400
+
+
+def test_the_run_latency_is_the_sum_of_its_steps():
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "spec", latency=1_000), call("crun_1", "implement", latency=4_000)],
+    ), "proj", "app_1")
+    assert out["runs"][0]["latency_ms"] == 5_000
+
+
+def test_each_step_says_which_model_did_the_work():
+    """"Which agent made the change" — the model and engine that actually ran it."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "implement", model="claude-sonnet-5", engine="claude_code")],
+    ), "proj", "app_1")
+    step = out["runs"][0]["steps"][0]
+    assert step["model"] == "claude-sonnet-5"
+    assert step["engine"] == "claude_code"
+
+
+def test_each_step_carries_its_own_cost():
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "implement", micros=1_750_000)],
+    ), "proj", "app_1")
+    assert out["runs"][0]["steps"][0]["spend_usd"] == 1.75
+
+
+def test_a_failed_step_is_marked_not_hidden():
+    """A run that failed at one step and succeeded at nine others is a different story from one
+    that failed everywhere."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "spec", ok=True), call("crun_1", "implement", ok=False)],
+    ), "proj", "app_1")
+    assert [s["ok"] for s in out["runs"][0]["steps"]] == [True, False]
+
+
+def test_steps_belong_to_their_own_run():
+    """Attributing one attempt's steps to another would misreport what each cost — the same
+    mistake as the time-window join that gave two agents identical spend."""
+    out = project_workspace(FakeConn(
+        [run("crun_2", age_min=1, app_id="app_1"), run("crun_1", age_min=2, app_id="app_1")],
+        calls=[call("crun_1", "spec"), call("crun_2", "implement")],
+    ), "proj", "app_1")
+    by_id = {r["id"]: r for r in out["runs"]}
+    assert [s["stage"] for s in by_id["crun_1"]["steps"]] == ["spec"]
+    assert [s["stage"] for s in by_id["crun_2"]["steps"]] == ["implement"]
+
+
+def test_a_run_with_no_recorded_calls_has_no_invented_steps():
+    out = project_workspace(FakeConn([run("crun_1", app_id="app_1")]), "proj", "app_1")
+    assert out["runs"][0]["steps"] == []
+    assert out["runs"][0]["latency_ms"] == 0
