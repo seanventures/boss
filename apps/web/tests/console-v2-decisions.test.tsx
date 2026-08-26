@@ -287,6 +287,18 @@ describe("panels", () => {
     expect(out).not.toMatch(/FOR \d+\s+AGAINST/);
   });
 
+  it("renders the arguments as markdown, not as raw asterisks", () => {
+    // The agents write headings, bold and tables. Shown raw, the reader sees ** and ## instead
+    // of emphasis — which on a page of four long arguments is most of what they see.
+    const out = withPanels(panels({
+      sessions: [panel({ turns: [
+        { speaker: "cto", phase: "round 1", text: "**Cost** is the risk.", stance: null },
+      ] })],
+    }));
+    expect(out).toContain("<strong>Cost</strong>");
+    expect(out).not.toMatch(/\*\*Cost\*\*/);
+  });
+
   it("shows the panel's own synthesis as the verdict", () => {
     // The `decisions` column is empty on every real meeting; the synthesis is where the
     // outcome actually is.

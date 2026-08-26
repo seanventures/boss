@@ -7,6 +7,7 @@ import React from "react";
 
 import { useState } from "react";
 
+import { Markdown } from "../../app/markdown";
 import type {
   DecisionQueue, PanelFeed, V2Decision, V2Panel, V2Turn,
 } from "../../lib/v2/decisions";
@@ -216,9 +217,9 @@ function PanelDetail({ p }: { p: V2Panel }) {
           {/* What the panel agreed, in its own words. The `decisions` column is empty on every
               real meeting; the synthesis is where the outcome actually is. */}
           {p.synthesis ? (
-            <p className="v2-verdict-text" data-testid={`v2-panel-synthesis-${p.id}`}>
-              {p.synthesis}
-            </p>
+            <div className="v2-verdict-text" data-testid={`v2-panel-synthesis-${p.id}`}>
+              <Markdown text={p.synthesis} />
+            </div>
           ) : null}
           {p.decisions.length > 0 ? (
             <p className="v2-verdict-text" data-testid={`v2-panel-decisions-${p.id}`}>
@@ -260,7 +261,12 @@ function Turn({ t, panel, index }: { t: V2Turn; panel: string; index: number }) 
           </span>
         ) : null}
       </span>
-      <p className="v2-turn-text">{t.text}</p>
+      {/* The arguments are markdown — the agents write headings, bold and tables. Rendered
+          with the console's existing dependency-free renderer, which exists for exactly this
+          prose. Shown raw, the reader sees ** and ## instead of emphasis. */}
+      <div className="v2-turn-text">
+        <Markdown text={t.text} />
+      </div>
     </li>
   );
 }
