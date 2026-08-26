@@ -148,6 +148,35 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # absent. This one is absent, and the screen says why rather than showing a zero that reads
     # as "this agent costs nothing".
     spend: dict[str, dict] = {}
+    # AGENTS THAT WORK BUT ARE NOT REGISTERED ROLES.
+    #
+    # Found by the Hive having no edges: five of the seven role keys the process template
+    # actually runs -- product_manager, engineering_captain, chief_architect, ux_engineer,
+    # vp_product -- are not in the roles table at all. Only cto and qa overlap.
+    #
+    # So the screen was listing 21 registered roles, nearly all idle, while the agents doing
+    # the work were invisible. Listing only registered roles is a view of the CONFIGURATION;
+    # this screen is supposed to show the workforce.
+    #
+    # They are included and MARKED, because an agent running work without a registered role has
+    # no trust score, no autonomy level and no violation tracking — a governance gap that
+    # hiding the agent would also hide.
+    registered = {r["role_key"] for r in roles}
+    working = {s["role_key"] for s in steps if s.get("role_key")}
+    for extra in sorted(working - registered):
+        roles.append({
+            "role_key": extra,
+            "display_name": _humanise(extra),
+            "autonomy_level": 0,
+            "trust_score": 0,
+            "successful_runs": 0,
+            "policy_violation_count": 0,
+            "hidden_failure_count": 0,
+            "scope_violation_count": 0,
+            "last_violation_at": None,
+            "_unregistered": True,
+        })
+
     agents = []
     for role in roles:
         key = role["role_key"]
@@ -177,6 +206,9 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
                 + int(role.get("scope_violation_count") or 0)
             ),
             "hidden_failures": int(role.get("hidden_failure_count") or 0),
+            # Runs work, but has no registered role — so nothing governs it. Shown rather than
+            # hidden: an ungoverned agent is precisely the one to know about.
+            "registered": not role.get("_unregistered"),
             "last_seen_seconds": int(step["age_seconds"]) if step and step.get("age_seconds") else None,
             "run_id": step.get("run_id") if step else None,
             # WHICH PIECE OF WORK. The reference calls this the project; here it is the run the
@@ -203,6 +235,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             for h in handoffs
         ],
         "counts": _counts(agents),
+        "unregistered": sorted(a["id"] for a in agents if not a["registered"]),
         # Stated in the payload so a screen cannot quietly render a zero in its place.
         "spend_attributed": False,
         "spend_note": (

@@ -37,6 +37,9 @@ export type V2Agent = {
   /** The last artefact it touched, read from the step's own output. Null when the step
    *  recorded nothing: a plausible-looking filename cannot be told apart from a real one. */
   last_touched: string | null;
+  /** False when the agent runs work but has no row in the roles table — so nothing governs it:
+   *  no trust score, no autonomy level, no violation tracking. */
+  registered: boolean;
 };
 
 export type V2Handoff = {
@@ -53,6 +56,8 @@ export type Workforce = {
   agents: V2Agent[];
   handoffs: V2Handoff[];
   counts: Record<string, number>;
+  /** Agents doing work with no registered role. A governance gap, not a display detail. */
+  unregistered?: string[];
   spend_attributed?: boolean;
   spend_note?: string;
   apiReachable: boolean;

@@ -320,3 +320,59 @@ def test_a_handoff_stays_inside_its_own_run():
     workforce(conn, "p")
     handoff_sql = [s for s, _ in conn.statements if "prev.role_key as source" in s.lower()][0]
     assert "prev.run_id = s.run_id" in handoff_sql
+
+
+# --------------------------------------------------------------------------- #
+# Agents that work without a registered role
+#
+# Found by the Hive having no edges: five of the seven role keys the process template actually
+# runs are not in the roles table at all. The screen was listing 21 registered roles, nearly
+# all idle, while the agents doing the work were invisible.
+# --------------------------------------------------------------------------- #
+def test_an_agent_that_runs_work_appears_even_without_a_registered_role():
+    """Listing only registered roles is a view of the CONFIGURATION. This screen is supposed to
+    show the workforce."""
+    out = workforce(FakeConn(
+        roles=[role("cto")],
+        steps=[step("cto"), step("product_manager", status="running")],
+    ), "p")
+    ids = {a["id"] for a in out["agents"]}
+    assert "product_manager" in ids
+
+
+def test_an_unregistered_agent_is_marked_not_disguised():
+    """It has no trust score, no autonomy level and no violation tracking. Hiding the agent
+    would hide the governance gap too — and an ungoverned agent is precisely the one to know
+    about."""
+    out = workforce(FakeConn(
+        roles=[role("cto")],
+        steps=[step("cto"), step("product_manager")],
+    ), "p")
+    by_id = {a["id"]: a for a in out["agents"]}
+    assert by_id["cto"]["registered"] is True
+    assert by_id["product_manager"]["registered"] is False
+    assert out["unregistered"] == ["product_manager"]
+
+
+def test_an_unregistered_agent_claims_no_trust_score():
+    """Zero, not fifty. Inheriting a default would present an ungoverned agent as an average
+    one."""
+    out = workforce(FakeConn(roles=[], steps=[step("ghost_role")]), "p")
+    assert out["agents"][0]["trust_score"] == 0
+    assert out["agents"][0]["autonomy_level"] == 0
+
+
+def test_its_status_comes_from_its_work_like_any_other_agent():
+    out = workforce(FakeConn(roles=[], steps=[step("product_manager", status="running")]), "p")
+    assert out["agents"][0]["status"] == WORKING
+
+
+def test_a_registered_role_is_never_duplicated_by_its_own_steps():
+    """The union must not list an agent twice because it both exists and works."""
+    out = workforce(FakeConn(roles=[role("cto")], steps=[step("cto")]), "p")
+    assert [a["id"] for a in out["agents"]] == ["cto"]
+
+
+def test_a_fully_registered_workforce_reports_no_gap():
+    out = workforce(FakeConn(roles=[role("cto"), role("qa")], steps=[step("cto")]), "p")
+    assert out["unregistered"] == []

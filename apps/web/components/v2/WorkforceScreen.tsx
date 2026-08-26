@@ -153,6 +153,19 @@ export function WorkforceScreen({
         </div>
       ) : null}
 
+      {/* AGENTS RUNNING WORK WITH NO REGISTERED ROLE.
+          Nothing governs them: no trust score, no autonomy level, no violation tracking. The
+          screen was listing 21 registered roles, nearly all idle, while these did the work and
+          did not appear at all. */}
+      {workforce.unregistered && workforce.unregistered.length > 0 ? (
+        <p className="v2-ungoverned" data-testid="v2-workforce-ungoverned">
+          {workforce.unregistered.length} agent
+          {workforce.unregistered.length === 1 ? " is" : "s are"} running work without a
+          registered role, so nothing governs {workforce.unregistered.length === 1 ? "it" : "them"}
+          — no trust score, no autonomy level, no violation tracking.
+        </p>
+      ) : null}
+
       {/* Said once, at the top, rather than a dash on every row. BOSS does not record which
           agent an LLM call belongs to, and the screen refuses to imply otherwise. */}
       {workforce.spend_attributed === false && workforce.agents.length > 0 ? (
@@ -201,7 +214,13 @@ function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
     <li className="v2-card" data-testid={`v2-agent-${a.id}`} data-status={a.status}>
       <div className="v2-card-head">
         <span className="v2-card-name">{a.name}</span>
-        <span className="v2-card-role">{a.role}</span>
+        {a.registered ? (
+          <span className="v2-card-role">{a.role}</span>
+        ) : (
+          <span className="v2-card-role v2-ungoverned-tag" data-testid={`v2-agent-ungoverned-${a.id}`}>
+            no registered role
+          </span>
+        )}
         <button
           type="button"
           className="v2-card-chat"

@@ -34,6 +34,7 @@ const agent = (over: Partial<V2Agent> = {}): V2Agent => ({
   run_id: "run_1",
   project: "Shorty",
   last_touched: "src/routes/shorten.ts",
+  registered: true,
   ...over,
 });
 
@@ -127,6 +128,24 @@ describe("Workforce", () => {
     // A plausible filename cannot be told apart from a real one.
     expect(wfHtml(wf({ agents: [agent({ last_touched: null })] })))
       .not.toContain('data-testid="v2-agent-touched-coder"');
+  });
+
+  it("names agents running work with no registered role", () => {
+    // The screen was listing 21 registered roles, nearly all idle, while these did the work and
+    // did not appear at all. Nothing governs them — no trust score, no autonomy, no violation
+    // tracking — so hiding them would hide the governance gap too.
+    const out = wfHtml(wf({
+      unregistered: ["product_manager"],
+      agents: [agent({ id: "product_manager", registered: false })],
+    }));
+    expect(out).toContain('data-testid="v2-workforce-ungoverned"');
+    expect(out).toContain('data-testid="v2-agent-ungoverned-product_manager"');
+    expect(out).toMatch(/nothing governs it/);
+  });
+
+  it("a fully registered workforce raises no governance warning", () => {
+    expect(wfHtml(wf({ unregistered: [] })))
+      .not.toContain('data-testid="v2-workforce-ungoverned"');
   });
 
   it("an unreachable API shows no counts", () => {

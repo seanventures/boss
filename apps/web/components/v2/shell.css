@@ -611,3 +611,8 @@
 .v2-step-role { color: var(--v2-dim); }
 .v2-step-timing { color: var(--v2-dim); margin-left: auto; }
 .v2-step-failed { color: var(--v2-red); }
+
+.v2-ungoverned {
+  margin: 0 0 14px; font-size: 12px; color: var(--v2-amber); line-height: 1.45;
+}
+.v2-ungoverned-tag { color: var(--v2-amber); }
