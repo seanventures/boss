@@ -717,6 +717,51 @@ def _scope_label(scope: dict) -> str:
     return ", ".join(sorted(scope)[:3])[:60] if scope else ""
 
 
+#: Keys a transcript turn may use. Checked in order; the first that holds text wins.
+_TURN_SPEAKER = ("speaker", "role", "name", "agent")
+_TURN_TEXT = ("message", "text", "content", "summary")
+
+
+def _transcript_turns(raw: Any) -> list[dict[str, Any]]:
+    """Per-speaker turns out of a transcript artifact.
+
+    Returns [] rather than a placeholder when there is nothing to show. An invented turn would
+    be indistinguishable from a real one, which on a screen about deliberation is the worst
+    possible thing to get wrong.
+    """
+    if isinstance(raw, str):
+        import json as _json
+
+        try:
+            raw = _json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(raw, dict):
+        return []
+
+    turns = raw.get("transcript") or raw.get("turns") or []
+    if not isinstance(turns, list):
+        return []
+
+    out = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        speaker = next((str(turn[k]) for k in _TURN_SPEAKER if turn.get(k)), "")
+        text = next((str(turn[k]) for k in _TURN_TEXT if turn.get(k)), "")
+        if not text:
+            continue
+        out.append({
+            "speaker": speaker or "(unattributed)",
+            "phase": str(turn.get("phase") or ""),
+            "text": text[:1200],
+            # BOSS does not record a stance per turn. None, never a guess: inventing FOR or
+            # AGAINST would put words in an agent's mouth on the record.
+            "stance": turn.get("stance") if turn.get("stance") in ("FOR", "AGAINST") else None,
+        })
+    return out[:40]
+
+
 def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str, Any]:
     """The panels debating something right now, and what they concluded.
 
@@ -738,12 +783,16 @@ def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str,
     rows = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT id, title, purpose, status, participants, decisions,
-                   dissent_records, minutes_artifact_id, transcript_artifact_id,
-                   blocked_state, completed_at, created_at
-            FROM meetings
-            WHERE project_id = :p
-            ORDER BY created_at DESC
+            SELECT m.id, m.title, m.purpose, m.status, m.participants, m.decisions,
+                   m.dissent_records, m.minutes_artifact_id, m.transcript_artifact_id,
+                   m.blocked_state, m.completed_at, m.created_at,
+                   t.content AS transcript
+            FROM meetings m
+            -- The transcript lives in artifacts.content, so it joins rather than needing a
+            -- second call per session. One query, whatever the session count.
+            LEFT JOIN artifacts t ON t.id = m.transcript_artifact_id
+            WHERE m.project_id = :p
+            ORDER BY m.created_at DESC
             LIMIT :lim
             """
         ),
@@ -784,6 +833,11 @@ def panel_sessions(connection, project_id: str, *, limit: int = 20) -> dict[str,
                 else (str(blocked)[:200] if blocked else None)
             ),
             "has_minutes": bool(row.get("minutes_artifact_id")),
+            # WHAT WAS ACTUALLY SAID. The reference shows each panelist's argument; BOSS records
+            # the same thing as {speaker, message, phase} turns, and the console has never
+            # displayed them. A panel whose reasoning is invisible is indistinguishable from a
+            # coin toss with minutes attached.
+            "turns": _transcript_turns(row.get("transcript")),
             "completed_at": row["completed_at"].isoformat() if row.get("completed_at") else None,
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         })

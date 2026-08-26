@@ -376,3 +376,85 @@ def test_a_registered_role_is_never_duplicated_by_its_own_steps():
 def test_a_fully_registered_workforce_reports_no_gap():
     out = workforce(FakeConn(roles=[role("cto"), role("qa")], steps=[step("cto")]), "p")
     assert out["unregistered"] == []
+
+
+# --------------------------------------------------------------------------- #
+# The org chart as a tree
+#
+# BOSS has no parent field on a role, so a hierarchy from imagination would be an organisation
+# that does not exist. The handoff graph IS directed, so a tree is derivable: a root is an agent
+# nobody hands to, children are who it hands to, depth is distance from the root.
+# --------------------------------------------------------------------------- #
+def _edge(source, target, times=1):
+    return {"source": source, "target": target, "times": times,
+            "last_at": NOW, "last_action": "review"}
+
+
+def test_the_root_is_an_agent_nobody_hands_to():
+    out = org_chart(FakeConn(
+        roles=[role("pm"), role("captain"), role("qa")],
+        handoffs=[_edge("pm", "captain"), _edge("captain", "qa")],
+    ), "p")
+    assert out["roots"] == ["pm"]
+    assert out["root_inferred"] is False
+    by_id = {n["id"]: n for n in out["tree"]}
+    assert by_id["pm"]["depth"] == 0
+    assert by_id["captain"]["depth"] == 1
+    assert by_id["qa"]["depth"] == 2
+
+
+def test_children_hang_from_their_parent():
+    out = org_chart(FakeConn(
+        roles=[role("pm"), role("a"), role("b")],
+        handoffs=[_edge("pm", "a"), _edge("pm", "b")],
+    ), "p")
+    by_id = {n["id"]: n for n in out["tree"]}
+    assert by_id["a"]["parent"] == "pm"
+    assert by_id["b"]["parent"] == "pm"
+    assert out["depth"] == 2
+
+
+def test_an_agent_reachable_by_several_paths_appears_once():
+    """Work fans out and rejoins. Drawing an agent several times would inflate the org."""
+    out = org_chart(FakeConn(
+        roles=[role("pm"), role("a"), role("b"), role("join")],
+        handoffs=[_edge("pm", "a"), _edge("pm", "b"),
+                  _edge("a", "join"), _edge("b", "join")],
+    ), "p")
+    assert [n["id"] for n in out["tree"]].count("join") == 1
+
+
+def test_a_cycle_falls_back_to_the_busiest_and_says_so():
+    """"Nobody hands to this agent" and "everything cycles so we picked the busiest" are
+    different facts, and the payload must be able to say which it drew."""
+    out = org_chart(FakeConn(
+        roles=[role("a"), role("b")],
+        handoffs=[_edge("a", "b"), _edge("b", "a")],
+    ), "p")
+    assert out["root_inferred"] is True
+    assert len(out["tree"]) == 2
+
+
+def test_an_agent_with_no_handoffs_is_not_in_the_tree():
+    """It belongs in "working alone", not hanging off a root it has no relationship with."""
+    out = org_chart(FakeConn(
+        roles=[role("pm"), role("hermit")],
+        handoffs=[_edge("pm", "pm")],
+    ), "p")
+    assert "hermit" not in {n["id"] for n in out["tree"]}
+    assert "hermit" in out["isolated"]
+
+
+def test_an_edge_to_an_unknown_agent_is_ignored():
+    """A handoff naming a role that no longer exists must not create a phantom node."""
+    out = org_chart(FakeConn(
+        roles=[role("pm")],
+        handoffs=[_edge("pm", "deleted_role")],
+    ), "p")
+    assert {n["id"] for n in out["tree"]} <= {"pm"}
+
+
+def test_the_tree_is_empty_when_nothing_was_handed_over():
+    out = org_chart(FakeConn(roles=[role("a")]), "p")
+    assert out["tree"] == []
+    assert out["depth"] == 0

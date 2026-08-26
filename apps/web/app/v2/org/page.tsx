@@ -28,7 +28,7 @@ export default async function V2Section({ searchParams }: Params) {
 
   return (
     <Shell active="org" overview={overview} orgId={selected?.org_id}>
-      <OrgScreen chart={data} />
+      <OrgScreen chart={data} projectId={projectId} />
     </Shell>
   );
 }

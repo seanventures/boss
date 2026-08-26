@@ -314,12 +314,67 @@ def _counts(agents: list[dict]) -> dict[str, int]:
     return out
 
 
-def org_chart(connection, project_id: str, *, hours: int = 168) -> dict[str, Any]:
-    """Who hands work to whom, counted — an observed chart, not a declared one.
+def _build_tree(nodes: list[dict], edges: list[dict]) -> list[dict]:
+    """Lay the handoff graph out as a tree: roots, then who they hand to, breadth first.
 
-    BOSS has no parent field on a role. Inventing a hierarchy would draw an organisation that
-    does not exist; deriving it from handoffs shows how the work actually flows, which is both
-    true and more useful.
+    THE HIERARCHY IS OBSERVED, NOT DECLARED. BOSS has no parent field on a role, so a tree drawn
+    from imagination would be an organisation that does not exist. This one is drawn from who
+    actually passed work to whom — which is a real relationship, and arguably the more useful
+    one: it shows how work flows rather than who someone once said reports to whom.
+
+    A ROOT IS AN AGENT NOBODY HANDS TO. That is the top of a flow. Where a cycle means nothing
+    qualifies, the busiest agent is used and the payload says so, because refusing to draw
+    anything would be worse than drawing something explained.
+
+    Each agent appears ONCE, at its shallowest depth. Work fans out and rejoins, so an agent can
+    be reached by several paths; drawing it several times would inflate the org.
+    """
+    by_id = {n["id"]: n for n in nodes}
+    children: dict[str, list[str]] = {}
+    incoming: dict[str, int] = {}
+    for e in edges:
+        source, target = e["source"], e["target"]
+        if source not in by_id or target not in by_id:
+            continue
+        children.setdefault(source, []).append(target)
+        incoming[target] = incoming.get(target, 0) + 1
+
+    connected = {e["source"] for e in edges if e["source"] in by_id}
+    connected |= {e["target"] for e in edges if e["target"] in by_id}
+
+    roots = sorted(
+        (n for n in connected if not incoming.get(n)),
+        key=lambda n: (-len(children.get(n, [])), by_id[n]["name"]),
+    )
+    inferred_root = False
+    if not roots and connected:
+        # Every agent is handed to by someone: a cycle. Take the busiest and say so, rather
+        # than drawing nothing.
+        roots = [max(connected, key=lambda n: len(children.get(n, [])))]
+        inferred_root = True
+
+    placed: set[str] = set()
+    tree: list[dict] = []
+    queue = [(r, 0, None) for r in roots]
+    while queue:
+        key, depth, parent = queue.pop(0)
+        if key in placed:
+            continue
+        placed.add(key)
+        tree.append({**by_id[key], "depth": depth, "parent": parent})
+        for child in sorted(children.get(key, []), key=lambda c: by_id[c]["name"]):
+            if child not in placed:
+                queue.append((child, depth + 1, key))
+
+    return tree, roots, inferred_root
+
+
+def org_chart(connection, project_id: str, *, hours: int = 168) -> dict[str, Any]:
+    """Who hands work to whom, laid out as a tree.
+
+    BOSS has no declared reporting line. Inventing a hierarchy would draw an organisation that
+    does not exist; deriving it from handoffs shows how work actually flows, which is both true
+    and more useful. The screen repeats which it is.
 
     A week by default, because a day is too short to see the shape.
     """
@@ -327,7 +382,6 @@ def org_chart(connection, project_id: str, *, hours: int = 168) -> dict[str, Any
     agents = {a["id"]: a for a in data["agents"]}
     edges = data["handoffs"]
 
-    # Who receives from the most distinct sources: the closest thing to a hub this data has.
     incoming: dict[str, int] = {}
     outgoing: dict[str, int] = {}
     for e in edges:
@@ -346,10 +400,18 @@ def org_chart(connection, project_id: str, *, hours: int = 168) -> dict[str, Any
         })
     nodes.sort(key=lambda n: (-(n["handoffs_in"] + n["handoffs_out"]), n["name"]))
 
+    tree, roots, inferred_root = _build_tree(nodes, edges)
+
     return {
         "project_id": project_id,
         "window_hours": int(hours),
         "nodes": nodes,
+        "tree": tree,
+        "roots": roots,
+        # Said in the payload: a root chosen because everything cycles is not the same as a root
+        # nobody hands to, and the screen must be able to tell the operator which it drew.
+        "root_inferred": inferred_root,
+        "depth": max((n["depth"] for n in tree), default=0) + 1 if tree else 0,
         "edges": edges,
         # Said in the payload so the screen cannot present this as a declared structure.
         "derived_from": "observed handoffs",

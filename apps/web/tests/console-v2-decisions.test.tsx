@@ -158,6 +158,7 @@ const panel = (over: Partial<V2Panel> = {}): V2Panel => ({
   has_minutes: true,
   completed_at: "2026-08-26T12:00:00Z",
   created_at: "2026-08-26T11:00:00Z",
+  turns: [],
   ...over,
 });
 
@@ -216,6 +217,73 @@ describe("panels", () => {
   it("an unreachable panel feed does not read as no panels", () => {
     expect(withPanels(panels({ apiReachable: false, sessions: [] })))
       .toContain('data-testid="v2-panels-unreachable"');
+  });
+
+  it("puts the session list beside what was said", () => {
+    const out = withPanels(panels());
+    expect(out).toContain('data-testid="v2-panels-list"');
+    expect(out).toContain('data-testid="v2-panel-detail-m1"');
+  });
+
+  it("shows what each agent actually said", () => {
+    // A panel whose reasoning is invisible is indistinguishable from a coin toss with minutes
+    // attached. BOSS records the turns and the console has never displayed them.
+    const out = withPanels(panels({
+      sessions: [panel({ turns: [
+        { speaker: "cto", phase: "review", text: "The cost model does not hold.", stance: null },
+        { speaker: "qa", phase: "review", text: "Two tests are missing.", stance: null },
+      ] })],
+    }));
+    expect(out).toContain('data-testid="v2-panel-turns-m1"');
+    expect(out).toMatch(/The cost model does not hold/);
+    expect(out).toMatch(/Two tests are missing/);
+  });
+
+  it("shows no stance badge when the transcript did not record one", () => {
+    // Inferring FOR/AGAINST from the words would put a vote in an agent's name on a page whose
+    // whole purpose is the record.
+    const out = withPanels(panels({
+      sessions: [panel({ turns: [
+        { speaker: "cto", phase: "", text: "I have concerns about the cost.", stance: null },
+      ] })],
+    }));
+    expect(out).not.toContain('data-testid="v2-turn-stance-m1-0"');
+  });
+
+  it("shows a stance when the transcript did record one", () => {
+    const out = withPanels(panels({
+      sessions: [panel({ turns: [
+        { speaker: "cto", phase: "", text: "Yes.", stance: "FOR" },
+      ] })],
+    }));
+    expect(out).toContain('data-testid="v2-turn-stance-m1-0"');
+  });
+
+  it("a panel with no transcript says what is missing, not nothing", () => {
+    const out = withPanels(panels({ sessions: [panel({ turns: [] })] }));
+    expect(out).toContain('data-testid="v2-panel-noturns-m1"');
+    expect(out).toMatch(/only\s+the outcome below/);
+  });
+
+  it("names who was on the panel", () => {
+    expect(withPanels(panels())).toContain('data-testid="v2-panel-panelists-m1"');
+  });
+
+  it("the verdict box carries the decision and any dissent separately", () => {
+    const out = withPanels(panels({
+      sessions: [panel({ decisions: ["Ship it"], dissent: ["Legal objected"] })],
+    }));
+    expect(out).toContain('data-testid="v2-panel-verdict-m1"');
+    expect(out).toContain('data-testid="v2-panel-decisions-m1"');
+    expect(out).toContain('data-testid="v2-panel-dissent-m1"');
+  });
+
+  it("draws no vote tally, because BOSS does not record votes", () => {
+    // The reference totals FOR and AGAINST. Counting stances BOSS never recorded would be a
+    // number invented on the one screen that exists to be the record.
+    const out = withPanels(panels());
+    expect(out).not.toMatch(/TALLY/);
+    expect(out).not.toMatch(/FOR \d+\s+AGAINST/);
   });
 
   it("the decisions queue still renders without panels", () => {

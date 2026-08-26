@@ -686,3 +686,89 @@
 .v2-wf-owner-dot[data-kind="PANEL"] { background: var(--v2-purple); }
 .v2-wf-owner-dot[data-kind="PARALLEL"] { background: var(--v2-mint); }
 .v2-wf-owner-dot[data-kind="JOIN"] { background: var(--v2-green); }
+
+/* ---------------------------------------------------------------------------
+   Org chart — a tree of who hands work to whom.
+   Connectors are drawn with borders on the level wrappers rather than SVG, so
+   the layout stays responsive and the cards stay real buttons.
+   --------------------------------------------------------------------------- */
+.v2-org-provenance {
+  margin: 10px 0 0; font-size: 11px; color: var(--v2-dim); line-height: 1.6; max-width: 78ch;
+}
+.v2-tree { display: flex; flex-direction: column; align-items: center; margin: 32px 0 8px; }
+.v2-tree-level {
+  display: flex; justify-content: center; align-items: flex-start;
+  gap: 20px; flex-wrap: wrap; position: relative;
+}
+/* Every level below the first hangs from a bus above it. */
+.v2-tree-level:not([data-depth="0"]) { margin-top: 34px; }
+.v2-tree-level:not([data-depth="0"])::before {
+  content: ""; position: absolute; top: -34px; left: 0; right: 0; height: 1px;
+  background: var(--v2-border);
+}
+.v2-tree-level:not([data-depth="0"]) > .v2-org-card::before {
+  content: ""; position: absolute; top: -34px; left: 50%; width: 1px; height: 34px;
+  background: var(--v2-border);
+}
+.v2-tree-level[data-depth="0"] > .v2-org-card::after {
+  content: ""; position: absolute; bottom: -34px; left: 50%; width: 1px; height: 34px;
+  background: var(--v2-border);
+}
+
+.v2-org-card {
+  position: relative;
+  width: 230px; min-height: 62px;
+  background: var(--v2-panel); border: 1px solid var(--v2-border);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  cursor: pointer; text-align: center;
+  font-family: var(--v2-font-display); color: inherit;
+}
+.v2-org-card:hover { border-color: var(--v2-muted); }
+.v2-org-card[data-root="true"] { border-color: var(--v2-mint); }
+.v2-org-card-head { display: flex; align-items: center; gap: 7px; }
+.v2-org-card-name { font-size: 14px; font-weight: 700; color: var(--v2-ink); }
+.v2-org-card-role { font-size: 11px; color: var(--v2-muted); }
+.v2-org-card-task {
+  font-size: 11.5px; color: var(--v2-dim); line-height: 1.45; margin-top: 3px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+   Panels — the session list beside what was actually said.
+   --------------------------------------------------------------------------- */
+.v2-panel-card { border-left: 2px solid var(--v2-border); }
+.v2-panel-card[data-state="debating"] { border-left-color: var(--v2-purple); }
+.v2-panel-card[data-state="blocked"] { border-left-color: var(--v2-amber); }
+.v2-panel-card[data-state="concluded"] { border-left-color: var(--v2-green); }
+.v2-panel-card[data-selected="true"] { border-color: var(--v2-mint); }
+
+.v2-panel-state {
+  font-size: 9.5px; letter-spacing: .08em; color: var(--v2-dim);
+}
+.v2-panel-state[data-state="debating"] { color: var(--v2-purple); }
+.v2-panel-state[data-state="blocked"] { color: var(--v2-amber); }
+.v2-panel-state[data-state="concluded"] { color: var(--v2-green); }
+
+.v2-panelists { display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0 0; font-size: 10.5px; }
+.v2-panelist { display: inline-flex; align-items: center; gap: 6px; color: var(--v2-muted); }
+
+/* Each turn: a bar in the stance colour, the speaker, then what they said. */
+.v2-turns { list-style: none; margin: 18px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.v2-turn { border-left: 2px solid var(--v2-border); padding-left: 14px; }
+.v2-turn[data-stance="FOR"] { border-left-color: var(--v2-green); }
+.v2-turn[data-stance="AGAINST"] { border-left-color: var(--v2-red); }
+.v2-turn-head { display: flex; align-items: baseline; gap: 9px; }
+.v2-turn-speaker { font-size: 13px; font-weight: 700; color: var(--v2-ink); }
+.v2-turn-phase { font-size: 9.5px; letter-spacing: .06em; color: var(--v2-dim); text-transform: uppercase; }
+.v2-turn-stance { font-size: 9.5px; letter-spacing: .06em; }
+.v2-turn-stance[data-stance="FOR"] { color: var(--v2-green); }
+.v2-turn-stance[data-stance="AGAINST"] { color: var(--v2-red); }
+.v2-turn-text { margin: 4px 0 0; font-size: 12.5px; color: var(--v2-muted); line-height: 1.55; }
+
+.v2-verdict {
+  margin-top: 20px; border: 1px solid var(--v2-green); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.v2-verdict-label { font-size: 9.5px; letter-spacing: .08em; color: var(--v2-green); }
+.v2-verdict-text { margin: 0; font-size: 12.5px; color: var(--v2-ink); line-height: 1.5; }

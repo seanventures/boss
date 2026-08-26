@@ -65,6 +65,15 @@ export async function fetchDecisionQueue(projectId: string): Promise<DecisionQue
  * `streamed` is false and stays false: BOSS's panels produce real minutes but are not watched
  * live. The screen must not animate a debate nobody is watching.
  */
+export type V2Turn = {
+  speaker: string;
+  phase: string;
+  text: string;
+  /** null unless the transcript recorded one. BOSS does not, and inventing FOR/AGAINST would
+   *  put words in an agent's mouth on the record. */
+  stance: "FOR" | "AGAINST" | null;
+};
+
 export type V2Panel = {
   id: string;
   title: string;
@@ -81,6 +90,9 @@ export type V2Panel = {
   has_minutes: boolean;
   completed_at: string | null;
   created_at: string | null;
+  /** What was actually said, per speaker. The console has never shown this — a panel whose
+   *  reasoning is invisible is indistinguishable from a coin toss with minutes attached. */
+  turns: V2Turn[];
 };
 
 export type PanelFeed = {

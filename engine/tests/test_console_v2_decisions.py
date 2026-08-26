@@ -250,3 +250,77 @@ def test_panelists_are_listed():
 def test_the_title_is_cleaned_like_everywhere_else():
     out = panel_sessions(FakeConn([meeting("m1", title="Shorty — Re-build PRD")]), "p")
     assert out["sessions"][0]["title"] == "Shorty"
+
+
+# --------------------------------------------------------------------------- #
+# What was actually said
+#
+# The reference shows each panelist's argument. BOSS records the same thing as
+# {speaker, message, phase} turns in the transcript artifact, and the console has never
+# displayed them — a panel whose reasoning is invisible is indistinguishable from a coin toss
+# with minutes attached.
+# --------------------------------------------------------------------------- #
+def test_the_transcript_joins_rather_than_costing_a_call_per_session():
+    """One query whatever the session count. A read per session is the N+1 that made v1 slow."""
+    conn = FakeConn([meeting("m1")])
+    panel_sessions(conn, "p")
+    assert len(conn.statements) == 1
+    assert "LEFT JOIN artifacts" in conn.statements[0][0]
+
+
+def test_turns_are_read_from_the_transcript():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), transcript={
+        "transcript": [
+            {"speaker": "cto", "message": "Ship it.", "phase": "review"},
+            {"speaker": "qa", "message": "Two tests missing.", "phase": "review"},
+        ]
+    })]), "p")
+    turns = out["sessions"][0]["turns"]
+    assert [t["speaker"] for t in turns] == ["cto", "qa"]
+    assert turns[0]["text"] == "Ship it."
+    assert turns[1]["phase"] == "review"
+
+
+def test_a_transcript_stored_as_json_text_is_still_read():
+    import json as _json
+
+    out = panel_sessions(FakeConn([dict(meeting("m1"), transcript=_json.dumps({
+        "transcript": [{"speaker": "cto", "message": "Ship it."}]
+    }))]), "p")
+    assert out["sessions"][0]["turns"][0]["text"] == "Ship it."
+
+
+def test_no_stance_is_invented():
+    """BOSS does not record FOR/AGAINST per turn. Guessing would put words in an agent's mouth
+    on the record."""
+    out = panel_sessions(FakeConn([dict(meeting("m1"), transcript={
+        "transcript": [{"speaker": "cto", "message": "I have concerns about the cost."}]
+    })]), "p")
+    assert out["sessions"][0]["turns"][0]["stance"] is None
+
+
+def test_a_recorded_stance_is_kept():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), transcript={
+        "transcript": [{"speaker": "cto", "message": "Yes.", "stance": "FOR"}]
+    })]), "p")
+    assert out["sessions"][0]["turns"][0]["stance"] == "FOR"
+
+
+def test_a_turn_with_no_text_is_dropped():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), transcript={
+        "transcript": [{"speaker": "cto"}, {"speaker": "qa", "message": "Fine."}]
+    })]), "p")
+    assert len(out["sessions"][0]["turns"]) == 1
+
+
+def test_an_unattributed_turn_says_so_rather_than_being_assigned():
+    out = panel_sessions(FakeConn([dict(meeting("m1"), transcript={
+        "transcript": [{"message": "Someone said this."}]
+    })]), "p")
+    assert out["sessions"][0]["turns"][0]["speaker"] == "(unattributed)"
+
+
+def test_a_malformed_transcript_yields_no_turns_rather_than_crashing():
+    for bad in ("not json", {"transcript": "nope"}, {"other": []}, None, 42):
+        out = panel_sessions(FakeConn([dict(meeting("m1"), transcript=bad)]), "p")
+        assert out["sessions"][0]["turns"] == [], bad

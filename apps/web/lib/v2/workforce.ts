@@ -68,12 +68,23 @@ export type OrgNode = V2Agent & {
   handoffs_in: number;
   handoffs_out: number;
   connected: boolean;
+  /** Distance from a root, on the tree. Present only on nodes in `tree`. */
+  depth?: number;
+  parent?: string | null;
 };
 
 export type OrgChart = {
   project_id: string;
   window_hours: number;
   nodes: OrgNode[];
+  /** The same agents, laid out as a tree: a root is an agent nobody hands to, children are who
+   *  it hands to. Derived from the handoff graph — BOSS has no declared reporting line. */
+  tree: OrgNode[];
+  roots: string[];
+  /** True when every agent is handed work by someone (a cycle), so the busiest was taken as
+   *  the top. A different fact from a root nobody hands to, and the screen says so. */
+  root_inferred: boolean;
+  depth: number;
   edges: V2Handoff[];
   derived_from: string;
   note: string;
@@ -101,6 +112,10 @@ export function emptyOrgChart(projectId: string, reason: string): OrgChart {
     project_id: projectId,
     window_hours: 168,
     nodes: [],
+    tree: [],
+    roots: [],
+    root_inferred: false,
+    depth: 0,
     edges: [],
     derived_from: "observed handoffs",
     note: "",

@@ -267,6 +267,10 @@ describe("Org Chart", () => {
     project_id: "boss-dogfood",
     window_hours: 168,
     nodes: [{ ...agent({ id: "a" }), handoffs_in: 2, handoffs_out: 1, connected: true }],
+    tree: [{ ...agent({ id: "a" }), handoffs_in: 2, handoffs_out: 1, connected: true, depth: 0, parent: null }],
+    roots: ["a"],
+    root_inferred: false,
+    depth: 1,
     edges: [{ source: "b", target: "a", times: 2, last_action: "review", last_at: null }],
     derived_from: "observed handoffs",
     note: "BOSS has no declared reporting line. This is who actually passed work to whom.",
@@ -283,10 +287,28 @@ describe("Org Chart", () => {
     expect(out).toMatch(/no declared reporting line/);
   });
 
-  it("shows who work comes from and goes to, with counts", () => {
+  it("draws a tree rather than a list of relationships", () => {
+    // An earlier version listed "receives from / passes to" per agent, which was honest and
+    // unreadable. The handoff graph is directed, so a tree is derivable rather than invented.
     const out = html(chart());
-    expect(out).toMatch(/receives from/);
-    expect(out).toMatch(/b \(2\)/);
+    expect(out).toContain('data-testid="v2-org-tree"');
+    expect(out).toContain('data-testid="v2-org-level-0"');
+    expect(out).toContain('data-testid="v2-org-node-a"');
+  });
+
+  it("marks the root", () => {
+    expect(html(chart())).toMatch(/data-root="true"/);
+  });
+
+  it("says when the root had to be inferred from a cycle", () => {
+    // "Nobody hands to this agent" and "everything cycles so we picked the busiest" are
+    // different facts, and the screen must be able to say which it drew.
+    const out = html(chart({ root_inferred: true }));
+    expect(out).toContain('data-testid="v2-org-root-inferred"');
+  });
+
+  it("does not claim an inferred root when there is a real one", () => {
+    expect(html(chart())).not.toContain('data-testid="v2-org-root-inferred"');
   });
 
   it("agents nobody works with get their own section", () => {
@@ -305,6 +327,7 @@ describe("Org Chart", () => {
   it("no observed flow says so rather than drawing nothing", () => {
     const out = html(chart({
       nodes: [{ ...agent({ id: "a" }), handoffs_in: 0, handoffs_out: 0, connected: false }],
+      tree: [],
       edges: [],
       isolated: ["a"],
     }));
