@@ -62,7 +62,7 @@ _FAILED_STATES = ("failed", "error")
 # harnesses times five exercises, plus the QA benchmark suite. The pattern set below was
 # extended from what was actually on screen, not from what seemed likely.
 _INTERNAL_TITLE = re.compile(
-    r"^\s*\[?\s*(?:"
+    r"^\s*[\[(]?\s*(?:"
     r"captain:|quality improve pass|goldeneye profile check|follow-up:\s*deferred review"
     r"|list the exact names|ceo command:|boss-\d+"
     # BOSS's own model bakeoffs and end-to-end exercises: "[bakeoff:qwen_all#1] URL slug
@@ -70,6 +70,10 @@ _INTERNAL_TITLE = re.compile(
     r"|bakeoff:|boss:coding|qa benchmark:|smoke test:|regression:"
     # Notices ABOUT a run rather than a thing to build.
     r"|the deployment for run\b|this is the discovery task\b"
+    # More of BOSS's own scaffolding, read off the same screen: harness fixtures, canaries,
+    # self-repair notices, and substrate validation runs.
+    r"|ga-slice|sealed-e2e|e2e smoke|auto-repair:|hybrid substrate validation"
+    r"|\w[\w-]*\s+test\)"
     r")",
     re.I,
 )
@@ -131,57 +135,147 @@ _QUOTED_NAME = re.compile(
     re.I,
 )
 
+#: What KIND of thing it is, which is never what it is CALLED. Eight rows on the live screen
+#: were all named "Web app", because the title was "Web app - <the entire PRD pasted in>" and
+#: the head of the dash was taken as a name.
+_CATEGORY = re.compile(
+    r"^\s*(?:web\s*app|webapp|website|web\s*site|app|application|service|api|site|tool|"
+    r"landing\s*page|mobile\s*app|script)\s*$",
+    re.I,
+)
+
+#: The run title often carries an entire PRD after the category. The product name is the
+#: markdown H1 -- "# BugBox - Product Requirements Document (PRD)" -- and NOT the document type
+#: that follows it. That distinction is the operator's complaint in one line: the PRD heading
+#: names the artifact; the name inside it names the product.
+_MARKDOWN_HEADING = re.compile(r"^#{1,6}\s*(.+)$")
+
+#: When the heading names only the document, the PRD states the product separately:
+#: "# Product Requirements Document (PRD)  **Project:** Lightweight Self-hosted Bookmarks".
+_PROJECT_FIELD = re.compile(
+    r"\*\*\s*(?:project|product|app|name)\s*:?\s*\*\*\s*:?\s*([^\n*#]{2,60})",
+    re.I,
+)
+
+
+def _strip_artifact(text: str) -> str:
+    """Remove the document type from around a name.
+
+    "BugBox - Product Requirements Document (PRD)" is one string naming two things: a product
+    and the kind of document describing it. Only the first is a title.
+    """
+    t = text.strip()
+    t = re.sub(rf"^(?:{_ARTIFACT})\s*[:\-\u2013\u2014]\s*", "", t, flags=re.I)
+    t = re.sub(rf"\s*[\u2013\u2014-]\s*(?:re-?build\s+)?(?:{_ARTIFACT})\b.*$", "", t, flags=re.I)
+    t = re.sub(rf"\s*\(\s*(?:{_ARTIFACT})\s*\)\s*$", "", t, flags=re.I)
+    return t.strip(" -\u2013\u2014:\u00b7")
+
+
+def _name_from_document(body: str) -> str:
+    """The product name out of a PRD that was pasted into the run title.
+
+    30 runs on goldeneye were titled "Web app - <the entire PRD>", so the name was sitting in
+    the markdown H1 all along:
+
+        # BugBox - Product Requirements Document (PRD)  *Version 1.0*   -> BugBox
+        # ApproveIt Canary - PRD (BOSS #1c23722, PR #90)                -> ApproveIt Canary
+        # Product Requirements Document (PRD)  **Project:** Bookmarks   -> Bookmarks
+
+    The third case is the interesting one: when the heading names only the DOCUMENT, the
+    product is named by a field inside it. Taking the heading there would put "Product
+    Requirements Document" on the card, which is the exact complaint this is answering.
+    """
+    heading = _MARKDOWN_HEADING.match(body.strip())
+    if heading:
+        # The pasted markdown is flattened to one line, so the heading runs on into the body.
+        # Cut at the first bold field or sentence marker.
+        line = re.split(r"\s{2,}|\*\*|\s\*", heading.group(1), maxsplit=1)[0]
+        name = _strip_artifact(line)
+        # A heading is often "Name - what it does" ("ApproveIt - Expense Approval Workflow").
+        # Same short-head rule as below: a name, not a sentence.
+        parts = re.split(r"\s*[–—]\s*", name, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and len(parts[0].split()) <= 5:
+            name = parts[0].strip()
+        if name and not re.fullmatch(rf"(?:{_ARTIFACT})[\s()]*", name, re.I):
+            return name
+
+    field = _PROJECT_FIELD.search(body)
+    if field:
+        return _strip_artifact(field.group(1))
+    return ""
+
 
 def _clean_title(raw: str) -> str:
-    """A product NAME — not a document type, not a directive, not a run's bookkeeping.
+    """A product NAME - not a document type, not a category, not a run's bookkeeping.
 
-    Three things kept ending up on cards that are none of them:
+    Four things kept ending up on cards that are none of them:
 
-      "Product Requirements Document"  what the artifact IS, not what the product is called;
-      "Web app — Build 'Living Colors' — a VIBRANT, COLORFUL site"   an instruction;
-      "Shorty — self-hosted URL shortener · retry 2"                 an attempt number.
+      "Product Requirements Document"   what the artifact IS, not what the product is called;
+      "Web app"                         what KIND of thing it is (eight rows shared this one);
+      "Web app - Build 'Living Colors'" an instruction;
+      "Shorty - ... - retry 2"          an attempt number.
 
-    The last one matters beyond tidiness: two decorations of one name are two rows on the
-    Projects screen, so "Shorty — Re-build PRD" and "Shorty — self-hosted URL shortener" showed
-    up as separate apps. Cleaning them to the same string is what lets them merge.
+    The last matters beyond tidiness: two decorations of one name are two rows on the Projects
+    screen, so "Shorty - Re-build PRD" and "Shorty - self-hosted URL shortener" showed up as
+    separate apps. Cleaning them to the same string is what lets them merge.
 
     Returns "" when nothing survives, so the caller can say it does not know rather than
     labelling every app with the name of a document.
     """
     t = (raw or "").strip().split("\n")[0].strip()
-    # Leading emoji/punctuation decoration.
     t = re.sub(r"^[\s\W_]*(?:\ud83d[\udcc4-\udcdd]|\U0001F4C4|\U0001F4DD)?[\s\W_]*", "", t)
 
     for pattern, repl in _RUN_BOOKKEEPING:
         t = pattern.sub(repl, t)
 
-    # A quoted name inside a directive wins outright — it is the one place the operator said
+    # A quoted name inside a directive wins outright - it is the one place the operator said
     # what the thing is CALLED rather than what it should do.
     quoted = _QUOTED_NAME.search(t)
     if quoted:
         return quoted.group(1).strip()[:80]
 
-    t = re.sub(rf"^(?:{_ARTIFACT})\s*[:\-\u2013\u2014]\s*", "", t, flags=re.I)
-    # "Product Requirements Document — Shorty": the artifact type led, so the name trails.
-    lead_artifact = re.match(rf"^(?:{_ARTIFACT})\s*[\u2013\u2014-]\s*(.+)$", t, re.I)
-    if lead_artifact:
-        t = lead_artifact.group(1).strip()
-    # "Shorty — Re-build PRD": the artifact type trails, so the name leads.
-    t = re.sub(rf"\s*[\u2013\u2014-]\s*(?:re-?build\s+)?(?:{_ARTIFACT})\b.*$", "", t, flags=re.I)
+    # "<category> - <rest>": the head says nothing, so the name must come from the rest.
+    parts = re.split(r"\s+[\u2013\u2014]\s+", t, maxsplit=1)
+    if len(parts) == 2 and _CATEGORY.match(parts[0]):
+        from_doc = _name_from_document(parts[1])
+        if from_doc:
+            return from_doc[:80]
+        # No name anywhere in it. Better to show the directive than eight identical rows
+        # reading "Web app".
+        t = parts[1].strip()
 
-    # "Name — description" / "Name — hardened: ...". Only when the head looks like a NAME:
-    # short, and not a sentence. "Add multi-currency support: let users pick..." must survive
-    # whole, because there the head is the work itself.
+    t = _strip_artifact(t)
+
+    # "Name - description". Only when the head looks like a NAME: short, not a sentence, and
+    # not a category. "Add multi-currency support: let users pick..." must survive whole,
+    # because there the head IS the work.
     dashed = re.split(r"\s+[\u2013\u2014]\s+", t, maxsplit=1)
     if len(dashed) == 2:
         head = dashed[0].strip()
-        if head and len(head) <= 40 and len(head.split()) <= 5:
+        if head and len(head) <= 40 and len(head.split()) <= 5 and not _CATEGORY.match(head):
             t = head
 
-    t = t.strip(" -\u2013\u2014:·")
-    if re.fullmatch(rf"(?:{_ARTIFACT})[\s:\u2013\u2014-]*", t, flags=re.I):
+    t = t.strip(" -\u2013\u2014:\u00b7")
+    if _CATEGORY.match(t):
         return ""
-    return t[:80]
+    if re.fullmatch(rf"(?:{_ARTIFACT})[\s:\u2013\u2014()-]*", t, flags=re.I):
+        return ""
+    return _shorten(t)
+
+
+def _shorten(t: str, limit: int = 80) -> str:
+    """Cut at a word, and show that a cut happened.
+
+    A hard slice produced "...and convert amount" and "...queryable by focu", which read as the
+    name rather than as a truncation of it.
+    """
+    if len(t) <= limit:
+        return t
+    cut = t[: limit - 1]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:-\u2013\u2014") + "\u2026"
 
 
 def _stage_of(runs: list[dict]) -> tuple[str, str]:

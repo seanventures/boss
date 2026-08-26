@@ -187,3 +187,118 @@ def test_an_explicit_id_is_never_overridden_by_a_matching_name():
     a = _run("crun_1", "Shorty", app_id="app_1")
     b = _run("crun_2", "Shorty", app_id="app_2")
     assert _lineage_key(a) != _lineage_key(b)
+
+
+# --------------------------------------------------------------------------- #
+# The name is inside the document, not the document's name
+#
+# The real shape on goldeneye: the run title is a generic category, an em-dash, and then the
+# ENTIRE PRD markdown pasted in. 30 runs looked like this, and taking the head of the dash gave
+# eight rows all called "Web app".
+#
+#   Web app — # BugBox – Product Requirements Document (PRD)  *Version 1.0 – 10 Aug...
+#   Web app — # ApproveIt Canary – PRD (BOSS #1c23722, PR #90)   **Document version...
+#   Web app — # Product Requirements Document (PRD)   **Project:** Lightweight Self-...
+#
+# "you even don't know the difference of artifact name vs actual project title" — the PRD
+# heading is the artifact; the name inside it is the product.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("raw,want", [
+    ("Web app — # BugBox – Product Requirements Document (PRD)  *Version 1.0 – 10 Aug*", "BugBox"),
+    ("Web app — # HookWatch – Product Requirements Document (PRD)  **Version:** 1.0.0", "HookWatch"),
+    ("Web app — # Official BugBox – Product Requirements Document (PRD)   **Version:**",
+     "Official BugBox"),
+    ("Web app — # ApproveIt Canary – PRD (BOSS #1c23722, PR #90)    **Document version",
+     "ApproveIt Canary"),
+    ("Web app — # BugBox v1.0 – Product Requirements Document (PRD)   **Version 1.0", "BugBox v1.0"),
+    ("Web app — # ApproveIt – Expense Approval Workflow   **Product Requirements Doc",
+     "ApproveIt"),
+])
+def test_the_name_is_taken_from_the_prd_heading(raw, want):
+    assert _clean_title(raw) == want
+
+
+def test_a_heading_that_is_only_the_artifact_falls_through_to_the_project_field():
+    """"# Product Requirements Document (PRD)  **Project:** Lightweight Self-hosted..."
+    The heading names the document, so the product name is wherever the document says it."""
+    raw = ("Web app — # Product Requirements Document (PRD)   "
+           "**Project:** Lightweight Self-hosted Bookmarks")
+    assert _clean_title(raw) == "Lightweight Self-hosted Bookmarks"
+
+
+@pytest.mark.parametrize("raw", [
+    "Web app — Build a professional, polished single-page marketing website · retry 2",
+    "Web app",
+    "Website — something or other",
+])
+def test_a_category_is_never_used_as_a_name(raw):
+    """"Web app" is what KIND of thing it is. Eight rows on the live screen were all called
+    that, which is the same failure as "Product Requirements Document" wearing a card."""
+    assert _clean_title(raw) != "Web app"
+    assert _clean_title(raw) != "Website"
+
+
+def test_the_quoted_name_still_wins_inside_a_category_prefix():
+    assert _clean_title(
+        "Web app — Build 'Living Colors' — a VIBRANT, COLORFUL portfolio · retry 1"
+    ) == "Living Colors"
+
+
+# --------------------------------------------------------------------------- #
+# More of BOSS's own scaffolding, read off the same screen
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("title", [
+    "actor-share test) do the thing",
+    "[ga-slice] simulated fixture",
+    "e2e smoke",
+    "sealed-e2e-canary",
+    "Auto-repair: turn cap exhausted",
+    "Hybrid substrate validation: word-frequency counter",
+    "[boss:coding e2e test] Add a greet() helper",
+])
+def test_test_scaffolding_is_not_a_project(title):
+    assert _is_internal(title), title
+
+
+@pytest.mark.parametrize("title", [
+    "Leads Capture Tool v1",
+    "Pricing page (monthly/annual toggle)",
+    "Waitlist signup (landing + DB)",
+    "Official BugBox",
+])
+def test_real_apps_survive_the_wider_filter(title):
+    """Every widening of this filter risks swallowing real work, which fails silently — the
+    screen just looks tidier than the truth."""
+    assert not _is_internal(title), title
+
+
+# --------------------------------------------------------------------------- #
+# Two rough edges found by running the cleaner over all 353 real titles
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("title", [
+    "(actor-share test) · retry 2",
+    "(actor-share test)",
+    "(workspace test) what's the status of this task?",
+])
+def test_scaffolding_in_parentheses_is_still_scaffolding(title):
+    """The anchor allowed a leading "[" but not a leading "(", so three of these reached the
+    Projects screen as apps called "actor-share test)"."""
+    assert _is_internal(title), title
+
+
+def test_a_long_name_is_cut_at_a_word_and_marked():
+    """Cutting mid-word produced "...convert amount" and "...queryable by focu", which read as
+    the actual name rather than as a truncation. An ellipsis says a name was shortened; a
+    severed word says the name is broken."""
+    raw = ("Add multi-currency support: let users pick a display currency and convert amounts "
+           "(USD/EUR/INR/GBP) with a rate lookup")
+    got = _clean_title(raw)
+    assert len(got) <= 80
+    assert got.endswith("…")
+    assert not got[:-1].endswith(" ")
+    # The last kept word must be whole.
+    assert raw.startswith(got[:-1].rstrip("… "))
+
+
+def test_a_name_that_fits_gains_no_ellipsis():
+    assert _clean_title("Leads Capture Tool v1") == "Leads Capture Tool v1"
