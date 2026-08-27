@@ -63,6 +63,16 @@ export type V2Host = {
 export type V2Target = {
   id: string; app_name: string; repo: string | null; environment: string | null;
   kind: string | null; ref: string | null; status: string; retired: boolean;
+  /** Where the app answers. null when the target records no address — not a link. */
+  domains: string[];
+  url: string | null;
+  /** The registered host this lands on, or null rather than a guess: an app filed under the
+   *  wrong machine is worse than one filed under none. */
+  host: string | null;
+  last_deploy: {
+    status: string; commit: string | null; finished_at: string | null;
+    failure_reason: string | null;
+  } | null;
 };
 export type V2Model = {
   model: string; calls: number; tokens: number; spend_usd: number; estimated: boolean;

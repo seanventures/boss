@@ -516,6 +516,232 @@ def _evidence(state: dict) -> list[dict[str, str]]:
     return out
 
 
+#: What a stopped attempt is waiting on, in a sentence. Keyed on the phase the run halted in.
+#:
+#: "blocked" on its own reads as a failure, and the operator read it that way. The commonest
+#: case here is not a failure at all -- the pipeline finished planning and is waiting for a
+#: human to approve the plan before it writes any code.
+_WHY_STOPPED = {
+    "awaiting_plan_approval":
+        "It finished planning and stopped for a human to approve the plan before writing code. "
+        "Nothing failed — it is waiting on you.",
+    "queued": "It has not started yet; it is waiting for a free slot in the pipeline.",
+    "provisioning": "It stopped while cloning the repository.",
+    "design": "It stopped while designing the plan.",
+    "implement": "It stopped part-way through writing the code.",
+    "run_tests": "It stopped while running the tests.",
+    "review_panel": "It stopped during adversarial review.",
+    "check_tests": "It stopped during the mutation check.",
+}
+
+#: Human names for the pipeline phases, matching v1's vocabulary so the two consoles agree.
+PHASE_LABELS = {
+    "queued": "Queued", "provisioning": "Cloning repo", "design": "Designing plan",
+    "awaiting_plan_approval": "Awaiting plan approval", "write_tests": "QA writing tests",
+    "implement": "Engineer implementing", "run_tests": "Running tests",
+    "review_panel": "Adversarial review", "check_tests": "Mutation check", "done": "Done",
+    "coding": "Coding", "validating": "Testing", "opening_pr": "Opening PR",
+}
+
+
+def _narrative(run: dict, gates: list[dict], steps: list[dict]) -> dict[str, Any]:
+    """What this attempt set out to do, and what became of it -- in sentences.
+
+    Every clause is derived from a recorded field. The screen showed "blocked" and a list of
+    stage names, which tells someone who already knows the pipeline what happened and tells
+    everyone else nothing.
+    """
+    status = str(run.get("status") or "")
+    phase = str(run.get("phase") or "")
+    done = [s["stage"] for s in steps]
+    # From finalize_ctx, because this is handed the raw row -- the computed `advisory` key is
+    # added further down and reading it here silently got None, so every waived check was
+    # described as unwaived.
+    advisory = bool((run.get("finalize_ctx") or {}).get("advisory_failing_gates"))
+
+    if status in _DONE_STATES:
+        passed = [g for g in gates if g["ok"] is True]
+        failed = [g for g in gates if g["ok"] is False]
+        outcome = (
+            f"Completed. It ran {len(done)} step{'' if len(done) == 1 else 's'}, "
+            f"passed {len(passed)} of {len(passed) + len(failed)} quality checks"
+        )
+        if run.get("pull_request_number"):
+            outcome += f", and opened PR #{run['pull_request_number']}"
+        outcome += "."
+        if failed:
+            names = ", ".join(g["label"].lower() for g in failed)
+            outcome += (
+                f" {len(failed)} check did not pass ({names})"
+                if len(failed) == 1 else
+                f" {len(failed)} checks did not pass ({names})"
+            )
+            outcome += (
+                " — graded advisory, so it did not block the PR."
+                if advisory else
+                " and it was not waived."
+            )
+        return {"outcome": outcome, "waiting": False,
+                "phase_label": PHASE_LABELS.get(phase, phase)}
+
+    if status in _FAILED_STATES:
+        why = str(run.get("error") or "").strip()
+        return {
+            "outcome": (f"Failed during {PHASE_LABELS.get(phase, phase) or 'the run'}."
+                        + (f" {why}" if why else "")),
+            "waiting": False,
+            "phase_label": PHASE_LABELS.get(phase, phase),
+        }
+
+    # Stopped, but not failed. This is the case the screen was describing worst.
+    why = _WHY_STOPPED.get(phase)
+    label = PHASE_LABELS.get(phase, phase)
+    outcome = f"Stopped at “{label}”." if label else "Stopped."
+    if done:
+        outcome += f" It got through {', '.join(done)} first."
+    return {
+        "outcome": outcome,
+        "why": why,
+        # A gate is a decision waiting on a person, not a fault. Saying which it is decides
+        # whether the reader goes looking for a bug or goes and approves something.
+        "waiting": phase in _WAITING_PHASES,
+        "phase_label": label,
+    }
+
+
+#: Phases where the pipeline is deliberately holding for a human.
+_WAITING_PHASES = {"awaiting_plan_approval", "queued"}
+
+
+def _step_agents(connection, project_id: str) -> dict[str, dict[str, Any]]:
+    """Which agent owns each pipeline stage, and how that agent's work has actually gone.
+
+    The mapping is STAGE_ROLES from llm_telemetry -- the SAME map BOSS uses at write time to
+    attribute spend. Reusing it means the console and the cost ledger cannot disagree about who
+    did what; inventing a second mapping here would guarantee they eventually would.
+
+    NOT a confidence score. BOSS records no per-step confidence, so what is returned instead is
+    an observation: how many of that role's calls succeeded, over how many, in the window. A
+    role with three calls and a role with three hundred are different kinds of evidence, so the
+    denominator travels with the number.
+    """
+    from .llm_telemetry import STAGE_ROLES
+
+    stats: dict[str, dict] = {}
+    for row in connection.execute(
+        sql(
+            """
+            SELECT stage,
+                   count(*) AS calls,
+                   count(*) FILTER (WHERE ok) AS ok_calls
+            FROM llm_calls
+            WHERE project_id = :p
+              AND created_at > now() - interval '30 days'
+            GROUP BY stage
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        role = STAGE_ROLES.get(str(row["stage"] or "").strip().lower())
+        if not role:
+            continue
+        agg = stats.setdefault(role, {"calls": 0, "ok": 0})
+        agg["calls"] += int(row["calls"] or 0)
+        agg["ok"] += int(row["ok_calls"] or 0)
+
+    # `roles` is the registry -- the same table the Workforce screen reads. There is no
+    # `agent_registry`; inventing one here would have failed closed and quietly marked every
+    # role unregistered, which reads as a much bigger problem than the real one.
+    registered = {
+        str(r["role_key"]) for r in connection.execute(
+            sql("SELECT role_key FROM roles WHERE project_id = :p"),
+            {"p": project_id},
+        ).mappings().all()
+    }
+
+    out: dict[str, dict[str, Any]] = {}
+    for stage, role in STAGE_ROLES.items():
+        agg = stats.get(role) or {"calls": 0, "ok": 0}
+        out[stage] = {
+            "role": role,
+            # Whether the org actually has this agent. Two of these do NOT resolve on the live
+            # deployment -- STAGE_ROLES attributes work to "architect" and "reviewer" while the
+            # registry holds "chief_architect" and "adversarial_reviewer" -- so that spend can
+            # never be matched to an agent. Reported rather than hidden.
+            "registered": role in registered,
+            "calls": agg["calls"],
+            "ok_calls": agg["ok"],
+            # None, not 100%, when nothing has run. A rate over zero calls is not a good score.
+            "success_rate": (round(agg["ok"] / agg["calls"], 3) if agg["calls"] else None),
+        }
+    return out
+
+
+def _deployment(connection, project_id: str, title: str) -> Optional[dict[str, Any]]:
+    """Where this app is actually running, and how the last deploy went.
+
+    The operator asked why the console could not load this when the app was plainly deployed --
+    "is the state missing?". It was not missing. deployment_targets.domains held the address and
+    deployment_runs held the outcome; v2 selected neither, so a running app looked unbound.
+
+    Matched on app_name, which is what deployment_targets records. Returns None rather than a
+    half-filled block when there is no target: "not deployed" and "deployed somewhere I cannot
+    find" must not render alike.
+    """
+    if not title:
+        return None
+    target = connection.execute(
+        sql(
+            """
+            SELECT id, app_name, environment, target_kind, target_ref, domains, status
+            FROM deployment_targets
+            WHERE project_id = :p AND app_name = :n
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """
+        ),
+        {"p": project_id, "n": title},
+    ).mappings().first()
+    if not target:
+        return None
+
+    last = connection.execute(
+        sql(
+            """
+            SELECT status, commit_ref, started_at, finished_at, failure_reason
+            FROM deployment_runs
+            WHERE project_id = :p AND deployment_target_id = :t
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"p": project_id, "t": target["id"]},
+    ).mappings().first()
+
+    domains = [str(d) for d in (target.get("domains") or []) if d]
+    # The health check records a scheme; without one an address is not a link.
+    url = f"http://{domains[0]}" if domains else None
+    return {
+        "target_id": target["id"],
+        "environment": str(target.get("environment") or ""),
+        "target_ref": str(target.get("target_ref") or ""),
+        "status": str(target.get("status") or ""),
+        "url": url,
+        "domains": domains,
+        "last_deploy": (
+            {
+                "status": str(last.get("status") or ""),
+                "commit": (str(last["commit_ref"])[:10] if last.get("commit_ref") else None),
+                "finished_at": (last["finished_at"].isoformat()
+                                if last.get("finished_at") else None),
+                "failure_reason": (str(last.get("failure_reason"))[:200]
+                                   if last.get("failure_reason") else None),
+            }
+            if last else None
+        ),
+    }
+
+
 def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any]:
     """One app: every run in its lineage, where it stands, and what can be done to it.
 
@@ -580,6 +806,7 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
     # is to go and read logs. The operator asked for what v1 showed — latency, the steps, and
     # which agent made the change — and BOSS records all of it.
     run_ids = [r["id"] for r in lineage]
+    agents = _step_agents(connection, project_id)
     calls = {}
     steps_by_run: dict[str, list] = {}
     if run_ids:
@@ -612,6 +839,8 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
                 "retries": int(row.get("retries") or 0),
                 "ok": bool(row.get("ok")),
                 "error": (str(row.get("error"))[:200] or None) if row.get("error") else None,
+                # Which agent this step belongs to, so the work maps onto the org chart.
+                "agent": agents.get(str(row.get("stage") or "").strip().lower()),
             })
 
     runs = [
@@ -634,6 +863,8 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
             # it, and what they wrote. v1 showed all of it; v2 was selecting the columns and
             # discarding them, so the screen said "attempt 1 - completed" and stopped.
             "gates": _gate_rows(r.get("state") or {}, r),
+            "narrative": _narrative(
+                r, _gate_rows(r.get("state") or {}, r), steps_by_run.get(r["id"], [])),
             "provenance": _provenance(r.get("state") or {}),
             "evidence": _evidence(r.get("state") or {}),
             "impl_files": list((r.get("state") or {}).get("impl_files") or [])[:60],
@@ -665,6 +896,8 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
         "status": status,
         "pct": STAGE_PCT.get(stage, 0),
         "spend_usd": round(micros / 1_000_000, 2),
+        # Where it is running, if it is. Read from the same rows the v1 CI/CD screen reads.
+        "deployment": _deployment(connection, project_id, title),
         # The contract this work was accepted against. Without it the quality checks are marks
         # with no exam paper -- you can see that something passed, not what it passed.
         "criteria": [str(c) for c in (spec.get("acceptance_criteria") or []) if c][:40],

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { NavIcon } from "./NavIcon";
 import { AutonomyControl } from "./AutonomyControl";
 import { LaunchButton } from "./LaunchButton";
 import { ConsoleToggle } from "./ConsoleToggle";
@@ -139,6 +140,7 @@ export function Shell({
                 data-built={item.built}
                 data-testid={`v2-nav-${item.id}`}
               >
+                <NavIcon id={item.id} />
                 {item.label}
                 {item.id === "panels" && gates > 0 ? (
                   <span className="v2-mono v2-nav-badge">{gates}</span>

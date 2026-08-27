@@ -21,6 +21,46 @@ export type V2Step = {
   retries: number;
   ok: boolean;
   error: string | null;
+  /** Which agent owns this stage, from the same map BOSS uses to attribute spend. */
+  agent: V2StepAgent | null;
+};
+
+export type V2StepAgent = {
+  role: string;
+  /** False when BOSS attributes work to a role its own registry does not contain — real on the
+   *  live deployment for `architect` and `reviewer`. */
+  registered: boolean;
+  calls: number;
+  ok_calls: number;
+  /** Observed success rate, NOT a confidence score — BOSS records none. null when the role has
+   *  never run, because 100% of nothing is the most misleading number available. */
+  success_rate: number | null;
+};
+
+/** What an attempt set out to do and what became of it, in sentences. */
+export type V2Narrative = {
+  outcome: string;
+  /** Present only when the attempt stopped without failing. */
+  why?: string;
+  /** True when the pipeline is holding for a person — a decision, not a fault. */
+  waiting: boolean;
+  phase_label: string;
+};
+
+export type V2Deployment = {
+  target_id: string;
+  environment: string;
+  target_ref: string;
+  status: string;
+  /** null when the target records no address; a broken link is worse than none. */
+  url: string | null;
+  domains: string[];
+  last_deploy: {
+    status: string;
+    commit: string | null;
+    finished_at: string | null;
+    failure_reason: string | null;
+  } | null;
 };
 
 /** One quality check. `ok: null` means it did not run — which is neither a pass nor a failure,
@@ -71,6 +111,7 @@ export type V2Run = {
   steps: V2Step[];
   latency_ms: number;
   gates?: V2Gate[];
+  narrative?: V2Narrative;
   provenance?: V2Provenance;
   evidence?: V2Evidence[];
   impl_files?: string[];
@@ -99,6 +140,9 @@ export type Workspace = {
    *  no exam paper. */
   criteria?: string[];
   verification?: string[];
+  /** Where the app is actually running. null means no target, which is different from a target
+   *  whose address is unknown. */
+  deployment?: V2Deployment | null;
   deployable?: boolean;
   deployable_reason?: string;
   latest_run_id?: string;

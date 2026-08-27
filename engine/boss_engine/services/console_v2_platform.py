@@ -30,7 +30,7 @@ different and false claim.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy import text as sql
 
@@ -185,6 +185,21 @@ def workflows(connection, project_id: str) -> dict[str, Any]:
     }
 
 
+def _host_for(target_ref: str, hosts: list[dict]) -> Optional[str]:
+    """Which registered host a target deploys to, matched on the address inside its ref.
+
+    A target_ref is "root@2.29.2.202:22" and a host records "2.29.2.202". Matched on the address
+    rather than parsed as a URL, because the ref is an ssh destination and target_kind is not
+    always ssh. Returns None rather than guessing: an app shown under the wrong machine is worse
+    than an app shown under none.
+    """
+    for h in hosts:
+        addr = str(h.get("address") or "").strip()
+        if addr and addr in target_ref:
+            return str(h.get("name") or addr)
+    return None
+
+
 def infra(connection, project_id: str) -> dict[str, Any]:
     """Hosts, deployment targets, and what the models cost.
 
@@ -208,7 +223,7 @@ def infra(connection, project_id: str) -> dict[str, Any]:
     targets = [dict(r) for r in connection.execute(
         sql(
             """
-            SELECT id, app_name, repo, environment, target_kind, target_ref, status
+            SELECT id, app_name, repo, environment, target_kind, target_ref, status, domains
             FROM deployment_targets
             WHERE project_id = :p
             ORDER BY app_name, environment
@@ -216,6 +231,24 @@ def infra(connection, project_id: str) -> dict[str, Any]:
         ),
         {"p": project_id},
     ).mappings().all()]
+
+    # The latest deploy per target, in ONE query. The v1 CI/CD screen shows change -> merged ->
+    # deploy -> live for every app; without this the v2 screen could say a target existed and
+    # nothing about whether anything had ever landed on it.
+    latest: dict[str, dict] = {}
+    for row in connection.execute(
+        sql(
+            """
+            SELECT DISTINCT ON (deployment_target_id)
+                   deployment_target_id, status, commit_ref, finished_at, failure_reason
+            FROM deployment_runs
+            WHERE project_id = :p
+            ORDER BY deployment_target_id, created_at DESC
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        latest[str(row["deployment_target_id"])] = dict(row)
 
     # Model spend for the month, by model. This IS attributable — an llm_call records its own
     # model — unlike per-agent spend, which is not recorded and is therefore not shown.
@@ -277,6 +310,26 @@ def infra(connection, project_id: str) -> dict[str, Any]:
                 "ref": t.get("target_ref"),
                 "status": t.get("status") or "unknown",
                 "retired": str(t.get("status")) == "retired",
+                # Where it actually answers. v1 links to the running app from here and v2 could
+                # not, because this column was never selected.
+                "domains": [str(d) for d in (t.get("domains") or []) if d],
+                "url": (f"http://{[str(d) for d in (t.get('domains') or []) if d][0]}"
+                        if [d for d in (t.get("domains") or []) if d] else None),
+                # Which host this lands on, so the screen can group apps under their machine
+                # instead of listing two flat lists that the reader has to join by eye.
+                "host": _host_for(str(t.get("target_ref") or ""), hosts),
+                "last_deploy": (
+                    {
+                        "status": str(latest[t["id"]].get("status") or ""),
+                        "commit": (str(latest[t["id"]]["commit_ref"])[:10]
+                                   if latest[t["id"]].get("commit_ref") else None),
+                        "finished_at": (latest[t["id"]]["finished_at"].isoformat()
+                                        if latest[t["id"]].get("finished_at") else None),
+                        "failure_reason": (str(latest[t["id"]].get("failure_reason"))[:200]
+                                           if latest[t["id"]].get("failure_reason") else None),
+                    }
+                    if t["id"] in latest else None
+                ),
             }
             for t in targets
         ],

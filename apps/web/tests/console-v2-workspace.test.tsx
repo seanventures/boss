@@ -353,3 +353,102 @@ describe("what the pipeline checked", () => {
     expect(out).not.toContain("Acceptance criteria");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Saying what happened, who did it, and where it runs
+// ---------------------------------------------------------------------------
+describe("explaining an attempt", () => {
+  it("shows a waiting attempt as waiting, not as broken", () => {
+    const out = html(ws({ runs: [run({
+      status: "blocked",
+      narrative: {
+        outcome: "Stopped at “Awaiting plan approval”. It got through standards, plan first.",
+        why: "It finished planning and stopped for a human to approve the plan. Nothing failed — it is waiting on you.",
+        waiting: true, phase_label: "Awaiting plan approval",
+      },
+    })] }));
+    expect(out).toContain('data-waiting="true"');
+    expect(out).toContain("waiting on you");
+  });
+
+  it("does not dress a real failure up as a pause", () => {
+    const out = html(ws({ runs: [run({
+      status: "failed",
+      narrative: { outcome: "Failed during Engineer implementing.", waiting: false,
+                   phase_label: "Engineer implementing" },
+    })] }));
+    expect(out).toContain('data-waiting="false"');
+    expect(out).toContain("Failed during");
+    expect(out).not.toContain("v2-narrative-why");
+  });
+
+  it("names the agent that owns each step", () => {
+    const out = html(ws({ runs: [run({ steps: [{
+      stage: "security_check", model: "claude-sonnet-5", engine: "claude_code",
+      tokens: 0, spend_usd: 0, latency_ms: 1000, turns: 4, retries: 0, ok: true, error: null,
+      agent: { role: "security_reviewer", registered: true, calls: 20, ok_calls: 19,
+               success_rate: 0.95 },
+    }] })] }));
+    expect(out).toContain("security_reviewer");
+    expect(out).toContain("95% of 20");        // the rate carries its denominator
+  });
+
+  it("flags a role the org registry does not contain", () => {
+    // Real on the live deployment: BOSS attributes work to "reviewer" while the registry holds
+    // "adversarial_reviewer", so that spend can never be matched to an agent.
+    const out = html(ws({ runs: [run({ steps: [{
+      stage: "review_code", model: "claude-sonnet-5", engine: "claude_code",
+      tokens: 0, spend_usd: 0, latency_ms: 1000, turns: 4, retries: 0, ok: true, error: null,
+      agent: { role: "reviewer", registered: false, calls: 5, ok_calls: 5, success_rate: 1 },
+    }] })] }));
+    expect(out).toContain("unregistered");
+    expect(out).toContain('data-registered="false"');
+  });
+
+  it("shows no rate at all for a role that has never run", () => {
+    // 100% of nothing is the most misleading number the screen could print.
+    const out = html(ws({ runs: [run({ steps: [{
+      stage: "write_tests", model: null, engine: null,
+      tokens: 0, spend_usd: 0, latency_ms: 0, turns: 0, retries: 0, ok: true, error: null,
+      agent: { role: "qa", registered: true, calls: 0, ok_calls: 0, success_rate: null },
+    }] })] }));
+    expect(out).toContain("qa");
+    expect(out).not.toMatch(/%\s*of\s*0/);
+  });
+});
+
+describe("where the app runs", () => {
+  const dep = (over = {}) => ({
+    target_id: "deptgt_1", environment: "staging", target_ref: "root@2.29.2.202:22",
+    status: "active", url: "http://2.29.2.202:3013", domains: ["2.29.2.202:3013"],
+    last_deploy: { status: "succeeded", commit: "19d5806", finished_at: null,
+                   failure_reason: null },
+    ...over,
+  });
+
+  it("links to the running app", () => {
+    const out = html(ws({ deployment: dep() }));
+    expect(out).toContain('href="http://2.29.2.202:3013"');
+    expect(out).toContain("last deploy succeeded");
+    expect(out).toContain("19d5806");
+  });
+
+  it("shows why the last deploy failed rather than just that it did", () => {
+    const out = html(ws({ deployment: dep({
+      last_deploy: { status: "failed", commit: null, finished_at: null,
+                     failure_reason: "port 3014 already bound" } }) }));
+    expect(out).toContain("port 3014 already bound");
+  });
+
+  it("renders no link when the target records no address", () => {
+    // A broken link is worse than none.
+    const out = html(ws({ deployment: dep({ url: null, domains: [] }) }));
+    expect(out).toContain("no address recorded");
+    expect(out).not.toContain('data-testid="v2-deploy-url"');
+  });
+
+  it("says nothing at all when the app is not deployed", () => {
+    // "Not deployed" and "deployed somewhere I cannot find" must not render alike.
+    expect(html(ws({}))).not.toContain('data-testid="v2-deployment"');
+  });
+});

@@ -4,7 +4,7 @@
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React from "react";
 
-import type { InfraView } from "../../lib/v2/platform";
+import type { InfraView, V2Target } from "../../lib/v2/platform";
 
 /**
  * Infra & Models — where things run, and what the models cost.
@@ -21,6 +21,77 @@ import type { InfraView } from "../../lib/v2/platform";
 
 function money(n: number): string {
   return "$" + (n < 100 ? n.toFixed(2) : Math.round(n).toLocaleString());
+}
+
+/**
+ * One deployed app: which machine it lands on, how the last deploy went, and a link to the
+ * thing itself.
+ *
+ * The v1 CI/CD screen puts each app on a card with its pipeline and an "open app" link. v2 had
+ * a flat list of rows that named a target and an ssh string, so the reader had to join app to
+ * machine by eye and had no way to reach the running app at all -- the address was in the
+ * database the whole time and was simply never selected.
+ */
+function TargetCard({ t }: { t: V2Target }) {
+  const last = t.last_deploy;
+  return (
+    <article className="v2-deploy-card" data-retired={t.retired} data-testid={`v2-target-${t.id}`}>
+      <header className="v2-deploy-card-head">
+        <span className="v2-deploy-card-name">{t.app_name}</span>
+        <span className="v2-deploy-env v2-mono" data-status={t.status}>
+          {t.environment}
+        </span>
+        {/* Retired is not a failure and not a running app. Said in a word, not by colour
+            alone. */}
+        {t.retired ? (
+          <span className="v2-wf-violations v2-mono" data-testid={`v2-target-retired-${t.id}`}>
+            retired
+          </span>
+        ) : null}
+      </header>
+
+      <p className="v2-deploy-card-where v2-mono">
+        <span className="v2-row-meta-dim">{t.repo}</span>
+        {/* The machine, by NAME, not by ssh string — and only when it resolves to a registered
+            host. An app filed under the wrong machine is worse than one filed under none. */}
+        {t.host ? (
+          <span data-testid={`v2-target-host-${t.id}`}> on {t.host}</span>
+        ) : (
+          <span className="v2-step-agent-gap" data-testid={`v2-target-nohost-${t.id}`}>
+            {" "}on an unregistered host
+          </span>
+        )}
+        <span className="v2-row-meta-dim"> · {t.kind} {t.ref}</span>
+      </p>
+
+      <div className="v2-deploy-state">
+        {last ? (
+          <span className="v2-deploy-last v2-mono" data-status={last.status}
+                data-testid={`v2-target-last-${t.id}`}>
+            last deploy {last.status}
+            {last.commit ? ` · ${last.commit}` : ""}
+            {/* Why, on the screen. "failed" on its own is another dead end. */}
+            {last.failure_reason ? ` — ${last.failure_reason}` : ""}
+          </span>
+        ) : (
+          <span className="v2-row-meta-dim v2-mono" data-testid={`v2-target-never-${t.id}`}>
+            never deployed
+          </span>
+        )}
+
+        {t.url ? (
+          <a className="v2-deploy-url v2-mono" href={t.url} target="_blank" rel="noreferrer"
+             data-testid={`v2-target-url-${t.id}`}>
+            open app ↗
+          </a>
+        ) : (
+          <span className="v2-row-meta-dim v2-mono" data-testid={`v2-target-nourl-${t.id}`}>
+            no address recorded
+          </span>
+        )}
+      </div>
+    </article>
+  );
 }
 
 export function InfraScreen({ view }: { view: InfraView }) {
@@ -91,37 +162,15 @@ export function InfraScreen({ view }: { view: InfraView }) {
         </ul>
       )}
 
-      <h2 className="v2-ws-h">Deployment targets</h2>
+      <h2 className="v2-ws-h">Apps and where they deploy</h2>
       {view.targets.length === 0 ? (
         <p className="v2-empty" data-testid="v2-infra-no-targets">
           No app is bound to a destination yet.
         </p>
       ) : (
-        <ul className="v2-rows" data-testid="v2-infra-targets">
-          {view.targets.map((t) => (
-            <li className="v2-row" key={t.id} data-testid={`v2-target-${t.id}`}>
-              <span className="v2-row-main">
-                <span className="v2-row-title">
-                  {t.app_name}
-                  <span className="v2-row-meta-dim"> · {t.environment}</span>
-                </span>
-                <span className="v2-row-meta">
-                  <span>{t.repo}</span>
-                  <span>
-                    {t.kind} {t.ref}
-                  </span>
-                  {t.retired ? (
-                    <span className="v2-wf-violations" data-testid={`v2-target-retired-${t.id}`}>
-                      retired
-                    </span>
-                  ) : (
-                    <span>{t.status}</span>
-                  )}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="v2-deploy-grid" data-testid="v2-infra-targets">
+          {view.targets.map((t) => <TargetCard key={t.id} t={t} />)}
+        </div>
       )}
 
       <h2 className="v2-ws-h">Models this month</h2>

@@ -22,16 +22,43 @@ class FakeConn:
     answers everything identically will agree with any code, including wrong code.
     """
 
-    def __init__(self, rows, calls=()):
+    def __init__(self, rows, calls=(), roles=(), targets=(), deploys=()):
         self.rows = rows
         self.calls = list(calls)
+        self.roles = list(roles)
+        self.targets = list(targets)
+        self.deploys = list(deploys)
         self.statements = []
+
+    def _rows_for(self, raw: str):
+        low = raw.lower()
+        # Order matters: the stage-stats query and the per-call query both name llm_calls, and
+        # the stats one is a GROUP BY that wants aggregate rows, not call rows.
+        if "from llm_calls" in low and "group by stage" in low:
+            agg: dict[str, dict] = {}
+            for c in self.calls:
+                a = agg.setdefault(c["stage"], {"stage": c["stage"], "calls": 0, "ok_calls": 0})
+                a["calls"] += 1
+                a["ok_calls"] += 1 if c.get("ok", True) else 0
+            return list(agg.values())
+        if "from llm_calls" in low:
+            return self.calls
+        if "from roles" in low:
+            return self.roles
+        if "from deployment_targets" in low:
+            return self.targets
+        if "from deployment_runs" in low:
+            return self.deploys
+        if "from code_task_runs" in low:
+            return self.rows
+        # An unrecognised query returns NOTHING rather than the run rows. Handing code-task rows
+        # to a query that wanted something else is how a fake comes to agree with any code.
+        return []
 
     def execute(self, statement, params=None):
         raw = str(statement)
         self.statements.append((" ".join(raw.split()), dict(params or {})))
-        rows = self.calls if "llm_calls" in raw.lower() else self.rows
-        captured = rows
+        captured = self._rows_for(raw)
 
         class _R:
             def mappings(self):
@@ -39,6 +66,9 @@ class FakeConn:
 
             def all(self):
                 return [dict(r) for r in captured]
+
+            def first(self):
+                return dict(captured[0]) if captured else None
 
         return _R()
 
@@ -73,10 +103,18 @@ def test_the_screen_costs_a_bounded_number_of_queries_and_never_one_per_run():
     the receipts feed does. What must never appear is a query per item — that is the shape that
     scales with the data and takes the page down when the project gets busy.
     """
-    lineage = [run(f"crun_{i}", age_min=i, app_id="app_1") for i in range(12)]
-    conn = FakeConn(lineage)
+    # The invariant is that the count does not GROW with the data, which is what a magic
+    # number stopped expressing the moment a legitimate fourth query was added: bumping the
+    # constant to 7 would have passed just as happily against a query per run.
+    conn = FakeConn([run(f"crun_{i}", age_min=i, app_id="app_1") for i in range(12)])
     project_workspace(conn, "proj", "app_1")
-    assert len(conn.statements) <= 3, [s for s, _ in conn.statements]
+    twelve = len(conn.statements)
+
+    conn_two = FakeConn([run(f"crun_{i}", age_min=i, app_id="app_1") for i in range(2)])
+    project_workspace(conn_two, "proj", "app_1")
+    assert twelve == len(conn_two.statements), (
+        f"{twelve} queries for 12 runs vs {len(conn_two.statements)} for 2 — scales with data")
+    assert twelve <= 8, [s for s, _ in conn.statements]
 
     conn_small = FakeConn([run("crun_1", app_id="app_1")])
     project_workspace(conn_small, "proj", "app_1")
@@ -88,8 +126,10 @@ def test_the_step_query_asks_for_every_run_at_once():
     """= ANY(:ids), not a loop."""
     conn = FakeConn([run("crun_1", app_id="app_1"), run("crun_2", app_id="app_1")])
     project_workspace(conn, "proj", "app_1")
-    call_sql = [s for s, _ in conn.statements if "llm_calls" in s.lower()]
-    assert call_sql, "no llm_calls query at all"
+    # The PER-CALL query, not the stage-stats aggregate that also names llm_calls.
+    call_sql = [s for s, _ in conn.statements
+                if "llm_calls" in s.lower() and "group by stage" not in s.lower()]
+    assert call_sql, "no per-call llm_calls query at all"
     assert "= ANY(:ids)" in call_sql[0]
 
 
@@ -474,3 +514,150 @@ def test_an_app_whose_every_run_is_internal_still_gets_its_own_name():
     out = project_workspace(FakeConn([only]), "proj", "app_1")
     assert out["title"] != "Untitled app"
     assert "Follow-up" in out["title"]
+
+
+# --------------------------------------------------------------------------- #
+# Saying what an attempt was doing, in sentences
+#
+# "blocked" and a list of stage names tells someone who already knows the pipeline what
+# happened, and tells everyone else nothing. The operator read "blocked" as a failure; the
+# commonest case is not a failure at all.
+# --------------------------------------------------------------------------- #
+def test_waiting_for_a_human_is_not_described_as_a_failure():
+    """The live case: attempt 1 planned, then stopped at awaiting_plan_approval with no error.
+
+    The screen said "blocked". Nothing had gone wrong -- it was holding for an approval, and
+    the difference decides whether the reader hunts a bug or goes and approves something.
+    """
+    r = run("crun_1", app_id="app_1", status="blocked", phase="awaiting_plan_approval")
+    out = project_workspace(FakeConn([r], calls=[
+        call("crun_1", "standards"), call("crun_1", "plan")]), "proj", "app_1")
+    n = out["runs"][0]["narrative"]
+    assert n["waiting"] is True
+    assert "waiting on you" in n["why"]
+    assert "fail" not in n["outcome"].lower()
+    assert "standards" in n["outcome"]          # what it DID get through
+
+
+def test_a_real_failure_is_still_described_as_one():
+    """The guard must not turn every stop into a friendly pause."""
+    r = run("crun_1", app_id="app_1", status="failed", phase="implement",
+            err="the build could not be reproduced")
+    out = project_workspace(FakeConn([r]), "proj", "app_1")
+    n = out["runs"][0]["narrative"]
+    assert n["waiting"] is False
+    assert "Failed" in n["outcome"]
+    assert "could not be reproduced" in n["outcome"]
+
+
+def test_a_completed_attempt_says_what_it_produced():
+    r = run("crun_1", app_id="app_1", status="completed", phase="done", pr=112)
+    r["state"] = {"tests_passed": True, "test_exit_code": 0,
+                  "adversarial_verdict": "survived", "security_verdict": "clean",
+                  "regressions_ok": True, "consistency_verdict": "drift"}
+    r["finalize_ctx"] = {**(r.get("finalize_ctx") or {}), "advisory_failing_gates": ["x"]}
+    out = project_workspace(FakeConn([r], calls=[call("crun_1", "implement")]), "proj", "app_1")
+    n = out["runs"][0]["narrative"]
+    assert "PR #112" in n["outcome"]
+    assert "consistency" in n["outcome"]
+    assert "did not block the PR" in n["outcome"]
+
+
+def test_an_unwaived_failing_check_is_not_described_as_advisory():
+    r = run("crun_1", app_id="app_1", status="completed", phase="done")
+    r["state"] = {"consistency_verdict": "drift"}
+    out = project_workspace(FakeConn([r]), "proj", "app_1")
+    assert "not waived" in out["runs"][0]["narrative"]["outcome"]
+
+
+# --------------------------------------------------------------------------- #
+# Which agent owns which step
+# --------------------------------------------------------------------------- #
+def test_a_step_names_the_agent_that_owns_it():
+    """From STAGE_ROLES -- the same map BOSS uses at write time to attribute spend. A second
+    mapping invented here would eventually disagree with the cost ledger."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "security_check"), call("crun_1", "implement")],
+        roles=[{"role_key": "security_reviewer"}, {"role_key": "software_engineer"}],
+    ), "proj", "app_1")
+    steps = out["runs"][0]["steps"]
+    assert steps[0]["agent"]["role"] == "security_reviewer"
+    assert steps[1]["agent"]["role"] == "software_engineer"
+    assert all(s["agent"]["registered"] for s in steps)
+
+
+def test_an_agent_the_org_does_not_have_is_flagged_rather_than_hidden():
+    """Live: STAGE_ROLES attributes work to "architect" and "reviewer" while the registry holds
+    "chief_architect" and "adversarial_reviewer", so that spend can never be matched to an
+    agent. Hiding it would hide a real gap in BOSS's own attribution."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "review_code")],
+        roles=[{"role_key": "adversarial_reviewer"}],     # NOT "reviewer"
+    ), "proj", "app_1")
+    agent = out["runs"][0]["steps"][0]["agent"]
+    assert agent["role"] == "reviewer"
+    assert agent["registered"] is False
+
+
+def test_reliability_is_observed_and_carries_its_denominator():
+    """Not a confidence score -- BOSS records none. Three calls and three hundred are different
+    kinds of evidence, so the count travels with the rate."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "implement"), call("crun_1", "implement", ok=False),
+               call("crun_1", "implement")],
+    ), "proj", "app_1")
+    a = out["runs"][0]["steps"][0]["agent"]
+    assert (a["calls"], a["ok_calls"]) == (3, 2)
+    assert a["success_rate"] == round(2 / 3, 3)
+
+
+def test_a_role_that_has_never_run_has_no_success_rate():
+    """A rate over zero calls is not a good score; 100% of nothing is the most misleading
+    number the screen could show."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")], calls=[call("crun_1", "implement")]), "proj", "app_1")
+    from boss_engine.services.console_v2 import _step_agents
+    agents = _step_agents(FakeConn([], calls=[]), "proj")
+    assert agents["security_check"]["success_rate"] is None
+    assert agents["security_check"]["calls"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Where the app is actually running
+# --------------------------------------------------------------------------- #
+def target(app_name="Shorty — a URL shortener", domains=("2.29.2.202:3013",), status="active"):
+    return {"id": "deptgt_1", "app_name": app_name, "environment": "staging",
+            "target_kind": "ssh", "target_ref": "root@2.29.2.202:22",
+            "domains": list(domains), "status": status}
+
+
+def test_a_deployed_app_carries_the_address_it_is_running_on():
+    """The operator asked why the console could not load this when the app was plainly
+    deployed. The state was never missing -- deployment_targets.domains held it and v2 did not
+    select it."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")], targets=[target()],
+        deploys=[{"status": "succeeded", "commit_ref": "19d5806aaa",
+                  "started_at": None, "finished_at": None, "failure_reason": None}],
+    ), "proj", "app_1")
+    d = out["deployment"]
+    assert d["url"] == "http://2.29.2.202:3013"
+    assert d["last_deploy"]["status"] == "succeeded"
+    assert d["last_deploy"]["commit"] == "19d5806aaa"
+
+
+def test_an_app_with_no_target_reports_nothing_rather_than_a_half_filled_block():
+    """"Not deployed" and "deployed somewhere I cannot find" must not render alike."""
+    out = project_workspace(FakeConn([run("crun_1", app_id="app_1")]), "proj", "app_1")
+    assert out["deployment"] is None
+
+
+def test_a_target_with_no_domain_yields_no_link():
+    """A bound target with no address is not a link, and a broken link is worse than none."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")], targets=[target(domains=())]), "proj", "app_1")
+    assert out["deployment"]["url"] is None
+    assert out["deployment"]["target_ref"] == "root@2.29.2.202:22"

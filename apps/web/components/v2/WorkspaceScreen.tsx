@@ -5,7 +5,7 @@ import Link from "next/link";
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React from "react";
 
-import type { V2Evidence, V2Gate, V2Provenance, V2Run, V2Step, Workspace }
+import type { V2Deployment, V2Evidence, V2Gate, V2Provenance, V2Run, V2Step, Workspace }
   from "../../lib/v2/workspace";
 import { Markdown } from "../../app/markdown";
 import { DeployControls } from "./DeployControls";
@@ -134,6 +134,11 @@ export function WorkspaceScreen({
           same requests as the v1 card, deliberately: those handlers are already off the
           Server-Action path, and reusing them is what lets the parity check report MOVED
           instead of MISSING. */}
+      {/* WHERE IT IS RUNNING. The operator asked why the console could not load this when the
+          app was plainly deployed — the state was never missing, v2 just never read
+          deployment_targets.domains or the deploy runs beside them. */}
+      {workspace.deployment ? <Deployment d={workspace.deployment} /> : null}
+
       {workspace.latest_run_id ? (
         <DeployControls
           runId={workspace.latest_run_id}
@@ -166,6 +171,46 @@ function BackLink({ q }: { q: string }) {
     <Link href={`/v2${q}`} className="v2-back v2-mono" data-testid="v2-workspace-back">
       ← Projects
     </Link>
+  );
+}
+
+/** Where the app is running, and how the last deploy went. */
+function Deployment({ d }: { d: V2Deployment }) {
+  const last = d.last_deploy;
+  return (
+    <div className="v2-deployment" data-testid="v2-deployment">
+      <span className="v2-deploy-env v2-mono" data-status={d.status}>
+        {d.environment || "deployed"}
+        {d.status && d.status !== "active" ? ` · ${d.status}` : ""}
+      </span>
+
+      {/* The link the operator was looking for. Only when there is an address — a bound target
+          with no domain is not a link, and a broken link is worse than none. */}
+      {d.url ? (
+        <a className="v2-deploy-url v2-mono" href={d.url} target="_blank" rel="noreferrer"
+           data-testid="v2-deploy-url">
+          {d.domains[0]} ↗
+        </a>
+      ) : (
+        <span className="v2-row-meta-dim v2-mono" data-testid="v2-deploy-no-url">
+          no address recorded for this target
+        </span>
+      )}
+
+      {last ? (
+        <span className="v2-deploy-last v2-mono" data-status={last.status}
+              data-testid="v2-deploy-last">
+          last deploy {last.status}
+          {last.commit ? ` · ${last.commit}` : ""}
+          {/* Why it failed, on the screen. Otherwise "failed" is another dead end. */}
+          {last.failure_reason ? ` — ${last.failure_reason}` : ""}
+        </span>
+      ) : (
+        <span className="v2-row-meta-dim v2-mono">never deployed</span>
+      )}
+
+      <span className="v2-deploy-ref v2-mono v2-row-meta-dim">{d.target_ref}</span>
+    </div>
   );
 }
 
@@ -208,6 +253,22 @@ function RunRow({ run }: { run: V2Run }) {
           attempt {run.attempt}
           <span className="v2-row-meta-dim"> · {run.id}</span>
         </span>
+
+        {/* WHAT THIS ATTEMPT WAS DOING, in sentences.
+            "blocked" plus a list of stage names tells someone who already knows the pipeline
+            what happened and tells everyone else nothing — and it reads as a failure even when
+            the pipeline is simply holding for an approval. */}
+        {run.narrative ? (
+          <span className="v2-narrative" data-waiting={run.narrative.waiting}
+                data-testid={`v2-narrative-${run.id}`}>
+            <span className="v2-narrative-outcome">{run.narrative.outcome}</span>
+            {run.narrative.why ? (
+              <span className="v2-narrative-why" data-testid={`v2-narrative-why-${run.id}`}>
+                {run.narrative.why}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
 
         {/* A failure with no text is a dead end: the only move left is to go and read logs. */}
         {run.error ? (
@@ -440,6 +501,28 @@ function RunStep({ s, runId, index }: { s: V2Step; runId: string; index: number 
       data-testid={`v2-step-${runId}-${index}`}
     >
       <span className="v2-step-name">{s.stage}</span>
+      {/* WHICH AGENT owns this stage, so the work maps onto the org chart. From the same map
+          BOSS uses at write time to attribute spend — not a second one invented here. */}
+      {s.agent ? (
+        <span className="v2-step-agent" data-registered={s.agent.registered}
+              data-testid={`v2-step-agent-${runId}-${index}`}>
+          {s.agent.role}
+          {/* BOSS attributes work to roles its own registry does not contain. Saying so beats
+              linking to an agent that is not there. */}
+          {!s.agent.registered ? (
+            <span className="v2-step-agent-gap" title="no such role in the agent registry">
+              {" "}· unregistered
+            </span>
+          ) : null}
+          {/* Observed reliability, with its denominator. Not a confidence score: BOSS records
+              none, and three calls and three hundred are different kinds of evidence. */}
+          {s.agent.success_rate != null ? (
+            <span className="v2-step-agent-rate" data-testid={`v2-step-rate-${runId}-${index}`}>
+              {" "}{Math.round(s.agent.success_rate * 100)}% of {s.agent.calls}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
       {s.model ? <span className="v2-step-role">{s.model}</span> : null}
       <span className="v2-step-timing">
         {s.turns > 0 ? `${s.turns} turn${s.turns === 1 ? "" : "s"} · ` : ""}

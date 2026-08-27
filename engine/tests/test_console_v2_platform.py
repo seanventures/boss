@@ -34,6 +34,8 @@ class FakeConn:
             rows = self.tables.get("hosts", [])
         elif "deployment_targets" in low:
             rows = self.tables.get("targets", [])
+        elif "deployment_runs" in low:
+            rows = self.tables.get("deploys", [])
         elif "llm_calls" in low:
             rows = self.tables.get("models", [])
         elif "mcp_servers" in low:
@@ -343,3 +345,77 @@ def test_the_payload_says_the_template_cannot_be_edited():
     API, so they must be absent rather than drawn as buttons that cannot act."""
     out = workflows(FakeConn(templates=[]), "p")
     assert out["editable"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Infra: apps under the machine they run on, with the address that answers
+#
+# The operator compared this to v1's CI/CD screen, which shows each app, its host, its pipeline
+# and a link to the running thing. v2 listed hosts and targets as two flat lists and never read
+# the address at all -- so it could not say where anything was, while the app was plainly up.
+# --------------------------------------------------------------------------- #
+HOST = {"id": "h1", "name": "hetzner-ci-01", "address": "2.29.2.202", "arch": "AMD64",
+        "status": "verified", "labels": None, "created_at": None}
+
+
+def tgt(app="Invoice-Chaser", domains=("2.29.2.202:3013",), ref="root@2.29.2.202:22",
+        status="active", tid="deptgt_1"):
+    return {"id": tid, "app_name": app, "repo": "boss-sandbox", "environment": "staging",
+            "target_kind": "ssh", "target_ref": ref, "status": status,
+            "domains": list(domains)}
+
+
+def test_a_target_carries_the_address_the_app_answers_on():
+    out = infra(FakeConn(hosts=[HOST], targets=[tgt()]), "proj")
+    t = out["targets"][0]
+    assert t["url"] == "http://2.29.2.202:3013"
+    assert t["domains"] == ["2.29.2.202:3013"]
+
+
+def test_a_target_with_no_address_offers_no_link():
+    out = infra(FakeConn(hosts=[HOST], targets=[tgt(domains=())]), "proj")
+    assert out["targets"][0]["url"] is None
+
+
+def test_an_app_is_grouped_under_the_host_it_deploys_to():
+    """Two flat lists make the reader join host to app by eye, off an ssh string."""
+    out = infra(FakeConn(hosts=[HOST], targets=[tgt()]), "proj")
+    assert out["targets"][0]["host"] == "hetzner-ci-01"
+
+
+def test_an_app_on_an_unregistered_host_is_not_filed_under_the_wrong_one():
+    """Shown under no machine beats shown under the wrong machine."""
+    out = infra(FakeConn(hosts=[HOST], targets=[tgt(ref="root@10.0.0.9:22")]), "proj")
+    assert out["targets"][0]["host"] is None
+
+
+def test_the_last_deploy_travels_with_its_target():
+    out = infra(FakeConn(
+        hosts=[HOST], targets=[tgt()],
+        deploys=[{"deployment_target_id": "deptgt_1", "status": "succeeded",
+                  "commit_ref": "19d5806aaaa", "finished_at": None, "failure_reason": None}],
+    ), "proj")
+    last = out["targets"][0]["last_deploy"]
+    assert last["status"] == "succeeded"
+    assert last["commit"] == "19d5806aaa"
+
+
+def test_a_target_that_has_never_deployed_says_so_rather_than_borrowing_another_row():
+    out = infra(FakeConn(
+        hosts=[HOST],
+        targets=[tgt(tid="deptgt_1"), tgt(app="Shorty", tid="deptgt_2")],
+        deploys=[{"deployment_target_id": "deptgt_1", "status": "succeeded",
+                  "commit_ref": "abc", "finished_at": None, "failure_reason": None}],
+    ), "proj")
+    by = {t["app_name"]: t for t in out["targets"]}
+    assert by["Invoice-Chaser"]["last_deploy"]["status"] == "succeeded"
+    assert by["Shorty"]["last_deploy"] is None
+
+
+def test_a_failed_deploy_carries_its_reason():
+    out = infra(FakeConn(
+        hosts=[HOST], targets=[tgt()],
+        deploys=[{"deployment_target_id": "deptgt_1", "status": "failed", "commit_ref": None,
+                  "finished_at": None, "failure_reason": "port 3014 already bound"}],
+    ), "proj")
+    assert "already bound" in out["targets"][0]["last_deploy"]["failure_reason"]

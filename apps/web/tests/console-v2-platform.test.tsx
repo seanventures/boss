@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { InfraScreen } from "../components/v2/InfraScreen";
 import { SettingsScreen } from "../components/v2/SettingsScreen";
 import { WorkflowsScreen } from "../components/v2/WorkflowsScreen";
-import type { InfraView, SettingsView, WorkflowsView } from "../lib/v2/platform";
+import type { InfraView, V2Target, SettingsView, WorkflowsView } from "../lib/v2/platform";
 
 /**
  * Workflows, Infra & Models, Settings.
@@ -261,5 +261,66 @@ describe("Settings", () => {
   it("an unreachable API does not imply an unconfigured company", () => {
     expect(html(settings({ apiReachable: false, roles: [], repos: [], unavailable: [] })))
       .toContain('data-testid="v2-settings-unreachable"');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Apps and where they deploy
+//
+// The operator compared this screen to v1's CI/CD, which puts each app on a card with its host
+// and a link to the running thing. v2 listed a target and an ssh string, so there was no way to
+// reach the app -- while the app was plainly up at an address sitting unread in the database.
+// ---------------------------------------------------------------------------
+describe("deployed apps", () => {
+  const html = (v: InfraView) => renderToStaticMarkup(<InfraScreen view={v} />);
+  const target = (over: Partial<V2Target> = {}): V2Target => ({
+    id: "deptgt_1", app_name: "Invoice-Chaser", repo: "boss-sandbox", environment: "staging",
+    kind: "ssh", ref: "root@2.29.2.202:22", status: "active", retired: false,
+    domains: ["2.29.2.202:3013"], url: "http://2.29.2.202:3013", host: "hetzner-ci-01",
+    last_deploy: { status: "succeeded", commit: "19d5806", finished_at: null,
+                   failure_reason: null },
+    ...over,
+  });
+
+  it("links to the running app", () => {
+    const out = html(infra({ targets: [target()] }));
+    expect(out).toContain('href="http://2.29.2.202:3013"');
+    expect(out).toContain("open app");
+  });
+
+  it("names the machine rather than making the reader parse an ssh string", () => {
+    expect(html(infra({ targets: [target()] }))).toContain("on hetzner-ci-01");
+  });
+
+  it("says so rather than guessing when the host is not registered", () => {
+    // An app filed under the wrong machine is worse than one filed under none.
+    const out = html(infra({ targets: [target({ host: null })] }));
+    expect(out).toContain("unregistered host");
+  });
+
+  it("shows how the last deploy went, and why it failed", () => {
+    const out = html(infra({ targets: [target({
+      last_deploy: { status: "failed", commit: null, finished_at: null,
+                     failure_reason: "port 3014 already bound" } })] }));
+    expect(out).toContain("last deploy failed");
+    expect(out).toContain("port 3014 already bound");
+  });
+
+  it("distinguishes never-deployed from deployed-and-failed", () => {
+    expect(html(infra({ targets: [target({ last_deploy: null })] })))
+      .toContain("never deployed");
+  });
+
+  it("offers no link when there is no address", () => {
+    const out = html(infra({ targets: [target({ url: null, domains: [] })] }));
+    expect(out).toContain("no address recorded");
+    expect(out).not.toContain('data-testid="v2-target-url-deptgt_1"');
+  });
+
+  it("marks a retired target without colouring it as a failure", () => {
+    const out = html(infra({ targets: [target({ retired: true, status: "retired" })] }));
+    expect(out).toContain('data-retired="true"');
+    expect(out).toContain("retired");
   });
 });
