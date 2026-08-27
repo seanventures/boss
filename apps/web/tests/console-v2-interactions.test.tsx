@@ -30,6 +30,7 @@ const agent: V2Agent = {
   model: "claude-opus-5", tokens: null, spend_usd: null, calls: null,
   autonomy_level: 1, trust_score: 50, successful_runs: 3, violations: 0,
   hidden_failures: 0, last_seen_seconds: 40, run_id: "run_1",
+  project: null, last_touched: null, registered: true,
 };
 
 describe("agent chat", () => {

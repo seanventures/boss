@@ -184,8 +184,10 @@ export function WorkforceScreen({
         </p>
       ) : (
         <ul className="v2-cards" data-testid="v2-workforce-list">
-          {shown.map((a) => (
-            <AgentCard key={a.id} a={a} onChat={() => setChatWith(a)} />
+          {/* Rank comes from position in the ALREADY-SORTED list the engine returned, not from
+              a second sort here — two orderings of the same data eventually disagree. */}
+          {shown.map((a, i) => (
+            <AgentCard key={a.id} a={a} onChat={() => setChatWith(a)} rank={i + 1} />
           ))}
         </ul>
       )}

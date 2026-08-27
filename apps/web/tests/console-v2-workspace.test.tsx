@@ -145,9 +145,10 @@ describe("v2 project workspace", () => {
           latency_ms: 12_400,
           steps: [
             { stage: "spec", model: "claude-opus-5", engine: "claude_code", tokens: 4000,
-              spend_usd: 0.25, latency_ms: 3_000, calls: 1, ok: true },
+              spend_usd: 0.25, latency_ms: 3_000, turns: 4, retries: 0, error: null, agent: null, ok: true },
             { stage: "implement", model: "claude-sonnet-5", engine: "claude_code", tokens: 9000,
-              spend_usd: 0.9, latency_ms: 9_400, calls: 3, ok: false },
+              spend_usd: 0.9, latency_ms: 9_400, turns: 6, retries: 0, error: null,
+              agent: null, ok: false },
           ],
         })],
       }));
@@ -330,7 +331,7 @@ describe("what the pipeline checked", () => {
   it("shows the error text on a failed step rather than the word failed", () => {
     const out = html(ws({ runs: [run({ steps: [{
       stage: "consistency_check", model: "claude_code", engine: "claude_code",
-      tokens: 0, spend_usd: 0, latency_ms: 421_000, turns: 0, retries: 0,
+      tokens: 0, spend_usd: 0, latency_ms: 421_000, turns: 0, retries: 0, agent: null,
       ok: false, error: "claude code agent timed out after 420s",
     }] })] }));
     expect(out).toContain("timed out after 420s");
