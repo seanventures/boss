@@ -53,6 +53,8 @@ export function WorkforceScreen({
   const [filter, setFilter] = useState<Filter>("ALL");
   const [chatWith, setChatWith] = useState<V2Agent | null>(null);
 
+  // The busiest agent sets the scale for every bar, so the lengths are comparable.
+  const busiest = Math.max(1, ...workforce.agents.map((x) => (x.calls ?? 0) + (x.steps ?? 0)));
   const shown = useMemo(
     () =>
       filter === "ALL"
@@ -187,7 +189,8 @@ export function WorkforceScreen({
           {/* Rank comes from position in the ALREADY-SORTED list the engine returned, not from
               a second sort here — two orderings of the same data eventually disagree. */}
           {shown.map((a, i) => (
-            <AgentCard key={a.id} a={a} onChat={() => setChatWith(a)} rank={i + 1} />
+            <AgentCard key={a.id} a={a} onChat={() => setChatWith(a)} rank={i + 1}
+                       busiest={busiest} />
           ))}
         </ul>
       )}
@@ -251,7 +254,16 @@ function recency(a: V2Agent): "live" | "today" | "week" | "cold" {
   return "cold";
 }
 
-function AgentCard({ a, onChat, rank }: { a: V2Agent; onChat: () => void; rank: number }) {
+/** How much work this agent did, in whichever unit it works in. */
+function volume(a: V2Agent): number {
+  return (a.calls ?? 0) + (a.steps ?? 0);
+}
+
+function AgentCard({ a, onChat, rank, busiest }:
+  { a: V2Agent; onChat: () => void; rank: number; busiest: number }) {
+  // Share of the busiest agent's volume. A floor of 3% keeps a real but tiny contribution
+  // visible — a bar of zero width reads as no bar, which is the thing it must not say.
+  const share = volume(a) > 0 && busiest > 0 ? volume(a) / busiest : null;
   return (
     <li
       className="v2-card"
@@ -373,10 +385,20 @@ function AgentCard({ a, onChat, rank }: { a: V2Agent; onChat: () => void; rank: 
           applies to an agent working this instant, and on a quiet afternoon that is nobody, so
           the page looked as static as before. Width is the success rate, so the motion is
           carrying the number rather than decorating it. */}
-      {rate(a) != null ? (
+      {/* LENGTH IS VOLUME, COLOUR IS QUALITY.
+          The first version made length the success rate, and on the live page every agent sat
+          at or near 100% — so twenty-eight identical full-width green bars carried no
+          information and dominated every card. Success rate is nearly constant here; volume is
+          not (865 steps against 84 calls), so length now shows share of the busiest agent's
+          work and the ranking is readable down the page. Colour still carries the rate, which
+          is where the variance that matters actually shows up. */}
+      {share != null ? (
         <div className="v2-bar v2-score-bar" data-testid={`v2-agent-bar-${a.id}`}
-             role="img" aria-label={`${Math.round(rate(a)! * 100)}% success`}>
-          <span data-tone={scoreTone(rate(a))} style={{ width: `${Math.round(rate(a)! * 100)}%` }} />
+             role="img"
+             aria-label={`${volume(a)} units of work, ${rate(a) != null
+               ? `${Math.round(rate(a)! * 100)}% success` : "no rate recorded"}`}>
+          <span data-tone={scoreTone(rate(a))}
+                style={{ width: `${Math.max(3, Math.round(share * 100))}%` }} />
         </div>
       ) : null}
 

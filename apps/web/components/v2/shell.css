@@ -1077,7 +1077,14 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
  */
 @keyframes v2-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-.v2-score-bar { margin-top: 8px; height: 3px; }
+/* Thin and muted. At 3px of saturated mint on twenty-eight cards it read as the loudest thing
+   on the page while saying the least. */
+.v2-score-bar { margin-top: 8px; height: 2px; opacity: .55; }
+.v2-card[data-ranked="true"] .v2-score-bar { opacity: 1; }
+/* Thicker only where something is travelling along it — a sweep on a 2px line is not legible,
+   and the whole point of the sweep is that it can be seen. */
+.v2-card[data-recency="live"] .v2-score-bar,
+.v2-card[data-recency="today"] .v2-score-bar { height: 3px; opacity: 1; }
 .v2-score-bar > span {
   display: block; height: 100%; border-radius: 2px;
   transform-origin: left center;
@@ -1089,12 +1096,9 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 .v2-score-bar > span[data-tone="bad"]  { background: var(--v2-red); }
 .v2-score-bar > span[data-tone="none"] { background: var(--v2-idle); }
 
-/* A card that has done work at all is not grey. The left edge carries it, so the ranked list
-   reads as a leaderboard down the page rather than a wall of identical panels. */
-.v2-card:has(.v2-score-bar) { border-left: 2px solid var(--v2-border-strong); }
-.v2-card:has(.v2-score-bar > span[data-tone="good"]) { border-left-color: var(--v2-green); }
-.v2-card:has(.v2-score-bar > span[data-tone="warn"]) { border-left-color: var(--v2-amber); }
-.v2-card:has(.v2-score-bar > span[data-tone="bad"])  { border-left-color: var(--v2-red); }
+/* NO COLOURED LEFT EDGE. It said exactly what the bar underneath already said, in the same
+   green, and two dominant greens on one card read as decoration rather than as data. The rank
+   number carries "this one has done work"; the bar carries how well. */
 
 @media (prefers-reduced-motion: reduce) {
   .v2-score-bar > span { animation: none !important; }
@@ -1135,3 +1139,78 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 .v2-routine-head::before { content: "▸ "; }
 .v2-routine[open] > .v2-routine-head::before { content: "▾ "; }
 .v2-routine-head:hover { color: var(--v2-muted); }
+
+/* ── Rank, and motion that is still there when you look ───────────────────── */
+/*
+ * The rank number replaces the coloured left edge: it says which position an agent holds
+ * without spending a second colour on it.
+ */
+.v2-rank {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 18px; padding: 0 5px; margin-right: 8px;
+  border-radius: 4px; background: var(--v2-surface);
+  color: var(--v2-dim); font-size: 10.5px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+/* The top three earn the ink. Below that the number is a position, not an achievement. */
+.v2-card[data-ranked="true"] .v2-rank { background: var(--v2-mint); color: #06231D; }
+
+/*
+ * MOTION THAT PERSISTS.
+ *
+ * Everything before this was a sub-second entrance, so by the time anyone looked the page had
+ * finished moving and read as static -- which is exactly what was reported, twice. The breathing
+ * rule only applied to an agent WORKING this instant, and on the live page that is nobody: 28
+ * cards, 0 working.
+ *
+ * Recency is the fact that IS true of a real number of agents right now (1 live, 7 today), and
+ * it is the one an operator most wants: a month of work and ten minutes ago otherwise render
+ * identically. So the motion is keyed to it, it never stops, and the amount of movement is the
+ * amount of recency.
+ */
+/* Amplitudes chosen by looking at the rendered page, not by taste in the abstract: at .10 alpha
+   the glow was invisible against this background, which is how a "working" animation and no
+   animation came to look identical to the operator three times running. */
+@keyframes v2-live-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,.05); }
+  50%      { box-shadow: 0 0 0 5px rgba(79,227,193,.30); }
+}
+@keyframes v2-today-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,.04); }
+  50%      { box-shadow: 0 0 16px 2px rgba(79,227,193,.22); }
+}
+@keyframes v2-sweep {
+  from { background-position: -150% 0; }
+  to   { background-position: 250% 0; }
+}
+
+/* Worked within the last quarter hour. The strongest signal on the page, and rare. */
+.v2-card[data-recency="live"] {
+  animation: v2-rise .34s cubic-bezier(.22,.61,.36,1) both,
+             v2-live-ring 2.4s ease-in-out .4s infinite;
+}
+/* Worked today. Slower and fainter — present without competing with `live`. */
+.v2-card[data-recency="today"] {
+  animation: v2-rise .34s cubic-bezier(.22,.61,.36,1) both,
+             v2-today-glow 4.5s ease-in-out .6s infinite;
+}
+
+/* A light travelling along the bar of anyone who worked today: continuous, and it points at
+   exactly the agents that are currently earning their score. */
+.v2-card[data-recency="live"]  .v2-score-bar > span::after,
+.v2-card[data-recency="today"] .v2-score-bar > span::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent 20%, rgba(255,255,255,.55) 50%, transparent 80%);
+  background-size: 40% 100%; background-repeat: no-repeat;
+  animation: v2-sweep 2.6s linear infinite;
+}
+.v2-score-bar > span { position: relative; overflow: hidden; }
+
+/* The status dot for a live agent keeps the pulse it already had; nothing to add. */
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-card[data-recency="live"],
+  .v2-card[data-recency="today"] { animation: none !important; }
+  .v2-card[data-recency="live"]  .v2-score-bar > span::after,
+  .v2-card[data-recency="today"] .v2-score-bar > span::after { animation: none !important; content: none; }
+}

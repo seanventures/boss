@@ -351,7 +351,37 @@ describe("the workforce leaderboard", () => {
       agent({ id: "software_engineer", calls: 499, ok_calls: 494, success_rate: 0.99 }),
     ] }));
     expect(out).toContain('data-testid="v2-agent-bar-software_engineer"');
-    expect(out).toContain("width:99%");
+    // The busiest agent fills the bar; it is the scale everyone else is drawn against.
+    expect(out).toContain("width:100%");
+  });
+
+  it("makes the bar's LENGTH the amount of work, not the success rate", () => {
+    // The first version made length the rate, and on the live page every agent sat at or near
+    // 100% -- twenty-eight identical full-width bars carrying no information at all. Success
+    // rate barely varies here; volume varies enormously.
+    const out = wfHtml(wf({ agents: [
+      agent({ id: "big",   calls: 500, ok_calls: 500, success_rate: 1 }),
+      agent({ id: "small", calls: 50,  ok_calls: 50,  success_rate: 1 }),
+    ] }));
+    const widths = [...out.matchAll(/width:(\d+)%/g)].map((m) => Number(m[1]));
+    expect(widths).toEqual([100, 10]);          // same perfect rate, very different bars
+  });
+
+  it("keeps a tiny contributor visible rather than drawing nothing", () => {
+    // A bar of zero width reads as no bar, which is the one thing it must not say.
+    const out = wfHtml(wf({ agents: [
+      agent({ id: "big",  calls: 10000, ok_calls: 10000, success_rate: 1 }),
+      agent({ id: "tiny", calls: 1,     ok_calls: 1,     success_rate: 1 }),
+    ] }));
+    const widths = [...out.matchAll(/width:(\d+)%/g)].map((m) => Number(m[1]));
+    expect(widths[1]).toBeGreaterThanOrEqual(3);
+  });
+
+  it("still lets colour carry how well the work went", () => {
+    const out = wfHtml(wf({ agents: [
+      agent({ id: "shaky", calls: 100, ok_calls: 50, success_rate: 0.5 }),
+    ] }));
+    expect(out).toMatch(/data-tone="bad"/);
   });
 
   it("scores an agent on the kind of work it actually does", () => {
