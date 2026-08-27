@@ -402,7 +402,7 @@ def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
     the agent last ran -- an agent that worked all month and stopped an hour ago is idle now,
     and its card should say both things.
     """
-    from .llm_telemetry import STAGE_ROLES
+    from .llm_telemetry import STAGE_ROLES, canonical_role
 
     rows = [dict(r) for r in connection.execute(
         sql(
@@ -427,7 +427,7 @@ def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for row in rows:
         stage = str(row.get("stage") or "").strip().lower()
-        role = STAGE_ROLES.get(stage)
+        role = canonical_role(STAGE_ROLES.get(stage))
         if not role:
             # A stage nobody owns. Counted nowhere rather than folded into a neighbour: an
             # agent credited with work it did not do is worse than a gap.

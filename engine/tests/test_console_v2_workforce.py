@@ -529,9 +529,9 @@ def test_an_agent_with_no_calls_has_no_score_rather_than_zero_or_a_hundred():
 
 
 def test_the_busiest_stages_say_what_the_agent_actually_does():
-    out = workforce(FakeConn(roles=[role("architect")],
+    out = workforce(FakeConn(roles=[role("chief_architect")],
                              spend=[lcall("plan", calls=7), lcall("spec", calls=2)]), "proj")
-    assert [s["stage"] for s in by_id(out)["architect"]["top_stages"]] == ["plan", "spec"]
+    assert [s["stage"] for s in by_id(out)["chief_architect"]["top_stages"]] == ["plan", "spec"]
 
 
 def test_a_stage_no_agent_owns_is_credited_to_nobody():
@@ -542,13 +542,26 @@ def test_a_stage_no_agent_owns_is_credited_to_nobody():
     assert by_id(out)["software_engineer"]["spend_usd"] == 0.1
 
 
-def test_an_agent_known_only_from_model_calls_is_listed_and_marked_unregistered():
-    """architect and reviewer are not in the registry, yet BOSS attributes spend to them."""
-    out = workforce(FakeConn(roles=[], spend=[lcall("review_code", micros=500_000)]), "proj")
+def test_work_is_credited_to_the_role_the_registry_actually_holds():
+    """BOSS attributed review work to "reviewer" while its registry held
+    "adversarial_reviewer". Nothing joined them, so that spend could never be matched to an
+    agent -- and the registered reviewer sat idle beside the unregistered one doing its job."""
+    out = workforce(FakeConn(roles=[role("adversarial_reviewer")],
+                             spend=[lcall("review_code", micros=500_000)]), "proj")
     a = by_id(out)
-    assert "reviewer" in a
-    assert a["reviewer"]["registered"] is False
-    assert a["reviewer"]["spend_usd"] == 0.5
+    assert a["adversarial_reviewer"]["spend_usd"] == 0.5
+    assert a["adversarial_reviewer"]["registered"] is True
+    assert "reviewer" not in a
+
+
+def test_an_agent_genuinely_absent_from_the_registry_is_still_listed_and_flagged():
+    """The alias fixes two known names. It must not become a way to hide the next gap: an agent
+    running work with no registered role has no trust score, no autonomy level and no violation
+    tracking, and hiding it would hide that."""
+    out = workforce(FakeConn(roles=[], spend=[lcall("implement", micros=500_000)]), "proj")
+    a = by_id(out)
+    assert a["software_engineer"]["registered"] is False
+    assert a["software_engineer"]["spend_usd"] == 0.5
 
 
 def test_the_model_shown_is_the_one_the_agent_mostly_used():

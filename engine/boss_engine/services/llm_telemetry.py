@@ -53,15 +53,39 @@ def get_llm_context() -> dict:
 # Which AGENT a pipeline stage belongs to — derived at write time so per-agent spend
 # ($/qa vs $/implementer vs $/reviewer) is a plain GROUP BY, no joins (BOSS-280 P1).
 STAGE_ROLES = {
-    "standards": "architect", "spec": "architect", "plan": "architect",
-    "review_plan": "architect", "design": "architect",
+    "standards": "chief_architect", "spec": "chief_architect", "plan": "chief_architect",
+    "review_plan": "chief_architect", "design": "chief_architect",
     "write_tests": "qa",
     "implement": "software_engineer", "repair": "software_engineer",
-    "review_code": "reviewer", "consistency_check": "reviewer",
+    "review_code": "adversarial_reviewer", "consistency_check": "adversarial_reviewer",
     "security_check": "security_reviewer",
     "check_tests": "qa", "run_all_tests": "qa",
     "guest": "software_engineer", "solo": "software_engineer",
 }
+
+#: Role names this map used to write, and the registered role each one actually meant.
+#:
+#: BOSS attributed work to "architect" and "reviewer" while its own registry held
+#: "chief_architect" and "adversarial_reviewer". Nothing joined them, so that spend could never
+#: be matched to an agent and the org chart showed two agents doing significant work with no
+#: trust score, no autonomy level and no violation tracking -- while the registered agents that
+#: WERE those same reviewers sat idle beside them.
+#:
+#: The map above is corrected, so new rows are attributed to the registered names. Historical
+#: rows keep what they were written with, and are folded in here rather than by rewriting
+#: months of cost history -- a bulk UPDATE over the ledger to fix a display problem is a much
+#: worse trade than a six-line lookup.
+ROLE_ALIASES = {
+    "architect": "chief_architect",
+    "reviewer": "adversarial_reviewer",
+}
+
+
+def canonical_role(role: Optional[str]) -> Optional[str]:
+    """The registered role a recorded role name refers to."""
+    if not role:
+        return None
+    return ROLE_ALIASES.get(role.strip().lower(), role.strip().lower())
 
 
 def role_for_stage(stage: Optional[str]) -> Optional[str]:

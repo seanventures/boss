@@ -625,7 +625,7 @@ def _step_agents(connection, project_id: str) -> dict[str, dict[str, Any]]:
     role with three calls and a role with three hundred are different kinds of evidence, so the
     denominator travels with the number.
     """
-    from .llm_telemetry import STAGE_ROLES
+    from .llm_telemetry import STAGE_ROLES, canonical_role
 
     stats: dict[str, dict] = {}
     for row in connection.execute(
@@ -660,7 +660,8 @@ def _step_agents(connection, project_id: str) -> dict[str, dict[str, Any]]:
     }
 
     out: dict[str, dict[str, Any]] = {}
-    for stage, role in STAGE_ROLES.items():
+    for stage, raw_role in STAGE_ROLES.items():
+        role = canonical_role(raw_role)
         agg = stats.get(role) or {"calls": 0, "ok": 0}
         out[stage] = {
             "role": role,

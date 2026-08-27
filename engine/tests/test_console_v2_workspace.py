@@ -587,17 +587,29 @@ def test_a_step_names_the_agent_that_owns_it():
     assert all(s["agent"]["registered"] for s in steps)
 
 
-def test_an_agent_the_org_does_not_have_is_flagged_rather_than_hidden():
-    """Live: STAGE_ROLES attributes work to "architect" and "reviewer" while the registry holds
-    "chief_architect" and "adversarial_reviewer", so that spend can never be matched to an
-    agent. Hiding it would hide a real gap in BOSS's own attribution."""
+def test_review_work_is_credited_to_the_registered_reviewer():
+    """STAGE_ROLES attributed review work to "reviewer" while the registry held
+    "adversarial_reviewer", so it could never be matched to an agent. Corrected, and historical
+    rows written under the old name are folded in rather than rewritten."""
     out = project_workspace(FakeConn(
         [run("crun_1", app_id="app_1")],
         calls=[call("crun_1", "review_code")],
-        roles=[{"role_key": "adversarial_reviewer"}],     # NOT "reviewer"
+        roles=[{"role_key": "adversarial_reviewer"}],
     ), "proj", "app_1")
     agent = out["runs"][0]["steps"][0]["agent"]
-    assert agent["role"] == "reviewer"
+    assert agent["role"] == "adversarial_reviewer"
+    assert agent["registered"] is True
+
+
+def test_an_agent_genuinely_absent_from_the_registry_is_still_flagged():
+    """The alias must not become a way to hide the next gap."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "implement")],
+        roles=[],
+    ), "proj", "app_1")
+    agent = out["runs"][0]["steps"][0]["agent"]
+    assert agent["role"] == "software_engineer"
     assert agent["registered"] is False
 
 

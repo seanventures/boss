@@ -126,3 +126,26 @@ def test_a_root_has_no_manager():
     c = FakeConn()
     SVC.register_role(c, "proj", "ceo")
     assert c.rows[("proj", "ceo")]["reports_to"] is None
+
+
+def test_a_role_name_boss_used_to_write_resolves_to_the_registered_one():
+    """Months of llm_calls carry role='architect' and role='reviewer'. Rewriting the cost ledger
+    to fix a display problem is a far worse trade than a lookup, so history is folded in."""
+    from boss_engine.services.llm_telemetry import canonical_role
+
+    assert canonical_role("architect") == "chief_architect"
+    assert canonical_role("reviewer") == "adversarial_reviewer"
+    # Everything else passes through untouched, normalised.
+    assert canonical_role("software_engineer") == "software_engineer"
+    assert canonical_role("  QA ") == "qa"
+    assert canonical_role(None) is None
+
+
+def test_new_calls_are_attributed_to_the_registered_names():
+    """The map itself is corrected, so this stops accruing more history to fold in."""
+    from boss_engine.services.llm_telemetry import STAGE_ROLES, role_for_stage
+
+    assert role_for_stage("plan") == "chief_architect"
+    assert role_for_stage("review_code") == "adversarial_reviewer"
+    assert "architect" not in set(STAGE_ROLES.values())
+    assert "reviewer" not in set(STAGE_ROLES.values())
