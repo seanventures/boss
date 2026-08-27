@@ -148,7 +148,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # This is what made the page look dead: every agent that does the actual building --
     # software_engineer, qa, security_reviewer, reviewer, architect -- works through llm_calls,
     # and the screen only ever looked at agent_process_steps.
-    spend = _llm_work(connection, project_id, hours)
+    spend = _llm_work(connection, project_id, SCORE_WINDOW_HOURS)
     # AGENTS THAT WORK BUT ARE NOT REGISTERED ROLES.
     #
     # Found by the Hive having no edges: five of the seven role keys the process template
@@ -285,7 +285,19 @@ def _status_from_work(work: dict) -> tuple[str, str]:
         if age is not None and age < 300:
             return WORKING, stage
     n = work.get("calls") or 0
-    return IDLE, f"last: {stage} · {n} call{'' if n == 1 else 's'} in this window"
+    # "in this window" was misleading once the scoring window widened to 30 days -- the reader
+    # takes "window" to mean the 24h the rest of the screen talks about.
+    return IDLE, f"last: {stage} · {n} call{'' if n == 1 else 's'} in 30d"
+
+
+#: How far back an agent's SCORE looks. Deliberately much longer than the live-status window.
+#:
+#: With both at 24h the live page showed one agent with a scoreboard and twenty-five blank
+#: cards, because only one stage had run that day. A card reading "no calls recorded" for an
+#: agent that has reviewed a hundred changes this month is not a quiet day, it is a wrong
+#: answer -- and this page exists to measure agents, which is a question about a track record
+#: rather than about this afternoon.
+SCORE_WINDOW_HOURS = 720   # 30 days
 
 
 def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
@@ -293,6 +305,10 @@ def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
 
     Grouped by stage and then folded into roles through STAGE_ROLES, so a role that owns four
     stages shows one total rather than four rows the reader has to add up.
+
+    `hours` is the SCORING window, not the status window. Status still comes from how recently
+    the agent last ran -- an agent that worked all month and stopped an hour ago is idle now,
+    and its card should say both things.
     """
     from .llm_telemetry import STAGE_ROLES
 
