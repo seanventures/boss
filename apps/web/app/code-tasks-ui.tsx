@@ -2335,6 +2335,19 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
       {tasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
+      ) : tasks.filter((c) => !isInternalRun(c)).length === 0 ? (
+        // EVERYTHING IN THE WINDOW WAS HOUSEKEEPING.
+        //
+        // The grid rendered empty under a heading reading "200 code tasks" and said nothing,
+        // so the operator's reasonable conclusion was that their apps had been deleted. They
+        // had not — 200 of the 200 newest runs were "Captain: QUALITY IMPROVE PASS", and every
+        // app they had built was older than the window. An empty grid beside a non-zero count
+        // is a contradiction the screen has to explain rather than leave to be discovered.
+        <p className="detail" data-testid="ct-all-internal">
+          All {tasks.length} runs in this window are BOSS&apos;s own maintenance passes
+          (&quot;Captain: …&quot;), so there is nothing here to show. Your apps still exist —
+          they are older than this window.
+        </p>
       ) : (
         // THE grid. Meetings lay their cards out three-across at minmax(320px, 1fr); mine
         // stacked one per row, which is why the same CSS class still read as a full-width row

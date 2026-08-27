@@ -91,14 +91,64 @@ def load_code_task_run(connection, run_id: str) -> Optional[dict]:
     return _row_to_run(r) if r else None
 
 
-def list_code_task_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
+#: Title prefixes BOSS gives its OWN maintenance runs. Kept beside the query, because the
+#: console filters on the same list and the two drifting apart is the bug this exists to
+#: prevent.
+#:
+#: Deployment-specific prefixes come from the environment rather than being written here. One
+#: operator's platform runs "<platform> profile check" against itself, and hardcoding that name
+#: in the engine would couple the OSS package to a single deployment -- which the port rules
+#: forbid, and rightly: the next operator's housekeeping is called something else.
+_DEFAULT_INTERNAL_PREFIXES = ("captain:", "quality improve pass")
+
+
+def _internal_run_prefixes() -> tuple[str, ...]:
+    import os
+
+    extra = tuple(
+        p.strip().lower()
+        for p in (os.environ.get("BOSS_INTERNAL_RUN_PREFIXES") or "").split(",")
+        if p.strip()
+    )
+    return _DEFAULT_INTERNAL_PREFIXES + extra
+
+
+INTERNAL_RUN_PREFIXES = _internal_run_prefixes()
+
+
+def list_code_task_runs(connection, project_id: str, limit: int = 50,
+                        *, exclude_internal: bool = False) -> list[dict]:
+    """Newest runs for a project, optionally without BOSS's own housekeeping.
+
+    WHY THE FILTER BELONGS HERE AND NOT IN THE CONSOLE
+    --------------------------------------------------
+    The console fetches N newest and then drops internal runs, so a burst of housekeeping does
+    not just add noise -- it consumes the entire window. This has now happened twice. The limit
+    was raised 50 -> 200 in August for exactly this reason, and today 200 of the 200 newest runs
+    were "Captain: QUALITY IMPROVE PASS", so the Factory rendered an empty grid under a heading
+    that said "200 code tasks". Every app the operator had built was still there, just older
+    than the window.
+
+    Raising the limit again does not fix it; it only moves it, and this response is already
+    1.41 MB at 200. Filtering before the LIMIT means the window holds real work by construction.
+    """
     if hasattr(connection, "list_runs"):
         return connection.list_runs(project_id, limit)
+    where = "project_id = :p"
+    params: dict = {"p": project_id, "lim": int(limit)}
+    if exclude_internal:
+        # Matched case-insensitively at the START of the title, the same shape the console has
+        # always used, so the two agree about what "internal" means.
+        clauses = []
+        for i, prefix in enumerate(_internal_run_prefixes()):
+            clauses.append(f"lower(coalesce(title, '')) NOT LIKE :pre{i}")
+            params[f"pre{i}"] = f"{prefix}%"
+        where += " AND " + " AND ".join(clauses)
     rows = connection.execute(
         sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
-             "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
-             "FROM code_task_runs WHERE project_id = :p ORDER BY created_at DESC LIMIT :lim"),
-        {"p": project_id, "lim": int(limit)},
+            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
+            f"FROM code_task_runs WHERE {where} ORDER BY created_at DESC LIMIT :lim"),
+        params,
     ).mappings().all()
     return [_row_to_run(r) for r in rows]
 

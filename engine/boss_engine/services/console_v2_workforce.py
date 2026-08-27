@@ -226,6 +226,10 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "steps_failed": sw.get("steps_failed"),
             "runs": sw.get("runs"),
             "step_success_rate": sw.get("step_success_rate"),
+            # WHEN this agent last did anything, of either kind. The screen needs one answer,
+            # not two nullable ones, and it is what tells a busy agent apart from a retired
+            # one -- both of which otherwise render as IDLE with a good score.
+            "last_activity_at": _latest_activity(work, sw),
             "last_call_at": (work["last_at"].isoformat()
                              if work.get("last_at") else None),
             "last_stage": work.get("last_stage"),
@@ -296,6 +300,17 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "be shown. Project spend is on the Projects screen."
         ),
     }
+
+
+def _latest_activity(call_work: dict, step_work: dict) -> Optional[str]:
+    """The more recent of an agent's last model call and last pipeline step.
+
+    An agent that worked ten minutes ago and one that stopped a month ago both render IDLE with
+    a full scoreboard, and on a page about who is doing the work that is the difference that
+    matters most.
+    """
+    stamps = [t for t in (call_work.get("last_at"), step_work.get("last_step_at")) if t]
+    return max(stamps).isoformat() if stamps else None
 
 
 def _step_work(connection, project_id: str, hours: float) -> dict[str, dict]:

@@ -59,6 +59,9 @@ export type V2Agent = {
   steps_failed?: number | null;
   runs?: number | null;
   step_success_rate?: number | null;
+  /** The more recent of the agent's last model call and last pipeline step. What tells a busy
+   *  agent apart from a retired one — both otherwise render IDLE with a good score. */
+  last_activity_at?: string | null;
 };
 
 export type V2Handoff = {

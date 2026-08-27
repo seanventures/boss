@@ -230,10 +230,43 @@ function scoreTone(rate: number | null | undefined): string {
   return "bad";
 }
 
-function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
+/**
+ * How recently this agent did anything, as a word.
+ *
+ * The page is ranked by VOLUME, which says who has done the most but not who is doing it now.
+ * A month of work and ten minutes ago both render IDLE with a good score, and that is the
+ * difference an operator most wants at a glance -- so recency is its own signal, and it is the
+ * one thing on this page that keeps moving.
+ */
+function recency(a: V2Agent): "live" | "today" | "week" | "cold" {
+  const t = a.last_activity_at;
+  if (!t) return "cold";
+  const ms = Date.now() - new Date(t).getTime();
+  if (Number.isNaN(ms)) return "cold";
+  if (ms < 15 * 60_000) return "live";
+  if (ms < 24 * 3_600_000) return "today";
+  if (ms < 7 * 24 * 3_600_000) return "week";
+  return "cold";
+}
+
+function AgentCard({ a, onChat, rank }: { a: V2Agent; onChat: () => void; rank: number }) {
   return (
-    <li className="v2-card" data-testid={`v2-agent-${a.id}`} data-status={a.status}>
+    <li
+      className="v2-card"
+      data-testid={`v2-agent-${a.id}`}
+      data-status={a.status}
+      data-recency={recency(a)}
+      data-ranked={rank <= 3 && (a.calls || a.steps) ? "true" : "false"}
+    >
       <div className="v2-card-head">
+        {/* RANK, not a coloured stripe. The green left border said the same thing as the green
+            bar underneath it, twice, and two dominant greens on one card read as decoration
+            rather than as data. A number says which position this is and takes no colour. */}
+        {(a.calls || a.steps) ? (
+          <span className="v2-rank v2-mono" data-testid={`v2-agent-rank-${a.id}`}>
+            {rank}
+          </span>
+        ) : null}
         <span className="v2-card-name">{a.name}</span>
         {a.registered ? (
           <span className="v2-card-role">{a.role}</span>

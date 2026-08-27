@@ -5924,9 +5924,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", "/v1/meetings/prd", { body: payload },
       );
     },
-    getCodeTasks(projectId: string, limit = 50) {
+    getCodeTasks(projectId: string, limit = 50, excludeInternal = false) {
       return request<CodeTasksResponse>("GET", "/v1/code-tasks", {
-        query: { project_id: projectId, limit },
+        // excludeInternal drops BOSS's own maintenance runs BEFORE the limit, so a burst of
+        // housekeeping cannot consume the whole window and hide every app an operator built.
+        query: { project_id: projectId, limit,
+                 ...(excludeInternal ? { exclude_internal: true } : {}) },
       });
     },
     getQaBenchmarkApps(projectId?: string) {

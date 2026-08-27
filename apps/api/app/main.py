@@ -9649,8 +9649,15 @@ def set_code_task_origin_endpoint(run_id: str, payload: dict):
 
 
 @app.get("/v1/code-tasks")
-def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
-    """List code-task runs for a project (newest first) for the Code Tasks view."""
+def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50,
+                             exclude_internal: bool = False):
+    """List code-task runs for a project (newest first) for the Code Tasks view.
+
+    `exclude_internal` drops BOSS's own maintenance runs BEFORE the limit is applied. The
+    console filters them out anyway, but filtering after the limit lets a burst of housekeeping
+    consume the whole window -- which is exactly how the Factory came to render an empty grid
+    under a heading reading "200 code tasks".
+    """
     project_id = resolve_list_project_id(project_id)
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
@@ -9659,7 +9666,8 @@ def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
         return {
             "project_id": project_id,
             "code_tasks": [summarise_run_for_list(r)
-                           for r in list_code_task_runs(c, project_id, limit)],
+                           for r in list_code_task_runs(c, project_id, limit,
+                                                        exclude_internal=exclude_internal)],
         }
 
 
