@@ -488,6 +488,7 @@ from .schemas import (
     RoleReviewRequest,
     RoleTrustEvidenceRequest,
     RoleTrustEvidenceResponse,
+    RegisterRoleRequest,
     RoleDetail,
     RoleListResponse,
     RoleScopeCheckRequest,
@@ -2183,6 +2184,7 @@ def role_summary_from_service(payload) -> RoleSummary:
         scope_violation_count=payload.get("scope_violation_count", 0),
         last_reviewed_at=payload.get("last_reviewed_at"),
         last_violation_at=payload.get("last_violation_at"),
+        reports_to=payload.get("reports_to"),
         created_at=payload["created_at"],
     )
 
@@ -2207,6 +2209,7 @@ def role_detail_from_service(payload) -> RoleDetail:
         scope_violation_count=payload.get("scope_violation_count", 0),
         last_reviewed_at=payload.get("last_reviewed_at"),
         last_violation_at=payload.get("last_violation_at"),
+        reports_to=payload.get("reports_to"),
         created_at=payload["created_at"],
         spec=payload["spec"] or {},
     )
@@ -12054,6 +12057,30 @@ def list_roles(project_id: str) -> RoleListResponse:
             project_id=project_id,
             items=[role_summary_from_service(role) for role in roles],
         )
+
+
+@app.post("/v1/roles", response_model=RoleDetail, status_code=201)
+def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
+    """Register an agent role, or update one already registered.
+
+    BOSS had eight role endpoints and every one of them read. Roles arrived only by installing a
+    spec pack, so an agent that began working outside one could never be registered -- and an
+    unregistered role has no trust score, no autonomy level and no violation tracking. The
+    console reported exactly that on five agents running most of the PRD pipeline, with no way
+    to act on it.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        try:
+            role = specpack.register_role(
+                connection, body.project_id, body.role_key,
+                display_name=body.display_name, autonomy_level=body.autonomy_level,
+                reports_to=body.reports_to, spec=body.spec,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return role_detail_from_service(role)
 
 
 @app.get("/v1/roles/{role_key}", response_model=RoleDetail)

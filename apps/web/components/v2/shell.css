@@ -1214,3 +1214,61 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
   .v2-card[data-recency="live"]  .v2-score-bar > span::after,
   .v2-card[data-recency="today"] .v2-score-bar > span::after { animation: none !important; content: none; }
 }
+
+/* ── Infra & Models: give the sections room to be sections ────────────────── */
+/*
+ * Reported twice as "cluttered", and it was: MODELS THIS MONTH sat directly under the last app
+ * card and APPS AND WHERE THEY DEPLOY directly under the host, with no more space than the gap
+ * between two rows inside a single list. Four different kinds of thing read as one long column.
+ */
+.v2-screen > .v2-ws-h {
+  margin-top: 34px;
+  padding-top: 14px;
+  border-top: 1px solid var(--v2-border);
+}
+/* The first heading after the page header does not need a second rule above it. */
+.v2-screen > .v2-screen-head + .v2-ws-h { margin-top: 20px; border-top: 0; padding-top: 0; }
+
+/* Model spend, as a table: four figures per model that only mean anything read DOWN the
+   column. Stacked as rows they cost two lines each and never lined up. */
+.v2-figs { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+.v2-figs th {
+  text-align: left; padding: 0 12px 7px 0;
+  color: var(--v2-dim); font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase;
+  font-family: var(--v2-font-mono); font-weight: 500;
+  border-bottom: 1px solid var(--v2-border);
+}
+.v2-figs td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--v2-surface); color: var(--v2-muted); }
+.v2-figs-name { color: var(--v2-ink); font-size: 12.5px; }
+.v2-figs-num  { text-align: right; font-family: var(--v2-font-mono); font-variant-numeric: tabular-nums; }
+.v2-figs-num b { color: var(--v2-ink); }
+.v2-figs th.v2-figs-num { text-align: right; }
+/* An estimated price must not sit beside measured ones looking like one. */
+.v2-figs-flag {
+  margin-left: 8px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--v2-amber); color: var(--v2-amber);
+  font-size: 9px; letter-spacing: .06em; font-family: var(--v2-font-mono);
+}
+
+/* Integrations: four short facts each. A full-width row put a 1500px gap between the name and
+   the risk tier that qualifies it. */
+.v2-chip-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px; margin-top: 10px;
+}
+.v2-chip-card {
+  border: 1px solid var(--v2-border); border-radius: var(--v2-radius-sm);
+  background: var(--v2-panel); padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+/* Tier is what decides what a server may touch, so it is on the card, not only in the text. */
+.v2-chip-card[data-tier="2"] { border-left: 2px solid var(--v2-amber); }
+.v2-chip-card[data-tier="3"] { border-left: 2px solid var(--v2-red); }
+.v2-chip-name { font-size: 13px; font-weight: 700; color: var(--v2-ink); }
+.v2-chip-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 10.5px; color: var(--v2-dim); }
+.v2-chip-state { font-size: 9.5px; letter-spacing: .08em; font-family: var(--v2-font-mono); }
+.v2-chip-state[data-on="true"]  { color: var(--v2-green); }
+.v2-chip-state[data-on="false"] { color: var(--v2-dim); }
+
+/* Host cards do not need to be as wide as app cards — a host is a name and an address. */
+.v2-host-cards { grid-template-columns: repeat(auto-fill, minmax(260px, 320px)); }

@@ -132,7 +132,7 @@ export function InfraScreen({ view }: { view: InfraView }) {
           deployed until a host is added and verified.
         </p>
       ) : (
-        <ul className="v2-cards" data-testid="v2-infra-hosts">
+        <ul className="v2-cards v2-host-cards" data-testid="v2-infra-hosts">
           {view.hosts.map((h) => (
             <li
               key={h.id}
@@ -179,29 +179,39 @@ export function InfraScreen({ view }: { view: InfraView }) {
           No model calls recorded this month.
         </p>
       ) : (
-        <ul className="v2-rows" data-testid="v2-infra-models">
-          {view.models.map((m) => (
-            <li className="v2-row" key={m.model} data-testid={`v2-model-${m.model}`}>
-              <span className="v2-row-main">
-                <span className="v2-row-title v2-mono">{m.model}</span>
-                <span className="v2-row-meta">
-                  <span>
-                    <b>{money(m.spend_usd)}</b>
-                  </span>
-                  <span>{m.calls.toLocaleString()} calls</span>
-                  <span>{m.tokens.toLocaleString()} tokens</span>
-                  {/* A price the price map did not know is a guess. It must not sit beside
+        // A TABLE, because these are four figures per model that only mean anything compared
+        // DOWN the column. As stacked rows -- name on one line, figures on the next -- each
+        // model cost two lines and no two numbers ever lined up.
+        <table className="v2-figs" data-testid="v2-infra-models">
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th className="v2-figs-num">Spend</th>
+              <th className="v2-figs-num">Calls</th>
+              <th className="v2-figs-num">Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.models.map((m) => (
+              <tr key={m.model} data-testid={`v2-model-${m.model}`}>
+                <td className="v2-mono v2-figs-name">
+                  {m.model}
+                  {/* A price the price map did not know is a guess, and it must not sit beside
                       measured figures looking like one. */}
                   {m.estimated ? (
-                    <span className="v2-wf-violations" data-testid={`v2-model-estimated-${m.model}`}>
-                      price estimated — this model is not in the price map
+                    <span className="v2-figs-flag" data-testid={`v2-model-estimated-${m.model}`}
+                          title="not in the price map — this cost is estimated">
+                      estimated
                     </span>
                   ) : null}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
+                </td>
+                <td className="v2-figs-num"><b>{money(m.spend_usd)}</b></td>
+                <td className="v2-figs-num">{m.calls.toLocaleString()}</td>
+                <td className="v2-figs-num">{m.tokens.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
 
       <h2 className="v2-ws-h">Integrations</h2>
@@ -210,31 +220,30 @@ export function InfraScreen({ view }: { view: InfraView }) {
           No MCP servers are configured.
         </p>
       ) : (
-        <ul className="v2-rows" data-testid="v2-infra-integrations">
+        // Small cards rather than full-width rows: an integration is four short facts, and a
+        // row stretched across a 1700px screen puts a huge gap between the name and the tier
+        // that qualifies it.
+        <div className="v2-chip-grid" data-testid="v2-infra-integrations">
           {view.integrations.map((g) => (
-            <li className="v2-row" key={g.id} data-testid={`v2-integration-${g.id}`}>
-              <span className="v2-row-main">
-                <span className="v2-row-title">{g.name}</span>
-                <span className="v2-row-meta">
-                  <span>{g.transport}</span>
-                  {/* Risk tier and data boundary decide what a server may touch. The name
-                      alone makes a tier-3 external server look like a tier-1 internal one. */}
-                  <span data-testid={`v2-integration-risk-${g.id}`}>
-                    risk tier {g.risk_tier}
-                  </span>
-                  <span data-testid={`v2-integration-boundary-${g.id}`}>{g.data_boundary}</span>
-                  {g.enabled ? (
-                    <span>enabled</span>
-                  ) : (
-                    <span className="v2-row-meta-dim" data-testid={`v2-integration-off-${g.id}`}>
-                      disabled
-                    </span>
-                  )}
-                </span>
+            <div className="v2-chip-card" key={g.id} data-testid={`v2-integration-${g.id}`}
+                 data-enabled={g.enabled} data-tier={g.risk_tier}>
+              <span className="v2-chip-name">{g.name}</span>
+              <span className="v2-chip-meta v2-mono">
+                <span>{g.transport}</span>
+                {/* Risk tier and data boundary decide what a server may touch. The name alone
+                    makes a tier-3 external server look like a tier-1 internal one. */}
+                <span data-testid={`v2-integration-risk-${g.id}`}>tier {g.risk_tier}</span>
+                <span data-testid={`v2-integration-boundary-${g.id}`}>{g.data_boundary}</span>
               </span>
-            </li>
+              {g.enabled ? (
+                <span className="v2-chip-state" data-on="true">enabled</span>
+              ) : (
+                <span className="v2-chip-state" data-on="false"
+                      data-testid={`v2-integration-off-${g.id}`}>disabled</span>
+              )}
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );

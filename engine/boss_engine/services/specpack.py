@@ -677,6 +677,72 @@ class SpecPackService:
             raise AgentModuleNotFoundError(f"Agent module '{module_id}' not found")
         return module
 
+    def register_role(
+        self, connection: Connection, project_id: str, role_key: str, *,
+        display_name: Optional[str] = None, autonomy_level: int = 0,
+        reports_to: Optional[str] = None, spec: Optional[dict] = None,
+    ) -> dict[str, Any]:
+        """Put a role on the books, or update the one already there.
+
+        WHY THIS DID NOT EXIST
+        ----------------------
+        BOSS had eight role endpoints and every one of them read. Roles arrived only by
+        installing a spec pack, so an agent that started doing work outside one could never be
+        registered at all -- and an unregistered role has no trust score, no autonomy level and
+        no violation tracking. The console had been reporting exactly that, on five agents that
+        between them ran most of the PRD pipeline, with no way to act on it.
+
+        Idempotent on (project_id, role_key): registering twice updates rather than duplicating,
+        because the caller is usually a console button pressed by someone who cannot see whether
+        it worked the first time.
+        """
+        key = (role_key or "").strip()
+        if not key:
+            raise ValueError("role_key is required")
+
+        existing = connection.execute(
+            text("SELECT id FROM roles WHERE project_id = :p AND role_key = :k"),
+            {"p": project_id, "k": key},
+        ).mappings().first()
+
+        # A role reporting to itself is a cycle of one. Cheap to check, and it would otherwise
+        # make the org chart pick an arbitrary root and look correct while being wrong.
+        if reports_to is not None and reports_to.strip() == key:
+            raise ValueError("a role cannot report to itself")
+
+        if existing:
+            connection.execute(
+                text(
+                    """
+                    UPDATE roles
+                       SET display_name    = COALESCE(:name, display_name),
+                           autonomy_level  = :autonomy,
+                           reports_to      = :reports_to,
+                           spec            = COALESCE(CAST(:spec AS JSONB), spec)
+                     WHERE project_id = :p AND role_key = :k
+                    """
+                ),
+                {"p": project_id, "k": key, "name": display_name,
+                 "autonomy": int(autonomy_level), "reports_to": reports_to,
+                 "spec": json.dumps(spec) if spec is not None else None},
+            )
+        else:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO roles (id, project_id, role_key, display_name, autonomy_level,
+                                       reports_to, spec)
+                    VALUES (:id, :p, :k, :name, :autonomy, :reports_to,
+                            CAST(:spec AS JSONB))
+                    """
+                ),
+                {"id": f"role_{uuid4().hex[:20]}", "p": project_id, "k": key,
+                 "name": display_name or key.replace("_", " ").title(),
+                 "autonomy": int(autonomy_level), "reports_to": reports_to,
+                 "spec": json.dumps(spec or {})},
+            )
+        return self.get_role_for_project(connection, project_id, key)
+
     def list_roles_for_project(
         self, connection: Connection, project_id: str
     ) -> list[dict[str, Any]]:
@@ -685,6 +751,7 @@ class SpecPackService:
                 """
                 SELECT DISTINCT ON (role_key)
                        id, role_key, display_name, autonomy_level, spec, created_at,
+                       reports_to,
                        trust_score, successful_runs, policy_violation_count,
                        duplicate_effect_attempt_count, hidden_failure_count,
                        low_quality_output_count, scope_violation_count,
@@ -704,6 +771,7 @@ class SpecPackService:
                 "role_key": row["role_key"],
                 "display_name": row["display_name"],
                 "autonomy_level": row["autonomy_level"],
+                "reports_to": row.get("reports_to"),
                 "spec": row["spec"] or {},
                 "trust_score": int(row.get("trust_score") or 50),
                 "successful_runs": int(row.get("successful_runs") or 0),

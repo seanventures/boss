@@ -98,6 +98,11 @@ ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_reviewed_at TIMESTAMPTZ;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_violation_at TIMESTAMPTZ;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS source_module_id TEXT;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS source_module_version TEXT;
+-- Who this role reports to, as a role_key in the same project. Nullable: a root has nobody
+-- above it, and BOSS has never required a hierarchy to exist. Held as a key rather than a
+-- foreign key to roles(id) so a manager can be registered after their report without the
+-- insert order mattering -- the org is discovered, not designed up front.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS reports_to TEXT;
 
 CREATE TABLE IF NOT EXISTS pack_installs (
   id TEXT PRIMARY KEY,
