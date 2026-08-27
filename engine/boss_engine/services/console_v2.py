@@ -332,15 +332,26 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
     # Group into apps (lineages), newest first by most recent activity.
     apps: dict[str, list[dict]] = {}
     for row in rows:
-        if _is_internal(str(row.get("title") or "")):
-            continue
         apps.setdefault(_lineage_key(row), []).append(row)
+
+    # A run whose title is internal ("Follow-up: deferred review findings") is housekeeping, not
+    # a product -- but it still BELONGS to the app it ran against, and its cost is part of that
+    # app's cost. Dropping such rows before grouping, which is what this did, meant an app whose
+    # only named run cleaned to nothing had no name left to find and was labelled "Untitled app"
+    # while its own workspace page showed the real one. Whole groups of nothing but housekeeping
+    # are still discarded: those are not apps.
+    apps = {
+        key: runs for key, runs in apps.items()
+        if not all(_is_internal(str(r.get("title") or "")) for r in runs)
+    }
 
     projects = []
     for key, runs in apps.items():
         runs.sort(key=lambda r: r["created_at"], reverse=True)
         title = ""
-        for r in runs:                       # first run whose title survives cleaning
+        for r in runs:                       # newest run that names a PRODUCT
+            if _is_internal(str(r.get("title") or "")):
+                continue
             title = _clean_title(str(r.get("title") or ""))
             if title:
                 break
@@ -350,6 +361,14 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
             # product. Looking there beats labelling the card "Untitled app".
             for r in runs:
                 title = _name_from_document(str((r.get("spec") or {}).get("instructions") or ""))
+                if title:
+                    break
+        if not title:
+            # Last resort, and the same one the workspace uses: a housekeeping title is a real
+            # name and beats "Untitled app". Both screens must land on it, or they disagree
+            # about what you just clicked.
+            for r in runs:
+                title = _clean_title(str(r.get("title") or ""))
                 if title:
                     break
         stage, status = _stage_of(runs)

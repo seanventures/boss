@@ -140,3 +140,96 @@ def test_every_column_the_shape_reads_is_actually_selected():
     for column in ("id", "title", "status", "spec", "state", "usage", "finalize_ctx",
                    "pull_request_url", "pull_request_number", "created_at", "updated_at"):
         assert column in select, f"the shape reads {column} but the query does not select it"
+
+
+# --------------------------------------------------------------------------- #
+# company_overview: which lineages are apps, and what each is called
+#
+# This function had no tests. Removing the filter that keeps housekeeping runs from becoming
+# their own apps changed nothing in the suite, which means every follow-up task could have
+# appeared as a separate product on the Projects screen unnoticed.
+# --------------------------------------------------------------------------- #
+class OverviewConn:
+    """Routes by query, because company_overview issues three different ones.
+
+    A fake that returns the same rows to every query agrees with any implementation -- it would
+    hand code-task rows to the pending-decisions count and call it a pass.
+    """
+
+    def __init__(self, runs):
+        self.runs = list(runs)
+
+    def execute(self, statement, params=None):
+        raw = str(statement).lower()
+        outer = self
+
+        class R:
+            def mappings(self):
+                return self
+
+            def all(self):
+                return outer.runs if "from code_task_runs" in raw else []
+
+            def scalar(self):
+                return 0
+
+        return R()
+
+
+def orun(run_id, title, *, app_id=None, status="completed", micros=0, created=None):
+    from datetime import datetime, timezone
+    return {
+        "id": run_id, "title": title, "status": status, "phase": "done",
+        "spec": {"owner": "paramg", "repo": "boss-sandbox", "instructions": ""},
+        "state": {}, "usage": {"cost_usd_micros": micros},
+        "finalize_ctx": {"app_id": app_id} if app_id else {},
+        "pull_request_url": None, "pull_request_number": None,
+        "created_at": created or datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc),
+        "updated_at": created or datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc),
+    }
+
+
+def titles(out):
+    return [p["title"] for p in out["projects"]]
+
+
+def test_a_lineage_of_nothing_but_housekeeping_is_not_an_app():
+    """Otherwise every follow-up task becomes its own product on the Projects screen."""
+    out = console_v2.company_overview(OverviewConn([
+        orun("crun_1", "Follow-up: deferred review findings", app_id="app_hk"),
+        orun("crun_2", "Shorty", app_id="app_real"),
+    ]), "proj")
+    assert titles(out) == ["Shorty"]
+
+
+def test_housekeeping_does_not_rename_the_app_it_ran_against():
+    """The same defect the workspace had: the newest title won, and the newest was a chore."""
+    from datetime import datetime, timezone
+    out = console_v2.company_overview(OverviewConn([
+        orun("crun_new", "Follow-up: deferred review findings", app_id="app_1",
+             created=datetime(2026, 8, 26, tzinfo=timezone.utc)),
+        orun("crun_old", "Invoice-Chaser", app_id="app_1",
+             created=datetime(2026, 8, 20, tzinfo=timezone.utc)),
+    ]), "proj")
+    assert titles(out) == ["Invoice-Chaser"]
+
+
+def test_housekeeping_spend_counts_toward_the_app_it_ran_against():
+    """It was excluded from the group entirely, so its cost vanished from the Projects screen
+    while the app's own workspace page counted it -- two screens, two numbers."""
+    out = console_v2.company_overview(OverviewConn([
+        orun("crun_new", "Follow-up: deferred review findings", app_id="app_1", micros=2_000_000),
+        orun("crun_old", "Invoice-Chaser", app_id="app_1", micros=1_000_000),
+    ]), "proj")
+    assert out["projects"][0]["spend_usd"] == 3.0
+
+
+def test_an_app_named_only_by_a_chore_uses_that_name_rather_than_untitled():
+    """Seen live: the Projects screen said "Untitled app" while its own workspace page showed
+    the real name. Both screens have to land on the same one."""
+    out = console_v2.company_overview(OverviewConn([
+        orun("crun_1", "Product Requirements Document", app_id="app_1"),   # cleans to ""
+        orun("crun_2", "Follow-up: deferred review findings", app_id="app_1"),
+    ]), "proj")
+    assert titles(out) != ["Untitled app"]
+    assert "Follow-up" in titles(out)[0]
