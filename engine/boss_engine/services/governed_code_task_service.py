@@ -2986,6 +2986,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         if do_separate_tests:
             gates["tests_written_first"] = bool(test_files)
             gates["coder_did_not_edit_tests"] = tests_untouched
+        # BOUND BEFORE THE BRANCH THAT FILLS IT.
+        #
+        # This was declared inside `if do_review:` and read at the bottom of the function
+        # regardless, so every run with do_review False -- which is every run at risk_tier 0 --
+        # died with "cannot access local variable 'skipped_seats'". It is a UnboundLocalError,
+        # so it surfaced as reason_code=pipeline_exception / failure_class=infra, which reads as
+        # a platform problem rather than a two-line bug.
+        skipped_seats: dict[str, str] = {}
         if do_review:
             # SEVERITY-CALIBRATED: a NIT must not sink a phase the way a BLOCKER does. Findings
             # below the threshold are carried in `deferred_findings` and spawned as their own
@@ -3006,7 +3014,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # panel was ["regression"].
             # Mark them satisfied-because-not-applicable, and record WHY in the evidence so
             # the PR still says plainly that no reviewer looked at this.
-            skipped_seats: dict[str, str] = {}
             for _seat, _gate in (("review_code", "code_review_passed"),
                                  ("security_check", "security_clean"),
                                  ("consistency_check", "consistent")):
