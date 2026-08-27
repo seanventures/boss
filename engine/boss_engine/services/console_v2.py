@@ -531,11 +531,25 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
         return {"found": False, "app_id": app_id, "project_id": project_id}
 
     lineage.sort(key=lambda r: r["created_at"], reverse=True)
+    # Name the app the way the projects list names it, which means skipping internal runs.
+    #
+    # A follow-up task carries its own title ("Follow-up: deferred review findings"), and taking
+    # simply the newest title let that RENAME the app it ran against: three different apps all
+    # opened under one heading, and clicking "Invoice-Chaser" landed on a page called something
+    # else. An app is not renamed by the last piece of housekeeping done to it.
     title = ""
     for r in lineage:
+        if _is_internal(str(r.get("title") or "")):
+            continue
         title = _clean_title(str(r.get("title") or ""))
         if title:
             break
+    if not title:
+        # Every run in this lineage is internal. Its own title beats "Untitled app".
+        for r in lineage:
+            title = _clean_title(str(r.get("title") or ""))
+            if title:
+                break
 
     stage, status = _stage_of(lineage)
     micros = sum(int((r.get("usage") or {}).get("cost_usd_micros") or 0) for r in lineage)

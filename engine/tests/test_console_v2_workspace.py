@@ -445,3 +445,32 @@ def test_verification_is_read_from_the_key_the_pipeline_actually_writes():
     out = project_workspace(FakeConn([r]), "proj", "app_1")
     assert out["criteria"] == ["Invoices can be created"]
     assert out["verification"] == ["npx playwright test"]
+
+
+def test_a_follow_up_task_does_not_rename_the_app_it_ran_against():
+    """Seen live: three different apps all opened under one heading.
+
+    Clicking "Invoice-Chaser" in the projects list landed on a page titled "Follow-up: deferred
+    review findings", because the newest run in the lineage was a piece of housekeeping and its
+    title won. The projects list already skips internal runs when naming an app; the workspace
+    has to agree, or the two screens disagree about what you clicked on.
+    """
+    newest = run("crun_new", app_id="app_1")
+    newest["title"] = "Follow-up: deferred review findings"
+    newest["created_at"] = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+    older = run("crun_old", app_id="app_1")
+    older["title"] = "Invoice-Chaser"
+    older["created_at"] = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+
+    out = project_workspace(FakeConn([newest, older]), "proj", "app_1")
+    assert out["title"] == "Invoice-Chaser"
+
+
+def test_an_app_whose_every_run_is_internal_still_gets_its_own_name():
+    """Skipping internal titles must not fall through to "Untitled app" when that is all
+    there is -- the real name, however housekeeping-ish, beats no name."""
+    only = run("crun_1", app_id="app_1")
+    only["title"] = "Follow-up: deferred review findings"
+    out = project_workspace(FakeConn([only]), "proj", "app_1")
+    assert out["title"] != "Untitled app"
+    assert "Follow-up" in out["title"]
