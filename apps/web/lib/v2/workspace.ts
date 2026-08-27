@@ -15,8 +15,43 @@ export type V2Step = {
   tokens: number;
   spend_usd: number;
   latency_ms: number;
-  calls: number;
+  /** Per CALL, not per stage. The earlier per-stage aggregate discarded these three, and on a
+   *  failed attempt the error is the only thing worth opening the run for. */
+  turns: number;
+  retries: number;
   ok: boolean;
+  error: string | null;
+};
+
+/** One quality check. `ok: null` means it did not run — which is neither a pass nor a failure,
+ *  and rendering it as either invents a result nobody measured. */
+export type V2Gate = {
+  label: string;
+  ok: boolean | null;
+  skipped: boolean;
+  note: string | null;
+};
+
+export type V2Provenance = {
+  build_engine: string | null;
+  build_model: string | null;
+  review_engine: string | null;
+  review_model: string | null;
+  /** Whether a different model reviewed the build. The single fact that most changes what a
+   *  green review is worth. */
+  cross_model: boolean;
+  reviewer_independent: boolean;
+  test_author_independent: boolean;
+  profile: string | null;
+  risk_tier: number | null;
+};
+
+export type V2Evidence = {
+  key: string;
+  title: string;
+  /** Markdown — the reviewer's own words. */
+  text: string;
+  truncated: boolean;
 };
 
 export type V2Run = {
@@ -35,6 +70,15 @@ export type V2Run = {
    *  read logs. */
   steps: V2Step[];
   latency_ms: number;
+  gates?: V2Gate[];
+  provenance?: V2Provenance;
+  evidence?: V2Evidence[];
+  impl_files?: string[];
+  test_files?: string[];
+  phase_timings?: { phase: string; ms: number }[];
+  /** A first-pass build ships with failing checks marked advisory. Saying so is the difference
+   *  between "this passed" and "we let this through on purpose". */
+  advisory?: boolean;
 };
 
 export type V2Phase = { id: string; reached: boolean; label: string };
@@ -51,6 +95,10 @@ export type Workspace = {
   pct?: number;
   spend_usd?: number;
   runs?: V2Run[];
+  /** The contract the work was accepted against. Without it the quality checks are marks with
+   *  no exam paper. */
+  criteria?: string[];
+  verification?: string[];
   deployable?: boolean;
   deployable_reason?: string;
   latest_run_id?: string;

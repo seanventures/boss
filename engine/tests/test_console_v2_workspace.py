@@ -221,10 +221,16 @@ def test_the_pr_number_is_carried_so_the_link_can_be_built():
 # to go and read logs. BOSS records the stage, model, latency and cost of every call.
 # --------------------------------------------------------------------------- #
 def call(run_id, stage, *, model="claude-opus-5", latency=1200, micros=250_000,
-         tokens=4000, calls=1, ok=True, engine="claude_code"):
+         tokens=4000, turns=5, retries=0, ok=True, engine="claude_code", error=None):
+    """One row of llm_calls, with the REAL column names.
+
+    These are per-call rows now, not a per-stage aggregate. The aggregate discarded turns,
+    retries and the error text -- and on a failed attempt the error is the only thing worth
+    opening the run for.
+    """
     return {"run_id": run_id, "stage": stage, "model": model, "engine": engine,
-            "tokens": tokens, "micros": micros, "latency_ms": latency,
-            "calls": calls, "all_ok": ok}
+            "total_tokens": tokens, "cost_usd_micros": micros, "latency_ms": latency,
+            "turns": turns, "retries": retries, "ok": ok, "error": error}
 
 
 def test_a_run_lists_the_steps_it_actually_ran():
@@ -299,3 +305,128 @@ def test_a_run_with_no_recorded_calls_has_no_invented_steps():
     out = project_workspace(FakeConn([run("crun_1", app_id="app_1")]), "proj", "app_1")
     assert out["runs"][0]["steps"] == []
     assert out["runs"][0]["latency_ms"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# The governed pipeline's own record of an attempt
+#
+# v1 showed the quality checks, who ran them, and what the reviewers wrote. v2 was SELECTing
+# state and finalize_ctx and discarding both, so the screen said "attempt 1 - completed" and
+# stopped. The operator asked for the v1 content back.
+# --------------------------------------------------------------------------- #
+def state_run(run_id="crun_1", **state):
+    r = run(run_id, app_id="app_1")
+    r["state"] = {**(r.get("state") or {}), **state}
+    return r
+
+
+def gates_of(out):
+    return {g["label"]: g for g in out["runs"][0]["gates"]}
+
+
+def test_a_check_that_never_ran_is_not_reported_as_passing_or_failing():
+    """Three states, never two. "We did not check" is not "it is fine", and it is not a
+    failure either -- colouring it red claims evidence nobody gathered."""
+    out = project_workspace(FakeConn([state_run()]), "proj", "app_1")
+    sec = gates_of(out)["Security clean"]
+    assert sec["skipped"] is True
+    assert sec["ok"] is None
+
+
+def test_a_check_that_ran_and_failed_is_reported_as_failing():
+    out = project_workspace(FakeConn([state_run(
+        security_verdict="vulnerable", consistency_verdict="drift")]), "proj", "app_1")
+    g = gates_of(out)
+    assert (g["Security clean"]["skipped"], g["Security clean"]["ok"]) == (False, False)
+    assert (g["Consistency"]["skipped"], g["Consistency"]["ok"]) == (False, False)
+    assert g["Consistency"]["note"] == "drift"
+
+
+def test_a_check_that_ran_and_passed_carries_its_evidence():
+    out = project_workspace(FakeConn([state_run(
+        tests_passed=True, test_exit_code=0,
+        adversarial_verdict="survived", security_verdict="clean",
+        regressions_ok=True, mutation_caught=True,
+        consistency_verdict="consistent")]), "proj", "app_1")
+    g = gates_of(out)
+    assert g["Code built / tests pass"]["ok"] is True
+    assert g["Code built / tests pass"]["note"] == "exit 0"
+    assert g["No regressions"]["note"] == "mutation caught"
+    assert all(row["ok"] for row in out["runs"][0]["gates"][:5])
+
+
+def test_a_zero_exit_code_is_not_mistaken_for_no_exit_code():
+    """`if exit_code:` would drop the successful case -- 0 is the passing value."""
+    out = project_workspace(FakeConn([state_run(tests_passed=True, test_exit_code=0)]),
+                            "proj", "app_1")
+    assert gates_of(out)["Code built / tests pass"]["skipped"] is False
+
+
+def test_the_same_model_reviewing_its_own_work_is_stated():
+    """The single fact that most changes what a green review is worth."""
+    same = project_workspace(FakeConn([state_run(
+        build_engine="claude_code", review_engine="claude_code")]), "proj", "app_1")
+    assert same["runs"][0]["provenance"]["cross_model"] is False
+
+    cross = project_workspace(FakeConn([state_run(
+        build_engine="claude_code", review_engine="codex")]), "proj", "app_1")
+    assert cross["runs"][0]["provenance"]["cross_model"] is True
+
+
+def test_a_missing_reviewer_does_not_read_as_a_cross_model_review():
+    """review_engine defaults to the builder, so absence must not look like independence."""
+    out = project_workspace(FakeConn([state_run(build_engine="claude_code")]), "proj", "app_1")
+    assert out["runs"][0]["provenance"]["cross_model"] is False
+
+
+def test_the_reviewers_own_words_are_returned_in_order_and_empties_omitted():
+    """A panel titled "Security review" with nothing in it is worse than no panel."""
+    out = project_workspace(FakeConn([state_run(
+        review_summary="Found two issues.", security_summary="   ",
+        impl_summary="Built the thing.")]), "proj", "app_1")
+    ev = out["runs"][0]["evidence"]
+    assert [e["key"] for e in ev] == ["review_summary", "impl_summary"]
+    assert ev[0]["title"] == "Adversarial reviewer findings"
+
+
+def test_a_long_review_is_clipped_on_a_boundary_and_says_so():
+    out = project_workspace(FakeConn([state_run(review_summary="word " * 3000)]),
+                            "proj", "app_1")
+    ev = out["runs"][0]["evidence"][0]
+    assert ev["truncated"] is True
+    assert ev["text"].count("**") % 2 == 0
+
+
+def test_a_first_pass_build_that_shipped_with_failing_checks_says_so():
+    """Otherwise a green header sits above a red row and the reader has to guess which won."""
+    r = run("crun_1", app_id="app_1")
+    r["finalize_ctx"] = {**(r.get("finalize_ctx") or {}), "advisory_failing_gates": ["consistency"]}
+    out = project_workspace(FakeConn([r]), "proj", "app_1")
+    assert out["runs"][0]["advisory"] is True
+
+
+def test_a_normal_build_is_not_labelled_advisory():
+    out = project_workspace(FakeConn([run("crun_1", app_id="app_1")]), "proj", "app_1")
+    assert out["runs"][0]["advisory"] is False
+
+
+def test_a_failed_call_carries_the_error_text():
+    """The whole reason to open a failed attempt."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "consistency_check", ok=False,
+                    error="claude code agent timed out after 420s")],
+    ), "proj", "app_1")
+    step = out["runs"][0]["steps"][0]
+    assert step["ok"] is False
+    assert "timed out after 420s" in step["error"]
+
+
+def test_turns_and_retries_survive_to_the_screen():
+    """Both were being discarded by the per-stage aggregate."""
+    out = project_workspace(FakeConn(
+        [run("crun_1", app_id="app_1")],
+        calls=[call("crun_1", "solo", turns=46, retries=2)],
+    ), "proj", "app_1")
+    assert (out["runs"][0]["steps"][0]["turns"],
+            out["runs"][0]["steps"][0]["retries"]) == (46, 2)

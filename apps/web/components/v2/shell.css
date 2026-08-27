@@ -817,3 +817,74 @@
 /* Long arguments are clamped with the full text one click away, so a page of four panelists
    stays scannable. */
 .v2-turn-text { max-height: 320px; overflow-y: auto; }
+
+/* ── Attempt evidence: what was checked, by whom, and what they wrote ─────── */
+/* v1 showed all of this and v2 showed none of it. Collapsed by default so the attempt list
+   stays scannable; a reader who wants the evidence is one click from all of it. */
+.v2-contract, .v2-run-evidence, .v2-evidence { margin-top: 8px; }
+.v2-contract-head, .v2-run-evidence-head, .v2-evidence-head {
+  cursor: pointer; color: var(--v2-muted); font-size: 11.5px;
+  font-family: var(--v2-font-mono); letter-spacing: .04em;
+  padding: 4px 0; list-style: none;
+}
+.v2-contract-head::before, .v2-run-evidence-head::before, .v2-evidence-head::before {
+  content: "▸ "; color: var(--v2-dim);
+}
+details[open] > .v2-contract-head::before,
+details[open] > .v2-run-evidence-head::before,
+details[open] > .v2-evidence-head::before { content: "▾ "; }
+.v2-contract-head:hover, .v2-run-evidence-head:hover, .v2-evidence-head:hover { color: var(--v2-ink); }
+.v2-contract-list { margin: 6px 0 0; padding-left: 20px; color: var(--v2-muted); font-size: 12px; line-height: 1.6; }
+
+.v2-gate-verdict {
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  font-size: 9.5px; letter-spacing: .08em; border: 1px solid;
+}
+.v2-gate-verdict[data-tone="good"] { color: var(--v2-green); border-color: var(--v2-green); }
+.v2-gate-verdict[data-tone="warn"] { color: var(--v2-amber); border-color: var(--v2-amber); }
+.v2-gate-verdict[data-tone="bad"]  { color: var(--v2-red);   border-color: var(--v2-red); }
+
+.v2-gate-advisory {
+  margin: 6px 0; padding: 6px 9px; border-left: 2px solid var(--v2-amber);
+  background: rgba(245,177,76,.06); color: var(--v2-muted); font-size: 11.5px; line-height: 1.5;
+}
+
+.v2-gates { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 5px; }
+.v2-gate { display: flex; align-items: baseline; gap: 9px; font-size: 12px; }
+.v2-gate-mark { flex: 0 0 12px; font-weight: 700; }
+.v2-gate[data-tone="good"] .v2-gate-mark { color: var(--v2-green); }
+.v2-gate[data-tone="bad"]  .v2-gate-mark { color: var(--v2-red); }
+/* A check that did not run is dim, never green and never red — it is an unknown, and colouring
+   it either way claims evidence nobody gathered. */
+.v2-gate[data-tone="skip"] .v2-gate-mark { color: var(--v2-dim); }
+.v2-gate[data-tone="skip"] .v2-gate-label { color: var(--v2-dim); }
+.v2-gate-label { color: var(--v2-ink); }
+.v2-gate-note { color: var(--v2-dim); font-size: 11px; font-family: var(--v2-font-mono); }
+
+.v2-provenance { margin-top: 10px; }
+.v2-provenance-line { margin: 3px 0; color: var(--v2-muted); font-size: 11.5px; line-height: 1.5; }
+.v2-provenance-line b { color: var(--v2-ink); }
+.v2-provenance-note { color: var(--v2-dim); }
+
+.v2-timing { margin-top: 12px; }
+.v2-timing-rows { list-style: none; margin: 4px 0 0; padding: 0; }
+.v2-timing-rows li {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 3px 0; font-size: 12px; color: var(--v2-muted);
+}
+.v2-timing-total { border-top: 1px solid var(--v2-border); margin-top: 3px; padding-top: 5px !important; color: var(--v2-ink) !important; }
+
+.v2-evidence-text {
+  margin-top: 4px; padding-left: 10px; border-left: 1px solid var(--v2-border);
+  color: var(--v2-muted); font-size: 12px; line-height: 1.55;
+  max-height: 360px; overflow-y: auto;
+}
+.v2-evidence-text h1, .v2-evidence-text h2, .v2-evidence-text h3,
+.v2-evidence-text h4 { font-size: 12.5px; margin: 8px 0 4px; color: var(--v2-ink); }
+.v2-evidence-text ul, .v2-evidence-text ol { margin: 4px 0; padding-left: 18px; }
+.v2-evidence-text code { font-size: 11px; background: var(--v2-surface); padding: 1px 4px; border-radius: 3px; }
+.v2-evidence-text pre { overflow-x: auto; background: var(--v2-surface); padding: 8px; border-radius: 4px; }
+.v2-evidence-text table { border-collapse: collapse; font-size: 11px; }
+.v2-evidence-text td, .v2-evidence-text th { border: 1px solid var(--v2-border); padding: 3px 6px; text-align: left; }
+
+.v2-run-files { margin-top: 10px; color: var(--v2-dim); font-size: 10.5px; line-height: 1.55; word-break: break-word; }

@@ -367,6 +367,10 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
             "steps": steps,
             "spend_usd": round(micros / 1_000_000, 2),
             "repo": f"{spec.get('owner') or '?'}/{spec.get('repo') or '?'}",
+        # The contract the work was accepted against. Without it the quality checks below are
+        # marks with no exam paper -- you can see that something passed, not what it passed.
+        "criteria": [str(c) for c in (spec.get("acceptance_criteria") or []) if c][:40],
+        "verification": [str(c) for c in (spec.get("verification") or []) if c][:40],
             "latest_run_id": runs[0]["id"],
             "pull_request_number": next(
                 (r.get("pull_request_number") for r in runs if r.get("pull_request_number")), None),
@@ -397,6 +401,104 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
                      "detail": "Spend & deploys pause for you.",
                      "modes_available": ["Supervised"]},
     }
+
+
+#: The quality checks the governed pipeline records, in the order v1 showed them. Each is
+#: (label, how to read the verdict). Kept as data so the screen cannot drift from the pipeline.
+_GATE_SPECS = (
+    ("Code built / tests pass", "tests"),
+    ("Code review (adversarial)", "adversarial"),
+    ("Security clean", "security"),
+    ("No regressions", "regressions"),
+    ("Consistency", "consistency"),
+    ("Pull request opened", "pr"),
+)
+
+#: Verdict strings that mean "this did not run", as opposed to "this ran and failed". The
+#: difference matters more than it looks: a skipped check is an unknown, and colouring it red
+#: claims evidence of a failure nobody gathered.
+_NOT_RUN = {"", "skipped", "not_run", "none"}
+
+#: Verdicts that count as a pass for the consistency check.
+_CONSISTENT = {"consistent", "pass", "survived", "ok"}
+
+
+def _gate_rows(state: dict, run: dict) -> list[dict[str, Any]]:
+    """The quality checks, each as pass / fail / not-run with the evidence for it.
+
+    Three states, never two. v1 drew a tick, a cross, or a dash, and the dash is the important
+    one -- "we did not check" is not "it is fine", and a screen that renders it as either is
+    inventing a result.
+    """
+    def row(label: str, ok: Optional[bool], skipped: bool, note: Optional[str]) -> dict:
+        return {"label": label, "ok": None if skipped else ok,
+                "skipped": skipped, "note": (note or None)}
+
+    tests_passed = state.get("tests_passed")
+    exit_code = state.get("test_exit_code")
+    adversarial = str(state.get("adversarial_verdict") or "")
+    security = str(state.get("security_verdict") or "")
+    regressions = state.get("regressions_ok")
+    consistency = str(state.get("consistency_verdict") or "")
+
+    return [
+        row("Code built / tests pass", bool(tests_passed),
+            tests_passed is None and exit_code is None,
+            f"exit {exit_code}" if exit_code is not None else None),
+        row("Code review (adversarial)", adversarial == "survived",
+            adversarial in _NOT_RUN, adversarial or None),
+        row("Security clean", security == "clean", security in _NOT_RUN, security or None),
+        row("No regressions", bool(regressions), regressions is None,
+            "mutation caught" if state.get("mutation_caught") else None),
+        row("Consistency", consistency in _CONSISTENT, consistency in _NOT_RUN,
+            consistency or None),
+        row("Pull request opened", bool(run.get("pull_request_url")),
+            not run.get("pull_request_url") and str(run.get("status")) != "completed",
+            f"PR #{run['pull_request_number']}" if run.get("pull_request_number") else None),
+    ]
+
+
+def _provenance(state: dict) -> dict[str, Any]:
+    """Who built it and who reviewed it -- and whether those were the same model.
+
+    A model grading its own work is the single fact that most changes how much a green review is
+    worth, so it is computed here rather than left for the reader to notice.
+    """
+    build = state.get("build_engine")
+    review = state.get("review_engine") or build
+    return {
+        "build_engine": build,
+        "build_model": state.get("model"),
+        "review_engine": review,
+        "review_model": state.get("review_model"),
+        "cross_model": bool(build and review and review != build),
+        "reviewer_independent": bool(state.get("reviewer_independent")),
+        "test_author_independent": bool(state.get("test_author_independent")),
+        "profile": state.get("profile"),
+        "risk_tier": state.get("risk_tier"),
+    }
+
+
+def _evidence(state: dict) -> list[dict[str, str]]:
+    """The reviewers' own words, in the order v1 showed them.
+
+    Returned as a list rather than a dict so the screen renders what exists in a fixed order and
+    silently omits what does not, instead of drawing empty panels titled "Security review".
+    """
+    out = []
+    for key, title in (
+        ("review_summary", "Adversarial reviewer findings"),
+        ("security_summary", "Security review"),
+        ("consistency_summary", "Consistency review"),
+        ("qa_summary", "QA / test-author summary"),
+        ("impl_summary", "Implementation summary"),
+        ("summary", "Agent summary"),
+    ):
+        text = state.get(key)
+        if isinstance(text, str) and text.strip():
+            clipped, cut = _clip(text)
+            out.append({"key": key, "title": title, "text": clipped, "truncated": cut})
+    return out
 
 
 def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any]:
@@ -456,15 +558,10 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
             sql(
                 """
                 SELECT code_task_run_id AS run_id, stage, model, engine,
-                       sum(total_tokens) AS tokens,
-                       sum(cost_usd_micros) AS micros,
-                       sum(latency_ms) AS latency_ms,
-                       count(*) AS calls,
-                       bool_and(ok) AS all_ok
+                       total_tokens, cost_usd_micros, latency_ms, turns, retries, ok, error
                 FROM llm_calls
                 WHERE code_task_run_id = ANY(:ids)
-                GROUP BY code_task_run_id, stage, model, engine
-                ORDER BY code_task_run_id, min(created_at)
+                ORDER BY code_task_run_id, created_at
                 """
             ),
             {"ids": run_ids},
@@ -474,13 +571,18 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
                 "stage": str(row.get("stage") or "(unnamed)"),
                 "model": row.get("model"),
                 "engine": row.get("engine"),
-                "tokens": int(row.get("tokens") or 0),
-                "spend_usd": round(int(row.get("micros") or 0) / 1_000_000, 4),
+                "tokens": int(row.get("total_tokens") or 0),
+                "spend_usd": round(int(row.get("cost_usd_micros") or 0) / 1_000_000, 4),
                 # Latency, which is what the operator asked for and what tells a slow model
                 # apart from a slow pipeline.
                 "latency_ms": int(row.get("latency_ms") or 0),
-                "calls": int(row.get("calls") or 0),
-                "ok": bool(row.get("all_ok")),
+                # Per CALL, not summed per stage. An earlier version grouped by stage and so
+                # discarded turns, retries and the error text -- and the error is the whole
+                # reason to open a failed attempt. A stage that ran twice is also two facts.
+                "turns": int(row.get("turns") or 0),
+                "retries": int(row.get("retries") or 0),
+                "ok": bool(row.get("ok")),
+                "error": (str(row.get("error"))[:200] or None) if row.get("error") else None,
             })
 
     runs = [
@@ -499,6 +601,23 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
             # The steps this attempt actually ran, in order, each with its model and latency.
             "steps": steps_by_run.get(r["id"], []),
             "latency_ms": sum(s["latency_ms"] for s in steps_by_run.get(r["id"], [])),
+            # The governed pipeline's own record of this attempt: what it checked, who checked
+            # it, and what they wrote. v1 showed all of it; v2 was selecting the columns and
+            # discarding them, so the screen said "attempt 1 - completed" and stopped.
+            "gates": _gate_rows(r.get("state") or {}, r),
+            "provenance": _provenance(r.get("state") or {}),
+            "evidence": _evidence(r.get("state") or {}),
+            "impl_files": list((r.get("state") or {}).get("impl_files") or [])[:60],
+            "test_files": list((r.get("state") or {}).get("test_files") or [])[:60],
+            # Phase durations, recorded by the pipeline as it goes.
+            "phase_timings": [
+                {"phase": str(t.get("phase") or ""), "ms": int(t.get("ms") or 0)}
+                for t in ((r.get("finalize_ctx") or {}).get("phase_timings") or [])
+                if isinstance(t, dict)
+            ],
+            # A first-pass build ships with failing checks marked advisory. Saying so is the
+            # difference between "this passed" and "we let this through on purpose".
+            "advisory": bool((r.get("finalize_ctx") or {}).get("advisory_failing_gates")),
         }
         for r in lineage
     ]

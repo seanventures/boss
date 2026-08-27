@@ -236,3 +236,120 @@ describe("v2 project workspace", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// The governed pipeline's own record of an attempt
+//
+// v1 showed the quality checks, who ran them, and what the reviewers wrote. v2 rendered
+// "attempt 1 · crun_…" and stopped, leaving reading logs as the only next move.
+// ---------------------------------------------------------------------------
+describe("what the pipeline checked", () => {
+  const gate = (label: string, ok: boolean | null, skipped = false, note: string | null = null) =>
+    ({ label, ok, skipped, note });
+
+  it("shows a check that did not run as neither passed nor failed", () => {
+    // The distinction the whole panel rests on. A blank or a green tick against an unrun check
+    // claims evidence nobody gathered; a red cross claims a failure that never happened.
+    const out = html(ws({ runs: [run({
+      gates: [gate("Security clean", null, true)],
+    })] }));
+    expect(out).toMatch(/data-tone="skip"/);
+    expect(out).toContain("not run");
+    expect(out).not.toMatch(/data-tone="skip"[^>]*>\s*<span[^>]*>✓/);
+  });
+
+  it("distinguishes a failed check from an unrun one", () => {
+    const out = html(ws({ runs: [run({
+      gates: [gate("Consistency", false, false, "drift")],
+    })] }));
+    expect(out).toMatch(/data-tone="bad"/);
+    expect(out).toContain("drift");
+    expect(out).not.toMatch(/data-tone="skip"/);
+  });
+
+  it("says when failing checks were advisory and did not block the PR", () => {
+    // A green header above a red row is unreadable unless you say which one won.
+    const withAdvisory = html(ws({ runs: [run({
+      advisory: true, gates: [gate("Consistency", false)],
+    })] }));
+    expect(withAdvisory).toContain("advisory");
+    expect(withAdvisory).toMatch(/data-tone="warn"/);
+
+    const without = html(ws({ runs: [run({ gates: [gate("Consistency", false)] })] }));
+    expect(without).not.toContain("advisory");
+    expect(without).toMatch(/data-tone="bad"/);
+  });
+
+  it("states whether the same model built and reviewed the change", () => {
+    const same = html(ws({ runs: [run({ provenance: {
+      build_engine: "claude_code", build_model: "claude-sonnet-5",
+      review_engine: "claude_code", review_model: "claude-sonnet-5",
+      cross_model: false, reviewer_independent: true, test_author_independent: false,
+      profile: "balanced", risk_tier: 0,
+    } })] }));
+    expect(same).toContain("same model builds + reviews");
+    expect(same).toContain("balanced");
+    expect(same).toContain("risk tier");
+
+    const cross = html(ws({ runs: [run({ provenance: {
+      build_engine: "claude_code", build_model: "claude-sonnet-5",
+      review_engine: "codex", review_model: "gpt-5",
+      cross_model: true, reviewer_independent: true, test_author_independent: true,
+      profile: "balanced", risk_tier: 0,
+    } })] }));
+    expect(cross).toContain("cross-model review");
+    expect(cross).not.toContain("same model builds");
+  });
+
+  it("renders reviewer prose as markdown, not as raw asterisks", () => {
+    const out = html(ws({ runs: [run({ evidence: [
+      { key: "review_summary", title: "Adversarial reviewer findings",
+        text: "**Verified** by running the toolchain.", truncated: false },
+    ] })] }));
+    expect(out).toContain("<strong>Verified</strong>");
+    expect(out).not.toMatch(/\*\*Verified\*\*/);
+  });
+
+  it("says when a reviewer summary was clipped", () => {
+    const out = html(ws({ runs: [run({ evidence: [
+      { key: "review_summary", title: "Review", text: "Long.", truncated: true },
+    ] })] }));
+    expect(out).toContain("summary continues");
+  });
+
+  it("shows step timing with a total", () => {
+    const out = html(ws({ runs: [run({ phase_timings: [
+      { phase: "Cloning repo", ms: 6_000 },
+      { phase: "Engineer implementing", ms: 1_803_000 },
+    ] })] }));
+    expect(out).toContain("Cloning repo");
+    expect(out).toContain("30m 3s");          // read as minutes, not 1803.0s
+    expect(out).toContain("Total");
+  });
+
+  it("shows the error text on a failed step rather than the word failed", () => {
+    const out = html(ws({ runs: [run({ steps: [{
+      stage: "consistency_check", model: "claude_code", engine: "claude_code",
+      tokens: 0, spend_usd: 0, latency_ms: 421_000, turns: 0, retries: 0,
+      ok: false, error: "claude code agent timed out after 420s",
+    }] })] }));
+    expect(out).toContain("timed out after 420s");
+  });
+
+  it("shows the acceptance criteria the work was accepted against", () => {
+    const out = html(ws({
+      criteria: ["Invoices can be created"],
+      verification: ["npx playwright test passes"],
+    }));
+    expect(out).toContain("Acceptance criteria");
+    expect(out).toContain("Invoices can be created");
+    expect(out).toContain("npx playwright test passes");
+  });
+
+  it("draws no evidence panel at all when the pipeline recorded nothing", () => {
+    // An empty panel titled "Steps & quality checks" reads as a pipeline that checked nothing.
+    const out = html(ws({ runs: [run({})] }));
+    expect(out).not.toContain("v2-run-evidence");
+    expect(out).not.toContain("Acceptance criteria");
+  });
+});

@@ -5,7 +5,9 @@ import Link from "next/link";
 // so a component rendered in a test must have React in scope -- see app/previews-ui.tsx.
 import React from "react";
 
-import type { V2Run, V2Step, Workspace } from "../../lib/v2/workspace";
+import type { V2Evidence, V2Gate, V2Provenance, V2Run, V2Step, Workspace }
+  from "../../lib/v2/workspace";
+import { Markdown } from "../../app/markdown";
 import { DeployControls } from "./DeployControls";
 
 /**
@@ -78,6 +80,11 @@ export function WorkspaceScreen({
           {workspace.title}
         </h1>
         <p className="v2-screen-sub">{workspace.description}</p>
+
+        {/* The contract this work was accepted against. Collapsed, because it is reference
+            material you consult rather than read -- but present, because without it the
+            quality checks below are marks with no exam paper. */}
+        <Contract criteria={workspace.criteria} verification={workspace.verification} />
 
         <div className="v2-ws-facts v2-mono">
           <span className="v2-status" data-status={workspace.status}>
@@ -162,6 +169,32 @@ function BackLink({ q }: { q: string }) {
   );
 }
 
+function Contract({ criteria, verification }: {
+  criteria?: string[]; verification?: string[];
+}) {
+  const items = (criteria ?? []).filter(Boolean);
+  const checks = (verification ?? []).filter(Boolean);
+  if (!items.length && !checks.length) return null;
+  return (
+    <details className="v2-contract" data-testid="v2-contract">
+      <summary className="v2-contract-head">Acceptance criteria &amp; verification</summary>
+      {items.length ? (
+        <ul className="v2-contract-list" data-testid="v2-contract-criteria">
+          {items.map((c, i) => <li key={i}>{c}</li>)}
+        </ul>
+      ) : null}
+      {checks.length ? (
+        <>
+          <h4 className="v2-ws-h">Verification</h4>
+          <ul className="v2-contract-list" data-testid="v2-contract-verification">
+            {checks.map((c, i) => <li key={i}>{c}</li>)}
+          </ul>
+        </>
+      ) : null}
+    </details>
+  );
+}
+
 function RunRow({ run }: { run: V2Run }) {
   return (
     <li className="v2-row v2-ws-run" data-testid={`v2-run-${run.id}`}>
@@ -226,8 +259,169 @@ function RunRow({ run }: { run: V2Run }) {
             </>
           ) : null}
         </span>
+
+        <RunEvidence run={run} />
       </span>
     </li>
+  );
+}
+
+/**
+ * How long something took, in the units a person would say it in.
+ *
+ * Tenths under a minute, because the difference between 9.4s and 9s is the difference between
+ * two steps; whole minutes above it, because nobody reads "1803.4s" as half an hour.
+ */
+function fmtDuration(ms: number): string {
+  const sec = Math.max(0, ms) / 1000;
+  if (sec < 60) return `${sec.toFixed(1)}s`;
+  const whole = Math.round(sec);
+  const m = Math.floor(whole / 60);
+  const rs = whole % 60;
+  return rs ? `${m}m ${rs}s` : `${m}m`;
+}
+
+/**
+ * What the governed pipeline checked, who checked it, and what they wrote.
+ *
+ * v1 showed all of this and v2 showed none of it -- the columns were being SELECTed and thrown
+ * away, so an attempt rendered as "attempt 1 - completed" and the only move left was to go and
+ * read logs. The operator asked for the v1 content back, and it is the content that makes a
+ * green tick mean something.
+ */
+function RunEvidence({ run }: { run: V2Run }) {
+  const gates = run.gates ?? [];
+  const timings = run.phase_timings ?? [];
+  const evidence = run.evidence ?? [];
+  const files = [...(run.test_files ?? []), ...(run.impl_files ?? [])];
+  // provenance counts too: an attempt whose only record is "the same model built and reviewed
+  // this" still has something worth saying, and the earlier guard dropped it silently.
+  if (!gates.length && !timings.length && !evidence.length && !files.length
+      && !run.provenance) return null;
+
+  const failed = gates.filter((g) => g.ok === false).length;
+  const total = fmtDuration(timings.reduce((a, t) => a + t.ms, 0));
+
+  return (
+    <details className="v2-run-evidence" data-testid={`v2-run-evidence-${run.id}`}>
+      <summary className="v2-run-evidence-head">
+        Steps &amp; quality checks
+        {gates.length ? (
+          <span
+            className="v2-gate-verdict"
+            data-tone={failed ? (run.advisory ? "warn" : "bad") : "good"}
+            data-testid={`v2-gate-verdict-${run.id}`}
+          >
+            {failed ? `${failed} failing` : "passed"}
+          </span>
+        ) : null}
+      </summary>
+
+      {/* A green header above a red row is unreadable unless you say which one won. */}
+      {run.advisory ? (
+        <p className="v2-gate-advisory" data-testid={`v2-gate-advisory-${run.id}`}>
+          First-pass build: the checks below are advisory — a ✗ did not block the PR. Shipped so
+          you can preview now; retry to clear it.
+        </p>
+      ) : null}
+
+      {gates.length ? (
+        <ul className="v2-gates" data-testid={`v2-gates-${run.id}`}>
+          {gates.map((g) => <GateRow key={g.label} g={g} runId={run.id} />)}
+        </ul>
+      ) : null}
+
+      {run.provenance ? <Provenance p={run.provenance} runId={run.id} /> : null}
+
+      {/* Step timing: where the wall-clock actually went, which is rarely where you expect. */}
+      {timings.length ? (
+        <div className="v2-timing" data-testid={`v2-run-timing-${run.id}`}>
+          <h4 className="v2-ws-h">Step timing</h4>
+          <ul className="v2-timing-rows">
+            {timings.map((t, i) => (
+              <li key={`${t.phase}-${i}`}>
+                <span>{t.phase}</span>
+                <span className="v2-mono">{fmtDuration(t.ms)}</span>
+              </li>
+            ))}
+            <li className="v2-timing-total">
+              <span>Total</span>
+              <span className="v2-mono">{total}</span>
+            </li>
+          </ul>
+        </div>
+      ) : null}
+
+      {evidence.map((e) => <Evidence key={e.key} e={e} runId={run.id} />)}
+
+      {files.length ? (
+        <p className="v2-run-files v2-mono" data-testid={`v2-run-files-${run.id}`}>
+          {run.test_files?.length ? `Test files: ${run.test_files.join(", ")}. ` : ""}
+          {run.impl_files?.length ? `Impl files: ${run.impl_files.join(", ")}.` : ""}
+        </p>
+      ) : null}
+    </details>
+  );
+}
+
+/** One check. Three states, never two — see the engine's _gate_rows for why the third matters. */
+function GateRow({ g, runId }: { g: V2Gate; runId: string }) {
+  const mark = g.skipped ? "–" : g.ok ? "✓" : "✗";
+  const tone = g.skipped ? "skip" : g.ok ? "good" : "bad";
+  return (
+    <li
+      className="v2-gate"
+      data-tone={tone}
+      data-testid={`v2-gate-${runId}-${g.label.replace(/[^a-z]+/gi, "-").toLowerCase()}`}
+    >
+      <span className="v2-gate-mark" aria-hidden>{mark}</span>
+      <span className="v2-gate-label">{g.label}</span>
+      {/* "not run" is stated, never left blank — a blank reads as a pass. */}
+      <span className="v2-gate-note">{g.note ?? (g.skipped ? "not run" : "")}</span>
+    </li>
+  );
+}
+
+function Provenance({ p, runId }: { p: V2Provenance; runId: string }) {
+  return (
+    <div className="v2-provenance" data-testid={`v2-provenance-${runId}`}>
+      <p className="v2-provenance-line">
+        Independent reviewer: <b>{p.reviewer_independent ? "yes" : "no"}</b>
+        {" · "}Independent test author: <b>{p.test_author_independent ? "yes" : "no"}</b>
+        {p.profile ? <> · profile: <b>{p.profile}</b></> : null}
+        {p.risk_tier != null ? <> · risk tier <b>{p.risk_tier}</b></> : null}
+      </p>
+      {p.build_engine || p.review_engine ? (
+        <p className="v2-provenance-line">
+          Builder: <b>{p.build_engine ?? "—"}</b>
+          {p.build_model ? ` (${p.build_model})` : ""}
+          {" · "}Adversary: <b>{p.review_engine ?? "—"}</b>
+          {p.review_model ? ` (${p.review_model})` : ""}
+          {/* Stated either way. A model grading its own work is the single fact that most
+              changes how much a green review is worth. */}
+          <span className="v2-provenance-note" data-testid={`v2-cross-model-${runId}`}>
+            {p.cross_model
+              ? " — cross-model review (no self-grading)"
+              : " — same model builds + reviews"}
+          </span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** A reviewer's own words. Markdown, because that is how the agents write. */
+function Evidence({ e, runId }: { e: V2Evidence; runId: string }) {
+  return (
+    <details className="v2-evidence" data-testid={`v2-evidence-${runId}-${e.key}`}>
+      <summary className="v2-evidence-head">{e.title}</summary>
+      <div className="v2-evidence-text">
+        <Markdown text={e.text} />
+        {e.truncated ? (
+          <p className="v2-turn-clipped v2-mono">summary continues — clipped for this view</p>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -248,15 +442,17 @@ function RunStep({ s, runId, index }: { s: V2Step; runId: string; index: number 
       <span className="v2-step-name">{s.stage}</span>
       {s.model ? <span className="v2-step-role">{s.model}</span> : null}
       <span className="v2-step-timing">
-        {(s.latency_ms / 1000).toFixed(1)}s
-        {s.spend_usd > 0 ? ` · $${s.spend_usd.toFixed(2)}` : ""}
-        {s.calls > 1 ? ` · ${s.calls} calls` : ""}
+        {s.turns > 0 ? `${s.turns} turn${s.turns === 1 ? "" : "s"} · ` : ""}
+        {fmtDuration(s.latency_ms)}
+        {s.spend_usd > 0 ? ` · $${s.spend_usd.toFixed(3)}` : ""}
+        {s.retries > 0 ? ` · ${s.retries} retr${s.retries === 1 ? "y" : "ies"}` : ""}
       </span>
       {/* A run that failed at one step and succeeded at nine others is a different story from
-          one that failed everywhere. */}
+          one that failed everywhere. The error text is the whole reason to open a failed
+          attempt, so it is shown here rather than left in the logs. */}
       {!s.ok ? (
         <span className="v2-step-failed" data-testid={`v2-step-failed-${runId}-${index}`}>
-          failed
+          ✗ {s.error || "failed"}
         </span>
       ) : null}
     </li>
