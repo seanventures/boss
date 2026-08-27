@@ -23,6 +23,10 @@ const rec = (over: Partial<V2Receipt> = {}): V2Receipt => ({
   error: null,
   data_boundary: "internal",
   created_at: "2026-08-26T11:30:00Z",
+  family: "DEPLOY",
+  routine: false,
+  summary: "deployment · apply on Shorty",
+  run_id: null,
   ...over,
 });
 
@@ -123,5 +127,58 @@ describe("empty states", () => {
     const out = html(feed({ items: [], window_total: 0, shown: 0, window_hours: 6 }));
     expect(out).toContain('data-testid="v2-receipts-none"');
     expect(out).toMatch(/last 6 hours/);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Making the ledger readable
+//
+// "I'm unable to correlate any work from the Receipts." Over 24h this project recorded 1,901
+// receipts and four of them were work; the rest was BOSS's own heartbeat, sorted newest-first
+// with nothing to tell them apart.
+// ---------------------------------------------------------------------------
+describe("reading the ledger", () => {
+  it("puts the work first and folds the heartbeat away", () => {
+    const out = html(feed({ items: [
+      rec({ id: "tick", effect: "process_manager.tick", family: "SYSTEM", routine: true }),
+      rec({ id: "work", effect: "code_task.opened_pr", family: "CODE", routine: false }),
+    ] }));
+    // The work is in the main list; the tick is inside the collapsed block.
+    expect(out.indexOf('v2-receipt-work')).toBeLessThan(out.indexOf("v2-routine"));
+    expect(out).toContain("keeping itself alive");
+  });
+
+  it("colours each family differently so the ledger sorts before it is read", () => {
+    const out = html(feed({ items: [
+      rec({ id: "a", family: "CODE" }), rec({ id: "b", family: "SPEND" }),
+    ] }));
+    expect(out).toContain('data-testid="v2-receipt-family-a"');
+    expect(out).toMatch(/data-tone="mint"/);
+    expect(out).toMatch(/data-tone="amber"/);
+  });
+
+  it("keeps the identifier as well as the sentence", () => {
+    // The dotted name is precise and unreadable; the sentence is readable and imprecise.
+    const out = html(feed({ items: [rec({
+      effect: "code_task.spend_cap_failover",
+      summary: "code task · spend cap failover on crun_abc",
+    })] }));
+    expect(out).toContain("spend cap failover");
+    expect(out).toContain("code_task.spend_cap_failover");
+  });
+
+  it("links a receipt back to the run it belongs to", () => {
+    const out = html(feed({ items: [rec({ run_id: "crun_abc" })] }));
+    expect(out).toContain('data-testid="v2-receipt-run-rcp_1"');
+    expect(out).toContain("crun_abc");
+  });
+
+  it("says so when a window held nothing but upkeep", () => {
+    // Rather than an empty page, which reads as a broken screen.
+    const out = html(feed({ items: [
+      rec({ id: "t1", routine: true, family: "SYSTEM" }),
+    ] }));
+    expect(out).toContain("nobody asked it to do anything");
   });
 });

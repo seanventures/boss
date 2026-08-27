@@ -24,6 +24,12 @@ import type { ReceiptFeed, V2Receipt } from "../../lib/v2/receipts";
  * work, so they get their own count and their own marker.
  */
 
+/** Colour per family, so the eye can sort the ledger before reading a word of it. */
+const FAMILY_TONE: Record<string, string> = {
+  CODE: "mint", DEPLOY: "green", SPEND: "amber", GATE: "amber",
+  PANEL: "purple", PROCESS: "blue", RESEARCH: "purple", SYSTEM: "dim", OTHER: "dim",
+};
+
 export function ReceiptsScreen({ feed }: { feed: ReceiptFeed }) {
   if (!feed.apiReachable) {
     return (
@@ -37,6 +43,9 @@ export function ReceiptsScreen({ feed }: { feed: ReceiptFeed }) {
       </section>
     );
   }
+
+  const work = feed.items.filter((r) => !r.routine);
+  const routine = feed.items.filter((r) => r.routine);
 
   return (
     <section className="v2-screen" data-testid="v2-receipts">
@@ -77,11 +86,34 @@ export function ReceiptsScreen({ feed }: { feed: ReceiptFeed }) {
           No effects applied in the last {feed.window_hours} hours.
         </p>
       ) : (
-        <ul className="v2-rows" data-testid="v2-receipts-list">
-          {feed.items.map((r) => (
-            <ReceiptRow key={r.id} r={r} />
-          ))}
-        </ul>
+        <>
+          {/* WORK FIRST, HEARTBEAT SECOND.
+              1,901 receipts in a day and four of them were work. Sorted newest-first with no
+              distinction, the work sat under forty-six ticks — which is exactly why the
+              operator could not correlate anything here. */}
+          {work.length > 0 ? (
+            <ul className="v2-rows" data-testid="v2-receipts-list">
+              {work.map((r) => <ReceiptRow key={r.id} r={r} />)}
+            </ul>
+          ) : (
+            <p className="v2-empty" data-testid="v2-receipts-no-work">
+              Nothing but routine upkeep in this window. BOSS was running, and nobody asked it
+              to do anything.
+            </p>
+          )}
+
+          {routine.length > 0 ? (
+            <details className="v2-routine" data-testid="v2-receipts-routine">
+              <summary className="v2-routine-head">
+                {routine.length} routine {routine.length === 1 ? "effect" : "effects"} — BOSS
+                keeping itself alive (ticks, watches, spend settlement)
+              </summary>
+              <ul className="v2-rows">
+                {routine.map((r) => <ReceiptRow key={r.id} r={r} />)}
+              </ul>
+            </details>
+          ) : null}
+        </>
       )}
     </section>
   );
@@ -102,9 +134,26 @@ function ReceiptRow({ r }: { r: V2Receipt }) {
       </span>
 
       <span className="v2-row-main">
-        <span className="v2-row-title v2-mono">
-          {r.effect}
-          {r.scope ? <span className="v2-row-meta-dim"> · {r.scope}</span> : null}
+        <span className="v2-row-title">
+          {/* The family, as a coloured tag. Both halves of the identity are kept: the sentence
+              says what happened, the dotted name says it precisely. */}
+          <span className="v2-fam v2-mono" data-tone={FAMILY_TONE[r.family] ?? "dim"}
+                data-testid={`v2-receipt-family-${r.id}`}>
+            {r.family}
+          </span>
+          <span className="v2-rec-summary">{r.summary || r.effect}</span>
+        </span>
+
+        <span className="v2-row-meta v2-mono">
+          <span className="v2-row-meta-dim">{r.effect}</span>
+          {r.scope ? <span>{r.scope}</span> : null}
+          {/* The link back to the work. This is the correlation that was missing entirely. */}
+          {r.run_id ? (
+            <a className="v2-meta-link" href={`/v2?run=${encodeURIComponent(r.run_id)}`}
+               data-testid={`v2-receipt-run-${r.id}`}>
+              {r.run_id} ↗
+            </a>
+          ) : null}
         </span>
 
         {r.error ? (

@@ -171,3 +171,88 @@ def test_an_empty_window_reports_zero_rather_than_nothing():
     assert out["items"] == []
     assert out["window_total"] == 0
     assert out["shown"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Making the ledger readable
+#
+# The operator's report: "I'm unable to correlate any work from the Receipts." Accurate. Over
+# 24h this project recorded 1,901 receipts, and of the 60 most recent, 46 were BOSS's own
+# heartbeat. The four that recorded real work were buried under ticks, and the scope column
+# showed the NAMES of the scope fields rather than their values.
+# --------------------------------------------------------------------------- #
+def only(out, rid):
+    return next(i for i in out["items"] if i["id"] == rid)
+
+
+def test_the_scope_shows_what_was_acted_on_not_the_names_of_the_fields():
+    """It read "project_id, window" and "action, minute, steward_id" -- field labels where the
+    values should be."""
+    out = receipt_feed(FakeConn([receipt("r1", kind="process_manager.tick", scope={
+        "project_id": "boss-dogfood", "action": "advance", "minute": 42})]), "p")
+    scope = only(out, "r1")["scope"]
+    assert "advance" in scope and "42" in scope
+    # project_id is true of every row on the screen, so it says nothing.
+    assert "boss-dogfood" not in scope
+
+
+def test_a_named_subject_wins_over_key_value_pairs():
+    out = receipt_feed(FakeConn([receipt("r1", scope={"app_name": "Invoice-Chaser",
+                                                     "attempt": 2})]), "p")
+    assert only(out, "r1")["scope"] == "Invoice-Chaser"
+
+
+def test_boss_keeping_itself_alive_is_marked_as_routine():
+    """1,901 receipts in a day, and the work is four of them. Newest-first with no distinction
+    buries the work under the heartbeat."""
+    out = receipt_feed(FakeConn([
+        receipt("tick", kind="process_manager.tick"),
+        receipt("watch", kind="metatron.watch"),
+        receipt("sre", kind="ai_sre.overwatch"),
+        receipt("work", kind="code_task.spend_cap_failover"),
+    ]), "p")
+    assert only(out, "tick")["routine"] is True
+    assert only(out, "watch")["routine"] is True
+    assert only(out, "sre")["routine"] is True
+    assert only(out, "work")["routine"] is False
+    assert out["shown_routine"] == 3
+
+
+def test_each_effect_carries_the_family_it_belongs_to():
+    out = receipt_feed(FakeConn([
+        receipt("a", kind="code_task.opened_pr"),
+        receipt("b", kind="deployment.apply"),
+        receipt("c", kind="budget.llm_spend.settle"),
+        receipt("d", kind="agent_process.review_cto"),
+        receipt("e", kind="meeting.convene"),
+    ]), "p")
+    fam = {i["id"]: i["family"] for i in out["items"]}
+    assert fam == {"a": "CODE", "b": "DEPLOY", "c": "SPEND",
+                   "d": "PROCESS", "e": "PANEL"}
+
+
+def test_an_effect_says_what_it_did_in_words_as_well_as_in_its_identifier():
+    """`code_task.spend_cap_failover` is precise and unreadable. Both halves matter."""
+    out = receipt_feed(FakeConn([receipt("r1", kind="code_task.spend_cap_failover",
+                                         scope={"code_task_run_id": "crun_abc"})]), "p")
+    item = only(out, "r1")
+    assert "spend cap failover" in item["summary"]
+    assert "crun_abc" in item["summary"]
+    assert item["effect"] == "code_task.spend_cap_failover"   # the identifier survives
+
+
+def test_a_failed_or_unfinished_effect_says_so_in_its_sentence():
+    out = receipt_feed(FakeConn([
+        receipt("f", kind="deployment.apply", status="failed"),
+        receipt("p", kind="deployment.apply", status="in_progress"),
+    ]), "p")
+    assert "failed" in only(out, "f")["summary"]
+    assert "still running" in only(out, "p")["summary"]
+
+
+def test_a_receipt_that_names_a_run_carries_the_link_back_to_it():
+    """The correlation the operator was missing: this effect belongs to that piece of work."""
+    out = receipt_feed(FakeConn([receipt("r1", scope={"code_task_run_id": "crun_abc"})]), "p")
+    assert only(out, "r1")["run_id"] == "crun_abc"
+    out2 = receipt_feed(FakeConn([receipt("r2", scope={"app_name": "Shorty"})]), "p")
+    assert only(out2, "r2")["run_id"] is None

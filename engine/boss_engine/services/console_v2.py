@@ -1063,10 +1063,23 @@ def receipt_feed(connection, project_id: str, *, limit: int = 60,
     for r in rows:
         status = str(r.get("status") or "")
         err = r.get("error") or {}
+        effect = str(r.get("effect_kind") or "")
+        scope_raw = r.get("effect_scope") or {}
+        family, routine = _effect_family(effect)
         items.append({
             "id": r["id"],
-            "effect": str(r.get("effect_kind") or ""),
-            "scope": _scope_label(r.get("effect_scope") or {}),
+            "effect": effect,
+            "scope": _scope_label(scope_raw),
+            # What kind of thing this is, so the screen can colour it and the reader can filter.
+            "family": family,
+            # BOSS's own heartbeat. Kept in the ledger, but marked so it can be collapsed:
+            # newest-first with no distinction buries the work under the ticks.
+            "routine": routine,
+            "summary": _effect_sentence(effect, scope_raw, status),
+            # The run this belongs to, when the scope names one -- the link back to the work.
+            "run_id": (str(scope_raw.get("code_task_run_id") or scope_raw.get("run_id"))
+                       if (scope_raw.get("code_task_run_id") or scope_raw.get("run_id"))
+                       else None),
             "status": status,
             "unfinished": status in _RECEIPT_OPEN,
             # The provider's own reference, which is what makes this evidence rather than a
@@ -1089,20 +1102,90 @@ def receipt_feed(connection, project_id: str, *, limit: int = 60,
         "window_unfinished": int(totals.get("unfinished") or 0),
         "window_failed": int(totals.get("failed") or 0),
         "shown": len(items),
+        # How much of the page is BOSS keeping itself alive. Stated, so a reader who sees
+        # mostly ticks knows that is what this project's day looked like rather than assuming
+        # the screen is broken.
+        "shown_routine": sum(1 for i in items if i["routine"]),
     }
+
+
+#: Scope keys that name the THING an effect acted on, best first.
+_SUBJECT_KEYS = ("app_name", "name", "repo", "host", "target", "run_id", "code_task_run_id",
+                 "deployment_target_id", "meeting_id", "decision_id", "id")
+
+#: Scope keys that are true of every row on the screen and so tell the reader nothing.
+_SCOPE_NOISE = {"project_id", "org_id", "workspace_id"}
 
 
 def _scope_label(scope: dict) -> str:
     """What the effect acted on, in one short phrase.
 
-    Falls back to the raw keys rather than an empty string: knowing an effect had a scope we
-    cannot summarise is more useful than being shown nothing.
+    The earlier version fell back to the KEYS of the scope, so most rows read "project_id,
+    window" or "action, minute, steward_id" -- the names of the fields rather than anything
+    about what happened. On a screen whose whole job is letting an operator correlate an effect
+    with the work that caused it, that is the field label where the value should be.
     """
-    for key in ("app_name", "name", "repo", "host", "target", "run_id", "id"):
+    for key in _SUBJECT_KEYS:
         value = scope.get(key)
         if value:
             return str(value)[:60]
-    return ", ".join(sorted(scope)[:3])[:60] if scope else ""
+    # No named subject: show key=value for what is left, dropping the keys that are true of
+    # every row anyway. Values, not field names.
+    pairs = [f"{k}={scope[k]}" for k in sorted(scope)
+             if k not in _SCOPE_NOISE and scope.get(k) not in (None, "", [], {})]
+    return ", ".join(pairs)[:70] if pairs else ""
+
+
+#: Which family an effect belongs to. Matched on the leading segment of the dotted name, then
+#: on the whole name, so `code_task.spend_cap_failover` is CODE and `budget.llm_spend.settle`
+#: is SPEND without either needing its own entry.
+_EFFECT_FAMILIES = (
+    ("code_task", "CODE"), ("github", "CODE"), ("pr", "CODE"),
+    ("agent_process", "PROCESS"),
+    ("deployment", "DEPLOY"), ("deploy", "DEPLOY"), ("preview", "DEPLOY"),
+    ("budget", "SPEND"), ("spend", "SPEND"), ("entitlement", "SPEND"),
+    ("decision", "GATE"), ("gate", "GATE"), ("approval", "GATE"),
+    ("meeting", "PANEL"), ("panel", "PANEL"),
+    ("discovery", "RESEARCH"), ("research", "RESEARCH"),
+)
+
+#: Effects BOSS runs on a timer to keep itself alive. They are real effects and belong in the
+#: ledger, but they are not work anybody asked for.
+_ROUTINE_PREFIXES = ("process_manager", "metatron", "ai_sre", "watchdog", "janitor")
+_ROUTINE_SUFFIXES = ("tick", "watch", "overwatch", "sweep", "heartbeat", "poll")
+
+
+def _effect_family(effect: str) -> tuple[str, bool]:
+    """(family, is_routine) for an effect kind.
+
+    Routine matters more than it sounds. Over 24h this project recorded 1,901 receipts, and of
+    the 60 most recent, 46 were BOSS's own heartbeat -- ticks, watches and overwatches. Sorted
+    newest-first with no distinction, the four receipts that recorded actual work were buried
+    under them, which is precisely why the operator could not correlate anything on this screen.
+    """
+    name = (effect or "").strip().lower()
+    head = name.split(".")[0]
+    tail = name.split(".")[-1]
+    routine = head in _ROUTINE_PREFIXES or tail in _ROUTINE_SUFFIXES
+    for prefix, family in _EFFECT_FAMILIES:
+        if head == prefix:
+            return family, routine
+    return ("SYSTEM" if routine else "OTHER"), routine
+
+
+def _effect_sentence(effect: str, scope: dict, status: str) -> str:
+    """One line saying what happened, in words rather than in a dotted identifier.
+
+    `code_task.spend_cap_failover` is precise and unreadable; both halves matter, so the screen
+    keeps the identifier AND says what it means.
+    """
+    name = (effect or "").strip().lower()
+    subject = _scope_label(scope)
+    verb = {
+        "succeeded": "", "failed": " — and failed", "in_progress": " — still running",
+    }.get(status, "")
+    words = name.replace("_", " ").replace(".", " · ")
+    return (f"{words}{f' on {subject}' if subject else ''}{verb}")[:160]
 
 
 #: Keys a transcript turn may use. Checked in order; the first that holds text wins.

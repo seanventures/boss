@@ -20,9 +20,20 @@ export type V2Receipt = {
   error: string | null;
   data_boundary: string;
   created_at: string | null;
+  /** CODE / DEPLOY / SPEND / GATE / PANEL / PROCESS / RESEARCH / SYSTEM / OTHER. */
+  family: string;
+  /** BOSS keeping itself alive — a tick, a watch, an overwatch. A real effect, but not work
+   *  anyone asked for, and it outnumbers the real work about ten to one. */
+  routine: boolean;
+  /** What happened, in words. The dotted identifier is precise and unreadable; both matter. */
+  summary: string;
+  /** The run this effect belongs to, when its scope names one. */
+  run_id: string | null;
 };
 
 export type ReceiptFeed = {
+  /** How many of the shown rows are BOSS's own heartbeat. */
+  shown_routine?: number;
   project_id: string;
   window_hours: number;
   items: V2Receipt[];

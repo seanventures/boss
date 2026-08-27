@@ -1099,3 +1099,39 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
 @media (prefers-reduced-motion: reduce) {
   .v2-score-bar > span { animation: none !important; }
 }
+
+/* ── Receipts ─────────────────────────────────────────────────────────────── */
+/*
+ * The ledger reads as machine noise until the eye can sort it without reading. A coloured
+ * family tag per row does that: CODE, DEPLOY, SPEND, GATE, PANEL are different kinds of event
+ * and should not look alike.
+ *
+ * The reference screen achieves its colour the same way -- CODE / GATE / PANEL / ARTIFACT down
+ * the left -- so this is the reference's device applied to BOSS's actual effect kinds rather
+ * than to invented ones.
+ */
+.v2-fam {
+  display: inline-block; min-width: 62px; margin-right: 10px;
+  font-size: 9.5px; letter-spacing: .1em; vertical-align: 1px;
+}
+.v2-fam[data-tone="mint"]   { color: var(--v2-mint); }
+.v2-fam[data-tone="green"]  { color: var(--v2-green); }
+.v2-fam[data-tone="amber"]  { color: var(--v2-amber); }
+.v2-fam[data-tone="purple"] { color: var(--v2-purple); }
+.v2-fam[data-tone="blue"]   { color: #6EA8FE; }
+.v2-fam[data-tone="dim"]    { color: var(--v2-dim); }
+
+.v2-rec-summary { color: var(--v2-ink); font-size: 13px; }
+
+/* The heartbeat, folded away. It belongs in the ledger -- it is real, applied, deduped effect
+   -- but it outnumbers the work about ten to one and burying the work under it is what made
+   this screen unreadable. */
+.v2-routine { margin-top: 18px; border-top: 1px solid var(--v2-border); padding-top: 12px; }
+.v2-routine-head {
+  cursor: pointer; list-style: none;
+  color: var(--v2-dim); font-size: 11.5px; font-family: var(--v2-font-mono);
+  padding: 4px 0;
+}
+.v2-routine-head::before { content: "▸ "; }
+.v2-routine[open] > .v2-routine-head::before { content: "▾ "; }
+.v2-routine-head:hover { color: var(--v2-muted); }
