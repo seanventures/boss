@@ -339,3 +339,44 @@ describe("Org Chart", () => {
     expect(out).toContain('data-testid="v2-org-unreachable"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ranking, pipeline work, and motion that is actually visible
+// ---------------------------------------------------------------------------
+describe("the workforce leaderboard", () => {
+  it("draws a score bar for any agent that has done work", () => {
+    // The breathing border only applies to an agent working this INSTANT, and on a quiet
+    // afternoon that is nobody -- so with only that rule the page still looked static.
+    const out = wfHtml(wf({ agents: [
+      agent({ id: "software_engineer", calls: 499, ok_calls: 494, success_rate: 0.99 }),
+    ] }));
+    expect(out).toContain('data-testid="v2-agent-bar-software_engineer"');
+    expect(out).toContain("width:99%");
+  });
+
+  it("scores an agent on the kind of work it actually does", () => {
+    // Six agents run the PRD pipeline and never make a model call under their own role.
+    const out = wfHtml(wf({ agents: [
+      agent({ id: "product_manager", calls: null, steps: 12, steps_ok: 11,
+              step_success_rate: 0.917, runs: 4 }),
+    ] }));
+    expect(out).toContain("11/12 steps");
+    expect(out).toContain('data-testid="v2-agent-bar-product_manager"');
+  });
+
+  it("draws no bar at all for an agent that has done nothing", () => {
+    // A zero-width bar reads as a failing score rather than an absent one.
+    const out = wfHtml(wf({ agents: [agent({ id: "cao", calls: null })] }));
+    expect(out).not.toContain('data-testid="v2-agent-bar-cao"');
+  });
+
+  it("keeps call work and step work as separate figures", () => {
+    // A step and a model call are different units; one total would mean nothing.
+    const out = wfHtml(wf({ agents: [
+      agent({ id: "qa", calls: 3, ok_calls: 3, success_rate: 1, steps: 5, steps_ok: 5,
+              step_success_rate: 1 }),
+    ] }));
+    expect(out).toContain("3/3 ok");
+    expect(out).toContain("5/5 steps");
+  });
+});

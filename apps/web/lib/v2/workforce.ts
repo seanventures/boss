@@ -52,6 +52,13 @@ export type V2Agent = {
   top_stages?: { stage: string; calls: number }[];
   last_call_at?: string | null;
   last_stage?: string | null;
+  /** Work done in the PRD pipeline rather than through model calls. Separate figures, because
+   *  a step and a model call are different units and a combined total would mean nothing. */
+  steps?: number | null;
+  steps_ok?: number | null;
+  steps_failed?: number | null;
+  runs?: number | null;
+  step_success_rate?: number | null;
 };
 
 export type V2Handoff = {

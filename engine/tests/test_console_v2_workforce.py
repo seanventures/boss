@@ -24,9 +24,10 @@ NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 class FakeConn:
     """Routes each query to its seeded rows by the table it names."""
 
-    def __init__(self, roles=(), steps=(), handoffs=(), spend=()):
+    def __init__(self, roles=(), steps=(), handoffs=(), spend=(), step_work=()):
         self.data = {"roles": list(roles), "steps": list(steps),
-                     "handoffs": list(handoffs), "spend": list(spend)}
+                     "handoffs": list(handoffs), "spend": list(spend),
+                     "step_work": list(step_work)}
         self.statements = []
 
     def execute(self, statement, params=None):
@@ -39,6 +40,8 @@ class FakeConn:
             rows = self.data["handoffs"]
         elif "from llm_calls" in low or "join llm_calls" in low:
             rows = self.data["spend"]
+        elif "count(*) filter (where status = 'succeeded')" in low:
+            rows = self.data["step_work"]
         else:
             rows = self.data["steps"]
         conn_rows = rows
@@ -582,3 +585,62 @@ def test_an_idle_agent_does_not_claim_its_month_of_work_happened_today():
     task = by_id(out)["software_engineer"]["task"]
     assert "30d" in task
     assert "in this window" not in task
+
+
+# --------------------------------------------------------------------------- #
+# Ordering, and the agents whose work is not model calls
+# --------------------------------------------------------------------------- #
+def pstep(role_key, *, steps=1, ok=None, failed=0, runs=1, last=None):
+    """One GROUP BY role_key row from agent_process_steps."""
+    from datetime import datetime, timezone
+    return {"role_key": role_key, "steps": steps,
+            "ok_steps": steps if ok is None else ok, "failed_steps": failed, "runs": runs,
+            "last_at": last or datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)}
+
+
+def test_the_agents_that_did_the_work_come_first():
+    """Alphabetical put `cao` -- which has never made a call -- above the agent that did 16,000
+    turns, and the operator had to hunt for the ones that had done anything."""
+    out = workforce(FakeConn(
+        roles=[role("cao"), role("software_engineer"), role("qa")],
+        spend=[lcall("implement", calls=400), lcall("check_tests", calls=100)],
+    ), "proj")
+    assert [a["id"] for a in out["agents"]][:2] == ["software_engineer", "qa"]
+    assert out["agents"][-1]["id"] == "cao"
+
+
+def test_pipeline_work_counts_toward_the_ranking_too():
+    """Six agents run the PRD pipeline and never touch llm_calls under their own role. Scoring
+    only model calls left them visibly doing work and credited with none of it."""
+    out = workforce(FakeConn(
+        roles=[role("cao"), role("product_manager")],
+        step_work=[pstep("product_manager", steps=12)],
+    ), "proj")
+    a = {x["id"]: x for x in out["agents"]}
+    assert a["product_manager"]["steps"] == 12
+    assert out["agents"][0]["id"] == "product_manager"
+
+
+def test_steps_and_calls_are_not_added_into_one_meaningless_total():
+    """A step and a model call are different units."""
+    out = workforce(FakeConn(roles=[role("qa")], spend=[lcall("check_tests", calls=3)],
+                             step_work=[pstep("qa", steps=5)]), "proj")
+    a = {x["id"]: x for x in out["agents"]}["qa"]
+    assert a["calls"] == 3 and a["steps"] == 5
+
+
+def test_a_step_still_running_is_not_counted_as_a_failure():
+    """Counting in-flight steps as failures makes a busy agent look like a broken one."""
+    out = workforce(FakeConn(roles=[role("qa")],
+                             step_work=[pstep("qa", steps=10, ok=6, failed=1)]), "proj")
+    a = {x["id"]: x for x in out["agents"]}["qa"]
+    assert a["step_success_rate"] == round(6 / 7, 3)   # 3 in flight are excluded, not failed
+
+
+def test_the_order_is_stable_when_two_agents_have_done_the_same_amount():
+    """A list that reshuffles between renders is a list nobody can scan."""
+    conn = lambda: FakeConn(roles=[role("qa"), role("architect")],
+                            spend=[lcall("check_tests", calls=5), lcall("plan", calls=5)])
+    first = [a["id"] for a in workforce(conn(), "proj")["agents"]]
+    second = [a["id"] for a in workforce(conn(), "proj")["agents"]]
+    assert first == second

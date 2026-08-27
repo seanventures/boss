@@ -217,6 +217,11 @@ function money(n: number): string {
   return `$${n.toFixed(3)}`;
 }
 
+/** Whichever rate this agent actually has. An agent scores on the kind of work it does. */
+function rate(a: V2Agent): number | null {
+  return a.success_rate ?? a.step_success_rate ?? null;
+}
+
 /** Green only for a rate that is both high AND has enough calls behind it to mean anything. */
 function scoreTone(rate: number | null | undefined): string {
   if (rate == null) return "none";
@@ -303,6 +308,40 @@ function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
               <b>{a.retries}</b><span className="v2-score-of">retries</span>
             </span>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* PIPELINE WORK. Six agents run the PRD process and never make a model call under their
+          own role, so scoring only calls left them visibly doing work and credited with none.
+          Kept as its own figures: a step and a model call are different units. */}
+      {a.steps ? (
+        <div className="v2-scoreboard" data-testid={`v2-agent-steps-score-${a.id}`}>
+          <span className="v2-score" data-tone={scoreTone(a.step_success_rate)}>
+            <b>{a.step_success_rate != null ? `${Math.round(a.step_success_rate * 100)}%` : "—"}</b>
+            <span className="v2-score-of">{a.steps_ok}/{a.steps} steps</span>
+          </span>
+          {a.runs ? (
+            <span className="v2-score-fig">
+              <b>{a.runs}</b><span className="v2-score-of">runs</span>
+            </span>
+          ) : null}
+          {a.steps_failed ? (
+            <span className="v2-score-fig" data-tone="bad">
+              <b>{a.steps_failed}</b><span className="v2-score-of">failed</span>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* The bar animates from zero to its width on load. It is the one piece of motion on this
+          page that is visible on EVERY card that has done work -- the breathing border only
+          applies to an agent working this instant, and on a quiet afternoon that is nobody, so
+          the page looked as static as before. Width is the success rate, so the motion is
+          carrying the number rather than decorating it. */}
+      {rate(a) != null ? (
+        <div className="v2-bar v2-score-bar" data-testid={`v2-agent-bar-${a.id}`}
+             role="img" aria-label={`${Math.round(rate(a)! * 100)}% success`}>
+          <span data-tone={scoreTone(rate(a))} style={{ width: `${Math.round(rate(a)! * 100)}%` }} />
         </div>
       ) : null}
 

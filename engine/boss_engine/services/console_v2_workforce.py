@@ -149,6 +149,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # software_engineer, qa, security_reviewer, reviewer, architect -- works through llm_calls,
     # and the screen only ever looked at agent_process_steps.
     spend = _llm_work(connection, project_id, SCORE_WINDOW_HOURS)
+    step_work = _step_work(connection, project_id, SCORE_WINDOW_HOURS)
     # AGENTS THAT WORK BUT ARE NOT REGISTERED ROLES.
     #
     # Found by the Hive having no edges: five of the seven role keys the process template
@@ -166,7 +167,8 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # Working = seen in the process steps OR credited with model calls. The second half is what
     # was missing: architect and reviewer do all their work through llm_calls and appeared
     # nowhere, while BOSS was busy attributing spend to them.
-    working = {s["role_key"] for s in steps if s.get("role_key")} | set(spend)
+    working = ({s["role_key"] for s in steps if s.get("role_key")}
+               | set(spend) | set(step_work))
     for extra in sorted(working - registered):
         roles.append({
             "role_key": extra,
@@ -187,6 +189,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         step = latest.get(key)
         cost = spend.get(key, {})
         work = spend.get(key) or {}
+        sw = step_work.get(key) or {}
         status, task = _status_of(step)
         # An agent with no process step but real model calls is not "no work in this window" --
         # it is the agent that did the building. Say what it did.
@@ -215,6 +218,14 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             # someone decided about it.
             "success_rate": work.get("success_rate"),
             "top_stages": work.get("top_stages") or [],
+            # Pipeline work, kept as its own figures rather than added to the call counts: a
+            # step and a model call are different units and summing them would invent a total
+            # that means nothing.
+            "steps": sw.get("steps"),
+            "steps_ok": sw.get("steps_ok"),
+            "steps_failed": sw.get("steps_failed"),
+            "runs": sw.get("runs"),
+            "step_success_rate": sw.get("step_success_rate"),
             "last_call_at": (work["last_at"].isoformat()
                              if work.get("last_at") else None),
             "last_stage": work.get("last_stage"),
@@ -242,6 +253,26 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "last_touched": _touched(step) if step else None,
         })
 
+    # BUSIEST FIRST.
+    #
+    # Alphabetical put `cao` -- which has never made a call -- above the agent that did 16,000
+    # turns of work, and the operator had to hunt for the agents that had actually done
+    # something. Ordering by volume makes the page answer "who is doing the work" at a glance,
+    # which is what it is for.
+    #
+    # Calls and steps are different units, so neither is converted into the other: an agent is
+    # ranked on whichever kind of work it does. Ties fall back to spend, then turns, then name,
+    # so the order is stable between renders rather than jittering as counts move.
+    def _rank(a: dict) -> tuple:
+        return (
+            -(int(a.get("calls") or 0) + int(a.get("steps") or 0)),
+            -(float(a.get("spend_usd") or 0.0)),
+            -(int(a.get("turns") or 0)),
+            str(a.get("name") or a.get("id") or ""),
+        )
+
+    agents.sort(key=_rank)
+
     return {
         "project_id": project_id,
         "window_hours": int(hours),
@@ -265,6 +296,52 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "be shown. Project spend is on the Projects screen."
         ),
     }
+
+
+def _step_work(connection, project_id: str, hours: float) -> dict[str, dict]:
+    """What each agent did in the PROCESS pipeline, as opposed to through model calls.
+
+    Two vocabularies, two tables, one workforce. The PRD pipeline -- product_manager,
+    chief_architect, engineering_captain, ux_engineer, vp_product, cto -- records its work as
+    agent_process_steps and never touches llm_calls under its own role, so scoring only model
+    calls left six agents with a visible task and no score at all: doing work, credited with
+    none of it.
+    """
+    rows = [dict(r) for r in connection.execute(
+        sql(
+            """
+            SELECT role_key,
+                   count(*)                                        AS steps,
+                   count(*) FILTER (WHERE status = 'succeeded')    AS ok_steps,
+                   count(*) FILTER (WHERE status IN ('failed', 'error')) AS failed_steps,
+                   count(DISTINCT run_id)                          AS runs,
+                   max(created_at)                                 AS last_at
+            FROM agent_process_steps
+            WHERE project_id = :p
+              AND created_at > now() - make_interval(hours => :h)
+              AND role_key IS NOT NULL
+            GROUP BY role_key
+            """
+        ),
+        {"p": project_id, "h": int(hours)},
+    ).mappings().all()]
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        steps = int(row.get("steps") or 0)
+        ok = int(row.get("ok_steps") or 0)
+        failed = int(row.get("failed_steps") or 0)
+        out[str(row["role_key"])] = {
+            "steps": steps,
+            "steps_ok": ok,
+            "steps_failed": failed,
+            "runs": int(row.get("runs") or 0),
+            "last_step_at": row.get("last_at"),
+            # Over COMPLETED steps only. A step still running is not a failure, and counting it
+            # as one would make a busy agent look like a broken one.
+            "step_success_rate": (round(ok / (ok + failed), 3) if (ok + failed) else None),
+        }
+    return out
 
 
 def _status_from_work(work: dict) -> tuple[str, str]:

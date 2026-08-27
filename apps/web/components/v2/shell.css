@@ -1064,3 +1064,38 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
     animation: none !important;
   }
 }
+
+/* ── The score bar ────────────────────────────────────────────────────────── */
+/*
+ * The one piece of motion that is visible on every card that has done work. The breathing
+ * border only applies to an agent working this instant, and on a quiet afternoon that is
+ * nobody -- so with only that rule the page still looked static, which is exactly what was
+ * reported.
+ *
+ * Width IS the success rate, so the animation carries the number rather than decorating it:
+ * the bars sweep out to different lengths and the ranking is legible before you read a digit.
+ */
+@keyframes v2-fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+.v2-score-bar { margin-top: 8px; height: 3px; }
+.v2-score-bar > span {
+  display: block; height: 100%; border-radius: 2px;
+  transform-origin: left center;
+  animation: v2-fill .85s cubic-bezier(.22,.61,.36,1) both;
+  animation-delay: .18s;               /* after the card itself has arrived */
+}
+.v2-score-bar > span[data-tone="good"] { background: var(--v2-green); }
+.v2-score-bar > span[data-tone="warn"] { background: var(--v2-amber); }
+.v2-score-bar > span[data-tone="bad"]  { background: var(--v2-red); }
+.v2-score-bar > span[data-tone="none"] { background: var(--v2-idle); }
+
+/* A card that has done work at all is not grey. The left edge carries it, so the ranked list
+   reads as a leaderboard down the page rather than a wall of identical panels. */
+.v2-card:has(.v2-score-bar) { border-left: 2px solid var(--v2-border-strong); }
+.v2-card:has(.v2-score-bar > span[data-tone="good"]) { border-left-color: var(--v2-green); }
+.v2-card:has(.v2-score-bar > span[data-tone="warn"]) { border-left-color: var(--v2-amber); }
+.v2-card:has(.v2-score-bar > span[data-tone="bad"])  { border-left-color: var(--v2-red); }
+
+@media (prefers-reduced-motion: reduce) {
+  .v2-score-bar > span { animation: none !important; }
+}
