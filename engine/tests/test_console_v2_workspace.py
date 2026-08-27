@@ -430,3 +430,18 @@ def test_turns_and_retries_survive_to_the_screen():
     ), "proj", "app_1")
     assert (out["runs"][0]["steps"][0]["turns"],
             out["runs"][0]["steps"][0]["retries"]) == (46, 2)
+
+
+def test_verification_is_read_from_the_key_the_pipeline_actually_writes():
+    """`test_commands`, not `verification`.
+
+    A plausible-looking key that no spec contains fails silently: the section stays empty and
+    reads as a task nobody verified.
+    """
+    r = run("crun_1", app_id="app_1")
+    r["spec"] = {**(r.get("spec") or {}),
+                 "acceptance_criteria": ["Invoices can be created"],
+                 "test_commands": ["npx playwright test"]}
+    out = project_workspace(FakeConn([r]), "proj", "app_1")
+    assert out["criteria"] == ["Invoices can be created"]
+    assert out["verification"] == ["npx playwright test"]

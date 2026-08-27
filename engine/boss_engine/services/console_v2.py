@@ -367,10 +367,6 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
             "steps": steps,
             "spend_usd": round(micros / 1_000_000, 2),
             "repo": f"{spec.get('owner') or '?'}/{spec.get('repo') or '?'}",
-        # The contract the work was accepted against. Without it the quality checks below are
-        # marks with no exam paper -- you can see that something passed, not what it passed.
-        "criteria": [str(c) for c in (spec.get("acceptance_criteria") or []) if c][:40],
-        "verification": [str(c) for c in (spec.get("verification") or []) if c][:40],
             "latest_run_id": runs[0]["id"],
             "pull_request_number": next(
                 (r.get("pull_request_number") for r in runs if r.get("pull_request_number")), None),
@@ -636,6 +632,13 @@ def project_workspace(connection, project_id: str, app_id: str) -> dict[str, Any
         "status": status,
         "pct": STAGE_PCT.get(stage, 0),
         "spend_usd": round(micros / 1_000_000, 2),
+        # The contract this work was accepted against. Without it the quality checks are marks
+        # with no exam paper -- you can see that something passed, not what it passed.
+        "criteria": [str(c) for c in (spec.get("acceptance_criteria") or []) if c][:40],
+        # `test_commands` is the key the pipeline actually writes. An earlier version read a
+        # plausible-looking `verification` that no spec has ever contained, so the section would
+        # have stayed empty forever and read as a task nobody verified.
+        "verification": [str(c) for c in (spec.get("test_commands") or []) if c][:40],
         "runs": runs,
         # Say whether it can ship AND why not, together. A disabled Deploy with no reason is
         # what sends people to the API to find out.
