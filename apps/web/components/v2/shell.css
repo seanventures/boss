@@ -957,3 +957,110 @@ details[open] > .v2-evidence-head::before { content: "▾ "; }
   margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--v2-surface);
   font-size: 11px; flex-wrap: wrap;
 }
+
+/* ── Agent scoreboard ─────────────────────────────────────────────────────── */
+/* The point of the Workforce page: what each agent has actually produced. Figures read as
+   figures — big number, small unit — so the card scans as a scoreboard rather than prose. */
+.v2-scoreboard {
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  margin: 9px 0 0; padding: 8px 10px;
+  border-radius: var(--v2-radius-sm); background: var(--v2-surface);
+}
+.v2-score, .v2-score-fig { display: inline-flex; align-items: baseline; gap: 5px; }
+.v2-score b, .v2-score-fig b {
+  font-size: 15px; font-weight: 700; color: var(--v2-ink);
+  font-family: var(--v2-font-mono); font-variant-numeric: tabular-nums;
+}
+.v2-score-of { font-size: 9.5px; color: var(--v2-dim); letter-spacing: .04em; }
+.v2-score[data-tone="good"] b { color: var(--v2-green); }
+.v2-score[data-tone="warn"] b { color: var(--v2-amber); }
+.v2-score[data-tone="bad"]  b { color: var(--v2-red); }
+.v2-score-fig[data-tone="bad"] b  { color: var(--v2-red); }
+.v2-score-fig[data-tone="warn"] b { color: var(--v2-amber); }
+
+/* What the agent spends its calls on, in the pipeline's own vocabulary. */
+.v2-stages { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.v2-stage-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--v2-border); color: var(--v2-muted); font-size: 10px;
+}
+
+/* ── Motion ───────────────────────────────────────────────────────────────── */
+/*
+ * Every animation here has to earn its place by MEANING something. A page where everything
+ * moves says exactly as much as a page where nothing does — the eye stops treating motion as
+ * signal. So: cards arrive (the page feels alive on load), working agents breathe, a live
+ * figure ticks when it changes, and nothing else moves.
+ */
+@keyframes v2-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes v2-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79,227,193,0); }
+  50%      { box-shadow: 0 0 0 3px rgba(79,227,193,.10); }
+}
+@keyframes v2-sheen {
+  from { background-position: -180% 0; }
+  to   { background-position: 280% 0; }
+}
+
+/* Cards arrive in sequence. Staggered by nth-child so the grid assembles instead of blinking
+   into place all at once — the single cheapest thing that makes a dense page feel live. */
+.v2-cards > .v2-card,
+.v2-deploy-grid > .v2-deploy-card {
+  animation: v2-rise .34s cubic-bezier(.22,.61,.36,1) both;
+}
+.v2-cards > .v2-card:nth-child(1),  .v2-deploy-grid > .v2-deploy-card:nth-child(1)  { animation-delay: .00s; }
+.v2-cards > .v2-card:nth-child(2),  .v2-deploy-grid > .v2-deploy-card:nth-child(2)  { animation-delay: .03s; }
+.v2-cards > .v2-card:nth-child(3),  .v2-deploy-grid > .v2-deploy-card:nth-child(3)  { animation-delay: .06s; }
+.v2-cards > .v2-card:nth-child(4),  .v2-deploy-grid > .v2-deploy-card:nth-child(4)  { animation-delay: .09s; }
+.v2-cards > .v2-card:nth-child(5)  { animation-delay: .12s; }
+.v2-cards > .v2-card:nth-child(6)  { animation-delay: .15s; }
+.v2-cards > .v2-card:nth-child(7)  { animation-delay: .18s; }
+.v2-cards > .v2-card:nth-child(8)  { animation-delay: .21s; }
+/* Past the ninth the stagger stops: a 26-card grid would otherwise take two seconds to finish
+   assembling, which is a slow page pretending to be a lively one. */
+.v2-cards > .v2-card:nth-child(n+9) { animation-delay: .24s; }
+
+/* A card for an agent that is working right now breathes. Only that one. */
+.v2-card[data-status="WORKING"],
+.v2-card[data-status="RUNNING"] {
+  border-color: rgba(79,227,193,.35);
+  animation: v2-rise .34s cubic-bezier(.22,.61,.36,1) both,
+             v2-breathe 2.8s ease-in-out 1s infinite;
+}
+
+/* A stuck agent gets the same treatment in amber — stuck is also live, and the page should
+   pull the eye to it just as hard. */
+.v2-card[data-status="STUCK"] { border-color: rgba(245,177,76,.4); }
+
+/* Rows fade in without moving: a long list that slides looks like a page that is still
+   loading. */
+.v2-rows > .v2-row { animation: v2-rise .3s ease-out both; }
+.v2-rows > .v2-row:nth-child(n+12) { animation-delay: .1s; }
+
+/* A skeleton shimmer for anything genuinely still fetching, so "loading" and "empty" are
+   visibly different states. */
+.v2-loading {
+  background: linear-gradient(90deg, var(--v2-surface) 30%, var(--v2-border) 50%, var(--v2-surface) 70%);
+  background-size: 220% 100%;
+  animation: v2-sheen 1.3s linear infinite;
+  border-radius: 4px; color: transparent;
+}
+
+/* NON-NEGOTIABLE. Motion is a signal here, not decoration, and for a reader who has asked the
+   OS to stop animating things it becomes noise they cannot turn off. Status stays legible
+   because it is carried by colour and text as well. */
+@media (prefers-reduced-motion: reduce) {
+  .v2-cards > .v2-card,
+  .v2-deploy-grid > .v2-deploy-card,
+  .v2-rows > .v2-row,
+  .v2-card[data-status="WORKING"],
+  .v2-card[data-status="RUNNING"],
+  .v2-loading,
+  .v2-hive-halo[data-status="WORKING"] {
+    animation: none !important;
+  }
+}

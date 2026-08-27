@@ -133,21 +133,22 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         {"p": project_id, "h": int(hours)},
     ).mappings().all()]
 
-    # NO PER-AGENT SPEND. NOT BECAUSE IT IS HARD -- BECAUSE IT IS NOT RECORDED.
+    # PER-AGENT WORK AND SPEND -- now real, and worth explaining why.
     #
-    # An earlier version of this joined llm_calls to steps on a time window, which attributed
-    # every call in a 31-minute window to every role active in it. Shipped, and the live screen
-    # immediately showed CTO and QA Lead with exactly $61.3802 each -- the same money, twice.
+    # An earlier version joined llm_calls to steps on a TIME WINDOW, which attributed every call
+    # in a 31-minute window to every role active in it. Shipped, and the live screen immediately
+    # showed CTO and QA Lead with exactly $61.3802 each -- the same money, twice. It was removed
+    # and the screen said "not recorded", which was true of the join being attempted.
     #
-    # llm_calls carries project_id, code_task_run_id and stage; agent_process_steps carries
-    # run_id and role_key. There is no join between them, and the two vocabularies do not even
-    # overlap (steps say accept_prd/review_prd/build; calls say spec/implement/review_code). So
-    # a per-agent cost here can only be invented.
+    # It was not true of BOSS. llm_telemetry.STAGE_ROLES maps every pipeline stage to the agent
+    # that owns it, and BOSS uses that map AT WRITE TIME to attribute spend. So the attribution
+    # already exists and is authoritative; this screen simply was not reading it. Using the same
+    # map means the workforce page and the cost ledger cannot disagree about who spent what.
     #
-    # The rule this screen holds every other number to is that a number is either true or
-    # absent. This one is absent, and the screen says why rather than showing a zero that reads
-    # as "this agent costs nothing".
-    spend: dict[str, dict] = {}
+    # This is what made the page look dead: every agent that does the actual building --
+    # software_engineer, qa, security_reviewer, reviewer, architect -- works through llm_calls,
+    # and the screen only ever looked at agent_process_steps.
+    spend = _llm_work(connection, project_id, hours)
     # AGENTS THAT WORK BUT ARE NOT REGISTERED ROLES.
     #
     # Found by the Hive having no edges: five of the seven role keys the process template
@@ -162,7 +163,10 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # no trust score, no autonomy level and no violation tracking — a governance gap that
     # hiding the agent would also hide.
     registered = {r["role_key"] for r in roles}
-    working = {s["role_key"] for s in steps if s.get("role_key")}
+    # Working = seen in the process steps OR credited with model calls. The second half is what
+    # was missing: architect and reviewer do all their work through llm_calls and appeared
+    # nowhere, while BOSS was busy attributing spend to them.
+    working = {s["role_key"] for s in steps if s.get("role_key")} | set(spend)
     for extra in sorted(working - registered):
         roles.append({
             "role_key": extra,
@@ -182,7 +186,12 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         key = role["role_key"]
         step = latest.get(key)
         cost = spend.get(key, {})
+        work = spend.get(key) or {}
         status, task = _status_of(step)
+        # An agent with no process step but real model calls is not "no work in this window" --
+        # it is the agent that did the building. Say what it did.
+        if step is None and work.get("calls"):
+            status, task = _status_from_work(work)
         agents.append({
             "id": key,
             "name": role.get("display_name") or key,
@@ -192,10 +201,23 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             # Absent, not zero. See the note above the (empty) spend lookup: BOSS does not
             # record which agent an llm_call belongs to, and a zero would read as "this agent
             # costs nothing" rather than "nobody knows".
-            "model": cost.get("model") or None,
-            "tokens": None,
-            "spend_usd": None,
-            "calls": None,
+            "model": work.get("model") or None,
+            # Real numbers now, on the same basis as the cost ledger -- see the note above.
+            "tokens": work.get("tokens"),
+            "spend_usd": work.get("spend_usd"),
+            "calls": work.get("calls"),
+            "turns": work.get("turns"),
+            "retries": work.get("retries"),
+            "ok_calls": work.get("ok_calls"),
+            "failed_calls": work.get("failed_calls"),
+            # OBSERVED, and distinct from trust_score, which is a configured number that starts
+            # at 50 and has never moved. One is what the agent has done; the other is what
+            # someone decided about it.
+            "success_rate": work.get("success_rate"),
+            "top_stages": work.get("top_stages") or [],
+            "last_call_at": (work["last_at"].isoformat()
+                             if work.get("last_at") else None),
+            "last_stage": work.get("last_stage"),
             "autonomy_level": int(role.get("autonomy_level") or 0),
             "trust_score": int(role.get("trust_score") or 0),
             "successful_runs": int(role.get("successful_runs") or 0),
@@ -243,6 +265,100 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
             "be shown. Project spend is on the Projects screen."
         ),
     }
+
+
+def _status_from_work(work: dict) -> tuple[str, str]:
+    """Status for an agent whose work is model calls rather than process steps.
+
+    Recency decides WORKING vs IDLE, because a call that finished an hour ago is not work in
+    progress -- and a screen where everything says WORKING says nothing.
+    """
+    import datetime as _dt
+
+    last = work.get("last_at")
+    stage = work.get("last_stage") or "work"
+    if last is not None:
+        try:
+            age = (_dt.datetime.now(_dt.timezone.utc) - last).total_seconds()
+        except TypeError:
+            age = None
+        if age is not None and age < 300:
+            return WORKING, stage
+    n = work.get("calls") or 0
+    return IDLE, f"last: {stage} · {n} call{'' if n == 1 else 's'} in this window"
+
+
+def _llm_work(connection, project_id: str, hours: float) -> dict[str, dict]:
+    """What each agent actually did, from the model calls attributed to its stages.
+
+    Grouped by stage and then folded into roles through STAGE_ROLES, so a role that owns four
+    stages shows one total rather than four rows the reader has to add up.
+    """
+    from .llm_telemetry import STAGE_ROLES
+
+    rows = [dict(r) for r in connection.execute(
+        sql(
+            """
+            SELECT stage, model,
+                   count(*)                        AS calls,
+                   COALESCE(sum(turns), 0)         AS turns,
+                   COALESCE(sum(total_tokens), 0)  AS tokens,
+                   COALESCE(sum(cost_usd_micros),0) AS micros,
+                   COALESCE(sum(retries), 0)       AS retries,
+                   count(*) FILTER (WHERE ok)      AS ok_calls,
+                   max(created_at)                 AS last_at
+            FROM llm_calls
+            WHERE project_id = :p
+              AND created_at > now() - make_interval(hours => :h)
+            GROUP BY stage, model
+            """
+        ),
+        {"p": project_id, "h": int(hours)},
+    ).mappings().all()]
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        stage = str(row.get("stage") or "").strip().lower()
+        role = STAGE_ROLES.get(stage)
+        if not role:
+            # A stage nobody owns. Counted nowhere rather than folded into a neighbour: an
+            # agent credited with work it did not do is worse than a gap.
+            continue
+        agg = out.setdefault(role, {
+            "calls": 0, "turns": 0, "tokens": 0, "micros": 0, "retries": 0, "ok_calls": 0,
+            "last_at": None, "last_stage": None, "stages": {}, "_models": {},
+        })
+        agg["calls"] += int(row["calls"] or 0)
+        agg["turns"] += int(row["turns"] or 0)
+        agg["tokens"] += int(row["tokens"] or 0)
+        agg["micros"] += int(row["micros"] or 0)
+        agg["retries"] += int(row["retries"] or 0)
+        agg["ok_calls"] += int(row["ok_calls"] or 0)
+        agg["stages"][stage] = agg["stages"].get(stage, 0) + int(row["calls"] or 0)
+        if row.get("model"):
+            agg["_models"][row["model"]] = agg["_models"].get(row["model"], 0) + int(row["calls"] or 0)
+        last = row.get("last_at")
+        if last and (agg["last_at"] is None or last > agg["last_at"]):
+            agg["last_at"] = last
+            agg["last_stage"] = stage
+
+    for role, agg in out.items():
+        agg["spend_usd"] = round(agg["micros"] / 1_000_000, 4)
+        agg["failed_calls"] = agg["calls"] - agg["ok_calls"]
+        # None over zero calls: a rate with no denominator is not a score.
+        agg["success_rate"] = (round(agg["ok_calls"] / agg["calls"], 3) if agg["calls"] else None)
+        # The model it used MOST, not the first seen -- a single stray call on another model
+        # should not relabel the agent.
+        agg["model"] = (max(agg["_models"].items(), key=lambda kv: kv[1])[0]
+                        if agg["_models"] else None)
+        # Busiest stages first: what this agent mostly does.
+        agg["top_stages"] = [
+            {"stage": k, "calls": v}
+            for k, v in sorted(agg["stages"].items(), key=lambda kv: -kv[1])[:4]
+        ]
+        agg.pop("_models", None)
+        agg.pop("stages", None)
+    return out
 
 
 def _status_of(step: Optional[dict]) -> tuple[str, str]:

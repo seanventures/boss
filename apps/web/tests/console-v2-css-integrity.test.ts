@@ -63,6 +63,36 @@ describe("v2 stylesheet integrity", () => {
     expect(names.length).toBeGreaterThan(1);
   });
 
+  it("every animation can be turned off by prefers-reduced-motion", () => {
+    // Motion is a signal on these screens, not decoration. For a reader who has asked the OS to
+    // stop animating things it becomes noise they cannot escape, and status has to stay
+    // legible without it — which it does, because colour and text carry it too.
+    const reduced = CSS.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/g)?.join("\n") ?? "";
+    expect(reduced).toBeTruthy();
+
+    const defined = [...CSS.matchAll(/@keyframes\s+([\w-]+)/g)].map((m) => m[1]);
+    // Every keyframe that MOVES something (not just colour) must be reachable by the
+    // reduced-motion block through one of the selectors it disables.
+    const movers = defined.filter((n) => {
+      const block = CSS.match(new RegExp(`@keyframes\\s+${n}\\s*\\{(?:[^{}]|\\{[^{}]*\\})*\\}`))?.[0] ?? "";
+      return /transform:|translate|scale/.test(block);
+    });
+    expect(movers.length).toBeGreaterThan(0);
+    for (const n of movers) {
+      const users = [...CSS.matchAll(new RegExp(`([^{}]+)\\{[^{}]*animation[^;}]*\\b${n}\\b`, "g"))]
+        .map((m) => m[1].trim().split("\n").pop()!.trim());
+      for (const sel of users) {
+        // Strip the attribute and pseudo parts: a rule disabling `.v2-dot` covers
+        // `.v2-dot[data-status="RUNNING"]`, and requiring the exact string would fail against
+        // a stylesheet that is in fact correct.
+        const head = sel.split(",")[0].trim().split(/[\s>]/).pop()!
+          .replace(/\[[^\]]*\]/g, "").replace(/:.*$/, "");
+        expect(reduced, `${n} is used by ${sel} but reduced-motion does not disable it`)
+          .toContain(head);
+      }
+    }
+  });
+
   it("every SVG shape that scales sets transform-box", () => {
     // An SVG element transforms about the VIEWPORT origin by default, so a scale() meant to
     // breathe in place instead drags the shape across the canvas. HTML elements do not have

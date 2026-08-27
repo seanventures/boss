@@ -209,6 +209,22 @@ export function WorkforceScreen({
  * The card is the reference's own: a panel with a 2px left accent carrying the status colour,
  * measured out of the rendered artifact DOM rather than approximated.
  */
+/** Dollars at the scale an agent actually spends: cents matter below a dollar, they do not
+ *  above ten. */
+function money(n: number): string {
+  if (n >= 10) return `$${n.toFixed(0)}`;
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  return `$${n.toFixed(3)}`;
+}
+
+/** Green only for a rate that is both high AND has enough calls behind it to mean anything. */
+function scoreTone(rate: number | null | undefined): string {
+  if (rate == null) return "none";
+  if (rate >= 0.9) return "good";
+  if (rate >= 0.6) return "warn";
+  return "bad";
+}
+
 function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
   return (
     <li className="v2-card" data-testid={`v2-agent-${a.id}`} data-status={a.status}>
@@ -257,6 +273,50 @@ function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
         </div>
       ) : null}
 
+      {/* THE SCOREBOARD. This is the point of the page: what the agent has actually produced.
+          Absent entirely when the agent has made no calls, rather than a row of zeros that
+          reads as "this agent is bad at its job" when it means "it has not been asked". */}
+      {a.calls ? (
+        <div className="v2-scoreboard" data-testid={`v2-agent-score-${a.id}`}>
+          <span className="v2-score" data-tone={scoreTone(a.success_rate)}>
+            <b>{a.success_rate != null ? `${Math.round(a.success_rate * 100)}%` : "—"}</b>
+            {/* The denominator travels with the rate: 2 of 2 and 190 of 200 are not the same
+                claim, and a bare 100% hides which one you are looking at. */}
+            <span className="v2-score-of">
+              {a.ok_calls}/{a.calls} ok
+            </span>
+          </span>
+          <span className="v2-score-fig">
+            <b>{a.turns ?? 0}</b><span className="v2-score-of">turns</span>
+          </span>
+          <span className="v2-score-fig">
+            <b>{money(a.spend_usd ?? 0)}</b><span className="v2-score-of">spent</span>
+          </span>
+          {a.failed_calls ? (
+            <span className="v2-score-fig" data-tone="bad"
+                  data-testid={`v2-agent-failed-${a.id}`}>
+              <b>{a.failed_calls}</b><span className="v2-score-of">failed</span>
+            </span>
+          ) : null}
+          {a.retries ? (
+            <span className="v2-score-fig" data-tone="warn">
+              <b>{a.retries}</b><span className="v2-score-of">retries</span>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* WHAT IT DOES, in its own vocabulary — the stages it spends its calls on. */}
+      {a.top_stages?.length ? (
+        <div className="v2-stages" data-testid={`v2-agent-stages-${a.id}`}>
+          {a.top_stages.map((st) => (
+            <span className="v2-stage-chip v2-mono" key={st.stage}>
+              {st.stage}<span className="v2-score-of">{st.calls}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
       <div className="v2-card-meta">
         {/* The model it ACTUALLY used. Absent when nothing ran, rather than showing a
             configured model that never executed. */}
@@ -265,8 +325,10 @@ function AgentCard({ a, onChat }: { a: V2Agent; onChat: () => void }) {
         ) : (
           <span data-testid={`v2-agent-nomodel-${a.id}`}>no calls recorded</span>
         )}
-        <span>
-          trust <b>{a.trust_score}</b>
+        {/* CONFIGURED, and labelled as such. It starts at 50 and has never moved, so showing it
+            beside an observed rate without saying which is which invites reading it as earned. */}
+        <span title="configured trust level, not an observed score">
+          trust <b>{a.trust_score}</b> <span className="v2-score-of">set</span>
         </span>
         {/* Check-in. "42s ago" and "not seen in this window" are different facts. */}
         <span data-testid={`v2-agent-checkin-${a.id}`}>{ago(a.last_seen_seconds)}</span>

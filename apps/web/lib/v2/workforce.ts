@@ -40,6 +40,18 @@ export type V2Agent = {
   /** False when the agent runs work but has no row in the roles table — so nothing governs it:
    *  no trust score, no autonomy level, no violation tracking. */
   registered: boolean;
+  /** Work attributed through STAGE_ROLES — the same map BOSS uses at write time, so this and
+   *  the cost ledger cannot disagree about who spent what. */
+  turns?: number | null;
+  retries?: number | null;
+  ok_calls?: number | null;
+  failed_calls?: number | null;
+  /** OBSERVED success rate. Distinct from trust_score, which is configured and starts at 50.
+   *  null when the agent has made no calls — a rate with no denominator is not a score. */
+  success_rate?: number | null;
+  top_stages?: { stage: string; calls: number }[];
+  last_call_at?: string | null;
+  last_stage?: string | null;
 };
 
 export type V2Handoff = {

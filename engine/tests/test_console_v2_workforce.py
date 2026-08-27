@@ -458,3 +458,100 @@ def test_the_tree_is_empty_when_nothing_was_handed_over():
     out = org_chart(FakeConn(roles=[role("a")]), "p")
     assert out["tree"] == []
     assert out["depth"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# The agents that do the building
+#
+# The operator's complaint was that the Workforce page looked dead: "no info for software
+# engineer", every card grey and scoreless. It was accurate. Every agent that builds --
+# software_engineer, qa, security_reviewer, reviewer, architect -- does its work through
+# llm_calls, and this screen only ever read agent_process_steps.
+# --------------------------------------------------------------------------- #
+def lcall(stage, *, model="claude-sonnet-5", calls=1, turns=10, tokens=4000,
+          micros=250_000, retries=0, ok_calls=None, last_at=None):
+    """One GROUP BY (stage, model) row, with the real column names."""
+    from datetime import datetime, timezone
+    return {"stage": stage, "model": model, "calls": calls, "turns": turns,
+            "tokens": tokens, "micros": micros, "retries": retries,
+            "ok_calls": calls if ok_calls is None else ok_calls,
+            "last_at": last_at or datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)}
+
+
+def by_id(out):
+    return {a["id"]: a for a in out["agents"]}
+
+
+def test_an_agent_that_only_works_through_model_calls_is_no_longer_invisible():
+    """software_engineer owns `implement` and `solo`. It did 58 turns of work and the card said
+    "No work in this window. no calls recorded"."""
+    out = workforce(FakeConn(roles=[role("software_engineer")],
+                             spend=[lcall("implement", turns=12), lcall("solo", turns=46)]),
+                    "proj")
+    a = by_id(out)["software_engineer"]
+    assert a["calls"] == 2
+    assert a["turns"] == 58
+    assert a["spend_usd"] == 0.5
+    assert "no calls recorded" not in (a["task"] or "")
+
+
+def test_per_agent_spend_uses_the_same_map_boss_attributes_with():
+    """Not a time-window join. That version showed CTO and QA Lead $61.3802 EACH -- the same
+    money, twice -- because every call in a 31-minute window went to every active role."""
+    out = workforce(FakeConn(
+        roles=[role("software_engineer"), role("security_reviewer")],
+        spend=[lcall("implement", micros=800_000), lcall("security_check", micros=300_000)],
+    ), "proj")
+    a = by_id(out)
+    assert a["software_engineer"]["spend_usd"] == 0.8
+    assert a["security_reviewer"]["spend_usd"] == 0.3
+    # The whole point: the two do not both get the whole bill.
+    assert a["software_engineer"]["spend_usd"] != a["security_reviewer"]["spend_usd"]
+
+
+def test_a_score_is_observed_and_kept_apart_from_the_configured_trust_score():
+    out = workforce(FakeConn(roles=[role("qa", trust=50)],
+                             spend=[lcall("check_tests", calls=10, ok_calls=8)]), "proj")
+    a = by_id(out)["qa"]
+    assert a["success_rate"] == 0.8
+    assert a["trust_score"] == 50          # configured, unchanged, and separate
+    assert a["ok_calls"] == 8 and a["failed_calls"] == 2
+
+
+def test_an_agent_with_no_calls_has_no_score_rather_than_zero_or_a_hundred():
+    out = workforce(FakeConn(roles=[role("qa")]), "proj")
+    a = by_id(out)["qa"]
+    assert a["success_rate"] is None
+    assert a["spend_usd"] is None
+
+
+def test_the_busiest_stages_say_what_the_agent_actually_does():
+    out = workforce(FakeConn(roles=[role("architect")],
+                             spend=[lcall("plan", calls=7), lcall("spec", calls=2)]), "proj")
+    assert [s["stage"] for s in by_id(out)["architect"]["top_stages"]] == ["plan", "spec"]
+
+
+def test_a_stage_no_agent_owns_is_credited_to_nobody():
+    """An agent credited with work it did not do is worse than a gap."""
+    out = workforce(FakeConn(roles=[role("software_engineer")],
+                             spend=[lcall("implement", micros=100_000),
+                                    lcall("some_unmapped_stage", micros=999_000)]), "proj")
+    assert by_id(out)["software_engineer"]["spend_usd"] == 0.1
+
+
+def test_an_agent_known_only_from_model_calls_is_listed_and_marked_unregistered():
+    """architect and reviewer are not in the registry, yet BOSS attributes spend to them."""
+    out = workforce(FakeConn(roles=[], spend=[lcall("review_code", micros=500_000)]), "proj")
+    a = by_id(out)
+    assert "reviewer" in a
+    assert a["reviewer"]["registered"] is False
+    assert a["reviewer"]["spend_usd"] == 0.5
+
+
+def test_the_model_shown_is_the_one_the_agent_mostly_used():
+    """A single stray call on another model must not relabel the agent."""
+    out = workforce(FakeConn(roles=[role("software_engineer")], spend=[
+        lcall("implement", model="claude-sonnet-5", calls=9),
+        lcall("solo", model="gpt-4o", calls=1),
+    ]), "proj")
+    assert by_id(out)["software_engineer"]["model"] == "claude-sonnet-5"
