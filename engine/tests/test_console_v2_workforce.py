@@ -24,10 +24,12 @@ NOW = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
 class FakeConn:
     """Routes each query to its seeded rows by the table it names."""
 
-    def __init__(self, roles=(), steps=(), handoffs=(), spend=(), step_work=()):
+    def __init__(self, roles=(), steps=(), handoffs=(), spend=(), step_work=(),
+                 live_runs=(), live_steps=()):
         self.data = {"roles": list(roles), "steps": list(steps),
                      "handoffs": list(handoffs), "spend": list(spend),
-                     "step_work": list(step_work)}
+                     "step_work": list(step_work),
+                     "live_runs": list(live_runs), "live_steps": list(live_steps)}
         self.statements = []
 
     def execute(self, statement, params=None):
@@ -42,6 +44,10 @@ class FakeConn:
             rows = self.data["spend"]
         elif "count(*) filter (where status = 'succeeded')" in low:
             rows = self.data["step_work"]
+        elif "from code_task_runs" in low:
+            rows = self.data.get("live_runs", [])
+        elif "status in ('running', 'in_progress', 'pending')" in low:
+            rows = self.data.get("live_steps", [])
         else:
             rows = self.data["steps"]
         conn_rows = rows
@@ -657,3 +663,66 @@ def test_the_order_is_stable_when_two_agents_have_done_the_same_amount():
     first = [a["id"] for a in workforce(conn(), "proj")["agents"]]
     second = [a["id"] for a in workforce(conn(), "proj")["agents"]]
     assert first == second
+
+
+# --------------------------------------------------------------------------- #
+# Working NOW, not "worked recently"
+#
+# The operator launched a project, watched the build run through `implement`, and every one of
+# 26 agents read IDLE. It was not a display lag: llm_calls rows are written when a call
+# COMPLETES, and an implement call runs ten to thirty minutes, so for the whole time the agent
+# is working hardest there is no row for it at all.
+# --------------------------------------------------------------------------- #
+def live_run(phase="implement", rid="crun_1", title="CSV-to-Chart Explorer"):
+    return {"id": rid, "title": title, "phase": phase}
+
+
+def test_an_agent_is_working_while_its_run_is_in_flight():
+    """Not after the call it is making finally returns."""
+    out = workforce(FakeConn(roles=[role("software_engineer")],
+                             live_runs=[live_run("implement")]), "proj")
+    a = by_id(out)["software_engineer"]
+    assert a["status"] == "WORKING"
+    assert "CSV-to-Chart" in a["task"]
+
+
+def test_a_run_in_flight_beats_a_stale_inference_from_finished_calls():
+    """The agent's last COMPLETED call is 22 minutes old — which is exactly what a long call in
+    progress looks like."""
+    from datetime import datetime, timedelta, timezone
+    old = datetime.now(timezone.utc) - timedelta(minutes=22)
+    out = workforce(FakeConn(roles=[role("software_engineer")],
+                             spend=[lcall("solo", last_at=old)],
+                             live_runs=[live_run("implement")]), "proj")
+    assert by_id(out)["software_engineer"]["status"] == "WORKING"
+
+
+def test_the_phase_decides_which_agent_is_working():
+    out = workforce(FakeConn(roles=[role("qa"), role("software_engineer")],
+                             live_runs=[live_run("write_tests")]), "proj")
+    a = by_id(out)
+    assert a["qa"]["status"] == "WORKING"
+    assert a["software_engineer"]["status"] == "IDLE"
+
+
+def test_a_queued_run_puts_nobody_to_work():
+    """A phase no agent owns — queued, awaiting approval. Crediting the nearest role would put
+    an agent to work that is not working."""
+    out = workforce(FakeConn(roles=[role("software_engineer")],
+                             live_runs=[live_run("awaiting_plan_approval")]), "proj")
+    assert by_id(out)["software_engineer"]["status"] == "IDLE"
+
+
+def test_an_unresolved_process_step_also_counts_as_working():
+    out = workforce(FakeConn(roles=[role("product_manager")],
+                             live_steps=[{"role_key": "product_manager", "action": "intake_prd",
+                                          "step_key": "intake_prd", "run_id": "aprun_1"}]), "proj")
+    a = by_id(out)["product_manager"]
+    assert a["status"] == "WORKING"
+    assert "intake_prd" in a["task"]
+
+
+def test_nothing_in_flight_leaves_everyone_idle():
+    """The guard must not mark agents busy on a quiet system."""
+    out = workforce(FakeConn(roles=[role("qa")], spend=[lcall("check_tests")]), "proj")
+    assert by_id(out)["qa"]["status"] == "IDLE"

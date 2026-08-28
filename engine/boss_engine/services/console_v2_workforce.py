@@ -150,6 +150,7 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
     # and the screen only ever looked at agent_process_steps.
     spend = _llm_work(connection, project_id, SCORE_WINDOW_HOURS)
     step_work = _step_work(connection, project_id, SCORE_WINDOW_HOURS)
+    live = _live_work(connection, project_id)
     # AGENTS THAT WORK BUT ARE NOT REGISTERED ROLES.
     #
     # Found by the Hive having no edges: five of the seven role keys the process template
@@ -190,11 +191,18 @@ def workforce(connection, project_id: str, *, hours: int = 24) -> dict[str, Any]
         cost = spend.get(key, {})
         work = spend.get(key) or {}
         sw = step_work.get(key) or {}
+        now_on = live.get(key)
         status, task = _status_of(step)
         # An agent with no process step but real model calls is not "no work in this window" --
         # it is the agent that did the building. Say what it did.
         if step is None and work.get("calls"):
             status, task = _status_from_work(work)
+        # A run in flight beats every inference from finished work. This is the only signal that
+        # is true WHILE the agent is busy rather than after it stops.
+        if now_on:
+            status = WORKING
+            task = (f"{now_on['phase']} — {now_on['title']}" if now_on.get("title")
+                    else now_on["phase"])
         agents.append({
             "id": key,
             "name": role.get("display_name") or key,
@@ -356,6 +364,79 @@ def _step_work(connection, project_id: str, hours: float) -> dict[str, dict]:
             # as one would make a busy agent look like a broken one.
             "step_success_rate": (round(ok / (ok + failed), 3) if (ok + failed) else None),
         }
+    return out
+
+
+#: A run's PHASE, in the vocabulary llm_calls uses for stages. The two lists overlap but are not
+#: the same: a phase is where the pipeline is, a stage is what was billed.
+_PHASE_STAGE = {
+    "design": "plan", "write_tests": "write_tests", "implement": "implement",
+    "run_tests": "check_tests", "review_panel": "review_code",
+    "check_tests": "check_tests", "provisioning": "implement",
+}
+
+
+def _live_work(connection, project_id: str) -> dict[str, dict]:
+    """Who is working RIGHT NOW, from runs in flight rather than from calls that finished.
+
+    THE BUG THIS FIXES
+    ------------------
+    llm_calls rows are written when a call COMPLETES. An `implement` call runs for ten to thirty
+    minutes, so for the whole time the agent is working hardest there is no row for it -- and a
+    screen that infers "working" from completed calls therefore shows IDLE precisely then. The
+    operator watched a build run through `implement` while all 26 agents read IDLE, which is the
+    exact opposite of the truth.
+
+    A run that is `running` in phase `implement` is an agent working, and BOSS knows that
+    without waiting for anything to finish.
+    """
+    out: dict[str, dict] = {}
+
+    for row in connection.execute(
+        sql(
+            """
+            SELECT id, title, phase
+            FROM code_task_runs
+            WHERE project_id = :p AND status IN ('running', 'queued')
+            ORDER BY updated_at DESC
+            LIMIT 40
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        from .llm_telemetry import STAGE_ROLES, canonical_role
+
+        stage = _PHASE_STAGE.get(str(row.get("phase") or "").strip().lower())
+        role = canonical_role(STAGE_ROLES.get(stage or "")) if stage else None
+        if not role:
+            # A phase no agent owns -- queued, awaiting approval. Nobody is working on it, and
+            # crediting the nearest role would put an agent to work that is not.
+            continue
+        out.setdefault(role, {
+            "phase": str(row.get("phase") or ""),
+            "run_id": row["id"],
+            "title": str(row.get("title") or "")[:80],
+        })
+
+    # Process steps that have been started and not resolved.
+    for row in connection.execute(
+        sql(
+            """
+            SELECT DISTINCT ON (role_key) role_key, action, step_key, run_id
+            FROM agent_process_steps
+            WHERE project_id = :p
+              AND status IN ('running', 'in_progress', 'pending')
+              AND created_at > now() - interval '2 hours'
+            ORDER BY role_key, created_at DESC
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all():
+        out.setdefault(str(row["role_key"]), {
+            "phase": str(row.get("action") or row.get("step_key") or "work"),
+            "run_id": row.get("run_id"),
+            "title": "",
+        })
     return out
 
 
