@@ -291,7 +291,9 @@ export async function loadTaskContextAction(taskId: string, projectId: string): 
   const p = encodeURIComponent(projectId);
   const [task, codeTasks] = await Promise.all([
     getJsonReturn(`/v1/tasks/${encodeURIComponent(taskId)}?project_id=${p}`),
-    getJsonReturn(`/v1/code-tasks?project_id=${p}&limit=200`),
+    // exclude_internal, like every other code-task read. Without it a burst of BOSS's own
+    // maintenance runs fills the window and the caller sees an empty list.
+    getJsonReturn(`/v1/code-tasks?project_id=${p}&limit=200&exclude_internal=true`),
   ]);
   const ct = ((codeTasks.data as Record<string, unknown> | undefined)?.code_tasks ?? []) as Array<Record<string, unknown>>;
   return { ok: true, data: {
@@ -3112,8 +3114,13 @@ export async function relaunchCodeTaskAction(formData: FormData): Promise<{ run_
 export async function listCodeTasksAction(projectId?: string): Promise<any> {
   const pid = projectId || PROJECT_ID;
   try {
-    const res = await fetch(`${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(pid)}&limit=200`,
-                            { headers: authHeaders(), cache: "no-store" });
+    // exclude_internal MATTERS MOST HERE. This is the poll that runs while a task is live, and
+    // without the filter it replaced a correctly-rendered list with 200 internal captain runs
+    // that the client then dropped — so the operator's tasks appeared on load and vanished a
+    // few seconds later, every time, but only while something was running.
+    const res = await fetch(
+      `${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(pid)}&limit=200&exclude_internal=true`,
+      { headers: authHeaders(), cache: "no-store" });
     if (!res.ok) return { error: `code-tasks ${res.status}` };
     return await res.json();
   } catch (e) {
