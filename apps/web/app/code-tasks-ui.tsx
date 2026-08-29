@@ -2340,6 +2340,67 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
     return facts;
   }, [previews]);
 
+  /**
+   * What to ask BOSS about THIS app, derived from what BOSS recorded about it.
+   *
+   * The dock offered four fixed prompts — "What changed today?", "Which runs failed and why?"
+   * — which are the same four whatever you are looking at, so they never referred to the app
+   * in front of you. Everything needed to do better is already on the run: the checks that did
+   * not run, the findings graded below the blocking threshold and deferred, whether the tests
+   * survived a mutation, the acceptance criteria, the files touched.
+   *
+   * Each suggestion names a real gap in THIS build. Nothing here is invented: a suggestion
+   * only appears when the fact behind it is recorded.
+   */
+  const suggestionsFor = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]): string[] => {
+    const st = (m.state ?? {}) as Record<string, unknown>;
+    const fc = (m.finalize_ctx ?? {}) as Record<string, unknown>;
+    const app = appIdentity(m).name;
+    const out: string[] = [];
+
+    // Findings a reviewer raised and the pipeline shipped anyway — literally the bugs it knows
+    // it left behind.
+    const deferred = fc.deferred_findings ?? st.deferred_findings;
+    if (Array.isArray(deferred) && deferred.length) {
+      out.push(`Fix the ${deferred.length} deferred review finding${deferred.length === 1 ? "" : "s"} on ${app}`);
+    }
+
+    // Checks that never ran. At risk tier 0 no reviewer looks at the code at all.
+    const advisory = fc.advisory_failing_gates;
+    const notRun = [
+      st.adversarial_verdict === "not_run" ? "adversarial review" : null,
+      st.security_verdict === "not_run" ? "security review" : null,
+      st.consistency_verdict === "not_run" ? "consistency check" : null,
+    ].filter(Boolean) as string[];
+    if (notRun.length) {
+      out.push(`No ${notRun.join(", ")} ran on this build — what would they most likely find?`);
+    } else if (Array.isArray(advisory) && advisory.length) {
+      out.push(`${advisory.length} checks failed but shipped as advisory — which should block next time?`);
+    }
+
+    // The tests passed and did not notice a deliberately broken build.
+    if (st.mutation_caught === false) {
+      const n = Array.isArray(st.impl_files) ? (st.impl_files as unknown[]).length : 0;
+      out.push(`The tests missed an injected bug${n ? ` across ${n} changed files` : ""} — where are they weakest?`);
+    }
+
+    // The contract it was accepted against.
+    const criteria = (m.spec?.acceptance_criteria ?? []) as string[];
+    if (criteria.length) {
+      out.push(`Which of the ${criteria.length} acceptance criteria are not actually covered by a test?`);
+    }
+
+    // A failure worth explaining, from anywhere in the lineage.
+    const broken = (lineage ?? [m]).find((r) => r.error);
+    if (broken?.error) {
+      out.push(`Why did ${attemptKind(broken)} fail — ${String(broken.error).slice(0, 60)}?`);
+    }
+
+    // And the forward-looking one, grounded in what this app actually is.
+    out.push(`Read the PRD and the diff for ${app} — what should we build next, and why?`);
+    return out.slice(0, 5);
+  }, []);
+
   const askBossAbout = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]) => {
     const rootRunId = (m.finalize_ctx as Record<string, unknown> | undefined)?.root_run_id;
     const pr = (m as unknown as { pull_request_url?: string }).pull_request_url;
@@ -2363,12 +2424,16 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
     ].join("\n");
     try {
       window.sessionStorage.setItem(`boss.agent.facts.${m.id}`, facts);
+      // The dock reads these and offers them instead of four fixed prompts that never referred
+      // to the app in front of you.
+      window.sessionStorage.setItem(
+        `boss.agent.suggests.${m.id}`, JSON.stringify(suggestionsFor(m, lineage)));
     } catch { /* private mode: the dock still works, with less context */ }
     const url = new URL(window.location.href);
     url.searchParams.set("agent", m.id);
     window.history.pushState({}, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
-  }, []);
+  }, [suggestionsFor]);
 
   // The gateway URL for a run's live preview, or null. Built from the preview ID, never from
   // app_previews.url — that column holds the sandbox-internal address (127.0.0.1:PORT), which

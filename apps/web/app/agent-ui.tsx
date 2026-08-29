@@ -110,6 +110,29 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
   /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
   const [ranAction, setRanAction] = useState<string | null>(null);
+  /**
+   * Prompts about THIS app, handed over by the screen that opened the dock.
+   *
+   * Grounded in recorded facts rather than generated, so a suggestion cannot describe a gap
+   * that does not exist. When the dock is opened with no run in context there is nothing to
+   * ground them in, and the general set is the honest answer.
+   */
+  const [suggestions, setSuggestions] = useState<string[]>([
+    "What changed today?",
+    "Which runs failed and why?",
+    "What is this run waiting on?",
+  ]);
+  useEffect(() => {
+    if (!initialTaskId) return;
+    try {
+      const raw = window.sessionStorage.getItem(`boss.agent.suggests.${initialTaskId}`);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(parsed) && parsed.length && parsed.every((x) => typeof x === "string")) {
+        setSuggestions(parsed as string[]);
+      }
+    } catch { /* private mode: the general prompts still work */ }
+  }, [initialTaskId]);
+
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
   // HOW LONG, AND WHAT IF IT NEVER ANSWERS.
@@ -389,7 +412,25 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             <p className="detail">Loading conversation…</p>
           ) : messages.length === 0 ? (
             <div className="agent-chat-empty">
-              <p>Try “What changed today?”, “Which runs failed and why?”, or “Deploy Shorty to staging.”</p>
+              <div className="agent-empty-mark" aria-hidden>◆</div>
+              <p className="agent-empty-lead">Ask BOSS about this work.</p>
+              {/* ABOUT THIS APP, not four fixed prompts.
+                  The generic set said the same thing whatever you were looking at, so it never
+                  referred to the work in front of you. These are derived from what BOSS
+                  RECORDED about this run — findings it deferred, checks that never ran, tests
+                  that missed an injected bug, acceptance criteria with no test — so each one
+                  names a real gap in this build. The generic set is the fallback for when
+                  there is no run in context at all. */}
+              <div className="agent-suggests">
+                {suggestions.map((q) => (
+                  <button type="button" className="agent-suggest" key={q}
+                          title={q}
+                          data-testid={`agent-suggest-${q.slice(0, 12)}`}
+                          onClick={() => { setInput(q); }}>
+                    {q}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>
@@ -488,11 +529,12 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             it answerable — and a one-line field that scrolls sideways hides what you typed at
             exactly the moment you want to re-read it. Enter still sends, so the common short
             message is unchanged; Shift+Enter starts a new line. */}
-        <form onSubmit={(e) => { e.preventDefault(); send(); }}
-              style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-end" }}>
-          <textarea className="input agent-input" value={input} disabled={busy}
+        {/* ONE SURFACE. The field and its controls were a bare input with a Send button beside
+            it, which reads as a form on a page rather than a place to talk. */}
+        <form className="agent-composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
+          <textarea className="agent-input" value={input} disabled={busy}
             aria-label="Message BOSS"
-            placeholder="Message BOSS…"
+            placeholder="Ask BOSS…"
             rows={1}
             onChange={(e) => {
               setInput(e.target.value);
@@ -505,9 +547,19 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            style={{ flex: 1, resize: "none", overflowY: "auto", minHeight: 34, maxHeight: 160,
-                     lineHeight: 1.4, fontFamily: "inherit" }} />
-          <button type="submit" className="button" disabled={busy || !input.trim()}>{busy ? "…" : "Send"}</button>
+            style={{ resize: "none", overflowY: "auto", minHeight: 24, maxHeight: 160,
+                     lineHeight: 1.5, fontFamily: "inherit" }} />
+          <div className="agent-composer-bar">
+            <span className="agent-composer-hint">
+              {busy ? "BOSS is working…" : "Enter to send · Shift+Enter for a new line"}
+            </span>
+            {/* Circular, and disabled until there is something to send — a live-looking button
+                that does nothing is worse than one that says it is not ready. */}
+            <button type="submit" className="agent-send" disabled={busy || !input.trim()}
+                    aria-label="Send message" data-testid="agent-send">
+              {busy ? <span className="agent-send-spin" aria-hidden /> : "↑"}
+            </button>
+          </div>
         </form>
       </section>
     </div>

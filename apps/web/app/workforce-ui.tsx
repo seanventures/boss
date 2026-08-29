@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 
@@ -48,6 +48,29 @@ function toneFor(status: string): string {
   return "muted";
 }
 
+/**
+ * How recently this agent did anything, as a word.
+ *
+ * The page is ranked by VOLUME, which says who has done the most but not who is doing it now —
+ * a month of work and ten minutes ago otherwise render identically. Recency is its own signal
+ * and it is what the motion is keyed to, so the movement on this page always means something.
+ */
+function recency(a: V2Agent, now: number | null): "live" | "today" | "week" | "cold" {
+  // `now` is null until the component has mounted. Reading the clock DURING RENDER makes the
+  // server and the browser disagree — the server stamps one instant into the HTML and the
+  // browser computes another on hydration — and React tears the tree down. There is a test in
+  // this repo for exactly that, and it caught this.
+  if (now == null) return "cold";
+  const t = (a as { last_activity_at?: string | null }).last_activity_at;
+  if (!t) return "cold";
+  const ms = now - new Date(t).getTime();
+  if (Number.isNaN(ms)) return "cold";
+  if (ms < 15 * 60_000) return "live";
+  if (ms < 24 * 3_600_000) return "today";
+  if (ms < 7 * 24 * 3_600_000) return "week";
+  return "cold";
+}
+
 /** Whichever rate this agent has — it scores on the kind of work it does. */
 function rateOf(a: V2Agent): number | null {
   return a.success_rate ?? a.step_success_rate ?? null;
@@ -58,6 +81,14 @@ function volumeOf(a: V2Agent): number {
 
 export function WorkforceArea({ workforce }: { workforce: Workforce }) {
   const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
+  // Set after mount, so the first client paint matches the server HTML and the recency-driven
+  // motion starts on the frame after hydration rather than fighting it.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const agents = useMemo(() => {
     const list = workforce.agents ?? [];
@@ -120,6 +151,8 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
             const tone = rate == null ? "none" : rate >= 0.9 ? "good" : rate >= 0.6 ? "warn" : "bad";
             return (
               <article className="roster-card" key={a.id} data-status={a.status}
+                       data-recency={recency(a, now)} data-rank={i + 1}
+                       style={{ ["--i" as string]: String(Math.min(i, 11)) }}
                        data-testid={`wf-agent-${a.id}`}>
                 <header className="roster-card-head">
                   {volumeOf(a) > 0 ? <span className="roster-rank">{i + 1}</span> : null}
