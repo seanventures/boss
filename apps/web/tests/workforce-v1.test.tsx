@@ -73,9 +73,27 @@ describe("v1 Workforce", () => {
   it("is styled, not a bare list", () => {
     // Shipping an unstyled table once was enough.
     const css = cssOnly("app/globals.css");
-    for (const cls of [".wf-card", ".wf-figs", ".wf-chip", ".org-node", ".org-chip"]) {
+    for (const cls of [".roster-card", ".roster-figs", ".roster-chip", ".org-node"]) {
       expect(css, `${cls} has no styling`).toContain(cls);
     }
+  });
+
+  it("does not reuse class names another component already owns", () => {
+    // I built these screens on a `wf-` prefix that capabilities, meeting-room, reports,
+    // workflow and InfraScreen were already using — six collisions including .wf-card and
+    // .wf-bar — so my rules silently restyled five other screens and theirs broke my layout
+    // (the filter row collapsed to zero height under a foreign .wf-bar rule).
+    const src = codeOnly("app/workforce-ui.tsx");
+    const mine = new Set(
+      [...src.matchAll(/className="([^"{}]+)"/g)]
+        .flatMap((m) => m[1].split(/\s+/))
+        .filter((c) => c && !c.startsWith("cap-") && !c.startsWith("detail")
+                    && !c.startsWith("eyebrow") && !c.startsWith("section-")
+                    && !c.startsWith("ct-")),
+    );
+    // Every class this file introduces must be namespaced to it.
+    const stray = [...mine].filter((c) => !/^(roster|org)-/.test(c) && c !== "roster" && c !== "org");
+    expect(stray, "classes outside this screen's namespace").toEqual([]);
   });
 });
 

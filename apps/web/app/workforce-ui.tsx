@@ -80,12 +80,12 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
   }
 
   return (
-    <div className="wf">
-      <div className="wf-bar">
+    <div className="roster">
+      <div className="roster-filterbar">
         <span className="detail">
           {counts.total} agents · last {workforce.window_hours}h · scored over 30 days
         </span>
-        <span className="wf-filters">
+        <span className="roster-filters">
           {(["all", "working", "worked"] as const).map((f) => (
             <button
               key={f}
@@ -104,7 +104,7 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
       {/* Governance gap, said once and at the top: an agent running work without a registered
           role has no trust score, no autonomy level and no violation tracking. */}
       {(workforce.agents ?? []).some((a) => !a.registered) ? (
-        <p className="detail wf-ungoverned" data-testid="wf-ungoverned">
+        <p className="detail roster-ungoverned" data-testid="roster-ungoverned">
           {(workforce.agents ?? []).filter((a) => !a.registered).length} agents are working without
           a registered role — nothing governs them.
         </p>
@@ -113,51 +113,51 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
       {agents.length === 0 ? (
         <p className="detail">No agent matches this filter.</p>
       ) : (
-        <div className="wf-grid" data-testid="wf-grid">
+        <div className="roster-grid" data-testid="roster-grid">
           {agents.map((a, i) => {
             const rate = rateOf(a);
             const share = volumeOf(a) > 0 ? volumeOf(a) / busiest : null;
             const tone = rate == null ? "none" : rate >= 0.9 ? "good" : rate >= 0.6 ? "warn" : "bad";
             return (
-              <article className="wf-card" key={a.id} data-status={a.status}
+              <article className="roster-card" key={a.id} data-status={a.status}
                        data-testid={`wf-agent-${a.id}`}>
-                <header className="wf-card-head">
-                  {volumeOf(a) > 0 ? <span className="wf-rank">{i + 1}</span> : null}
-                  <span className="wf-name">{a.name}</span>
+                <header className="roster-card-head">
+                  {volumeOf(a) > 0 ? <span className="roster-rank">{i + 1}</span> : null}
+                  <span className="roster-name">{a.name}</span>
                   <span className={`cap-badge tone-${toneFor(a.status)}`}>{a.status}</span>
                 </header>
 
-                <p className="wf-task">{a.task}</p>
+                <p className="roster-task">{a.task}</p>
 
                 {/* THE SCOREBOARD — what this agent has produced. Absent entirely when it has
                     done nothing, rather than a row of zeros that reads as "bad at its job". */}
                 {volumeOf(a) > 0 ? (
                   <>
-                    <div className="wf-figs" data-testid={`wf-score-${a.id}`}>
-                      <span className="wf-fig" data-tone={tone}>
+                    <div className="roster-figs" data-testid={`wf-score-${a.id}`}>
+                      <span className="roster-fig" data-tone={tone}>
                         <b>{rate != null ? `${Math.round(rate * 100)}%` : "—"}</b>
-                        <span className="wf-unit">
+                        <span className="roster-unit">
                           {a.calls ? `${a.ok_calls}/${a.calls} ok` : `${a.steps_ok}/${a.steps} steps`}
                         </span>
                       </span>
                       {a.turns ? (
-                        <span className="wf-fig"><b>{groupDigits(a.turns)}</b><span className="wf-unit">turns</span></span>
+                        <span className="roster-fig"><b>{groupDigits(a.turns)}</b><span className="roster-unit">turns</span></span>
                       ) : null}
                       {a.runs ? (
-                        <span className="wf-fig"><b>{a.runs}</b><span className="wf-unit">runs</span></span>
+                        <span className="roster-fig"><b>{a.runs}</b><span className="roster-unit">runs</span></span>
                       ) : null}
                       {a.spend_usd ? (
-                        <span className="wf-fig"><b>{money(a.spend_usd)}</b><span className="wf-unit">spent</span></span>
+                        <span className="roster-fig"><b>{money(a.spend_usd)}</b><span className="roster-unit">spent</span></span>
                       ) : null}
                       {a.failed_calls ? (
-                        <span className="wf-fig" data-tone="bad"><b>{a.failed_calls}</b><span className="wf-unit">failed</span></span>
+                        <span className="roster-fig" data-tone="bad"><b>{a.failed_calls}</b><span className="roster-unit">failed</span></span>
                       ) : null}
                     </div>
                     {/* Length is VOLUME, colour is quality. Success rate barely varies here —
                         nearly everyone sits at 100% — so length carrying it would draw a
                         column of identical full bars saying nothing. */}
                     {share != null ? (
-                      <span className="wf-bar" data-testid={`wf-bar-${a.id}`}>
+                      <span className="roster-scorebar" data-testid={`wf-bar-${a.id}`}>
                         <span data-tone={tone} style={{ width: `${Math.max(3, Math.round(share * 100))}%` }} />
                       </span>
                     ) : null}
@@ -165,14 +165,14 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
                 ) : null}
 
                 {a.top_stages?.length ? (
-                  <div className="wf-chips">
+                  <div className="roster-chips">
                     {a.top_stages.map((s) => (
-                      <span className="wf-chip" key={s.stage}>{s.stage}<i>{s.calls}</i></span>
+                      <span className="roster-chip" key={s.stage}>{s.stage}<i>{s.calls}</i></span>
                     ))}
                   </div>
                 ) : null}
 
-                <footer className="wf-card-foot">
+                <footer className="roster-card-foot">
                   <span>{a.model ?? "no model calls"}</span>
                   {/* CONFIGURED, and labelled. It starts at 50 and has never moved; beside an
                       observed rate it would otherwise read as earned. */}
@@ -180,7 +180,7 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
                     trust <b>{a.trust_score}</b> set
                   </span>
                   {!a.registered ? (
-                    <span className="wf-ungov" data-testid={`wf-unreg-${a.id}`}>no registered role</span>
+                    <span className="roster-ungov" data-testid={`wf-unreg-${a.id}`}>no registered role</span>
                   ) : null}
                 </footer>
               </article>
@@ -234,7 +234,7 @@ export function OrgChartArea({ chart }: { chart: OrgChart }) {
                   ) : null}
                   {n.task ? <span className="org-node-task">{n.task}</span> : null}
                   {!n.registered ? (
-                    <span className="wf-ungov" data-testid={`org-unreg-${n.id}`}>no registered role</span>
+                    <span className="roster-ungov" data-testid={`org-unreg-${n.id}`}>no registered role</span>
                   ) : null}
                 </div>
               ))}
@@ -249,9 +249,9 @@ export function OrgChartArea({ chart }: { chart: OrgChart }) {
           <p className="detail">
             No work passed to or from these in {chart.window_hours}h — idle by design, or forgotten.
           </p>
-          <div className="org-isolated" data-testid="org-isolated">
+          <div className="roster-alone" data-testid="roster-alone">
             {isolated.map((n) => (
-              <span className="org-chip" key={n.id}>
+              <span className="roster-alonechip" key={n.id}>
                 {n.name}
                 {humanise(n.role || n.id) !== n.name ? <i>{humanise(n.role || n.id)}</i> : null}
               </span>

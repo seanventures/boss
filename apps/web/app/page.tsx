@@ -598,13 +598,20 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const budgetActive = shouldLoadBudgetArea(requestedArea);
   const infraActive = shouldLoadInfraArea(requestedArea);
   const assuranceActive = shouldLoadAssuranceArea(requestedArea);
-  // Loaded ONLY when the area is asked for. This page already fetches ~30 feeds per render;
-  // adding two more unconditionally is how it got slow in the first place.
-  const wantsWorkforce = requestedArea === "workforce";
-  const wantsOrgChart = requestedArea === "org_chart";
+  // ALWAYS FETCHED, deliberately.
+  //
+  // The sidebar switches area with history.pushState and NO server round-trip, so whichever
+  // area the server happened to render for decides what data exists for the whole session.
+  // Any conditional here means: land on Org Chart, click Workforce, and the panel says "Open
+  // Workforce to load it" until you hard-reload. I tried gating on the requested area and then
+  // on isAreaActive, and both left that hole open from a different starting point.
+  //
+  // These are two bounded single calls (~0.8s each, measured) running inside the same
+  // Promise.all as the other ~30 feeds, so the cost is a rounding error against the render
+  // they join. Correctness beats an optimisation nobody can see.
   const [workforceData, orgChartData] = await Promise.all([
-    wantsWorkforce ? fetchWorkforce(activeProjectId) : Promise.resolve(null),
-    wantsOrgChart ? fetchOrgChart(activeProjectId) : Promise.resolve(null),
+    fetchWorkforce(activeProjectId),
+    fetchOrgChart(activeProjectId),
   ]);
 
   const [budgetArea, infraArea, assuranceArea] = await Promise.all([
@@ -6899,11 +6906,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Every agent, what it has produced, and how well.</h3>
             </div>
           </div>
-          {workforceData ? (
-            <WorkforceArea workforce={workforceData} />
-          ) : (
-            <p className="detail">Open Workforce to load it.</p>
-          )}
+          <WorkforceArea workforce={workforceData} />
         </section>
 
         <section className="panel-stack" data-area="org_chart" aria-label="Org Chart">
@@ -6913,11 +6916,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Who actually passes work to whom.</h3>
             </div>
           </div>
-          {orgChartData ? (
-            <OrgChartArea chart={orgChartData} />
-          ) : (
-            <p className="detail">Open Org Chart to load it.</p>
-          )}
+          <OrgChartArea chart={orgChartData} />
         </section>
 
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">

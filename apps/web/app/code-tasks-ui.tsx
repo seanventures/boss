@@ -2535,7 +2535,18 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                   <span className="detail">no PR yet</span>
                 )}
                 {active.pull_request_url ? (
-                  <PreviewControls runId={active.id} livePreviews={previews} />
+                  // The LIVE ones only. Passing the raw list rendered every expired preview
+                  // this run ever had as a chip, and a run with fifteen of them pushed the
+                  // action bar off the right of the screen. `livePreviews` is the filtered,
+                  // capped list the detail view has always computed for exactly this reason —
+                  // I passed the unfiltered one.
+                  <PreviewControls
+                    runId={active.id}
+                    livePreviews={previews
+                      .filter((p) => p.run_id === active.id
+                        && (p.status === "running" || p.status === "verified"))
+                      .slice(0, 2)}
+                  />
                 ) : null}
                 <button type="button" className="cap-btn primary"
                         onClick={() => askBossAbout(active, siblings)}
