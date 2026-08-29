@@ -1711,6 +1711,120 @@ function fmtDuration(ms: number): string {
 
 // Per-stage model-call detail (the internal "why is this slow"): model, turns, latency,
 // retries, cost, errors per governed stage. Auto-refreshes while the task is live.
+/** How an agent key reads to a person. The API sends the key; nobody wants to read one. */
+function agentLabel(role: string | null | undefined): string {
+  if (!role) return "—";
+  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * What ran, who ran it, and what it cost — in ONE table.
+ *
+ * This replaces two blocks that listed the same steps in different vocabularies: "Step timing"
+ * named phases (Engineer implementing, Running tests) and "agent activity" named stages (solo,
+ * review_code). Same work, two names, stacked one above the other, so answering "what took 16
+ * minutes and who was doing it" meant joining them by eye.
+ *
+ * Phases with no model call still appear — cloning a repo takes time and no agent — because a
+ * timing table that silently drops the slow non-model steps mis-attributes the wall clock.
+ */
+function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs, totalMs }: {
+  runId: string;
+  live: boolean;
+  phaseTimings: { ms: number; phase: string }[];
+  currentPhase: string | null;
+  currentPhaseMs: number | null;
+  totalMs: number;
+}) {
+  const [calls, setCalls] = useState<LlmCallRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const data = await getCodeTaskActivityAction(runId);
+      if (!cancelled) { setCalls(data); setLoaded(true); }
+    };
+    void load();
+    const id = live ? setInterval(load, 4000) : undefined;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [runId, live]);
+
+  // Phase durations that no call accounts for. A phase whose stage produced calls is described
+  // by those calls; one that produced none (cloning, provisioning) is its own row.
+  const callStages = new Set(calls.map((c) => c.stage));
+  const unattributed = phaseTimings.filter((t) => !callStages.has(t.phase));
+
+  if (!loaded && phaseTimings.length === 0) {
+    return <p className="detail">Loading step detail…</p>;
+  }
+
+  return (
+    <div className="ct-block" style={{ margin: "8px 0" }} data-testid="ct-steps">
+      <div className="ct-block-title">Steps — who ran what</div>
+      <table className="ct-steps-table">
+        <thead>
+          <tr>
+            <th>Step</th><th>Agent</th><th>Model</th>
+            <th className="num">Turns</th><th className="num">Time</th><th className="num">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {calls.map((c, i) => (
+            <tr key={i} className={c.ok ? "" : "err"} data-testid={`ct-step-${c.stage}-${i}`}>
+              <td>{PHASE_LABEL[c.stage] ?? c.stage}</td>
+              {/* WHICH AGENT. The operator asked for this by name: the model was shown all
+                  along, the agent responsible for the step was not. */}
+              <td className="ct-step-agent" data-testid={`ct-step-agent-${i}`}>
+                {agentLabel(c.role)}
+              </td>
+              <td className="ct-step-model">{c.model || c.engine}</td>
+              <td className="num">{c.turns || "—"}</td>
+              <td className="num">{fmtDuration(c.latency_ms)}</td>
+              <td className="num">${(c.cost_usd_micros / 1e6).toFixed(3)}</td>
+              {!c.ok ? (
+                <td className="ct-step-err" colSpan={0}>✗ {(c.error ?? "error").slice(0, 60)}</td>
+              ) : null}
+            </tr>
+          ))}
+          {unattributed.map((t, i) => (
+            <tr key={`p${i}`} className="ct-step-nomodel">
+              <td>{PHASE_LABEL[t.phase] ?? t.phase}</td>
+              {/* No agent and no model, said rather than left blank: these are BOSS's own
+                  machinery, and a blank cell reads as missing data. */}
+              <td className="detail">no agent</td>
+              <td className="detail">—</td>
+              <td className="num">—</td>
+              <td className="num">{fmtDuration(t.ms)}</td>
+              <td className="num">—</td>
+            </tr>
+          ))}
+          {live && currentPhase && currentPhaseMs != null ? (
+            <tr className="ct-step-live" data-testid="ct-step-running">
+              <td>● {currentPhase}</td>
+              <td className="detail">running</td><td className="detail">—</td>
+              <td className="num">—</td>
+              <td className="num">{fmtDuration(currentPhaseMs)}</td>
+              <td className="num">—</td>
+            </tr>
+          ) : null}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={4}>Total{live ? " so far" : ""}</td>
+            <td className="num">{fmtDuration(totalMs)}</td>
+            <td className="num">
+              ${(calls.reduce((n, c) => n + c.cost_usd_micros, 0) / 1e6).toFixed(3)}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      {loaded && calls.length === 0 ? (
+        <p className="detail">No model calls recorded yet — the current stage has not returned one.</p>
+      ) : null}
+    </div>
+  );
+}
+
 function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
   const [open, setOpen] = useState(live);
   const [calls, setCalls] = useState<LlmCallRow[]>([]);
@@ -1849,31 +1963,14 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
         </div>
       ) : null}
 
-      {(phaseTimings.length > 0 || currentPhaseMs != null) ? (
-        <div className="ct-block" style={{ margin: "8px 0" }}>
-          <div className="ct-block-title">Step timing</div>
-          <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
-            {phaseTimings.map((t, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                <span style={{ color: "var(--ink)" }}>✓ {PHASE_LABEL[t.phase] ?? t.phase}</span>
-                <span className="detail">{fmtDuration(t.ms)}</span>
-              </div>
-            ))}
-            {live && currentPhaseMs != null ? (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
-              </div>
-            ) : null}
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
-              <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
-              <span className="detail">{fmtDuration(totalMs)}</span>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <CodeTaskActivity runId={run.id} live={live} />
+      {/* ONE TABLE.
+          "Step timing" and "agent activity" listed the same steps twice, in two vocabularies —
+          phase names above, stage names below — so the reader had to join them by eye to answer
+          "what took 16 minutes, and who was doing it". They are one thing: a step, the agent
+          that owns it, the model it used, and what it cost. */}
+      <CodeTaskSteps runId={run.id} live={live} phaseTimings={phaseTimings}
+                     currentPhase={live ? (PHASE_LABEL[run.phase] ?? run.phase) : null}
+                     currentPhaseMs={currentPhaseMs} totalMs={totalMs} />
 
       {run.error ? (
         <div className="ct-error">
@@ -2575,7 +2672,10 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 ? `${benchGroup.name} — QA benchmark`
                 : (members.find((m) => m.title)?.title || "Decomposed build")
                     .replace(/^\[\d+\/\d+\]\s*/, "");
-              const open = selectedApp === key;
+              // chosenKey, not selectedApp: the detail falls back to the first app when
+              // nothing is picked, and marking none selected left the list disagreeing with the
+              // pane beside it about which app you were looking at.
+              const open = chosenKey === key;
               return (
                 // The GROUPED card, on the same Meeting styling as the single one.
                 //

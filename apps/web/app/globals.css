@@ -6192,3 +6192,29 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-split-list { position: static; }
   .ct-split-items { max-height: 320px; }
 }
+
+/* ── Steps: one table, not two lists of the same thing ────────────────────── */
+/*
+ * "Step timing" named phases and "agent activity" named stages — the same work, two
+ * vocabularies, stacked. Answering "what took 16 minutes and who was doing it" meant reading
+ * both and joining them by eye.
+ */
+.ct-steps-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px; }
+.ct-steps-table th {
+  text-align: left; padding: 0 10px 6px 0; border-bottom: 1px solid var(--border);
+  color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  font-weight: 500;
+}
+.ct-steps-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); }
+.ct-steps-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ct-steps-table th.num { text-align: right; }
+.ct-step-agent { color: var(--ink); font-weight: 600; }
+.ct-step-model { color: var(--muted); font-family: var(--mono, monospace); font-size: 11.5px; }
+/* A step that no agent owns is dimmer — it is BOSS's own machinery, not somebody's work. */
+.ct-step-nomodel td { color: var(--muted); }
+.ct-steps-table tr.err td { background: rgba(242,109,109,.07); }
+.ct-step-err { color: #F26D6D; font-size: 11.5px; }
+.ct-step-live td { color: #58a6ff; font-weight: 600; }
+.ct-steps-table tfoot td {
+  padding-top: 8px; border-bottom: 0; color: var(--muted); font-weight: 600;
+}

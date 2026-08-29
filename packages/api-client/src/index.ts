@@ -1194,6 +1194,9 @@ export type LlmCallRow = {
   stage: string;
   engine: string;
   model: string;
+  /** Which agent owns this stage. Persisted per call and resolved to the role the registry
+   *  actually holds, so a call written under a retired name still names a real agent. */
+  role: string | null;
   total_tokens: number;
   cost_usd_micros: number;
   latency_ms: number;

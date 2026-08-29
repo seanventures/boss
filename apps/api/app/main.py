@@ -7196,13 +7196,15 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
 @app.get("/v1/code-tasks/{run_id}/activity")
 def code_task_activity_endpoint(run_id: str):
     """Per-stage model-call activity for a code task — the internal detail behind
-    each phase (model, latency, turns, retries, cost, ok/error). Written per call,
+    each phase (agent, model, latency, turns, retries, cost, ok/error). Written per call,
     so it's live: use it to see WHY a phase (e.g. write_tests) is slow."""
+    from boss_engine.services.llm_telemetry import canonical_role, role_for_stage
+
     with begin(engine) as connection:
         rows = connection.execute(
             text(
                 """
-                SELECT stage, engine, model, total_tokens, cost_usd_micros,
+                SELECT stage, engine, model, role, total_tokens, cost_usd_micros,
                        latency_ms, retries, turns, ok, error, created_at
                 FROM llm_calls
                 WHERE code_task_run_id = :rid
@@ -7216,6 +7218,10 @@ def code_task_activity_endpoint(run_id: str):
             "stage": r["stage"],
             "engine": r["engine"],
             "model": r["model"],
+            # WHICH AGENT ran this step. Persisted on the row, and passed through
+            # canonical_role so calls written under a name the registry no longer uses
+            # ("architect", "reviewer") resolve to the agent that is actually on the books.
+            "role": canonical_role(r["role"]) or role_for_stage(r["stage"]),
             "total_tokens": int(r["total_tokens"] or 0),
             "cost_usd_micros": int(r["cost_usd_micros"] or 0),
             "latency_ms": int(r["latency_ms"] or 0),

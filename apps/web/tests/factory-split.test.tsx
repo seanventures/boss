@@ -58,3 +58,35 @@ describe("factory master-detail", () => {
     expect(CSS).toMatch(/@media \(max-width: 1100px\)[\s\S]{0,400}grid-template-columns: 1fr/);
   });
 });
+
+describe("steps — one table, with who ran what", () => {
+  it("no longer renders the same steps twice under two headings", () => {
+    // "Step timing" listed phases; "agent activity" listed stages. Same work, two vocabularies,
+    // stacked — so "what took 16 minutes and who was doing it" meant joining them by eye.
+    expect(UI).not.toContain('<div className="ct-block-title">Step timing</div>');
+    expect(UI).toContain("Steps — who ran what");
+  });
+
+  it("names the agent responsible for each step, not just the model", () => {
+    // The model was shown all along; the agent was not, and that is what the operator asked for.
+    const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
+    expect(table).toContain("ct-step-agent");
+    expect(table).toContain("agentLabel(c.role)");
+  });
+
+  it("keeps phases that no agent ran rather than dropping them", () => {
+    // Cloning a repo takes real time and no model call. Dropping those rows would silently
+    // mis-attribute the wall clock to the steps that remain.
+    const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
+    expect(table).toContain("unattributed");
+    expect(table).toContain("no agent");
+  });
+
+  it("does not attribute a phase to an agent twice", () => {
+    // A phase whose stage produced calls is described BY those calls; only phases with no call
+    // of their own get their own row, or the total would double-count them.
+    const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
+    expect(table).toMatch(/callStages\s*=\s*new Set\(calls\.map/);
+    expect(table).toMatch(/phaseTimings\.filter\(\(t\) => !callStages\.has\(t\.phase\)\)/);
+  });
+});
