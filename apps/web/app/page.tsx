@@ -164,6 +164,8 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { OrgChartArea, WorkforceArea } from "./workforce-ui";
+import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
 import { MonitoringArea } from "./monitoring-ui";
@@ -596,6 +598,15 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const budgetActive = shouldLoadBudgetArea(requestedArea);
   const infraActive = shouldLoadInfraArea(requestedArea);
   const assuranceActive = shouldLoadAssuranceArea(requestedArea);
+  // Loaded ONLY when the area is asked for. This page already fetches ~30 feeds per render;
+  // adding two more unconditionally is how it got slow in the first place.
+  const wantsWorkforce = requestedArea === "workforce";
+  const wantsOrgChart = requestedArea === "org_chart";
+  const [workforceData, orgChartData] = await Promise.all([
+    wantsWorkforce ? fetchWorkforce(activeProjectId) : Promise.resolve(null),
+    wantsOrgChart ? fetchOrgChart(activeProjectId) : Promise.resolve(null),
+  ]);
+
   const [budgetArea, infraArea, assuranceArea] = await Promise.all([
     loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive }),
     loadInfraAreaData({ projectId: activeProjectId, active: infraActive }),
@@ -6879,6 +6890,34 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               meetings={meetingRooms.items.map((item) => ({ id: item.id, title: item.title }))}
             />
           </div>
+        </section>
+
+        <section className="panel-stack" data-area="workforce" aria-label="Workforce">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Workforce</span>
+              <h3>Every agent, what it has produced, and how well.</h3>
+            </div>
+          </div>
+          {workforceData ? (
+            <WorkforceArea workforce={workforceData} />
+          ) : (
+            <p className="detail">Open Workforce to load it.</p>
+          )}
+        </section>
+
+        <section className="panel-stack" data-area="org_chart" aria-label="Org Chart">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Org Chart</span>
+              <h3>Who actually passes work to whom.</h3>
+            </div>
+          </div>
+          {orgChartData ? (
+            <OrgChartArea chart={orgChartData} />
+          ) : (
+            <p className="detail">Open Org Chart to load it.</p>
+          )}
         </section>
 
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">

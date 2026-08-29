@@ -1711,10 +1711,51 @@ function fmtDuration(ms: number): string {
 
 // Per-stage model-call detail (the internal "why is this slow"): model, turns, latency,
 // retries, cost, errors per governed stage. Auto-refreshes while the task is live.
+//: Which stages belong to which pipeline phase.
+//
+// This is the join the first version of this table got wrong. It deduped by comparing a phase
+// name to a stage name -- but those are the two different vocabularies that made the old
+// screens look duplicated in the first place, so nothing matched and every piece of work was
+// listed TWICE: once as "Engineer implementing 16m 42s" and once as "solo 16m 42s", with the
+// total counting both.
+const PHASE_STAGES: Record<string, string[]> = {
+  provisioning: [],
+  queued: [],
+  design: ["standards", "spec", "plan", "review_plan", "design"],
+  write_tests: ["write_tests"],
+  implement: ["implement", "solo", "repair", "guest"],
+  run_tests: ["check_tests", "run_all_tests"],
+  review_panel: ["review_code", "security_check", "consistency_check"],
+  check_tests: ["check_tests"],
+};
+
+//: Which agent owns a stage. Mirrors llm_telemetry.STAGE_ROLES on the engine side.
+//
+// Used as a FALLBACK when the API does not send a role — older deployments do not, and an
+// "Agent" column full of dashes is worse than no column. The row prefers whatever the API
+// says; this fills the gap rather than overriding it.
+const STAGE_AGENT: Record<string, string> = {
+  standards: "chief_architect", spec: "chief_architect", plan: "chief_architect",
+  review_plan: "chief_architect", design: "chief_architect",
+  write_tests: "qa", check_tests: "qa", run_all_tests: "qa",
+  implement: "software_engineer", repair: "software_engineer",
+  solo: "software_engineer", guest: "software_engineer",
+  review_code: "adversarial_reviewer", consistency_check: "adversarial_reviewer",
+  security_check: "security_reviewer",
+};
+
 /** How an agent key reads to a person. The API sends the key; nobody wants to read one. */
+const AGENT_ACRONYMS: Record<string, string> = {
+  qa: "QA", cto: "CTO", coo: "COO", cao: "CAO", ux: "UX", vp: "VP", pm: "PM", sre: "SRE",
+};
+
 function agentLabel(role: string | null | undefined): string {
   if (!role) return "—";
-  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  // Title Case, except the words that are acronyms. "Qa" and "Cto" read as typos.
+  return role
+    .split("_")
+    .map((w) => AGENT_ACRONYMS[w.toLowerCase()] ?? (w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
 }
 
 /**
@@ -1749,77 +1790,91 @@ function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs
     return () => { cancelled = true; if (id) clearInterval(id); };
   }, [runId, live]);
 
-  // Phase durations that no call accounts for. A phase whose stage produced calls is described
-  // by those calls; one that produced none (cloning, provisioning) is its own row.
-  const callStages = new Set(calls.map((c) => c.stage));
-  const unattributed = phaseTimings.filter((t) => !callStages.has(t.phase));
+  // Phases carry the WALL CLOCK; calls carry who did it and what it cost. Nesting the calls
+  // under their phase is what makes this one table instead of two lists of the same work.
+  const used = new Set<number>();
+  const groups = phaseTimings.map((t) => {
+    const stages = PHASE_STAGES[t.phase] ?? [t.phase];
+    const mine = calls
+      .map((c, i) => ({ c, i }))
+      .filter(({ c, i }) => !used.has(i) && stages.includes(c.stage));
+    mine.forEach(({ i }) => used.add(i));
+    return { phase: t.phase, ms: t.ms, calls: mine.map((x) => x.c) };
+  });
+  // Calls whose stage no phase claimed still belong on the screen — dropping them would hide
+  // spend, and hidden spend is the worst thing this table could do.
+  const orphans = calls.filter((_, i) => !used.has(i));
+  const spend = calls.reduce((n, c) => n + c.cost_usd_micros, 0) / 1e6;
+  const longest = Math.max(1, ...phaseTimings.map((t) => t.ms));
 
-  if (!loaded && phaseTimings.length === 0) {
-    return <p className="detail">Loading step detail…</p>;
-  }
+  const CallRow = ({ c }: { c: LlmCallRow }) => (
+    <div className={`ct-call-row${c.ok ? "" : " err"}`} data-testid={`ct-call-${c.stage}`}>
+      <span className="ct-call-stage">{c.stage}</span>
+      <span className="ct-call-agent">{agentLabel(c.role ?? STAGE_AGENT[c.stage])}</span>
+      <span className="ct-call-model">{c.model || c.engine}</span>
+      <span className="ct-call-num">{c.turns ? `${c.turns} turns` : ""}</span>
+      <span className="ct-call-num">{c.cost_usd_micros ? `$${(c.cost_usd_micros / 1e6).toFixed(3)}` : ""}</span>
+      {!c.ok ? <span className="ct-call-err">✗ {(c.error ?? "error").slice(0, 70)}</span> : null}
+    </div>
+  );
 
   return (
-    <div className="ct-block" style={{ margin: "8px 0" }} data-testid="ct-steps">
-      <div className="ct-block-title">Steps — who ran what</div>
-      <table className="ct-steps-table">
-        <thead>
-          <tr>
-            <th>Step</th><th>Agent</th><th>Model</th>
-            <th className="num">Turns</th><th className="num">Time</th><th className="num">Cost</th>
-          </tr>
-        </thead>
-        <tbody>
-          {calls.map((c, i) => (
-            <tr key={i} className={c.ok ? "" : "err"} data-testid={`ct-step-${c.stage}-${i}`}>
-              <td>{PHASE_LABEL[c.stage] ?? c.stage}</td>
-              {/* WHICH AGENT. The operator asked for this by name: the model was shown all
-                  along, the agent responsible for the step was not. */}
-              <td className="ct-step-agent" data-testid={`ct-step-agent-${i}`}>
-                {agentLabel(c.role)}
-              </td>
-              <td className="ct-step-model">{c.model || c.engine}</td>
-              <td className="num">{c.turns || "—"}</td>
-              <td className="num">{fmtDuration(c.latency_ms)}</td>
-              <td className="num">${(c.cost_usd_micros / 1e6).toFixed(3)}</td>
-              {!c.ok ? (
-                <td className="ct-step-err" colSpan={0}>✗ {(c.error ?? "error").slice(0, 60)}</td>
-              ) : null}
-            </tr>
-          ))}
-          {unattributed.map((t, i) => (
-            <tr key={`p${i}`} className="ct-step-nomodel">
-              <td>{PHASE_LABEL[t.phase] ?? t.phase}</td>
-              {/* No agent and no model, said rather than left blank: these are BOSS's own
-                  machinery, and a blank cell reads as missing data. */}
-              <td className="detail">no agent</td>
-              <td className="detail">—</td>
-              <td className="num">—</td>
-              <td className="num">{fmtDuration(t.ms)}</td>
-              <td className="num">—</td>
-            </tr>
-          ))}
-          {live && currentPhase && currentPhaseMs != null ? (
-            <tr className="ct-step-live" data-testid="ct-step-running">
-              <td>● {currentPhase}</td>
-              <td className="detail">running</td><td className="detail">—</td>
-              <td className="num">—</td>
-              <td className="num">{fmtDuration(currentPhaseMs)}</td>
-              <td className="num">—</td>
-            </tr>
-          ) : null}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={4}>Total{live ? " so far" : ""}</td>
-            <td className="num">{fmtDuration(totalMs)}</td>
-            <td className="num">
-              ${(calls.reduce((n, c) => n + c.cost_usd_micros, 0) / 1e6).toFixed(3)}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
+    <div className="ct-block ct-steps" data-testid="ct-steps">
+      <div className="ct-steps-head">
+        <span className="ct-block-title">Steps — who ran what</span>
+        <span className="ct-steps-total">
+          <b>{fmtDuration(totalMs)}</b>{live ? " so far" : ""}
+          {spend > 0 ? <> · <b>${spend.toFixed(2)}</b></> : null}
+        </span>
+      </div>
+
+      <div className="ct-phases">
+        {groups.map((g, i) => (
+          <div className="ct-phase" key={i} data-testid={`ct-phase-${g.phase}`}>
+            <div className="ct-phase-head">
+              <span className="ct-phase-name">{PHASE_LABEL[g.phase] ?? g.phase}</span>
+              {/* Duration as a bar as well as a number: it is the only way to see at a glance
+                  that one step took half the run. */}
+              <span className="ct-phase-bar" aria-hidden>
+                <span style={{ width: `${Math.max(2, Math.round((g.ms / longest) * 100))}%` }} />
+              </span>
+              <span className="ct-phase-ms">{fmtDuration(g.ms)}</span>
+            </div>
+            {g.calls.length > 0 ? (
+              <div className="ct-phase-calls">{g.calls.map((c, j) => <CallRow c={c} key={j} />)}</div>
+            ) : loaded ? (
+              // Said once, quietly. A row of dashes across four columns reads as missing data.
+              <div className="ct-phase-nocall">no model call — BOSS's own machinery</div>
+            ) : null}
+          </div>
+        ))}
+
+        {live && currentPhase && currentPhaseMs != null ? (
+          <div className="ct-phase ct-phase-live" data-testid="ct-step-running">
+            <div className="ct-phase-head">
+              <span className="ct-phase-name">● {currentPhase}</span>
+              <span className="ct-phase-bar" aria-hidden><span style={{ width: "100%" }} /></span>
+              <span className="ct-phase-ms">{fmtDuration(currentPhaseMs)}</span>
+            </div>
+          </div>
+        ) : null}
+
+        {orphans.length > 0 ? (
+          <div className="ct-phase" data-testid="ct-phase-other">
+            <div className="ct-phase-head">
+              <span className="ct-phase-name">Other calls</span>
+              <span className="ct-phase-bar" aria-hidden />
+              <span className="ct-phase-ms" />
+            </div>
+            <div className="ct-phase-calls">{orphans.map((c, j) => <CallRow c={c} key={j} />)}</div>
+          </div>
+        ) : null}
+      </div>
+
       {loaded && calls.length === 0 ? (
-        <p className="detail">No model calls recorded yet — the current stage has not returned one.</p>
+        <p className="detail" style={{ marginTop: 8 }}>
+          No model calls recorded for this run yet.
+        </p>
       ) : null}
     </div>
   );
@@ -2235,13 +2290,9 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
   const search = useSearchParams()?.toString();
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
-  // MASTER-DETAIL, not an accordion.
-  //
-  // Expanding in place pushed every app below it down the page, so opening the third app moved
-  // the second one under the cursor and the list lost its shape. One app is selected at a time
-  // and its runs render BESIDE the list instead of inside it.
-  const [selectedApp, setSelectedApp] = useState<string | null>(null);
-  // The list docks away when the detail is what you are reading.
+  // The run list inside an app docks away when the detail is what you are reading. There is no
+  // app-level selection state: clicking an app opens its newest built run, and the page you
+  // land on owns which run is showing.
   const [listDocked, setListDocked] = useState(false);
   // Which app card has its spec panel open, and in which mode. KEYED BY RUN ID: the cards are
   // a .map(), so a single boolean here would open the panel on every app at once.
@@ -2342,7 +2393,21 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
     Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" | "existing" }>
   >({});
   const [tasks, setTasks] = useState<CodeTaskRun[]>(codeTasks);
-  useEffect(() => { setTasks(codeTasks); }, [codeTasks]);
+  // A REFRESH MAY NEVER EMPTY A LIST THAT HAD CONTENT.
+  //
+  // This list has now vanished on the operator three separate ways: a fetch limit filled by
+  // housekeeping, a poll that asked without the internal-run filter, and a server prop
+  // arriving empty on re-render. Each had its own cause and each produced the same symptom —
+  // tasks appear, then disappear a few seconds later — because in every case something
+  // replaced a full list with an empty one.
+  //
+  // Fixing them one at a time has not worked, so the rule is enforced here instead: an empty
+  // result never overwrites a non-empty list. Silence is not absence. If a project genuinely
+  // has no tasks, the first render says so and nothing overwrites anything.
+  const keepIfEmpty = useCallback((next: CodeTaskRun[]) => {
+    setTasks((prev) => (next.length === 0 && prev.length > 0 ? prev : next));
+  }, []);
+  useEffect(() => { keepIfEmpty(codeTasks); }, [codeTasks, keepIfEmpty]);
   const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string,
                                         kind?: "meeting" | "code" | "existing") => {
     setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error, kind } }));
@@ -2359,8 +2424,11 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
   const reload = useCallback(async () => {
     const fresh = await listCodeTasksAction(projectId);
-    if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) setTasks(fresh.code_tasks);
-  }, [projectId]);
+    // A failed or empty refresh leaves what is on screen alone. The poll runs while a task is
+    // live — exactly when someone is watching — so a blank frame here is the most visible
+    // possible failure.
+    if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) keepIfEmpty(fresh.code_tasks);
+  }, [projectId, keepIfEmpty]);
   // The callback is created before `reload` exists, so it reaches it through a ref rather
   // than forcing the two into one declaration order that reads backwards.
   const reloadRef = useRef<null | (() => Promise<void>)>(null);
@@ -2384,10 +2452,99 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
   const active = selected ? tasks.find((c) => c.id === selected) : null;
   if (active) {
+    // INSIDE AN APP: its runs on the left, the selected run's detail on the right.
+    //
+    // This is where the master-detail belongs. An earlier attempt put it on the Factory page,
+    // which added a navigation layer IN FRONT of the app list instead of behind it — the list
+    // is a list, and the split is what you find after clicking into one.
+    //
+    // Siblings are the other runs on the same app, so opening attempt 3 and then attempt 1 is
+    // two clicks in one place rather than two round trips back to the list.
+    const siblings = groupRunsIntoApps(tasks.filter((c) => !isInternalRun(c)))
+      .find((m) => m.some((r) => r.id === active.id)) ?? [active];
     return (
       <>
         {previewListError}
-        <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+        <div className="ct-split" data-docked={listDocked}>
+          <aside className="ct-split-list">
+            <div className="ct-split-listbar">
+              {/* Docked, the label goes and only the toggle remains: at 44px wide "← All apps"
+                  wrapped onto three lines and collided with the toggle beside it. */}
+              {!listDocked ? (
+                <button type="button" className="cap-btn" onClick={() => setSelected(null)}
+                        data-testid="ct-detail-back">← All apps</button>
+              ) : null}
+              <button type="button" className="cap-btn ct-dock-btn"
+                      onClick={() => setListDocked((d) => !d)}
+                      aria-expanded={!listDocked}
+                      data-testid="ct-dock-toggle"
+                      title={listDocked ? "Show the run list" : "Dock the run list"}>
+                {listDocked ? "»" : "«"}
+              </button>
+            </div>
+            <div className="ct-split-items" data-testid="ct-run-list">
+              <span className="detail" style={{ padding: "0 2px" }}>
+                {siblings.length === 1 ? "1 run" : `${siblings.length} runs, newest first`}
+              </span>
+              {siblings.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className="mr-meeting-card ct-app-item ct-run-item"
+                  data-selected={m.id === active.id}
+                  data-testid={`ct-run-item-${m.id}`}
+                  onClick={() => setSelected(m.id)}
+                >
+                  <span className="mr-meeting-card-head">
+                    <span className={`cap-badge tone-${statusTone(m.status)}`}>{m.status}</span>
+                    <span className="mr-meeting-date">{attemptKind(m)}</span>
+                  </span>
+                  {/* WHAT THIS RUN WAS, not just that it existed. A column of identical status
+                      chips tells you nothing about which attempt to open. */}
+                  <span className="ct-run-item-title">
+                    {(m.title || "Untitled run").replace(/^\[\d+\/\d+\]\s*/, "").slice(0, 70)}
+                  </span>
+                  <span className="detail ct-run-item-meta">
+                    {m.pull_request_number ? `PR #${m.pull_request_number}` : "no PR"}
+                    {(() => {
+                      const micros = Number((m.usage as Record<string, unknown> | undefined)?.cost_usd_micros ?? 0);
+                      return micros ? ` · ${fmtUsd(micros / 1e6)}` : "";
+                    })()}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <section className="ct-split-detail">
+            {/* THE ACTIONS, TOGETHER AND AT THE TOP.
+                Preview, the PR and Ask BOSS are what an operator opens this page to do, and
+                they were scattered down it — preview below the run list, the PR link inside a
+                meta line, Ask BOSS only on the card back in the list. */}
+            <div className="ct-detail-actionbar" data-testid="ct-detail-actionbar">
+              <div className="ct-detail-heading">
+                <span className="eyebrow">{appIdentity(active).kind || "App"}</span>
+                <h3>{appIdentity(active).name}</h3>
+              </div>
+              <div className="ct-detail-actions">
+                {active.pull_request_url ? (
+                  <a className="cap-btn" href={active.pull_request_url} target="_blank"
+                     rel="noreferrer" data-testid="ct-detail-pr">
+                    PR #{active.pull_request_number} ↗
+                  </a>
+                ) : (
+                  <span className="detail">no PR yet</span>
+                )}
+                {active.pull_request_url ? (
+                  <PreviewControls runId={active.id} livePreviews={previews} />
+                ) : null}
+                <button type="button" className="cap-btn primary"
+                        onClick={() => askBossAbout(active, siblings)}
+                        data-testid="ct-detail-ask">Ask BOSS</button>
+              </div>
+            </div>
+            <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+          </section>
+        </div>
       </>
     );
   }
@@ -2625,12 +2782,6 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
               appGroups.map((members) => [members[0].id, members]));
             const fcOf = fc;
             void fcOf;
-            // The app the detail pane is showing. Defaults to the first, so the pane is never
-            // an empty box next to a full list.
-            const chosenKey = (selectedApp && groups.has(selectedApp)) ? selectedApp : order[0];
-            const chosen = chosenKey ? groups.get(chosenKey) ?? [] : [];
-            const chosenBuilt = chosen.length ? pickBuiltRun(chosen) : null;
-            const chosenIdent = chosen.length ? appIdentity(chosen[0]) : null;
 
             const items = order.map((key, gi) => {
               const members = groups.get(key)!;
@@ -2672,10 +2823,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 ? `${benchGroup.name} — QA benchmark`
                 : (members.find((m) => m.title)?.title || "Decomposed build")
                     .replace(/^\[\d+\/\d+\]\s*/, "");
-              // chosenKey, not selectedApp: the detail falls back to the first app when
-              // nothing is picked, and marking none selected left the list disagreeing with the
-              // pane beside it about which app you were looking at.
-              const open = chosenKey === key;
+              // Nothing on this page is "open" any more — clicking an app navigates into it.
+              const open = false;
               return (
                 // The GROUPED card, on the same Meeting styling as the single one.
                 //
@@ -2686,9 +2835,12 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 // one path, miss its twin.
                 <div key={key} className="mr-meeting-card ct-app-item" data-selected={open}
                      role="button" tabIndex={0}
-                     onClick={() => setSelectedApp(key)}
+                     onClick={() => setSelected(pickBuiltRun(members)?.id ?? members[0].id)}
                      onKeyDown={(e) => {
-                       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedApp(key); }
+                       if (e.key === "Enter" || e.key === " ") {
+                         e.preventDefault();
+                         setSelected(pickBuiltRun(members)?.id ?? members[0].id);
+                       }
                      }}
                      style={{ cursor: "pointer" }}>
                   <div className="mr-meeting-card-head">
@@ -2832,64 +2984,11 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
               );
             });
 
-            // MASTER ON THE LEFT, DETAIL ON THE RIGHT — the shape the Panels screen uses.
-            return (
-              <div className="ct-split" data-docked={listDocked}>
-                <aside className="ct-split-list">
-                  <div className="ct-split-listbar">
-                    <span className="detail">{order.length} {order.length === 1 ? "app" : "apps"}</span>
-                    {/* DOCKABLE: when the detail is what you are reading, the list is in the way. */}
-                    <button type="button" className="cap-btn ct-dock-btn"
-                            onClick={() => setListDocked((d) => !d)}
-                            aria-expanded={!listDocked}
-                            data-testid="ct-dock-toggle"
-                            title={listDocked ? "Show the app list" : "Dock the app list"}>
-                      {listDocked ? "»" : "«"}
-                    </button>
-                  </div>
-                  <div className="ct-split-items">{items}</div>
-                </aside>
-
-                <section className="ct-split-detail" data-testid="ct-detail">
-                  {chosen.length === 0 ? (
-                    <p className="detail">Pick an app on the left to see the runs that built it.</p>
-                  ) : (
-                    <div data-testid={`ct-detail-${chosenKey}`}>
-                      <div className="ct-detail-head">
-                        <div>
-                          <h3 className="mr-meeting-title" style={{ margin: 0 }}>
-                            {chosenIdent?.name}
-                          </h3>
-                          {chosenIdent?.blurb ? (
-                            <p className="detail" style={{ margin: "4px 0 0" }}>{chosenIdent.blurb}</p>
-                          ) : null}
-                        </div>
-                        {/* PREVIEW AT THE TOP. It is what an operator opens this panel to do,
-                            and it sat below the run list, the target picker and the spend line
-                            — four scrolls from the name of the app it previews. */}
-                        <div className="ct-detail-actions" data-testid="ct-detail-preview">
-                          {(chosenBuilt ?? chosen[0]).pull_request_url ? (
-                            <PreviewControls runId={(chosenBuilt ?? chosen[0]).id}
-                                             livePreviews={previews} />
-                          ) : (
-                            <span className="detail">Preview appears once a run opens a PR.</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <span className="detail">
-                        {chosen.length === 1
-                          ? "The run that built it"
-                          : `${chosen.length} runs on this app, newest first`}
-                      </span>
-                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                        {chosen.map((m) => renderCard(m, attemptKind(m)))}
-                      </div>
-                    </div>
-                  )}
-                </section>
-              </div>
-            );
+            // The Factory page is a LIST of apps. Clicking one opens it; the runs inside an app
+            // are the task page's business, not this page's. An earlier version put the
+            // master-detail here, which put a second navigation layer in front of the list
+            // instead of behind it.
+            return items;
           })()}
         </div>
       )}

@@ -153,6 +153,13 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "budget",
   "enterprise",
 
+  // Workforce and Org Chart. BOSS's pitch is governed AI labour, and until these were here the
+  // console could show what the agents produced but never the agents themselves -- who did the
+  // work, how well it went, and which of them are running without a registered role at all.
+  // That last one is a governance fact an operator should not have to go looking for.
+  "workforce",
+  "org_chart",
+
   // The path from an idea to shipped software. Without these the console lists the places
   // work ENDS UP -- approvals, jobs, reports -- and none of the places it starts, so an
   // operator can watch BOSS work but cannot see how to set it going. Discovery and Meetings

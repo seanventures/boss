@@ -59,6 +59,8 @@ import {
 import { EditionChip } from "./edition-ui";
 
 type AreaId =
+  | "workforce"
+  | "org_chart"
   | "agent"
   | "metatron"
   | "dashboard"
@@ -167,6 +169,8 @@ const AREAS: AreaDef[] = [
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
   { id: "activity", label: "Activity log", sub: "Searchable events, steps, failures, stuck work", group: "Run", icon: ICONS.activity },
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
+  { id: "workforce", label: "Workforce", sub: "Every agent, what it has produced, and how well", group: "Run", icon: ICONS.org },
+  { id: "org_chart", label: "Org Chart", sub: "Who actually passes work to whom — observed, not declared", group: "Run", icon: ICONS.processes },
   { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },

@@ -996,6 +996,12 @@ h1, h2, h3, h4, h5, h6 {
 .bx-content[data-active] .frame > section {
   display: none;
 }
+/* NOTE FOR THE NEXT AREA ADDED: this list is the visibility mechanism. CSS cannot match one
+   attribute against another, so every area needs its own line here — a new section renders into
+   the DOM and stays display:none until it does, which looks exactly like a screen that fetched
+   nothing. */
+.bx-content[data-active="workforce"] .frame > section:is([data-area="workforce"], :has([data-area="workforce"])),
+.bx-content[data-active="org_chart"] .frame > section:is([data-area="org_chart"], :has([data-area="org_chart"])),
 .bx-content[data-active="agent"] .frame > section:is([data-area="agent"], :has([data-area="agent"])),
 .bx-content[data-active="metatron"] .frame > section:is([data-area="metatron"], :has([data-area="metatron"])),
 .bx-content[data-active="dashboard"] .frame > section:is([data-area="dashboard"], :has([data-area="dashboard"])),
@@ -6160,7 +6166,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ct-split-listbar {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding-bottom: 6px; border-bottom: 1px solid var(--border);
+  min-height: 34px;
 }
+/* Docked, only the toggle is left and it centres in the 44px rail. With the label still in
+   place it wrapped onto three lines and collided with the button beside it. */
+.ct-split[data-docked="true"] .ct-split-listbar { justify-content: center; }
+.ct-split-listbar .cap-btn { white-space: nowrap; }
 .ct-dock-btn { padding: 2px 9px; line-height: 1.6; }
 /* The list scrolls on its own so a long list never pushes the detail off the screen. */
 .ct-split-items {
@@ -6193,28 +6204,194 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-split-items { max-height: 320px; }
 }
 
-/* ── Steps: one table, not two lists of the same thing ────────────────────── */
+/* ── Steps: the phase carries the clock, the calls carry who and what ─────── */
 /*
- * "Step timing" named phases and "agent activity" named stages — the same work, two
- * vocabularies, stacked. Answering "what took 16 minutes and who was doing it" meant reading
- * both and joining them by eye.
+ * One block, not two lists of the same work. "Step timing" named phases and "agent activity"
+ * named stages, so the same 16 minutes appeared twice under two names and the reader had to
+ * join them by eye. Calls now nest under the phase they belong to.
  */
-.ct-steps-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px; }
-.ct-steps-table th {
-  text-align: left; padding: 0 10px 6px 0; border-bottom: 1px solid var(--border);
-  color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  font-weight: 500;
+.ct-steps { padding: 14px 16px; }
+.ct-steps-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--border);
 }
-.ct-steps-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); }
-.ct-steps-table .num { text-align: right; font-variant-numeric: tabular-nums; }
-.ct-steps-table th.num { text-align: right; }
-.ct-step-agent { color: var(--ink); font-weight: 600; }
-.ct-step-model { color: var(--muted); font-family: var(--mono, monospace); font-size: 11.5px; }
-/* A step that no agent owns is dimmer — it is BOSS's own machinery, not somebody's work. */
-.ct-step-nomodel td { color: var(--muted); }
-.ct-steps-table tr.err td { background: rgba(242,109,109,.07); }
-.ct-step-err { color: #F26D6D; font-size: 11.5px; }
-.ct-step-live td { color: #58a6ff; font-weight: 600; }
-.ct-steps-table tfoot td {
-  padding-top: 8px; border-bottom: 0; color: var(--muted); font-weight: 600;
+.ct-steps-total { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ct-steps-total b { color: var(--ink); }
+
+.ct-phases { display: flex; flex-direction: column; }
+.ct-phase { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ct-phase:last-child { border-bottom: 0; }
+
+.ct-phase-head { display: flex; align-items: center; gap: 12px; }
+.ct-phase-name { flex: 0 0 auto; min-width: 168px; font-size: 13px; color: var(--ink); font-weight: 600; }
+/* The bar is the point: it shows at a glance that one step took half the run. */
+.ct-phase-bar { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.ct-phase-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .55; }
+.ct-phase-ms {
+  flex: 0 0 auto; min-width: 66px; text-align: right;
+  font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.ct-phase-live .ct-phase-name { color: var(--blue, #58a6ff); }
+.ct-phase-live .ct-phase-bar > span { background: var(--blue, #58a6ff); opacity: .8; }
+
+/* The calls that made up the phase, indented under it. */
+.ct-phase-calls { margin: 7px 0 0 12px; padding-left: 12px; border-left: 2px solid var(--border); }
+.ct-call-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1.2fr) 72px 68px;
+  gap: 10px; align-items: baseline; padding: 5px 0; font-size: 12px;
+}
+.ct-call-stage { font-family: var(--mono, monospace); color: var(--muted); font-size: 11.5px; }
+/* WHO. The model was always on screen; the agent responsible was not. */
+.ct-call-agent { color: var(--ink); font-weight: 600; }
+.ct-call-model { font-family: var(--mono, monospace); font-size: 11.5px; color: var(--accent); }
+.ct-call-num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ct-call-row.err { background: rgba(242,109,109,.06); border-radius: 4px; padding-left: 6px; }
+.ct-call-err { grid-column: 1 / -1; color: #F26D6D; font-size: 11.5px; }
+.ct-phase-nocall { margin: 5px 0 0 24px; font-size: 11px; color: var(--faint, var(--muted)); }
+
+@media (max-width: 900px) {
+  .ct-call-row { grid-template-columns: 1fr 1fr; }
+  .ct-phase-name { min-width: 0; }
+}
+
+/* ── Workforce ────────────────────────────────────────────────────────────── */
+/*
+ * A scoreboard, not a roster. The page exists to answer "who is doing the work and how well",
+ * so the figures are the loudest thing on each card and the ordering is by volume.
+ */
+/* The wrapper owns the gap from the section heading above it. Without it the filter row sat
+   under the heading and was clipped by it. */
+.wf { display: block; margin-top: 14px; }
+.wf-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; padding-bottom: 10px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.wf-filters { display: inline-flex; gap: 6px; }
+.wf-filters .cap-btn[data-active="true"] { border-color: var(--accent); color: var(--accent); }
+.wf-ungoverned { color: var(--amber); margin: 10px 0 0; }
+
+.wf-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px; margin-top: 12px;
+}
+.wf-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
+  background: var(--bg-tint, transparent);
+  display: flex; flex-direction: column; gap: 8px;
+  transition: border-color .15s ease;
+}
+.wf-card:hover { border-color: var(--border-strong); }
+/* An agent working right now earns the accent border — the one state worth interrupting for. */
+.wf-card[data-status="WORKING"] { border-color: var(--accent); }
+.wf-card[data-status="STUCK"] { border-color: var(--amber); }
+
+.wf-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wf-rank {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 19px; padding: 0 6px; border-radius: 5px;
+  background: var(--border); color: var(--muted);
+  font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.wf-card:nth-child(-n+3) .wf-rank { background: var(--accent); color: var(--accent-ink, #06231D); }
+.wf-name { font-size: 14px; font-weight: 700; color: var(--ink); }
+.wf-task { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+.wf-figs {
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  padding: 9px 11px; border-radius: 8px; background: rgba(255,255,255,.03);
+}
+.wf-fig { display: inline-flex; align-items: baseline; gap: 5px; }
+.wf-fig b { font-size: 15px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.wf-unit { font-size: 10px; color: var(--faint, var(--muted)); letter-spacing: .03em; }
+.wf-fig[data-tone="good"] b { color: var(--accent); }
+.wf-fig[data-tone="warn"] b { color: var(--amber); }
+.wf-fig[data-tone="bad"]  b { color: var(--red, #F26D6D); }
+
+/* Length is VOLUME; colour is quality. Success rate barely varies — nearly everyone sits at
+   100% — so length carrying it would draw a column of identical full bars saying nothing. */
+.wf-bar-track, .wf-card > .wf-bar {
+  display: block; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden;
+}
+.wf-card > .wf-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+.wf-card > .wf-bar > span[data-tone="warn"] { background: var(--amber); }
+.wf-card > .wf-bar > span[data-tone="bad"]  { background: var(--red, #F26D6D); }
+
+.wf-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.wf-chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
+  font-size: 10.5px; color: var(--muted); font-family: var(--mono, monospace);
+}
+.wf-chip i { font-style: normal; color: var(--faint, var(--muted)); }
+
+.wf-card-foot {
+  display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline;
+  padding-top: 8px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--muted); font-family: var(--mono, monospace);
+}
+.wf-card-foot b { color: var(--ink); }
+.wf-ungov { color: var(--amber); }
+
+/* ── Org chart ────────────────────────────────────────────────────────────── */
+/*
+ * Drawn from OBSERVED handoffs — BOSS has no declared reporting line — so the page says so
+ * rather than presenting a derived shape as a declared structure.
+ */
+.org-tree { display: flex; flex-direction: column; gap: 26px; margin-top: 14px; }
+.org-level { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; position: relative; }
+/* The connector: one line down from the level above, so the tree reads as a tree without
+   needing SVG or absolute positioning that breaks when a name wraps. */
+.org-level:not(:first-child)::before {
+  content: ""; position: absolute; top: -14px; left: 10%; right: 10%;
+  border-top: 1px solid var(--border);
+}
+.org-node {
+  position: relative; min-width: 180px; max-width: 240px;
+  border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px;
+  display: flex; flex-direction: column; gap: 4px; background: var(--bg-tint, transparent);
+}
+.org-node[data-root="true"] { border-color: var(--accent); }
+.org-node:not([data-root="true"])::before {
+  content: ""; position: absolute; top: -14px; left: 50%; height: 14px;
+  border-left: 1px solid var(--border);
+}
+.org-node-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.org-node-role { font-size: 11px; color: var(--muted); font-family: var(--mono, monospace); }
+.org-node-task { font-size: 11.5px; color: var(--faint, var(--muted)); }
+
+.org-isolated { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.org-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border);
+  font-size: 12px; color: var(--ink);
+}
+.org-chip i { font-style: normal; font-size: 10.5px; color: var(--muted); }
+
+@media (max-width: 700px) {
+  .org-level { flex-direction: column; align-items: stretch; }
+  .org-level:not(:first-child)::before, .org-node:not([data-root="true"])::before { display: none; }
+}
+
+/* ── The detail's action bar ──────────────────────────────────────────────── */
+/*
+ * Preview, the PR and Ask BOSS are what an operator opens this page to do. They were scattered
+ * down it — preview under the run list, the PR inside a meta line, Ask BOSS only on the card
+ * back in the list — so doing any of them meant hunting first.
+ */
+.ct-detail-actionbar {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+  padding: 0 0 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border);
+}
+.ct-detail-heading { min-width: 0; }
+.ct-detail-heading h3 { margin: 3px 0 0; font-size: 17px; line-height: 1.3; }
+.ct-detail-actions {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  flex-shrink: 0;
+}
+@media (max-width: 900px) {
+  .ct-detail-actionbar { flex-direction: column; }
+  .ct-detail-actions { width: 100%; }
 }

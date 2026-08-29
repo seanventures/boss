@@ -18,27 +18,32 @@ describe("factory master-detail", () => {
     expect(UI).not.toContain("expandedGroups");
   });
 
-  it("selects one app at a time", () => {
-    expect(UI).toContain("selectedApp");
-    expect(UI).toContain("setSelectedApp");
+  it("the Factory page stays a plain list, with no split in front of it", () => {
+    // The split belongs INSIDE an app. Putting it on the Factory page added a navigation layer
+    // in front of the list rather than behind it — you had to pick an app to see apps.
+    const factory = UI.slice(UI.indexOf("const items = order.map"));
+    const listEnd = factory.indexOf("return items;");
+    expect(listEnd).toBeGreaterThan(-1);
+    expect(factory.slice(0, listEnd)).not.toContain("ct-split-detail");
   });
 
-  it("renders the runs in the detail pane, not inside the list item", () => {
-    const detail = UI.slice(UI.indexOf("ct-split-detail"));
-    expect(detail).toContain("renderCard");
-    // The list item ends before the detail begins, so the runs cannot be inside it.
-    const item = UI.slice(UI.indexOf("ct-app-item"), UI.indexOf("ct-split-detail"));
-    expect(item).not.toContain("chosen.map");
+  it("clicking an app opens it rather than expanding it", () => {
+    // Anchored on CODE, not on a comment: codeOnly() strips comments, so a test that slices
+    // from a comment slices from nothing and passes or fails for the wrong reason.
+    expect(UI).toContain("setSelected(pickBuiltRun(members)?.id");
   });
 
-  it("puts the preview at the top of the detail, above the runs", () => {
-    // It sat below the run list, the target picker and the spend line — four scrolls from the
-    // name of the app it previews.
-    const detail = UI.slice(UI.indexOf("ct-split-detail"));
-    const preview = detail.indexOf("ct-detail-preview");
-    const runs = detail.indexOf("chosen.map");
-    expect(preview).toBeGreaterThan(-1);
-    expect(runs).toBeGreaterThan(preview);
+  it("inside an app, the runs are the left panel and the detail is on the right", () => {
+    const inside = UI.slice(UI.indexOf("ct-run-list"));
+    expect(inside).toBeTruthy();
+    expect(inside.indexOf("ct-run-item-")).toBeLessThan(inside.indexOf("ct-split-detail"));
+    expect(inside).toContain("<CodeTaskDetail run={active}");
+  });
+
+  it("a run row says what the run WAS, not just that it existed", () => {
+    // A column of identical status chips tells you nothing about which attempt to open.
+    expect(UI).toContain("ct-run-item-title");
+    expect(UI).toContain("attemptKind(m)");
   });
 
   it("the list docks away", () => {
@@ -49,9 +54,10 @@ describe("factory master-detail", () => {
     expect(docked).toContain(".ct-split-items { display: none; }");
   });
 
-  it("the detail is never an empty box beside a full list", () => {
-    // Defaults to the first app rather than requiring a click to show anything.
-    expect(UI).toMatch(/chosenKey\s*=\s*\(selectedApp && groups\.has\(selectedApp\)\)/);
+  it("the run list offers a way back to all apps", () => {
+    // A split with no exit is a trap: the only way out was the browser back button.
+    expect(UI).toContain("ct-detail-back");
+    expect(UI).toContain("← All apps");
   });
 
   it("collapses to one column rather than two columns too narrow to use", () => {
@@ -67,26 +73,42 @@ describe("steps — one table, with who ran what", () => {
     expect(UI).toContain("Steps — who ran what");
   });
 
-  it("names the agent responsible for each step, not just the model", () => {
-    // The model was shown all along; the agent was not, and that is what the operator asked for.
+  it("names the agent responsible for each call, not just the model", () => {
+    // The model was on screen all along; the agent was not.
     const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
-    expect(table).toContain("ct-step-agent");
-    expect(table).toContain("agentLabel(c.role)");
+    expect(table).toContain("ct-call-agent");
+    expect(table).toContain("agentLabel(c.role ?? STAGE_AGENT[c.stage])");
   });
 
-  it("keeps phases that no agent ran rather than dropping them", () => {
-    // Cloning a repo takes real time and no model call. Dropping those rows would silently
-    // mis-attribute the wall clock to the steps that remain.
-    const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
-    expect(table).toContain("unattributed");
-    expect(table).toContain("no agent");
+  it("names the agent even when the API does not send one", () => {
+    // Older deployments do not return a role, and an Agent column full of dashes is worse than
+    // no column. The row prefers what the API says and falls back to the stage's owner.
+    expect(UI).toContain("const STAGE_AGENT");
+    expect(UI).toMatch(/solo:\s*"software_engineer"/);
+    expect(UI).toMatch(/review_code:\s*"adversarial_reviewer"/);
   });
 
-  it("does not attribute a phase to an agent twice", () => {
-    // A phase whose stage produced calls is described BY those calls; only phases with no call
-    // of their own get their own row, or the total would double-count them.
+  it("joins a call to its phase by STAGE, not by matching the two names", () => {
+    // The first merge deduped by comparing a phase name to a stage name — the very two
+    // vocabularies that made the old screens look duplicated — so "Engineer implementing
+    // 16m 42s" and "solo 16m 42s" both appeared and the total counted the work twice.
+    expect(UI).toContain("const PHASE_STAGES");
+    expect(UI).toMatch(/implement:\s*\["implement", "solo", "repair", "guest"\]/);
     const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
-    expect(table).toMatch(/callStages\s*=\s*new Set\(calls\.map/);
-    expect(table).toMatch(/phaseTimings\.filter\(\(t\) => !callStages\.has\(t\.phase\)\)/);
+    expect(table).toContain("stages.includes(c.stage)");
+  });
+
+  it("shows a call no phase claimed rather than dropping it", () => {
+    // Dropping it would hide spend, and hidden spend is the worst thing this block could do.
+    const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
+    expect(table).toContain("orphans");
+    expect(table).toContain("Other calls");
+  });
+
+  it("counts each call once", () => {
+    // A call claimed by one phase must not also be claimed by the next.
+    const table = UI.slice(UI.indexOf("function CodeTaskSteps"));
+    expect(table).toContain("!used.has(i)");
+    expect(table).toContain("used.add(i)");
   });
 });
