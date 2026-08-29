@@ -79,7 +79,10 @@ describe("the composer", () => {
   });
 
   it("sends the trimmed text, not the raw field", () => {
-    expect(src).toContain("`${appFacts}\\n\\n${typed}`");
+    // The context block now carries an explicit terminator, so stripping it back out for the
+    // reader is a marker lookup rather than a guess about blank lines. What this test guards —
+    // that the operator's text is sent whole, after the facts — is unchanged.
+    expect(src).toContain("`${appFacts}\\n${APP_FACTS_END}\\n\\n${typed}`");
   });
 });
 

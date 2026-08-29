@@ -76,13 +76,41 @@ function railBtn(active: boolean) {
  * A display transform must never be able to erase its input. If stripping leaves nothing, the
  * original is shown instead.
  */
+/**
+ * Remove the model's context block from a message before a human reads it.
+ *
+ * The block is prepended at send time as `${facts}\n\n${typed}`, so the boundary is the LAST
+ * blank line, not the first. Splitting on the first one left everything after it on screen the
+ * moment any fact contained a blank line of its own — which is how a one-line question came to
+ * be displayed under twenty lines of run_id, branch, "DEPLOY THIS ONE" and instructions
+ * addressed to the model.
+ *
+ * The last-blank-line rule is only applied when what precedes it still looks like the block
+ * (it carries `run_id:`), so a person writing a message with paragraphs in it keeps all of it.
+ */
+/** Marks where the model's context ends and the person's message begins. */
+export const APP_FACTS_END = "[/app context]";
+
 export function stripAppFacts(content: string): string {
   const text = content ?? "";
-  if (!text.startsWith("[app context]")) return text;
+  if (!text.trimStart().startsWith("[app context]")) return text;
+
+  // Exact, for anything sent since the terminator existed. Multi-paragraph questions survive
+  // because the boundary is a marker rather than a guess about blank lines.
+  const marked = text.indexOf(APP_FACTS_END);
+  if (marked !== -1) {
+    return text.slice(marked + APP_FACTS_END.length).trimStart() || text;
+  }
+
+  // LEGACY messages, already in the transcript without a terminator. FIRST blank line, not
+  // last: a last-blank-line rule strips more of the block, but on a message the operator wrote
+  // in several paragraphs it deletes everything except the final one. There is a test called
+  // "chat never loses your message" guarding exactly that, and it is the right guarantee —
+  // showing some stale context above an old question is a far smaller harm than silently
+  // discarding what someone typed. New messages carry the terminator and are exact.
   const split = text.indexOf("\n\n");
   if (split === -1) return text;
-  const stripped = text.slice(split + 2).trimStart();
-  return stripped || text;
+  return text.slice(split + 2).trimStart() || text;
 }
 
 /** An action BOSS is offering. `tool` + `args` are executed verbatim on click. */
@@ -240,7 +268,10 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
     const typed = String(fd.get("message") ?? "").trim();
     if (!typed) return;
     if (appFacts) {
-      fd.set("message", `${appFacts}\n\n${typed}`);
+      // An explicit terminator, because a blank line is not a boundary: the facts contain
+      // blank lines and so do people's questions, and any heuristic over them gets one of the
+      // two wrong. With this the split is exact.
+      fd.set("message", `${appFacts}\n${APP_FACTS_END}\n\n${typed}`);
     } else {
       fd.set("message", typed);
     }
@@ -535,20 +566,24 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           <textarea className="agent-input" value={input} disabled={busy}
             aria-label="Message BOSS"
             placeholder="Ask BOSS…"
-            rows={1}
+            // Three lines, not one. The useful questions here are the long ones — "why did
+            // this run take 152 minutes and what went wrong", plus the context that makes it
+            // answerable — and a field one line tall says "type something short".
+            rows={3}
             onChange={(e) => {
               setInput(e.target.value);
               // Grow with the content up to a cap, then scroll. Reset first so deleting a
               // line shrinks it back — without that it only ever gets taller.
               const el = e.currentTarget;
               el.style.height = "auto";
-              el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+              // Never below the resting three lines, never above a screenful.
+              el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 220)}px`;
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            style={{ resize: "none", overflowY: "auto", minHeight: 24, maxHeight: 160,
-                     lineHeight: 1.5, fontFamily: "inherit" }} />
+            style={{ resize: "none", overflowY: "auto", minHeight: 64, maxHeight: 220,
+                     lineHeight: 1.55, fontFamily: "inherit" }} />
           <div className="agent-composer-bar">
             <span className="agent-composer-hint">
               {busy ? "BOSS is working…" : "Enter to send · Shift+Enter for a new line"}
