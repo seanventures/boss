@@ -6136,3 +6136,59 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* What this app last did, when it is no longer bound to anything. History, not status —
    shown quietly so it cannot be mistaken for a live deployment. */
 .ct-deploy-history { opacity: .7; font-style: italic; }
+
+/* ── Factory: master on the left, detail on the right ─────────────────────── */
+/*
+ * Replaces an accordion. Expanding an app in place pushed every app below it down the page, so
+ * opening the third one moved the second under the cursor — the list lost its shape exactly
+ * when you were trying to navigate it.
+ */
+.ct-split {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 10px;
+}
+/* Docked: the list collapses to nothing and the detail takes the width. The toggle stays
+   reachable because the bar is what remains. */
+.ct-split[data-docked="true"] { grid-template-columns: 44px minmax(0, 1fr); }
+.ct-split[data-docked="true"] .ct-split-items { display: none; }
+.ct-split[data-docked="true"] .ct-split-listbar .detail { display: none; }
+
+.ct-split-list { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.ct-split-listbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.ct-dock-btn { padding: 2px 9px; line-height: 1.6; }
+/* The list scrolls on its own so a long list never pushes the detail off the screen. */
+.ct-split-items {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: calc(100vh - 200px); overflow-y: auto; padding-right: 4px;
+}
+
+/* One app in the list. Selection is a border, matching the Panels screen. */
+.ct-app-item { transition: border-color .12s ease, background .12s ease; }
+.ct-app-item:hover { border-color: var(--border-strong, #2C3A55); }
+.ct-app-item[data-selected="true"] {
+  border-color: var(--accent, #4FE3C1);
+  background: rgba(79, 227, 193, .05);
+}
+
+.ct-split-detail { min-width: 0; }
+/* Title left, preview right — the action at the top, where it is looked for. */
+.ct-detail-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-bottom: 12px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--border);
+}
+.ct-detail-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+@media (max-width: 1100px) {
+  /* One column: the list above the detail, still scrollable, never side-by-side at a width
+     where neither column can hold its content. */
+  .ct-split, .ct-split[data-docked="true"] { grid-template-columns: 1fr; }
+  .ct-split-list { position: static; }
+  .ct-split-items { max-height: 320px; }
+}

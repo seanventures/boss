@@ -2138,7 +2138,14 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
   const search = useSearchParams()?.toString();
   const [selected, setSelected] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // MASTER-DETAIL, not an accordion.
+  //
+  // Expanding in place pushed every app below it down the page, so opening the third app moved
+  // the second one under the cursor and the list lost its shape. One app is selected at a time
+  // and its runs render BESIDE the list instead of inside it.
+  const [selectedApp, setSelectedApp] = useState<string | null>(null);
+  // The list docks away when the detail is what you are reading.
+  const [listDocked, setListDocked] = useState(false);
   // Which app card has its spec panel open, and in which mode. KEYED BY RUN ID: the cards are
   // a .map(), so a single boolean here would open the panel on every app at once.
   const [specPanel, setSpecPanel] = useState<Record<string, "feature" | "rebuild" | undefined>>({});
@@ -2521,7 +2528,14 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
               appGroups.map((members) => [members[0].id, members]));
             const fcOf = fc;
             void fcOf;
-            return order.map((key, gi) => {
+            // The app the detail pane is showing. Defaults to the first, so the pane is never
+            // an empty box next to a full list.
+            const chosenKey = (selectedApp && groups.has(selectedApp)) ? selectedApp : order[0];
+            const chosen = chosenKey ? groups.get(chosenKey) ?? [] : [];
+            const chosenBuilt = chosen.length ? pickBuiltRun(chosen) : null;
+            const chosenIdent = chosen.length ? appIdentity(chosen[0]) : null;
+
+            const items = order.map((key, gi) => {
               const members = groups.get(key)!;
               // Singletons used to render as a bare run card, so an app looked like one thing
               // until it had a second attempt and then became another. One shape for every app.
@@ -2561,7 +2575,7 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 ? `${benchGroup.name} — QA benchmark`
                 : (members.find((m) => m.title)?.title || "Decomposed build")
                     .replace(/^\[\d+\/\d+\]\s*/, "");
-              const open = expandedGroups.has(key);
+              const open = selectedApp === key;
               return (
                 // The GROUPED card, on the same Meeting styling as the single one.
                 //
@@ -2570,13 +2584,14 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 // reasonably concluded the work had not been done. The identical mistake as
                 // the fetch limit, the housekeeping filter and the preview URL earlier: fix
                 // one path, miss its twin.
-                <div key={key} className="mr-meeting-card" style={{ cursor: "default" }}>
-                  <div
-                    className="mr-meeting-card-head"
-                    role="button"
-                    onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
-                    style={{ cursor: "pointer" }}
-                  >
+                <div key={key} className="mr-meeting-card ct-app-item" data-selected={open}
+                     role="button" tabIndex={0}
+                     onClick={() => setSelectedApp(key)}
+                     onKeyDown={(e) => {
+                       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelectedApp(key); }
+                     }}
+                     style={{ cursor: "pointer" }}>
+                  <div className="mr-meeting-card-head">
                     {/* The kind of thing this is, in the badge the benchmark cards use. */}
                     {appIdentity(members[0]).kind ? (
                       <span className="cap-badge tone-blue">{appIdentity(members[0]).kind}</span>
@@ -2592,10 +2607,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       {anyShipped && anyBroken ? " · last one failed" : ""}
                     </span>
                   </div>
-                  <span className="mr-meeting-title" role="button"
-                        onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
-                        style={{ cursor: "pointer" }}>
-                    {open ? "▾" : "▸"} {benchGroup?.name ? name : appIdentity(members[0]).name}
+                  <span className="mr-meeting-title">
+                    {benchGroup?.name ? name : appIdentity(members[0]).name}
                   </span>
                   {appIdentity(members[0]).blurb ? (
                     <p className="detail" style={{ margin: "2px 0 0" }}>
@@ -2715,21 +2728,68 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
                       : <span className="detail">one approval when the build finishes</span>}
                   </div>
-                  {open ? (
-                    <div style={{ display: "grid", gap: 8, marginTop: 6, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
-                      {/* Named by KIND. "•/5" told you an attempt existed and nothing about
-                          what it was; "follow-up" and "retry 1" tell the story of the app. */}
-                      <span className="detail">
-                        {members.length === 1
-                          ? "The run that built it"
-                          : `${members.length} runs on this app, newest first`}
-                      </span>
-                      {members.map((m) => renderCard(m, attemptKind(m)))}
-                    </div>
-                  ) : null}
                 </div>
               );
             });
+
+            // MASTER ON THE LEFT, DETAIL ON THE RIGHT — the shape the Panels screen uses.
+            return (
+              <div className="ct-split" data-docked={listDocked}>
+                <aside className="ct-split-list">
+                  <div className="ct-split-listbar">
+                    <span className="detail">{order.length} {order.length === 1 ? "app" : "apps"}</span>
+                    {/* DOCKABLE: when the detail is what you are reading, the list is in the way. */}
+                    <button type="button" className="cap-btn ct-dock-btn"
+                            onClick={() => setListDocked((d) => !d)}
+                            aria-expanded={!listDocked}
+                            data-testid="ct-dock-toggle"
+                            title={listDocked ? "Show the app list" : "Dock the app list"}>
+                      {listDocked ? "»" : "«"}
+                    </button>
+                  </div>
+                  <div className="ct-split-items">{items}</div>
+                </aside>
+
+                <section className="ct-split-detail" data-testid="ct-detail">
+                  {chosen.length === 0 ? (
+                    <p className="detail">Pick an app on the left to see the runs that built it.</p>
+                  ) : (
+                    <div data-testid={`ct-detail-${chosenKey}`}>
+                      <div className="ct-detail-head">
+                        <div>
+                          <h3 className="mr-meeting-title" style={{ margin: 0 }}>
+                            {chosenIdent?.name}
+                          </h3>
+                          {chosenIdent?.blurb ? (
+                            <p className="detail" style={{ margin: "4px 0 0" }}>{chosenIdent.blurb}</p>
+                          ) : null}
+                        </div>
+                        {/* PREVIEW AT THE TOP. It is what an operator opens this panel to do,
+                            and it sat below the run list, the target picker and the spend line
+                            — four scrolls from the name of the app it previews. */}
+                        <div className="ct-detail-actions" data-testid="ct-detail-preview">
+                          {(chosenBuilt ?? chosen[0]).pull_request_url ? (
+                            <PreviewControls runId={(chosenBuilt ?? chosen[0]).id}
+                                             livePreviews={previews} />
+                          ) : (
+                            <span className="detail">Preview appears once a run opens a PR.</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <span className="detail">
+                        {chosen.length === 1
+                          ? "The run that built it"
+                          : `${chosen.length} runs on this app, newest first`}
+                      </span>
+                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                        {chosen.map((m) => renderCard(m, attemptKind(m)))}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </div>
+            );
           })()}
         </div>
       )}
