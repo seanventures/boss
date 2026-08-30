@@ -20,6 +20,7 @@ import re
 from pathlib import Path
 import subprocess
 import threading
+import logging
 import time
 from typing import Optional, Protocol
 
@@ -27,6 +28,9 @@ from ..config import Settings
 from ..schemas import FileChange
 from .agent_turns import capture_enabled, parse_stream
 from .llm_telemetry import record_agent_turns, record_llm_call
+
+
+_log = logging.getLogger(__name__)
 
 
 def _parse_cli_output(stdout: str) -> Optional[dict]:
@@ -969,15 +973,43 @@ class PacedCodeAgent:
         return getattr(self._inner, name)
 
     def _paced(self, fn, *args, **kwargs):
-        with self._limiter.slot(self._provider):
+        # QUEUEING IS NOT WORKING, AND THIS IS THE PATH THAT RUNS.
+        #
+        # Every run on this deployment uses substrate=local, which dispatches through here —
+        # NOT through the guest/microVM path. Instrumenting only that one produced a run with
+        # zero stage timings, which is how this gap was found.
+        #
+        # `slot()` blocks on concurrency, pacing and AIMD backoff. Folded into one duration,
+        # a call that queued four minutes and then ran for one is indistinguishable from a
+        # call that worked for five — and the fixes for those are opposite.
+        started = time.monotonic()
+        with self._limiter.slot(self._provider) as slot:
+            work_started = time.monotonic()
             try:
                 out = fn(*args, **kwargs)
             except Exception as exc:  # noqa: BLE001 — classify then re-raise unchanged
                 if is_rate_limit_error(exc):
                     self._limiter.report_rate_limited(self._provider)
+                self._log_pacing(slot, started, work_started, failed=True)
                 raise
             self._limiter.report_ok(self._provider)
+            self._log_pacing(slot, started, work_started, failed=False)
             return out
+
+    def _log_pacing(self, slot, started: float, work_started: float, *, failed: bool) -> None:
+        """One line per dispatch: how long the lane held it, how long the work took."""
+        try:
+            waited = float(getattr(slot, "waited_seconds", 0.0) or 0.0)
+            work = max(0.0, time.monotonic() - work_started)
+            total = max(1e-6, time.monotonic() - started)
+            _log.info(
+                "model dispatch provider=%s engine=%s waited=%.1fs work=%.1fs "
+                "queueing=%.0f%%%s",
+                self._provider, self.engine, waited, work, 100.0 * waited / total,
+                " failed" if failed else "",
+            )
+        except Exception:  # noqa: BLE001 — a diagnostic never breaks a dispatch
+            pass
 
     def run_role(self, *args, **kwargs):
         return self._paced(self._inner.run_role, *args, **kwargs)

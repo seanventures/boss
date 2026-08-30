@@ -131,3 +131,29 @@ def test_an_unwritable_cache_does_not_break_the_build():
     src = inspect.getsource(sandbox._shared_tool_caches)
     assert "return {}" in src
     assert "running uncached" in src
+
+
+def test_the_local_path_reports_its_pacing_too():
+    """The gap that a real run exposed.
+
+    Every run on this deployment uses substrate=local, which dispatches through
+    `PacedCodeAgent`, NOT through the guest/microVM `_guest_stage`. Instrumenting only the
+    latter produced a completed run with ZERO stage timings — the measurement was in the path
+    that does not run.
+    """
+    from boss_engine.services import code_agent
+
+    src = inspect.getsource(code_agent.PacedCodeAgent)
+    assert "with self._limiter.slot(self._provider) as slot:" in src
+    assert "work_started = time.monotonic()" in src
+    assert "_log_pacing(" in src
+    # Reported on the failure path too: a dispatch that queued and then errored is exactly the
+    # case worth knowing about.
+    assert "failed=True" in src and "failed=False" in src
+
+
+def test_the_pacing_log_cannot_break_a_dispatch():
+    from boss_engine.services import code_agent
+
+    src = inspect.getsource(code_agent.PacedCodeAgent._log_pacing)
+    assert "except Exception:" in src
