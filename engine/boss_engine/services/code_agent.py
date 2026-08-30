@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -31,6 +32,33 @@ from .llm_telemetry import record_agent_turns, record_llm_call
 
 
 _log = logging.getLogger(__name__)
+
+
+def _argv_safe(prompt: str) -> str:
+    """Strip NUL bytes from a prompt before it becomes a command-line argument.
+
+    A NUL cannot appear in an argv entry: `subprocess.Popen` rejects the WHOLE command with
+    "embedded null byte" before the process is even started. Measured on a real run — the agent
+    built a SQLite-backed app, a binary blob reached the review prompt through the diff, and all
+    THREE reviewers (security, consistency, adversarial) failed in 2ms each. The review panel
+    silently did not run, and the only trace was a review_panel phase that took 20 seconds
+    instead of minutes.
+
+    Dropping the byte is the right repair, not escaping it: a NUL carries no meaning to a model,
+    it is an artefact of binary content leaking into text. Everything around it is still
+    perfectly readable, and a review that happens on slightly-cleaned text beats a review that
+    does not happen at all.
+    """
+    if "\x00" not in (prompt or ""):
+        return prompt
+    cleaned = prompt.replace("\x00", "")
+    _log.warning(
+        "prompt contained %d NUL byte(s) — stripped before dispatch. Binary content reached a "
+        "prompt (usually a binary file in the diff); the invocation would otherwise have died "
+        "instantly with 'embedded null byte' and the stage would not have run at all.",
+        len(prompt) - len(cleaned),
+    )
+    return cleaned
 
 
 def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
@@ -117,7 +145,9 @@ from .model_rate_limiter import (
 )
 from . import repo_retriever
 from .redaction import redact as _redact_pii
-from .sandbox import CommandResult, DiffSummary, EphemeralSandbox
+from .sandbox import (
+    CommandResult, DiffSummary, EphemeralSandbox, _shared_tool_caches,
+)
 
 # --------------------------------------------------------------------------- #
 # Which agent subprocesses are OURS, and what seat each one occupies.
@@ -554,7 +584,7 @@ class ClaudeCodeAgent:
             # "--- SECTION ---" header) must never be read as a CLI option.
             # Single choke point: every stage (build AND review) goes through _invoke, so the
             # batching rule is applied uniformly here rather than in each prompt builder.
-            return argv + ["--", prompt + _PARALLEL_TOOLS_RULE]
+            return argv + ["--", _argv_safe(prompt) + _PARALLEL_TOOLS_RULE]
         last_error = ""
 
         def _live_sink(live_model: str):
@@ -617,6 +647,18 @@ class ClaudeCodeAgent:
                     stderr=subprocess.PIPE,
                     text=True,
                     cwd=str(cwd),
+                    # THE AGENT GETS THE SHARED TOOL CACHE TOO.
+                    #
+                    # `sandbox.run()` has always pointed npm and Playwright at a cache that
+                    # outlives one sandbox; this subprocess did not, because it was spawned
+                    # with no env at all and inherited the worker's. So the pipeline's own
+                    # `playwright install chromium` finished in 11.6s from the warm cache while
+                    # the AGENT — running the same command inside a fresh sandbox, which is
+                    # where nearly all of that time is actually spent — re-downloaded Chromium
+                    # from scratch on every build. Measured on a real run: ~30 of 150 turns
+                    # went on installing dependencies and waiting for a browser download,
+                    # including a background install the agent then had to poll with `ps`.
+                    env={**os.environ, **_shared_tool_caches()},
                 )
                 register_seat(child.pid, seat)
                 try:
