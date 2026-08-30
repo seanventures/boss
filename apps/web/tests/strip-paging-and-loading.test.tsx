@@ -205,3 +205,39 @@ describe("the Factory count is a count, not a window", () => {
     expect(FEED).toContain('typeof res.total === "number" ? res.total : items.length');
   });
 });
+
+describe("the rest of the Factory list is reachable", () => {
+  const CT = codeOnly("app/code-tasks-ui.tsx");
+  const ROUTE = codeOnly("app/api/code-tasks/route.ts");
+
+  it("offers to load them, rather than only admitting they are missing", () => {
+    // "of 244 — showing the newest" is honest, but on its own it just tells an operator that
+    // 44 tasks exist somewhere they cannot get to.
+    expect(CT).toContain('data-testid="ct-home-show-all"');
+    expect(CT).toContain("Show all ${shownTotal}");
+  });
+
+  it("fetches on demand rather than on every render", () => {
+    // The feed is 1.41 MB at 200 and the load that once fetched more took 111 seconds and got
+    // the container evicted. The ceiling stays; the tail is opt-in.
+    expect(CT).toContain("const showAll = useCallback(async () => {");
+    expect(ROUTE).toContain("exclude_internal=true");
+  });
+
+  it("goes through a route handler, not a Server Action", () => {
+    // A Server Action reply re-renders the whole v1 tree, which takes seconds to paint.
+    expect(ROUTE).toContain("export const dynamic = \"force-dynamic\"");
+  });
+
+  it("caps what it will ask for", () => {
+    expect(ROUTE).toContain("Math.min(");
+  });
+
+  it("still refuses to let an empty answer wipe the list", () => {
+    expect(CT).toContain("keepIfEmpty(body.code_tasks ?? [])");
+  });
+
+  it("says why it failed instead of doing nothing", () => {
+    expect(CT).toContain('data-testid="ct-home-all-error"');
+  });
+});

@@ -1202,6 +1202,16 @@ h1, h2, h3, h4, h5, h6 {
 }
 .dw-define-actions { display: flex; gap: 6px; }
 /* "of 244 — showing the newest", beside the Factory count that used to imply it had them all. */
+/* "Show all 244" — a link, not a button-shaped thing: it reveals more of a list, it does not
+   start work, and the Factory's real buttons all do. */
+.ct-home-all {
+  background: none; border: 0; padding: 0 0 0 4px; font: inherit; font-size: 0.7rem;
+  color: var(--accent); cursor: pointer; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ct-home-all:disabled { color: var(--faint, var(--muted)); cursor: default; text-decoration: none; }
+.ct-home-all-error { color: var(--red, #f85149); margin-left: 8px; }
+
 .ct-home-of {
   margin-left: 6px; font-size: 0.7rem; color: var(--faint, var(--muted));
 }

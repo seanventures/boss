@@ -2530,6 +2530,37 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
   // Never below what is on screen: `tasks` can hold rows a later empty fetch chose not to
   // clobber, and "showing 12 of 8" would be worse than saying nothing.
   const shownTotal = Math.max(codeTaskTotal ?? tasks.length, tasks.length);
+
+  // THE TAIL, ON DEMAND.
+  //
+  // The page renders the newest 200 server-side and that ceiling is deliberate: the feed is
+  // 1.41 MB at 200, and the load that fetched more once took 111 seconds and starved the API's
+  // healthcheck until Traefik evicted the container. So the rest is not fetched on every
+  // render — it is fetched when somebody actually wants it, which is the only time it is worth
+  // paying for.
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [loadAllError, setLoadAllError] = useState<string | null>(null);
+  const showAll = useCallback(async () => {
+    setLoadingAll(true);
+    setLoadAllError(null);
+    try {
+      const r = await fetch(
+        `/api/code-tasks?project_id=${encodeURIComponent(projectId)}&limit=${shownTotal}`,
+        { cache: "no-store" });
+      const body = (await r.json()) as { code_tasks?: CodeTaskRun[]; error?: string };
+      if (!r.ok) {
+        setLoadAllError(body.error ?? `API returned ${r.status}`);
+        return;
+      }
+      // Same rule as everywhere else on this screen: an empty result never replaces a list
+      // that had content.
+      keepIfEmpty(body.code_tasks ?? []);
+    } catch (e) {
+      setLoadAllError(String((e as Error)?.message ?? e));
+    } finally {
+      setLoadingAll(false);
+    }
+  }, [projectId, shownTotal, keepIfEmpty]);
   const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string,
                                         kind?: "meeting" | "code" | "existing") => {
     setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error, kind } }));
@@ -2716,7 +2747,18 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
               nothing on the screen used to answer it. */}
           {shownTotal > tasks.length ? (
             <span className="ct-home-of" data-testid="ct-home-of">
-              of {shownTotal} — showing the newest
+              of {shownTotal} — showing the newest{" "}
+              <button type="button" className="ct-home-all" onClick={() => void showAll()}
+                      disabled={loadingAll} data-testid="ct-home-show-all">
+                {loadingAll ? `Loading all ${shownTotal}…` : `Show all ${shownTotal}`}
+              </button>
+            </span>
+          ) : null}
+          {loadAllError ? (
+            // The reason, not a shrug. A control that silently does nothing is worse than one
+            // that says why it could not.
+            <span className="ct-home-of ct-home-all-error" data-testid="ct-home-all-error">
+              Could not load the rest — {loadAllError}
             </span>
           ) : null}
         </span>
