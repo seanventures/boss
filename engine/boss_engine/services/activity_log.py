@@ -28,7 +28,7 @@ ActivityStatus = str  # ok | failed | waiting | stuck | info
 ActivitySeverity = str  # info | warn | error
 
 SOURCES = ("event", "process_step", "job", "deadletter", "receipt",
-           "llm_call", "agent_turn")
+           "llm_call", "agent_turn", "app_log")
 
 #: The four levels an operator reads at, coarsest last.
 #:
@@ -718,6 +718,69 @@ def _load_llm_calls(
     return items
 
 
+def _load_app_logs(
+    connection: Connection,
+    project_id: str,
+    *,
+    since: Any,
+    until: Any,
+    cap: int,
+    q: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """The container log, for the operator who cannot open a shell on the box.
+
+    BOSS logged which command ran and for how long, how long a stage queued for a model lane,
+    why a preview refused — and none of it reached this screen. A phase reading "27m46s — no
+    model call" is accurate and unhelpful: it says the model was not the cost without saying
+    what was. These are the lines that say what was.
+
+    Records without a project are included too. An error raised before any run was resolved —
+    a bad config, a provider refusing a key — belongs in the operator's log precisely because
+    nothing owns it; excluding it would hide the failures that have no home.
+    """
+    extra, params = _time_clauses(since, until)
+    rows = _fetch_rows(
+        connection,
+        f"""
+        SELECT id, project_id, run_id, service, level, logger, message, created_at
+        FROM app_logs
+        WHERE (project_id = :project_id OR project_id IS NULL){extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
+        """,
+        {"project_id": project_id, "cap": cap, **params},
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        raw = (_text(row.get("level")) or "info").lower()
+        # Python's names are not this log's names.
+        level = {"warning": "warn", "critical": "error", "fatal": "error"}.get(raw, raw)
+        if level not in LEVELS:
+            level = "info"
+        logger_name = _text(row.get("logger")) or "boss"
+        short = logger_name.rsplit(".", 1)[-1]
+        message = _text(row.get("message")) or ""
+        items.append(
+            _item(
+                id=_text(row.get("id")),
+                source="app_log",
+                kind=f"log.{short}",
+                actor=_text(row.get("service")) or "boss",
+                entity_type="code_task_run" if row.get("run_id") else "service",
+                entity_id=_text(row.get("run_id")) or _text(row.get("service")) or "boss",
+                created_at=row.get("created_at"),
+                data={"logger": logger_name, "service": _text(row.get("service")),
+                      "level": raw, "message": message},
+                classify_row={"kind": f"log.{short}",
+                              "status": "failed" if level == "error" else "info"},
+                level=level,
+                run_id=_text(row.get("run_id")),
+                body=message,
+            )
+        )
+    return items
+
+
 def _load_agent_turns(
     connection: Connection,
     project_id: str,
@@ -849,6 +912,7 @@ _LOADERS_BY_SOURCE = {
     "receipt": _load_receipts,
     "llm_call": _load_llm_calls,
     "agent_turn": _load_agent_turns,
+    "app_log": _load_app_logs,
 }
 
 

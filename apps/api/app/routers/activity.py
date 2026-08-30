@@ -105,7 +105,7 @@ def list_activity(
     source: Optional[str] = Query(
         default=None,
         description="event | process_step | job | deadletter | receipt | llm_call | "
-                    "agent_turn | infra (jobs+deadletters+receipts together)",
+                    "agent_turn | app_log | infra (jobs+deadletters+receipts together)",
     ),
     run_id: Optional[str] = Query(default=None, description="one work task (crun_...)"),
     agent: Optional[str] = Query(default=None, description="one AI agent, by role key"),

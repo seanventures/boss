@@ -3516,6 +3516,24 @@ CREATE INDEX IF NOT EXISTS idx_commitment_reconciliations_project
 
 -- Tier-1 "1-box" app previews: ephemeral local runs of a code-task's built app, so an
 -- operator can see the working website before merge. Process-based, auto-expiring (TTL).
+-- CONTAINER LOGS, WHERE AN OPERATOR CAN READ THEM.
+-- BOSS logged which command ran and for how long, how long a stage queued for a model lane,
+-- why a preview refused — all of it to a container log nobody outside the box can open. So
+-- "Engineer implementing — 27m46s — no model call" was accurate and unhelpful. The Activity
+-- Log reads this as one more source.
+CREATE TABLE IF NOT EXISTS app_logs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,          -- NULL when a record is raised outside any project's work
+  run_id TEXT,              -- attributed from the LLM context when there is one
+  service TEXT,             -- api | worker
+  level TEXT NOT NULL,      -- info | warning | error | critical
+  logger TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_logs_project ON app_logs (project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_logs_run ON app_logs (run_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_previews (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL,

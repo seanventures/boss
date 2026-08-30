@@ -34,7 +34,10 @@ BATCH = 20_000
 #: Only the high-volume, purely diagnostic tables. `events` is NOT here: it is the audit
 #: stream, other features read it, and quietly aging out a customer's audit trail from a
 #: routine housekeeping job is not a decision this module gets to make.
-PRUNABLE = ("agent_turns",)
+#: `app_logs` joins the transcript here for the same reason it exists: it is the highest-volume
+#: table in the console — one row per interesting log line across the API and every worker — and
+#: a log nobody ages out becomes the thing that fills the disk.
+PRUNABLE = ("agent_turns", "app_logs")
 
 
 def retention_days() -> int:

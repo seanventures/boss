@@ -25,6 +25,7 @@ const ACTIVITY_KINDS = [
   "receipt",
   "llm_call",
   "agent_turn",
+  "app_log",
 ] as const;
 
 /** How loudly a row speaks. A different question from `status`, which says what happened to a
@@ -37,6 +38,9 @@ const SOURCE_CHOICES: Array<{ value: string; label: string; hint: string }> = [
   { value: "", label: "Everything", hint: "all streams" },
   { value: "agent_turn", label: "Agent conversation", hint: "what the agents said and ran" },
   { value: "llm_call", label: "Model calls", hint: "which agent used which model" },
+  // The lines BOSS writes about its OWN machinery. A phase reading "27m46s — no model call"
+  // says the model was not the cost without saying what was; this is where what-was lives.
+  { value: "app_log", label: "BOSS internals", hint: "commands, timings, warnings from the engine" },
   { value: "event", label: "Events", hint: "the audit stream" },
   { value: "process_step", label: "Process steps", hint: "the PRD pipeline" },
   { value: "infra", label: "BOSS infra", hint: "jobs, deadletters, receipts" },
@@ -91,6 +95,7 @@ const KIND_LABELS: Record<ActivityKind, string> = {
   receipt: "Receipt",
   llm_call: "Model call",
   agent_turn: "Agent turn",
+  app_log: "BOSS internals",
 };
 
 /** The first meaningful line of a turn, for the row that summarises it.

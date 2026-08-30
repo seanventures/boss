@@ -172,7 +172,10 @@ def test_retention_does_not_touch_the_audit_stream():
     from boss_engine.services.activity_retention import PRUNABLE
 
     assert "events" not in PRUNABLE
-    assert PRUNABLE == ("agent_turns",)
+    # High-volume TRANSCRIPT tables only. `app_logs` joined for the same reason `agent_turns`
+    # is here — one row per interesting log line across the API and every worker — and for the
+    # same reason `events` is not: neither is an audit trail another feature reads.
+    assert set(PRUNABLE) == {"agent_turns", "app_logs"}
 
 
 def test_retention_deletes_in_batches():

@@ -389,6 +389,18 @@ WEDGED_AFTER_MINUTES = 120
 #: still writing files is working, however long it takes.
 NO_PROGRESS_MINUTES = 25
 
+#: When SILENCE BECOMES VISIBLE — which is much earlier than when it is acted on.
+#:
+#: A run went quiet for 27m46s: no model call, no turn, no event, nothing. It recovered on its
+#: own, so the 25-minute intervention above was arguably right not to have killed it. But for
+#: those 27 minutes the console showed a phase counting up and no reason, and the honest reading
+#: of a screen that says nothing is that nothing is happening.
+#:
+#: So quiet time is now REPORTED from five minutes and every five after, while the decision to
+#: intervene stays exactly where it was. Saying "nothing has happened for 10 minutes" costs one
+#: row and answers the question the blank could not.
+QUIET_WARN_MINUTES = 5
+
 
 #: Runs whose execution is a job. If the job is gone and the run still says it is working, the
 #: run is lying — nothing will ever move it. Every one of these produced the same symptom at
@@ -588,6 +600,74 @@ def sweep_abandoned_runs(engine, settings: Settings, project_id: str, *,
     return {"project_id": project_id, "closed_total": total, "detail": closed}
 
 
+def _quiet_minutes(engine, job_id: str) -> float:
+    """How long since this job's run last did anything. 0 when it is unknown."""
+    from ..db import begin
+
+    with begin(engine) as c:
+        row = c.execute(
+            sql("SELECT j.payload->>'run_id' AS run_id, "
+                "       EXTRACT(EPOCH FROM (now() - COALESCE(("
+                "         SELECT max(created_at) FROM llm_calls l "
+                "         WHERE l.code_task_run_id = j.payload->>'run_id'), j.updated_at)))/60 "
+                "       AS quiet_min "
+                "FROM jobs j WHERE j.id = :i"), {"i": job_id}).mappings().first()
+    if not row or not row["run_id"]:
+        return 0.0
+    return float(row["quiet_min"] or 0)
+
+
+def report_quiet(engine, job_id: str) -> Optional[float]:
+    """Put a run's silence in the Activity Log, long before anything is done about it.
+
+    Observation only — it changes nothing about when the shepherd intervenes. It exists because
+    a 27-minute blank in the log is indistinguishable from a dead system, and an operator
+    watching one is right to conclude the product is wasting their time.
+
+    Emitted at each five-minute step rather than on every sweep, so a genuinely long stage
+    leaves a readable trail instead of a wall of identical rows.
+    """
+    from ..db import begin
+
+    minutes = _quiet_minutes(engine, job_id)
+    if minutes < QUIET_WARN_MINUTES:
+        return None
+    step = int(minutes // QUIET_WARN_MINUTES) * QUIET_WARN_MINUTES
+    try:
+        with begin(engine) as c:
+            row = c.execute(
+                sql("SELECT payload->>'run_id' AS run_id, payload->>'project_id' AS project_id "
+                    "FROM jobs WHERE id = :i"), {"i": job_id}).mappings().first()
+            if not row or not row.get("run_id"):
+                return minutes
+            project_id = row.get("project_id")
+            if not project_id:
+                project_id = c.execute(
+                    sql("SELECT project_id FROM code_task_runs WHERE id = :r"),
+                    {"r": row["run_id"]}).scalar()
+            if not project_id:
+                return minutes
+            # One row per five-minute step. `emitted_step` makes the sweep idempotent: without
+            # it a sweep every 30s would write the same warning sixty times.
+            already = c.execute(
+                sql("SELECT 1 FROM events WHERE project_id = :p AND entity_id = :r "
+                    "AND event_type = 'code_task.quiet' "
+                    "AND (data->>'quiet_minutes')::int = :s LIMIT 1"),
+                {"p": project_id, "r": row["run_id"], "s": step}).first()
+            if already:
+                return minutes
+            emit_event(
+                c, project_id, "code_task.quiet", "shepherd", "code_task_run", row["run_id"],
+                {"quiet_minutes": step,
+                 "note": "no model call, turn or file since — the run may be installing "
+                         "dependencies, running tests, or stuck",
+                 "intervenes_at_minutes": NO_PROGRESS_MINUTES},
+            )
+    except Exception:  # noqa: BLE001 — reporting never breaks the sweep
+        pass
+    return minutes
+
+
 def _made_no_progress(engine, job_id: str) -> bool:
     """Has this job's run done ANYTHING recently — a model call, or a file?
 
@@ -664,6 +744,10 @@ def sweep_starved_work(engine, settings: Settings, project_id: str, *,
             continue
         wedged = float(blocker["running_min"] or 0) > WEDGED_AFTER_MINUTES
         if not wedged:
+            # Report the silence first, at five-minute steps, whatever is decided below. The
+            # 27-minute blank that prompted this recovered on its own — so intervention was
+            # right to hold off, and the console was wrong to say nothing for 27 minutes.
+            report_quiet(engine, blocker["id"])
             wedged = _made_no_progress(engine, blocker["id"])
         if wedged:
             with begin(engine) as c:

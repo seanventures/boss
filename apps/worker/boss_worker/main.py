@@ -361,6 +361,15 @@ def main() -> None:
 
     engine = get_engine(settings)
     db_ready = database_is_reachable(engine)
+    # The worker is where the coding pipeline actually runs, so it is where the interesting
+    # lines are written — which command took four minutes, how long a stage queued. Capturing
+    # them only in the API would consolidate the half that matters least.
+    if db_ready:
+        try:
+            from boss_engine.services.log_capture import install as _install_log_capture
+            _install_log_capture(engine, service="worker")
+        except Exception:  # noqa: BLE001 — never block the worker on a log handler
+            LOGGER.warning("activity-log capture unavailable", exc_info=True)
     LOGGER.info(
         "worker_started worker_id=%s database_connected=%s control_plane_url=%s github_configured=%s openai_configured=%s",
         settings.worker_id,

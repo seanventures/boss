@@ -1632,6 +1632,35 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         except Exception:  # noqa: BLE001
             return _lease_owner_at_start["v"]  # unknown -> assume unchanged, never false-abort
 
+    def _emit_cmd(label: str, result) -> None:
+        """Put one sandbox command's cost in the ACTIVITY LOG, not just the container log.
+
+        A phase reading "Engineer implementing — 27m46s — no model call" is accurate and
+        useless: it says the model was not the cost without saying what was. The cost is here —
+        `npm install`, the Playwright browser download, the test command — and until now none
+        of it reached the log an operator is told to look at, so the only honest answer to
+        "where did the time go" was "open a shell on the box".
+
+        A slow command is a WARN so it stands out from the ordinary ones without needing a
+        filter. Never raises: a diagnostic that can fail a build is worse than no diagnostic.
+        """
+        try:
+            ms = int(getattr(result, "duration_ms", 0) or 0)
+            with _transaction(engine) as c:
+                emit_event(
+                    c, project_id,
+                    "sandbox.command_slow" if ms >= 60_000 else "sandbox.command",
+                    "boss", "code_task_run", run_id,
+                    {"label": label,
+                     "command": str(getattr(result, "command", ""))[:200],
+                     "duration_ms": ms,
+                     "seconds": round(ms / 1000, 1),
+                     "exit_code": getattr(result, "exit_code", None),
+                     "timed_out": bool(getattr(result, "timed_out", False))},
+                )
+        except Exception:  # noqa: BLE001 — instrumentation never fails a run
+            pass
+
     def _record_stage_timing(stage_name: str, step: str, *, waited_ms: int, work_ms: int,
                              total_ms: int, provider: str, engine_name: str) -> None:
         """Append one stage's wait/work split to the run, and log it.
@@ -1650,12 +1679,24 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 "total_ms": int(total_ms),
                 "provider": provider, "engine": engine_name,
             }
+            queue_pct = (100.0 * waited_ms / total_ms) if total_ms else 0.0
             logger.info(
                 "stage timing run=%s stage=%s waited=%.1fs work=%.1fs (%.0f%% of it was queueing)",
-                run_id, stage_name, waited_ms / 1000, work_ms / 1000,
-                (100.0 * waited_ms / total_ms) if total_ms else 0.0,
+                run_id, stage_name, waited_ms / 1000, work_ms / 1000, queue_pct,
             )
             with _transaction(engine) as c:
+                # IN THE ACTIVITY LOG, not only in a container log nobody can read. "Where did
+                # the time go" has to be answerable from the screen the operator is sent to.
+                emit_event(
+                    c, project_id,
+                    "stage.queued" if waited_ms >= 30_000 else "stage.timing",
+                    "boss", "code_task_run", run_id,
+                    {"stage": stage_name, "step": step,
+                     "waited_seconds": round(waited_ms / 1000, 1),
+                     "work_seconds": round(work_ms / 1000, 1),
+                     "queueing_pct": round(queue_pct),
+                     "provider": provider, "engine": engine_name},
+                )
                 c.execute(
                     sql("UPDATE code_task_runs SET finalize_ctx = "
                         "COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
@@ -1925,6 +1966,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     cwd=str(cwd),
                     timeout=install_timeout,
                 )
+                _emit_cmd("install dependencies", install)
                 if install.exit_code != 0:
                     last_verify_output = (
                         prep_note
@@ -1933,14 +1975,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         + (install.stderr or "")
                     )[-4000:]
                     return install
-                sandbox.run(
+                _emit_cmd("install browsers", sandbox.run(
                     str(
                         prep.get("browser_install_command")
                         or verification_target.PLAYWRIGHT_INSTALL_CMD
                     ),
                     cwd=str(cwd),
                     timeout=install_timeout,
-                )
+                ))
             # npm install / the implementer can recreate leftover Playwright
             # configs. Force the official HookWatch tree again immediately
             # before the authoritative command so e2e cannot start itty-router

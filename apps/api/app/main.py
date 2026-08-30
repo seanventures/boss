@@ -1210,6 +1210,16 @@ async def lifespan(_: FastAPI):
         print("[lifespan] ensure_schema applied (idempotent schema sync)")
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] ensure_schema skipped — DB not ready or migration error: {exc}")
+    # CONSOLIDATE THE LOGS. Everything BOSS writes about where time went — the sandbox's
+    # per-command durations, the queueing-vs-work split, why a preview refused — went to a
+    # container log an operator cannot open. From here it also lands in `app_logs`, which the
+    # Activity Log reads as one more source, so the console is the single place to look.
+    try:
+        from boss_engine.services.log_capture import install as _install_log_capture
+        _install_log_capture(engine, service="api")
+        print("[lifespan] activity-log capture installed")
+    except Exception as exc:  # noqa: BLE001 — never block boot on a log handler
+        print(f"[lifespan] activity-log capture unavailable: {exc}")
     # Preview lifecycle is independent from the API. Reconcile the durable rows against
     # live processes/containers/rootfs services; never blanket-kill healthy previews.
     try:
