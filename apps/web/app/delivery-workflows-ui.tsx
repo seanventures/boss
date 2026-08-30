@@ -794,6 +794,14 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [importFrom, setImportFrom] = useState("");
+
+  /** What an import would be called if the operator names nothing. Shown as the placeholder,
+   *  so the name the workflow WILL get is visible before the button is pressed. */
+  const defaultImportName = useMemo(() => {
+    if (!importFrom) return "";
+    const source = installed.find((i) => i.workflow_key === importFrom);
+    return source ? `${source.name} (copy)` : "";
+  }, [importFrom, installed]);
   const [defining, setDefining] = useState(false);
 
   useEffect(() => {
@@ -1084,26 +1092,47 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               starts something read as the least important thing on the line. */}
           <div className="dw-head-left">
           {!creating ? (
-            <label className="field">
-              <span>Editing</span>
-              <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}
-                      data-testid="dw-target">
-                {/* The tab is called "Build your own", and until now the only way in was to fork
-                    something — so a screen that promised authorship offered only editing. */}
-                {editable.length === 0
-                  ? <option value="">Nothing of your own yet</option>
-                  : null}
-                {editable.map((i) => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
-            </label>
+            <div className="dw-head-picker">
+              <label className="field">
+                <span>Editing</span>
+                <select className="input" value={target}
+                        onChange={(e) => setTarget(e.target.value)} data-testid="dw-target">
+                  {/* The tab is called "Build your own", and until now the only way in was to
+                      fork something — so a screen that promised authorship offered only
+                      editing. */}
+                  {editable.length === 0
+                    ? <option value="">Nothing of your own yet</option>
+                    : null}
+                  {editable.map((i) => (
+                    <option key={i.id} value={i.id}>{i.name}</option>
+                  ))}
+                </select>
+              </label>
+              {/* A header made only of controls tells you nothing about the thing they act on.
+                  Two facts, in the space the dead gap used to occupy: how big this workflow is,
+                  and whether it came from a standard — which is also what decides whether
+                  "Reset to the standard" beside it means anything. */}
+              {target ? (
+                <p className="detail dw-head-meta" data-testid="dw-head-meta">
+                  {draft.length} step{draft.length === 1 ? "" : "s"}
+                  {loaded?.forked_from
+                    ? <> · from <strong>{loaded.forked_from.name}</strong></>
+                    : " · written from scratch"}
+                </p>
+              ) : null}
+            </div>
           ) : null}
 
           {creating ? (
             <form className="dw-new" onSubmit={(e) => {
               e.preventDefault();
-              const name = newName.trim();
+              // A NAME IS NOT REQUIRED TO COPY SOMETHING.
+              //
+              // Import was disabled until a name was typed, and a disabled button that does not
+              // say it is disabled reads as broken — which is exactly how it was reported. When
+              // you are starting from an existing workflow there is an obvious name available,
+              // so use it and let the operator rename afterwards.
+              const name = newName.trim() || defaultImportName;
               if (!name) return;
               // IMPORT IS A FORK WITH A NAME YOU CHOSE.
               //
@@ -1121,8 +1150,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   it has to say what mode the header is in — an unlabelled box next to a
                   labelled dropdown reads as part of the dropdown. */}
               <label className="field">
-                <span>New workflow</span>
-                <input className="input" autoFocus value={newName} placeholder="Name it"
+                <span>Name</span>
+                <input className="input" autoFocus value={newName}
+                       placeholder={defaultImportName || "Name it"}
                        onChange={(e) => setNewName(e.target.value)}
                        onKeyDown={(e) => { if (e.key === "Escape") setCreating(false); }}
                        aria-label="Name for the new workflow" data-testid="dw-new-name" />
@@ -1141,7 +1171,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   ))}
                 </select>
               </label>
-              <button type="submit" className="cap-btn" disabled={!!busy || !newName.trim()}
+              <button type="submit" className="cap-btn primary"
+                      disabled={!!busy || !(newName.trim() || defaultImportName)}
                       data-testid="dw-new-confirm">
                 {importFrom ? "Import" : "Create"}
               </button>
@@ -1149,6 +1180,13 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                       onClick={() => { setCreating(false); setNewName(""); setImportFrom(""); }}>
                 Cancel
               </button>
+              {/* The one case where the button IS still disabled, said out loud rather than
+                  left for the operator to work out by clicking a control that does nothing. */}
+              {!newName.trim() && !importFrom ? (
+                <span className="detail dw-new-hint" data-testid="dw-new-hint">
+                  Name it, or pick something to start from.
+                </span>
+              ) : null}
             </form>
           ) : (
             <>

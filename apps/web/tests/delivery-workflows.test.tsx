@@ -335,8 +335,12 @@ describe("build your own actually lets you build one", () => {
 
   it("keeps a single solid button, so two do not compete", () => {
     // Accent-tinted, not solid: prominent without turning the header into two primary buttons
-    // arguing about which one the operator meant.
-    expect(CSS).toContain("background: color-mix(in srgb, var(--accent) 12%, transparent)");
+    // arguing about which one the operator meant. Asserted on the SHAPE — a mix of accent into
+    // transparency — rather than on the exact percentage, which is a taste that will move.
+    const cta = CSS.slice(CSS.indexOf(".dw-new-cta {"));
+    expect(cta.slice(0, cta.indexOf("}"))).toMatch(
+      /background: color-mix\(in srgb, var\(--accent\) \d+%, transparent\)/);
+    expect(cta.slice(0, cta.indexOf("}"))).not.toContain("background: var(--accent)");
   });
 
   it("separates 'edit that one' from 'start a new one'", () => {
@@ -499,6 +503,47 @@ describe("the builder header asks one question at a time", () => {
   });
 
   it("labels the name field, because it took the labelled slot", () => {
-    expect(UI).toContain("<span>New workflow</span>");
+    // An unlabelled box beside a labelled dropdown reads as part of the dropdown.
+    expect(UI).toContain("<span>Name</span>");
+    expect(UI).toContain("<span>Start from</span>");
+  });
+
+  it("makes creating LOOK like a different mode", () => {
+    // The same flat row with different contents left an operator unsure whether they were
+    // editing the workflow in the dropdown or making a new one.
+    expect(CSS).toContain('.dw-canvas-head[data-mode="creating"]');
+  });
+});
+
+describe("importing does not need a name typed first", () => {
+  it("falls back to a name derived from what it copies", () => {
+    // Import was disabled until a name was typed, and a disabled button that does not say it
+    // is disabled reads as broken — which is how it was reported. Copying something has an
+    // obvious name available.
+    expect(UI).toContain("const name = newName.trim() || defaultImportName;");
+    expect(UI).toContain("`${source.name} (copy)`");
+  });
+
+  it("shows that name before the button is pressed", () => {
+    // As the placeholder, so the operator can see what the workflow will be called.
+    expect(UI).toContain('placeholder={defaultImportName || "Name it"}');
+  });
+
+  it("says why, in the one case it IS still disabled", () => {
+    expect(UI).toContain('data-testid="dw-new-hint"');
+    expect(UI).toContain("Name it, or pick something to start from.");
+  });
+});
+
+describe("the header carries a fact, not just controls", () => {
+  it("says how big the workflow is and where it came from", () => {
+    // The dead gap in the middle of the row is now the one place on the screen that says
+    // whether "Reset to the standard" beside it means anything.
+    expect(UI).toContain('data-testid="dw-head-meta"');
+    expect(UI).toContain("written from scratch");
+  });
+
+  it("keeps the two actions together instead of flinging them apart", () => {
+    expect(CSS).toContain(".dw-canvas-actions { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }");
   });
 });
