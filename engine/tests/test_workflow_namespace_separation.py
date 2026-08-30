@@ -73,7 +73,13 @@ def project(eng):
     with eng.begin() as c:
         # `events` too: creating a definition emits one, and it holds a foreign key to the
         # project. Order matters — children before the row they point at.
-        for table in ("workflow_versions", "workflow_definitions", "events", "receipts"):
+        # Children before parents. A run row holds a foreign key to its definition, so
+        # deleting definitions first aborts the transaction and every later DELETE in this
+        # block fails with "current transaction is aborted" — which reads as a broken test
+        # rather than a teardown that deleted things in the wrong order.
+        for table in ("workflow_step_runs", "workflow_runs", "workflow_mappings",
+                      "project_skills", "workflow_versions", "workflow_definitions",
+                      "decisions", "events", "receipts"):
             try:
                 c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
             except Exception:                      # a table this schema does not have
@@ -200,3 +206,92 @@ def test_a_fork_records_what_it_came_from(eng, project):
         )
     assert forked["forked_from_version_id"] == "wfv_original"
     assert forked["is_catalogue"] is False
+
+
+# ── Custom steps (Phase 6): the floor applies to a customer, not retroactively to BOSS ──
+
+def _skill(c, project_id, skill_id, *, risk, trusted, enabled=True):
+    c.execute(
+        text("INSERT INTO project_skills (id, project_id, skill_id, source, enabled, config, "
+             "provenance) VALUES (:i, :p, :s, 'tenant', :e, CAST(:c AS JSONB), CAST(:pr AS JSONB)) "
+             "ON CONFLICT (project_id, skill_id) DO UPDATE SET enabled=EXCLUDED.enabled, "
+             "config=EXCLUDED.config, provenance=EXCLUDED.provenance"),
+        {"i": f"psk_{uuid.uuid4().hex[:10]}", "p": project_id, "s": skill_id, "e": enabled,
+         "c": f'{{"risk_tier": {risk}}}', "pr": '{"trusted": true}' if trusted else '{}'},
+    )
+
+
+def _skill_workflow(c, project, key, skill_id, namespace, approval=None):
+    step = {"id": "s", "kind": "skill", "binding": {"skill_id": skill_id}, "next": []}
+    if approval:
+        step["approval"] = approval
+    definition = workflows.create_definition(
+        c, project_id=project, workflow_key=key, name=key, description=None,
+        actor="test", namespace=namespace,
+    )
+    version = workflows.publish_version(
+        c, project_id=project, definition_id=definition["id"],
+        spec={"entry_step": "s", "steps": [step]}, actor="test",
+    )
+    return workflows.start_run(
+        c, project_id=project, actor="test", input_data={},
+        dedupe_key=f"dk_{uuid.uuid4().hex[:10]}", workflow_version_id=version["id"],
+    )
+
+
+def test_a_customers_untrusted_high_risk_skill_is_refused(eng, project):
+    """"Attach your own skill" must not be the documented way around every gate in the
+    product."""
+    with eng.begin() as c:
+        _skill(c, project, "customer.dangerous", risk=3, trusted=False)
+        with pytest.raises(workflows.WorkflowBindingBlockedError) as caught:
+            _skill_workflow(c, project, "risky_custom", "customer.dangerous", "product")
+    assert "untrusted skill" in str(caught.value)
+
+
+def test_a_customers_high_risk_skill_cannot_be_auto_approved(eng, project):
+    with eng.begin() as c:
+        _skill(c, project, "customer.reviewed", risk=3, trusted=True)
+        with pytest.raises(workflows.WorkflowBindingBlockedError) as caught:
+            _skill_workflow(c, project, "auto_custom", "customer.reviewed", "product",
+                            approval={"mode": "auto"})
+    assert "requires a person" in str(caught.value)
+
+
+def test_a_customers_ordinary_skill_runs(eng, project):
+    with eng.begin() as c:
+        _skill(c, project, "customer.harmless", risk=0, trusted=False)
+        run = _skill_workflow(c, project, "ok_custom", "customer.harmless", "product")
+    assert run["status"] in {"queued", "running", "validating"}
+
+
+def test_a_disabled_skill_is_refused_rather_than_silently_doing_nothing(eng, project):
+    """A workflow that appears to run and does nothing is worse than one that refuses to
+    publish."""
+    with eng.begin() as c:
+        _skill(c, project, "customer.off", risk=0, trusted=True, enabled=False)
+        with pytest.raises(workflows.WorkflowBindingBlockedError):
+            _skill_workflow(c, project, "off_custom", "customer.off", "product")
+
+
+def test_the_new_rule_is_not_applied_to_bosss_own_workflows(eng, project):
+    """THE CONSTRAINT. BOSS's definitions were written before this rule existed and are
+    governed by the machinery around them. Applying a new check to them here would fail to
+    publish workflows that have been running correctly for months."""
+    with eng.begin() as c:
+        # The exact binding refused above, in the system namespace.
+        _skill(c, project, "internal.thing", risk=3, trusted=False)
+        run = _skill_workflow(c, project, "internal_skill_wf", "internal.thing", "system")
+    assert run["status"] in {"queued", "running", "validating"}
+
+
+def test_an_unclassified_skill_is_treated_as_dangerous_not_as_safe(eng, project):
+    """Guessing risk 0 for something nobody classified is how an ungoverned step ships."""
+    with eng.begin() as c:
+        c.execute(
+            text("INSERT INTO project_skills (id, project_id, skill_id, source, enabled) "
+                 "VALUES (:i, :p, 'customer.unlabelled', 'tenant', true)"),
+            {"i": f"psk_{uuid.uuid4().hex[:10]}", "p": project},
+        )
+        with pytest.raises(workflows.WorkflowBindingBlockedError):
+            _skill_workflow(c, project, "unlabelled_custom", "customer.unlabelled", "product")

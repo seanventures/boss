@@ -20,6 +20,8 @@ from sqlalchemy.engine import Connection
 from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
 from .workflow_capabilities import (
     approval_mode_for as effective_approval_mode,
+    validate_custom_step as custom_step_problems,
+    effective_approval as effective_approval_policy,
     estimate_minutes as capability_minutes,
     project_requirements as capability_project_requirements,
     validate_step as capability_problems,
@@ -214,13 +216,24 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
                 raise WorkflowValidationError(" ".join(problems))
             # Store the EFFECTIVE approval mode, not the requested one: a plan that reads
             # "auto" beside a step that will stop and wait is a plan nobody can trust.
-            approval = dict(step.get("approval") or {})
-            approval["mode"] = effective_approval_mode(
-                str(binding["capability"]), approval.get("mode")
+            step["approval"] = effective_approval_policy(
+                str(binding["capability"]), step.get("approval")
             )
-            step["approval"] = approval
         if kind == "skill" and not binding.get("skill_id"):
             raise WorkflowValidationError(f"skill step '{step_id}' requires binding.skill_id.")
+        if kind == "skill" and step.get("approval"):
+            # A customer's own step is under the same floor as a standard one. Without this,
+            # "custom step" would be the documented way to deploy to production unattended.
+            # The skill's real risk tier is checked against the project registry in
+            # `_validate_bindings`, which is the only place that can see it.
+            approval = dict(step["approval"])
+            mode = str(approval.get("mode", "auto")).lower()
+            if mode not in ("auto", "manual"):
+                raise WorkflowValidationError(
+                    f"step '{step_id}' approval mode must be 'auto' or 'manual'."
+                )
+            approval["mode"] = mode
+            step["approval"] = approval
         if kind == "integration" and not binding.get("integration_connection_id"):
             raise WorkflowValidationError(
                 f"integration step '{step_id}' requires binding.integration_connection_id."
@@ -905,11 +918,29 @@ def _table_exists(connection: Connection, table_name: str) -> bool:
     )
 
 
+def _skill_facts(row: Any) -> dict[str, Any]:
+    """What a project_skills row says about risk and provenance.
+
+    `risk_tier` lives in the skill's config rather than in a column, so read it there and
+    default to the FLOOR when it is absent — an unlabelled skill is treated as dangerous, not
+    as safe. Guessing 0 for something nobody classified is how an ungoverned step ships.
+    """
+    config = row.get("config") if isinstance(row.get("config"), dict) else {}
+    provenance = row.get("provenance") if isinstance(row.get("provenance"), dict) else {}
+    declared = config.get("risk_tier")
+    return {
+        "enabled": bool(row.get("enabled", True)),
+        "risk_tier": int(declared) if declared is not None else 2,
+        "provenance": provenance,
+    }
+
+
 def _validate_bindings(
     connection: Connection,
     project_id: str,
     version_id: str,
     spec: dict[str, Any],
+    namespace: str = SYSTEM_NAMESPACE,
 ) -> None:
     for step in spec["steps"]:
         binding = step.get("binding") or {}
@@ -930,7 +961,7 @@ def _validate_bindings(
             row = connection.execute(
                 text(
                     """
-                    SELECT enabled FROM project_skills
+                    SELECT enabled, config, provenance FROM project_skills
                     WHERE project_id=:project_id AND skill_id=:skill_id
                     """
                 ),
@@ -940,6 +971,21 @@ def _validate_bindings(
                 raise WorkflowBindingBlockedError(
                     f"step '{step['id']}' skill '{skill_id}' is missing or disabled."
                 )
+            # THE FLOOR APPLIES TO A CUSTOMER'S OWN STEPS TOO — BUT ONLY TO THEIRS.
+            #
+            # This is the only place that can see a skill's real risk tier and provenance, so
+            # it is the only place the check can be made. Without it, "attach your own skill"
+            # would be the documented way around every gate in the product.
+            #
+            # Scoped to `product`, deliberately. BOSS's own thirty-three definitions were
+            # written before this rule existed and are governed by the machinery around them;
+            # applying a new check to them here would fail to publish workflows that have been
+            # running correctly for months, which is exactly what "the infra workflows do not
+            # change" rules out.
+            if namespace == PRODUCT_NAMESPACE:
+                problems = custom_step_problems(step, _skill_facts(row))
+                if problems:
+                    raise WorkflowBindingBlockedError(" ".join(problems))
         if step["kind"] == "integration":
             if not _table_exists(connection, "integration_connections"):
                 raise WorkflowBindingBlockedError(
@@ -1029,7 +1075,14 @@ def start_run(
         workflow_version_id = resolution["selected"]["workflow_version_id"]
     version = _version_row(connection, project_id, str(workflow_version_id))
     spec = validate_workflow_spec(_json(version["spec"], {}))
-    _validate_bindings(connection, project_id, version["id"], spec)
+    version_namespace = connection.execute(
+        text(
+            "SELECT COALESCE(d.namespace, 'system') FROM workflow_definitions d "
+            "WHERE d.id = :definition_id"
+        ),
+        {"definition_id": version["workflow_definition_id"]},
+    ).scalar() or SYSTEM_NAMESPACE
+    _validate_bindings(connection, project_id, version["id"], spec, str(version_namespace))
 
     run_id = make_id("wfr")
     root_run_id = run_id

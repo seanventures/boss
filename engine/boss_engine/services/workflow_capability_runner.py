@@ -19,14 +19,16 @@ Three rules shape the whole file:
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import timedelta
 from typing import Any, Optional
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import workflows
-from .core import create_blocking_decision, emit_event
+from .core import create_blocking_decision, emit_event, now_utc
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
 log = logging.getLogger(__name__)
@@ -199,15 +201,33 @@ def _open_gate(
         capability.summary,
         risk_tier=max(2, capability.risk_tier),
     )
+    # The deadline goes on the step, not in a scheduler somewhere else. A timeout you cannot
+    # see from the row that is waiting is a timeout nobody can explain when it fires.
+    sla_hours = approval.get("sla_hours")
     connection.execute(
         text(
             """
             UPDATE workflow_step_runs
-            SET status='waiting', decision_id=:decision_id, updated_at=now()
+            SET status='waiting',
+                decision_id=:decision_id,
+                binding_snapshot = COALESCE(binding_snapshot, '{}'::jsonb)
+                                   || CAST(:snapshot AS JSONB),
+                updated_at=now()
             WHERE id=:id
             """
         ),
-        {"id": step_row["id"], "decision_id": decision_id},
+        {
+            "id": step_row["id"],
+            "decision_id": decision_id,
+            "snapshot": json.dumps({
+                "approval": approval,
+                "opened_at": now_utc().isoformat(),
+                "due_at": (
+                    (now_utc() + timedelta(hours=float(sla_hours))).isoformat()
+                    if sla_hours else None
+                ),
+            }),
+        },
     )
     emit_event(
         connection, project_id, "workflow.gate_opened", run.get("actor") or "workflow",
@@ -324,3 +344,130 @@ def tick(
             performed.append({"run_id": run_id, "outcome": "skipped", "error": str(error)})
 
     return {"project_id": project_id, "performed": performed, "count": len(performed)}
+
+
+def sweep_gate_timeouts(
+    connection: Connection, *, project_id: str, actor: str = "workflow-policy"
+) -> dict[str, Any]:
+    """Apply each waiting gate's timeout policy once its deadline has passed.
+
+    Three outcomes, and the difference between them matters more than the mechanism:
+
+      * `block`   — the default. It stays waiting and the run is marked blocked, so somebody
+                    has to look. A gate whose unanswered outcome is "proceed" is not a gate.
+      * `escalate`— still waiting, but now loud: an event a human process can pick up.
+      * `approve` — allowed only below the risk ceiling, and recorded as a decision made BY
+                    POLICY. An unattended approval that leaves no record is how an audit fails.
+
+    Never raises for one bad step. Runs on the worker loop beside the capability tick.
+    """
+    rows = connection.execute(
+        text(
+            """
+            SELECT s.id, s.step_id, s.workflow_run_id, s.binding_snapshot, s.decision_id,
+                   r.actor, d.workflow_key
+            FROM workflow_step_runs s
+            JOIN workflow_runs r ON r.id = s.workflow_run_id
+            JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+            WHERE s.project_id = :project_id
+              AND s.status = 'waiting'
+              AND COALESCE(d.namespace, 'system') = 'product'
+              AND s.binding_snapshot ? 'due_at'
+              AND s.binding_snapshot->>'due_at' IS NOT NULL
+              AND (s.binding_snapshot->>'due_at')::timestamptz < now()
+              AND COALESCE(s.binding_snapshot->>'timeout_applied', 'no') = 'no'
+            LIMIT 50
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().all()
+
+    applied: list[dict[str, Any]] = []
+    for row in rows:
+        snapshot = row["binding_snapshot"] or {}
+        approval = snapshot.get("approval") or {}
+        action = str(approval.get("on_timeout") or "block").lower()
+        try:
+            if action == "approve":
+                # NOT `complete_step`. That is the worker path and requires the step to be
+                # leased by the caller — this step is WAITING on a person, leased by nobody.
+                # Approving by policy is a different act from finishing work, and borrowing
+                # the worker's function to do it would have meant lying about who did what.
+                connection.execute(
+                    text(
+                        """
+                        UPDATE workflow_step_runs
+                        SET status='succeeded',
+                            output = CAST(:output AS JSONB),
+                            evidence = COALESCE(evidence, '[]'::jsonb)
+                                       || CAST(:evidence AS JSONB),
+                            completed_at = now(),
+                            updated_at = now()
+                        WHERE id = :id AND status = 'waiting'
+                        """
+                    ),
+                    {
+                        "id": row["id"],
+                        "output": json.dumps({
+                            "approved_by": "policy",
+                            "reason": "nobody answered within the agreed time",
+                            "sla_hours": approval.get("sla_hours"),
+                        }),
+                        # The evidence IS the record. "Approved by policy" beside the SLA it
+                        # was approved under is what an auditor needs; "approved" alone is not.
+                        "evidence": json.dumps([{
+                            "kind": "auto_approval",
+                            "decided_by": "policy",
+                            "sla_hours": approval.get("sla_hours"),
+                            "approver_role": approval.get("approver_role"),
+                            "due_at": snapshot.get("due_at"),
+                        }]),
+                    },
+                )
+                emit_event(
+                    connection, project_id, "workflow.gate_auto_approved", actor,
+                    "workflow_step_run", row["id"],
+                    {"step_id": row["step_id"], "workflow_key": row["workflow_key"],
+                     "sla_hours": approval.get("sla_hours")},
+                )
+                # The run has to move on, or a policy approval leaves the workflow parked at a
+                # step that has already been decided.
+                workflows.advance_run(connection, project_id, row["workflow_run_id"])
+                outcome = "auto_approved"
+            elif action == "escalate":
+                emit_event(
+                    connection, project_id, "workflow.gate_escalated", actor,
+                    "workflow_step_run", row["id"],
+                    {"step_id": row["step_id"], "workflow_key": row["workflow_key"],
+                     "approver_role": approval.get("approver_role"),
+                     "due_at": snapshot.get("due_at")},
+                )
+                outcome = "escalated"
+            else:
+                emit_event(
+                    connection, project_id, "workflow.gate_overdue", actor,
+                    "workflow_step_run", row["id"],
+                    {"step_id": row["step_id"], "workflow_key": row["workflow_key"],
+                     "due_at": snapshot.get("due_at")},
+                )
+                outcome = "blocked"
+
+            # Marked so a gate is not escalated once a minute forever. Escalating repeatedly is
+            # how people learn to ignore escalations.
+            connection.execute(
+                text(
+                    "UPDATE workflow_step_runs "
+                    "SET binding_snapshot = COALESCE(binding_snapshot,'{}'::jsonb) "
+                    "    || CAST(:patch AS JSONB), updated_at=now() "
+                    "WHERE id=:id"
+                ),
+                {"id": row["id"],
+                 "patch": json.dumps({"timeout_applied": outcome,
+                                      "timeout_applied_at": now_utc().isoformat()})},
+            )
+            applied.append({"step_run_id": row["id"], "step_id": row["step_id"],
+                            "outcome": outcome})
+        except Exception as error:                 # noqa: BLE001
+            log.warning("gate timeout sweep skipped %s (non-fatal): %s", row["id"], error)
+
+    return {"project_id": project_id, "applied": applied, "count": len(applied)}

@@ -322,9 +322,29 @@ def validate_step(step: Mapping[str, Any]) -> list[str]:
             f"step '{step_id}' ({capability.label}) does not take: {', '.join(sorted(unknown))}."
         )
 
-    approval = step.get("approval") or {}
+    problems.extend(validate_approval(step_id, capability, step.get("approval") or {}))
+    return problems
+
+
+#: What happens when nobody answers a gate in time.
+#:
+#: `approve` exists because real teams need it — a release manager on holiday should not stop
+#: a low-risk change forever. It is recorded as a decision made BY POLICY, never as one made by
+#: a person, which is the difference between an audit that passes and one that does not.
+TIMEOUT_ACTIONS = ("block", "escalate", "approve")
+
+#: A capability at or above this can never auto-approve on timeout, whatever the SLA says.
+#: Deploying to production because nobody looked is not an approval.
+TIMEOUT_APPROVE_RISK_CEILING = 2
+
+
+def validate_approval(
+    step_id: str, capability: "Capability", approval: Mapping[str, Any]
+) -> list[str]:
+    """Everything wrong with one step's approval policy."""
+    problems: list[str] = []
     requested = approval.get("mode")
-    if requested and str(requested).lower() not in ("auto", "manual"):
+    if requested is not None and str(requested).lower() not in ("auto", "manual"):
         problems.append(f"step '{step_id}' approval mode must be 'auto' or 'manual'.")
     elif capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR and str(requested).lower() == "auto":
         problems.append(
@@ -332,7 +352,64 @@ def validate_step(step: Mapping[str, Any]) -> list[str]:
             "always requires a person. Set approval to manual, or choose a different step."
         )
 
+    sla = approval.get("sla_hours")
+    if sla is not None:
+        try:
+            hours = float(sla)
+        except (TypeError, ValueError):
+            problems.append(f"step '{step_id}' sla_hours must be a number.")
+        else:
+            if hours <= 0 or hours > 24 * 30:
+                problems.append(
+                    f"step '{step_id}' sla_hours must be between 0 and 720 (30 days)."
+                )
+
+    on_timeout = approval.get("on_timeout")
+    if on_timeout is not None:
+        action = str(on_timeout).lower()
+        if action not in TIMEOUT_ACTIONS:
+            problems.append(
+                f"step '{step_id}' on_timeout must be one of: {', '.join(TIMEOUT_ACTIONS)}."
+            )
+        elif action == "approve" and capability.risk_tier >= TIMEOUT_APPROVE_RISK_CEILING:
+            # The floor again, from the other direction. A gate that approves itself because
+            # nobody looked is not a gate, and this is the setting that would quietly turn one
+            # off without ever saying "auto".
+            problems.append(
+                f"step '{step_id}' ({capability.label}) is risk tier {capability.risk_tier} "
+                "and cannot approve itself on a timeout. Use 'escalate' or 'block'."
+            )
+        elif action != "block" and sla is None:
+            problems.append(
+                f"step '{step_id}' has on_timeout='{action}' but no sla_hours, so the timeout "
+                "would never fire."
+            )
+
     return problems
+
+
+def effective_approval(
+    capability_key: str, approval: Optional[Mapping[str, Any]] = None
+) -> dict[str, Any]:
+    """The approval policy this step will ACTUALLY run under, with its defaults filled in.
+
+    Stored on the step so the plan says what will happen rather than what was asked for.
+    """
+    approval = dict(approval or {})
+    capability = get(capability_key)
+    resolved: dict[str, Any] = {
+        "mode": approval_mode_for(capability_key, approval.get("mode")),
+        # Defaults to blocking. A gate whose unanswered outcome is "proceed" unless somebody
+        # configured otherwise is a gate that fails open, and this one guards production.
+        "on_timeout": str(approval.get("on_timeout") or "block").lower(),
+    }
+    if approval.get("approver_role"):
+        resolved["approver_role"] = str(approval["approver_role"])
+    if approval.get("sla_hours") is not None:
+        resolved["sla_hours"] = float(approval["sla_hours"])
+    resolved["risk_tier"] = capability.risk_tier
+    resolved["forced_manual"] = capability.risk_tier >= MANUAL_APPROVAL_RISK_FLOOR
+    return resolved
 
 
 def project_requirements(spec: Mapping[str, Any]) -> set[str]:
@@ -365,3 +442,75 @@ def estimate_minutes(spec: Mapping[str, Any]) -> int:
         if key in CAPABILITY_KEYS:
             total += get(key).typical_minutes
     return total
+
+
+# ── Custom steps (Phase 6) ─────────────────────────────────────────────────────
+#
+# A step the customer defines, bound to a skill they registered rather than to one of the
+# capabilities above. Deliberately last: it needs the capability registry to model against,
+# the risk floor to sit under, and provenance on whatever they attached.
+#
+# It is NOT a way around the floor. A custom step inherits the risk tier of the skill it binds,
+# and the same rule applies — at or above the floor it is a human decision. Otherwise "custom
+# step" would be the documented method for deploying to production unattended.
+
+
+def validate_custom_step(
+    step: Mapping[str, Any], skill: Optional[Mapping[str, Any]]
+) -> list[str]:
+    """Everything wrong with one custom step, given the skill it binds.
+
+    `skill` is what the project's registry knows about that skill id, or None if it has none —
+    which is itself the most common problem and gets the clearest sentence.
+    """
+    problems: list[str] = []
+    step_id = step.get("id", "?")
+    binding = step.get("binding") or {}
+    skill_id = str(binding.get("skill_id") or "").strip()
+
+    if not skill_id:
+        problems.append(f"step '{step_id}' is a custom step with no skill attached.")
+        return problems
+    if skill is None:
+        problems.append(
+            f"step '{step_id}' attaches skill '{skill_id}', which this project does not have. "
+            "Register it first, or choose one of the standard steps."
+        )
+        return problems
+    if not skill.get("enabled", True):
+        # Fail closed. A disabled skill that silently no-ops is worse than a step that refuses
+        # to publish: the workflow would appear to run and do nothing.
+        problems.append(
+            f"step '{step_id}' attaches skill '{skill_id}', which is disabled in this project."
+        )
+
+    risk = int(skill.get("risk_tier") or 0)
+    approval = step.get("approval") or {}
+    if risk >= MANUAL_APPROVAL_RISK_FLOOR and str(approval.get("mode", "")).lower() == "auto":
+        problems.append(
+            f"step '{step_id}' attaches skill '{skill_id}' at risk tier {risk} and always "
+            "requires a person. Set approval to manual."
+        )
+
+    provenance = skill.get("provenance") or {}
+    if not provenance.get("trusted", False) and risk >= MANUAL_APPROVAL_RISK_FLOOR:
+        # Third-party supply chain. BOSS records provenance on imported toolchain sources for
+        # exactly this moment: an untrusted skill that can change the world does not get to run
+        # without somebody agreeing to it.
+        problems.append(
+            f"step '{step_id}' attaches an untrusted skill '{skill_id}' at risk tier {risk}. "
+            "Only a reviewed skill can be given that much reach."
+        )
+
+    return problems
+
+
+def custom_step_approval(skill: Mapping[str, Any], requested: Optional[str]) -> str:
+    """The approval mode a custom step will run under, under the same floor."""
+    risk = int((skill or {}).get("risk_tier") or 0)
+    if risk >= MANUAL_APPROVAL_RISK_FLOOR:
+        return "manual"
+    mode = (requested or "auto").strip().lower()
+    if mode not in ("auto", "manual"):
+        raise ValueError("approval mode must be 'auto' or 'manual'.")
+    return mode

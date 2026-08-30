@@ -19751,10 +19751,17 @@ def run_delivery_capabilities(payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="project_id is required")
     ctx = EngineContext.create()
     with begin(engine) as connection:
-        return workflow_capability_runner.tick(
+        advanced = workflow_capability_runner.tick(
             connection, ctx, project_id=project_id,
             worker_id=str(payload.get("worker_id") or "capability-runner"),
         )
+        # Same tick: a gate whose SLA has run out is as much "work that is ready" as a step
+        # waiting to execute, and running it on a separate schedule would mean two places to
+        # look when a workflow is not moving.
+        timeouts = workflow_capability_runner.sweep_gate_timeouts(
+            connection, project_id=project_id
+        )
+    return {**advanced, "gate_timeouts": timeouts}
 
 
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)

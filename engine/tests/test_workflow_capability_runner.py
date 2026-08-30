@@ -290,3 +290,118 @@ def test_the_runner_never_touches_a_system_workflow(eng, project, monkeypatch):
 
     assert result["count"] == 0, "the runner reached into a system workflow"
     assert not tool.calls
+
+
+# ── Approval policy (Phase 5) ──────────────────────────────────────────────────
+
+def _gate_workflow(c, project, key, approval):
+    return _publish(c, project, key, [
+        {"id": "g", "kind": "capability",
+         "binding": {"capability": "spec_review", "inputs": {}},
+         "approval": approval, "next": []},
+    ], "g")
+
+
+def _overdue(c, run_id):
+    """Move a waiting gate's deadline into the past."""
+    c.execute(
+        text(
+            "UPDATE workflow_step_runs "
+            "SET binding_snapshot = binding_snapshot || "
+            "    jsonb_build_object('due_at', (now() - interval '1 hour')::text) "
+            "WHERE workflow_run_id=:r AND status='waiting'"
+        ),
+        {"r": run_id},
+    )
+
+
+def test_a_gate_records_its_deadline_where_the_waiting_row_can_be_read(eng, project, monkeypatch):
+    """A timeout you cannot see from the row that is waiting is a timeout nobody can explain
+    when it fires."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        _, version = _gate_workflow(c, project, "sla_gate",
+                                    {"sla_hours": 24, "on_timeout": "escalate",
+                                     "approver_role": "product_owner"})
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        snapshot = c.execute(
+            text("SELECT binding_snapshot FROM workflow_step_runs WHERE workflow_run_id=:r"),
+            {"r": run["id"]},
+        ).scalar()
+    assert snapshot["due_at"], "the gate has no deadline"
+    assert snapshot["approval"]["approver_role"] == "product_owner"
+
+
+def test_an_overdue_gate_that_blocks_stays_waiting(eng, project, monkeypatch):
+    """The default. A gate whose unanswered outcome is "proceed" is not a gate."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        _, version = _gate_workflow(c, project, "block_gate", {"sla_hours": 1})
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        _overdue(c, run["id"])
+        result = runner.sweep_gate_timeouts(c, project_id=project)
+        status = c.execute(
+            text("SELECT status FROM workflow_step_runs WHERE workflow_run_id=:r"),
+            {"r": run["id"]},
+        ).scalar()
+    assert result["applied"][0]["outcome"] == "blocked"
+    assert status == "waiting", "a blocked gate let the work through"
+
+
+def test_an_overdue_gate_that_escalates_says_so_once(eng, project, monkeypatch):
+    """Escalating every minute is how people learn to ignore escalations."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        _, version = _gate_workflow(c, project, "esc_gate",
+                                    {"sla_hours": 1, "on_timeout": "escalate"})
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        _overdue(c, run["id"])
+        first = runner.sweep_gate_timeouts(c, project_id=project)
+        second = runner.sweep_gate_timeouts(c, project_id=project)
+        events = c.execute(
+            text("SELECT count(*) FROM events WHERE project_id=:p "
+                 "AND event_type='workflow.gate_escalated'"),
+            {"p": project},
+        ).scalar()
+    assert first["applied"][0]["outcome"] == "escalated"
+    assert second["count"] == 0, "the gate escalated twice"
+    assert events == 1
+
+
+def test_an_auto_approval_records_that_policy_made_it(eng, project, monkeypatch):
+    """"Approved" alone is what an audit fails on. The record has to say approved BY WHAT, and
+    under which SLA."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        # `notify` is below the ceiling, so it may approve on timeout.
+        _, version = _publish(c, project, "auto_gate", [
+            {"id": "n", "kind": "capability",
+             "binding": {"capability": "notify", "inputs": {"message": "hi"}},
+             "approval": {"mode": "manual", "sla_hours": 1, "on_timeout": "approve"},
+             "next": []},
+        ], "n")
+        run = _start(c, project, version["id"])
+        # Manual-mode non-gate steps are executed normally; force the waiting state the sweep
+        # acts on, which is what a real approval flow would have produced.
+        c.execute(
+            text("UPDATE workflow_step_runs SET status='waiting', "
+                 "binding_snapshot = jsonb_build_object("
+                 "  'approval', CAST(:a AS JSONB), "
+                 "  'due_at', (now() - interval '1 hour')::text) "
+                 "WHERE workflow_run_id=:r"),
+            {"r": run["id"], "a": '{"on_timeout":"approve","sla_hours":1}'},
+        )
+        result = runner.sweep_gate_timeouts(c, project_id=project)
+        row = c.execute(
+            text("SELECT status, output, evidence FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r"),
+            {"r": run["id"]},
+        ).mappings().one()
+    assert result["applied"][0]["outcome"] == "auto_approved"
+    assert row["status"] == "succeeded"
+    assert row["output"]["approved_by"] == "policy"
+    assert row["evidence"][0]["kind"] == "auto_approval"
+    assert row["evidence"][0]["sla_hours"] == 1
