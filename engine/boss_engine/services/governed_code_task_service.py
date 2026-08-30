@@ -2276,7 +2276,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                 # exact gap — e.g. "the defects are all in app.js, which no test covers". Sending
                 # the from-scratch prompt made the retry re-derive a whole suite it already had:
                 # ~4.6 min and ~$1 to rewrite 240 passing tests instead of covering the one hole.
-                if root_run != run_id:
+                # ...or when THIS run was interrupted and resumed its own work branch. The
+                # condition used to be the repair lineage alone, which was right while a
+                # re-delivered run always started from an empty tree. Now that provisioning
+                # restores the checkpointed branch, a same-run resume ALSO arrives with a
+                # working suite already present — and sending the from-scratch prompt into that
+                # tree is the exact failure this block was written to stop.
+                _resumed = bool(getattr(sandbox, "resumed_from_checkpoint", False))
+                if root_run != run_id or _resumed:
                     existing = sorted(
                         str(p.relative_to(root)) for p in root.rglob("*")
                         if p.is_file() and _is_test_path(str(p.relative_to(root)))
@@ -2288,17 +2295,36 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                         gap = (_hist[-1].get("fix_note")
                                or (instructions.split("=== ITERATION FEEDBACK", 1)[-1]
                                    if "=== ITERATION FEEDBACK" in instructions else "")) or ""
-                        prompt = (
-                            "This is a REPAIR iteration. A working test suite ALREADY EXISTS in "
-                            "this tree and currently passes:\n"
-                            + "\n".join(f"  - {p}" for p in existing[:40])
-                            + "\n\nDO NOT rewrite or re-author these tests, and do not delete any "
-                            "of them. Your ONLY job is to CLOSE THE SPECIFIC COVERAGE GAP the "
-                            "reviewers identified, by ADDING focused tests (or extending an "
-                            "existing file where that is the natural home).\n\n"
-                            f"GAP TO CLOSE:\n{gap[:2000]}\n\n"
-                            f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the whole suite "
-                            "green. Touch as few files as possible.")
+                        # TWO DIFFERENT SITUATIONS, TWO DIFFERENT INSTRUCTIONS. A repair has
+                        # reviewers' findings to act on. A RESUME has none: the previous
+                        # attempt was killed mid-run, not judged, so there is no gap to close
+                        # and telling the agent to close one would send it looking for a
+                        # finding that does not exist.
+                        _resume_only = _resumed and not gap.strip()
+                        _listing = "\n".join(f"  - {p}" for p in existing[:40])
+                        if _resume_only:
+                            prompt = (
+                                "This run was INTERRUPTED and has resumed. A working test "
+                                "suite it already authored is present in this tree and "
+                                "passes:\n" + _listing
+                                + "\n\nDO NOT rewrite, re-author or delete any of them — that "
+                                "work is done. Verify they still cover the task below, ADD "
+                                "only what is genuinely missing, and otherwise change "
+                                "nothing.\n\n"
+                                f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
+                                "whole suite green. Touch as few files as possible.")
+                        else:
+                            prompt = (
+                                "This is a REPAIR iteration. A working test suite ALREADY "
+                                "EXISTS in this tree and currently passes:\n" + _listing
+                                + "\n\nDO NOT rewrite or re-author these tests, and do not "
+                                "delete any of them. Your ONLY job is to CLOSE THE SPECIFIC "
+                                "COVERAGE GAP the reviewers identified, by ADDING focused "
+                                "tests (or extending an existing file where that is the "
+                                "natural home).\n\n"
+                                f"GAP TO CLOSE:\n{gap[:2000]}\n\n"
+                                f"TASK CONTEXT: {title}\n\nRun `{test_cmd}` and leave the "
+                                "whole suite green. Touch as few files as possible.")
                 if escalate:
                     prompt = (
                         "Your previous attempt produced NO recognizable test files. Author "

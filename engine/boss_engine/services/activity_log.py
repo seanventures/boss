@@ -382,6 +382,7 @@ def _item(
     level: Optional[str] = None,
     run_id: Optional[str] = None,
     agent: Optional[str] = None,
+    service: Optional[str] = None,
     body: str = "",
     sql_matched: bool = False,
 ) -> dict[str, Any]:
@@ -402,6 +403,12 @@ def _item(
         # knowing which `entity_id` convention a given source happened to use.
         "run_id": run_id or "",
         "agent": agent or "",
+        # WHICH PROCESS SAID THIS. The API and the worker do different jobs — one serves the
+        # console, the other runs the pipeline — so "the API is noisy" and "the worker is
+        # stuck" are different findings, and reading them interleaved hides both. Empty for
+        # sources that genuinely do not know: an agent turn is not recorded with a process, and
+        # guessing one would be inventing a fact to fill a column.
+        "service": service or "",
         "created_at": _iso(created_at),
         "data": _redact_data(data),
         # The readable body of a turn. Empty for every other source, which have structured
@@ -775,6 +782,7 @@ def _load_app_logs(
                               "status": "failed" if level == "error" else "info"},
                 level=level,
                 run_id=_text(row.get("run_id")),
+                service=_text(row.get("service")),
                 body=message,
             )
         )
@@ -942,6 +950,7 @@ class ActivityLogService:
         source: Optional[str] = None,
         run_id: Optional[str] = None,
         agent: Optional[str] = None,
+        service: Optional[str] = None,
         since: Any = None,
         until: Any = None,
         sort: Optional[str] = "created_at",
@@ -965,6 +974,7 @@ class ActivityLogService:
         source_filter = _text(source).lower()
         run_filter = _text(run_id)
         agent_filter = _text(agent)
+        service_filter = _text(service)
         if level_filter and level_filter not in LEVELS:
             raise ValueError(f"level must be one of: {', '.join(LEVELS)}")
         # "infra" is not a source; it is the THREE sources that describe BOSS operating itself.
@@ -997,7 +1007,7 @@ class ActivityLogService:
         #             project that has them, which is worse than being slow.
         filters_active = bool(
             needle or kind_filter or status_filter or actor_filter or entity_type_filter
-            or level_filter or run_filter or agent_filter
+            or level_filter or run_filter or agent_filter or service_filter
         )
         exact = (
             not filters_active
@@ -1030,6 +1040,11 @@ class ActivityLogService:
             items = [item for item in items if item["run_id"] == run_filter]
         if agent_filter:
             items = [item for item in items if item["agent"] == agent_filter]
+        if service_filter:
+            # Rows that do not know their process are EXCLUDED, not kept as a maybe. Asking for
+            # "the worker" and being shown rows that merely might be from it is worse than a
+            # shorter, honest answer.
+            items = [item for item in items if item["service"] == service_filter]
         if kind_filter:
             if kind_filter in SOURCES:
                 items = [item for item in items if item["source"] == kind_filter]

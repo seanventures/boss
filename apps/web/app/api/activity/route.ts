@@ -26,7 +26,9 @@ const FORWARD = [
   // The facets the log viewer reasons in: how loud, which stream, which work task, which AI
   // agent. A param missing from this list is dropped silently, so adding a filter to the UI
   // without adding it here narrows nothing and looks like the filter is broken.
-  "level", "source", "run_id", "agent",
+  // ...and which BOSS process said it (api | worker), which is how a container log gets
+  // separated from the run it happened during.
+  "level", "source", "run_id", "agent", "service",
   "since", "until", "sort", "order", "limit", "offset",
 ] as const;
 

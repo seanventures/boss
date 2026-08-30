@@ -2000,7 +2000,7 @@ def list_previews(
         # AND THEN FORGET THE OLD ONES.
         #
         # Expiring marked rows but never removed them, so `app_previews` only grew. Measured on
-        # goldeneye: 50 rows, of which 47 expired, 1 failed, 1 stopped and 1 actually running.
+        # a live deployment: 50 rows, of which 47 expired, 1 failed, 1 stopped and 1 running.
         #
         # That is not merely untidy. This query returns the newest N rows whatever their status
         # and callers filter for live ones afterwards, so a window that is 94% dead can push a

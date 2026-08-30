@@ -11,6 +11,32 @@ from .control_plane import ControlPlaneClient, LeasedJob
 
 LOGGER = logging.getLogger("boss.worker")
 
+#: Set when the container has been asked to stop (SIGTERM from a deploy). Lives here rather
+#: than in main.py because the code that can act on it — the lease heartbeat thread — is here;
+#: main.py's signal handler sets it. An Event, not a bool, so a waiter can block on it.
+SHUTDOWN = threading.Event()
+
+#: The lease TTL we re-heartbeat with when stopping, so the job is reclaimable almost at once.
+#: Not zero: a lease already in the past could race the reclaimer against a worker that is
+#: still, briefly, alive. A few seconds is enough to be sure we are gone.
+SHUTDOWN_LEASE_TTL_SECONDS = 5
+
+
+def _wait_in_slices(stop: threading.Event, seconds: float, slice_s: float = 1.0) -> bool:
+    """Wait up to ``seconds`` for ``stop``, checking SHUTDOWN every ``slice_s``.
+
+    Returns True if ``stop`` was set (the job finished), False if the time elapsed or a
+    shutdown was requested — the caller distinguishes those two.
+    """
+    remaining = max(0.0, float(seconds))
+    while remaining > 0:
+        if stop.wait(min(slice_s, remaining)):
+            return True
+        if SHUTDOWN.is_set():
+            return False
+        remaining -= slice_s
+    return False
+
 
 class RetryableJobError(RuntimeError):
     """A transient effect failure that should use the durable job backoff path."""
@@ -1014,6 +1040,18 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         _sweep_deployment_health()
         return False
 
+    if job.attempt > 1:
+        # SAY THAT THE WORK IS BEING REDONE. A re-delivery means a previous attempt was
+        # interrupted — a deploy, a crash, a lost lease — and every minute it had spent is
+        # gone. Recorded at WARNING because it is charged to the run's phase timing as though
+        # it were work: without this line the console shows "Engineer implementing 27m" for a
+        # stage that was killed at minute 20 and started over, and there is nothing anywhere
+        # that says so.
+        LOGGER.warning(
+            "job_redelivered worker_id=%s job_id=%s kind=%s attempt=%s — a previous attempt "
+            "was interrupted and its in-flight work was lost; this run restarts the stage",
+            settings.worker_id, job.id, job.kind, job.attempt,
+        )
     LOGGER.info(
         "job_leased worker_id=%s job_id=%s kind=%s attempt=%s",
         settings.worker_id,
@@ -1044,6 +1082,40 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         else client
     )
 
+    def _hand_back_on_shutdown() -> bool:
+        """Shorten the lease so a deploy costs seconds of recovery, not a full TTL.
+
+        A deploy recreates the worker: Docker sends SIGTERM and SIGKILLs ~10s later, killing
+        the main thread mid-stage. Nothing handed the job back, so it sat "running" under a
+        lease nobody was serving until the 300s TTL expired — measured on a real run, the gap
+        between the deploy and the round restarting was exactly one TTL.
+
+        We do NOT call `fail()`: that consumes a retry attempt and can deadletter or fail the
+        code task, and being interrupted by a deploy is not the job's fault. Re-heartbeating
+        with a tiny TTL expires the lease almost immediately, so the reclaimer takes the job on
+        its next poll — the same recovery path as a crash, just 60x sooner.
+
+        Runs on the heartbeat thread, which has its OWN client. The main thread is blocked deep
+        inside execute_job and cannot be asked to do anything.
+        """
+        try:
+            hb_client.heartbeat(settings.worker_id, job.id, job.lease_token,
+                                SHUTDOWN_LEASE_TTL_SECONDS)
+            LOGGER.warning(
+                "job_handed_back_for_shutdown worker_id=%s job_id=%s kind=%s — worker is "
+                "stopping (deploy or restart); lease shortened to %ss so this job is "
+                "reclaimed promptly instead of waiting out its %ss TTL",
+                settings.worker_id, job.id, job.kind,
+                SHUTDOWN_LEASE_TTL_SECONDS, settings.lease_ttl_seconds,
+            )
+            return True
+        except Exception:  # noqa: BLE001 — best effort; the TTL is still the backstop
+            LOGGER.warning(
+                "job_hand_back_failed worker_id=%s job_id=%s — falling back to lease expiry",
+                settings.worker_id, job.id,
+            )
+            return False
+
     def _renew_lease() -> None:
         # The heartbeat proves the WORKER is alive, never that the JOB is progressing. A
         # hung stage therefore kept its lease renewed indefinitely: nothing reclaimed it,
@@ -1057,7 +1129,15 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         interval = max(15, settings.lease_ttl_seconds // 2)
         max_runtime = max(0, int(getattr(settings, "job_max_runtime_seconds", 5400) or 0))
         started_at = time.monotonic()
-        while not hb_stop.wait(interval):
+        # SLICED, so a stop request is noticed within a second rather than up to half a lease
+        # TTL later. Docker's grace period before SIGKILL is ~10s: a renewal interval of 150s
+        # would mean the process is dead long before the loop next looks at anything.
+        while True:
+            if _wait_in_slices(hb_stop, interval):
+                return  # the job finished; nothing to renew
+            if SHUTDOWN.is_set():
+                _hand_back_on_shutdown()
+                return
             elapsed = time.monotonic() - started_at
             if max_runtime and elapsed > max_runtime:
                 LOGGER.error(

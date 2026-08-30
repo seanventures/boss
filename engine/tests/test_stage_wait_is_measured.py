@@ -145,11 +145,18 @@ def test_the_local_path_reports_its_pacing_too():
 
     src = inspect.getsource(code_agent.PacedCodeAgent)
     assert "with self._limiter.slot(self._provider) as slot:" in src
-    assert "work_started = time.monotonic()" in src
+    # The moment the slot was GRANTED is stamped separately from the moment the dispatch was
+    # requested — that difference is the queueing time, and folding the two together is what
+    # made "the lane was full" indistinguishable from "the model was slow". Asserted by
+    # behaviour rather than by variable name, which is free to change.
     assert "_log_pacing(" in src
+    assert src.count("time.monotonic()") >= 2
     # Reported on the failure path too: a dispatch that queued and then errored is exactly the
     # case worth knowing about.
     assert "failed=True" in src and "failed=False" in src
+    # And the case with no dispatch AT ALL: `slot()` can time out before the call is ever made,
+    # which used to record nothing anywhere. See test_never_dispatched_is_recorded.py.
+    assert "_record_never_dispatched(" in src
 
 
 def test_the_pacing_log_cannot_break_a_dispatch():

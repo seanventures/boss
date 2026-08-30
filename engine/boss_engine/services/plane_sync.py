@@ -78,7 +78,7 @@ def on_event(engine, settings, run_id: str, event_type: str) -> dict[str, Any]:
         if event_type not in _EVENT_STATE:
             return {"synced": False, "reason": "unmapped"}
         from .code_task_service import load_code_task_run
-        from .db import begin
+        from ..db import begin
         from .plane_client import PlaneClient
         with begin(engine) as c:
             run = load_code_task_run(c, run_id)

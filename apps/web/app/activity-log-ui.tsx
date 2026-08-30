@@ -205,6 +205,7 @@ export function ActivityLog({
   const [hideVerbose, setHideVerbose] = useState(true);
   const [source, setSource] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
+  const [serviceFilter, setServiceFilter] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // SCOPE FROM THE URL, READ ON THE CLIENT.
   //
@@ -252,6 +253,7 @@ export function ActivityLog({
         level: level || undefined,
         source: source || undefined,
         agent: agentFilter || undefined,
+        service: serviceFilter || undefined,
         run_id: scopedRun || undefined,
         sort: serverSort,
         order: serverOrder,
@@ -266,7 +268,7 @@ export function ActivityLog({
       alive = false;
     };
   }, [projectId, debouncedSearch, kind, status, actorFilter, level, source, agentFilter,
-      scopedRun, serverSort, serverOrder]);
+      serviceFilter, scopedRun, serverSort, serverOrder]);
 
   const items = useMemo(() => {
     const rows = feed.items ?? [];
@@ -314,7 +316,15 @@ export function ActivityLog({
 
   const selected = items.find((item) => item.id === selectedId) ?? null;
   const selectedPayload = selected ? redactPayload(selected.data) : "";
-  const hasFilters = Boolean(debouncedSearch || status || kind || actorFilter);
+  // EVERY narrowing facet, not just the first four. This decides between "nothing matches
+  // these filters" and "nothing was ever recorded", and those are opposite conclusions. The
+  // level/source/agent/run/process filters were missing, so narrowing to an empty result
+  // announced that BOSS had recorded nothing at all — the Process filter especially, since it
+  // excludes every source that does not record a process.
+  const hasFilters = Boolean(
+    debouncedSearch || status || kind || actorFilter ||
+    level || source || agentFilter || serviceFilter || scopedRun,
+  );
   const stuckCount = items.filter((item) => item.status === "stuck").length;
   const unavailable = !loading && !feed.apiReachable;
   const empty = !loading && feed.apiReachable && items.length === 0;
@@ -516,6 +526,26 @@ export function ActivityLog({
             </select>
           </label>
         ) : null}
+        {/* A FIXED LIST, unlike the agent filter above. Deriving the options from the feed
+            would be self-defeating for a two-value facet: once you pick "api" the feed holds
+            only api rows, so "worker" would vanish from the very control you would use to
+            switch to it. */}
+        <label className="field">
+          <span>Process</span>
+          <select
+            className="input"
+            name="service"
+            value={serviceFilter}
+            onChange={(event) => setServiceFilter(event.target.value)}
+            data-testid="activity-log-service-filter"
+            title="Which BOSS process emitted the row. Sources that do not record a process
+                   (events, receipts, jobs) are excluded rather than guessed at."
+          >
+            <option value="">Every process</option>
+            <option value="api">API</option>
+            <option value="worker">Worker</option>
+          </select>
+        </label>
         <label className="field">
           <span>Actor</span>
           <input

@@ -53,9 +53,14 @@ def _clean(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
-def _invoke_list(service: Any, connection: Any, **kwargs: Any) -> Any:
+def _invoke_list(log_service: Any, connection: Any, /, **kwargs: Any) -> Any:
+    """POSITIONAL-ONLY, deliberately. Every remaining argument is a caller-supplied FILTER
+    forwarded by name, so any parameter here shares a namespace with the query string. Adding
+    a `service=api|worker` filter collided with a parameter that happened to be called
+    `service` and raised "got multiple values" on every request. The `/` makes that structural
+    rather than a naming convention to remember."""
     for name in LIST_METHODS:
-        fn = getattr(service, name, None)
+        fn = getattr(log_service, name, None)
         if callable(fn):
             return fn(connection, **kwargs)
     raise HTTPException(status_code=503, detail=f"{UNAVAILABLE} Missing {LIST_METHODS[0]}.")
@@ -109,6 +114,11 @@ def list_activity(
     ),
     run_id: Optional[str] = Query(default=None, description="one work task (crun_...)"),
     agent: Optional[str] = Query(default=None, description="one AI agent, by role key"),
+    service: Optional[str] = Query(
+        default=None,
+        description="which BOSS process said it: api | worker. Rows that do not record a "
+                    "process are excluded rather than guessed at.",
+    ),
     since: Optional[str] = Query(default=None),
     until: Optional[str] = Query(default=None),
     sort: str = Query(default="created_at"),
@@ -133,11 +143,14 @@ def list_activity(
 
     with begin(get_engine()) as connection:
         try:
-            service = _service()
-            if service is None:
+            # NOT `service` — that is the name of the `service=api|worker` query filter, and
+            # binding the ActivityLogService to it overwrote the caller's value, so every
+            # request forwarded a service OBJECT where a string was expected.
+            log_service = _service()
+            if log_service is None:
                 raise HTTPException(status_code=503, detail=UNAVAILABLE)
             payload = _invoke_list(
-                service,
+                log_service,
                 connection,
                 project_id=project_id,
                 q=_clean(q),
@@ -149,6 +162,7 @@ def list_activity(
                 source=_clean(source),
                 run_id=_clean(run_id),
                 agent=_clean(agent),
+                service=_clean(service),
                 since=_clean(since),
                 until=_clean(until),
                 sort=sort_key,

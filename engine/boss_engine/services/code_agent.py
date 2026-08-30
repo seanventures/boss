@@ -958,6 +958,53 @@ _PROVIDER_LANES: dict[str, tuple[str, str]] = {
 }
 
 
+class _SlotWatchdog:
+    """Says "still waiting for a model slot" WHILE the wait is happening.
+
+    A post-mortem record explains a stall after it has cost the time. This one speaks during
+    it, at WARNING so the Activity Log keeps it unconditionally — the difference between an
+    operator watching a phase sit at 12 minutes with no idea why, and one reading
+    "waiting 10m for an anthropic slot, in_flight=1/1". Never raises, never blocks the
+    acquire: one daemon thread that only logs.
+    """
+
+    INTERVAL_S = 60.0
+
+    def __init__(self, limiter, provider: str) -> None:
+        self._limiter = limiter
+        self._provider = provider
+        self._done = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        try:
+            self._thread = threading.Thread(
+                target=self._run, name="model-slot-watchdog", daemon=True)
+            self._thread.start()
+        except Exception:  # noqa: BLE001 — a diagnostic never breaks a dispatch
+            self._thread = None
+
+    def _run(self) -> None:
+        waited = 0.0
+        while not self._done.wait(self.INTERVAL_S):
+            waited += self.INTERVAL_S
+            try:
+                state = self._limiter.lane_state(self._provider)
+                _log.warning(
+                    "still waiting for a %s model slot after %.0fm "
+                    "(in_flight=%s/%s, backoff=%ss, pacing=%ss)",
+                    self._provider, waited / 60,
+                    state.get("in_flight"), state.get("limit"),
+                    state.get("backoff_remaining_seconds"),
+                    state.get("pacing_wait_seconds"),
+                )
+            except Exception:  # noqa: BLE001
+                return
+
+    def stop(self) -> None:
+        self._done.set()
+
+
 class PacedCodeAgent:
     """Wraps a CodeAgent so every model invocation goes through the rate limiter (#111):
     bounded concurrency + pacing + adaptive backoff, keyed by the agent's provider. Delegates
@@ -982,19 +1029,71 @@ class PacedCodeAgent:
         # `slot()` blocks on concurrency, pacing and AIMD backoff. Folded into one duration,
         # a call that queued four minutes and then ran for one is indistinguishable from a
         # call that worked for five — and the fixes for those are opposite.
+        # A DISPATCH THAT NEVER GOT A SLOT USED TO LEAVE NO TRACE AT ALL.
+        #
+        # Every failure INSIDE `fn` records an `llm_call` with ok=False. But `slot()` blocks
+        # and can time out BEFORE `fn` is ever called, and that path recorded nothing: no
+        # call, no turns, not even the pacing line below — which is emitted inside the `with`.
+        # So a stage could burn the full 600s acquire deadline, be classified as inconclusive
+        # ("could not acquire a …" is a known non-completion marker), get re-run, and repeat —
+        # and the only evidence anywhere was a phase duration landing on a multiple of 600s.
+        # That is precisely how 27 silent minutes look from the console. `acquired_at` is the
+        # discriminator: still None means we never dispatched, and that now gets recorded.
         started = time.monotonic()
-        with self._limiter.slot(self._provider) as slot:
-            work_started = time.monotonic()
+        acquired_at: Optional[float] = None
+        watchdog = _SlotWatchdog(self._limiter, self._provider)
+        try:
+            watchdog.start()
+            with self._limiter.slot(self._provider) as slot:
+                acquired_at = time.monotonic()
+                watchdog.stop()
+                try:
+                    out = fn(*args, **kwargs)
+                except Exception as exc:  # noqa: BLE001 — classify then re-raise unchanged
+                    if is_rate_limit_error(exc):
+                        self._limiter.report_rate_limited(self._provider)
+                    self._log_pacing(slot, started, acquired_at, failed=True)
+                    raise
+                self._limiter.report_ok(self._provider)
+                self._log_pacing(slot, started, acquired_at, failed=False)
+                return out
+        except Exception as exc:  # noqa: BLE001 — record, then re-raise unchanged
+            if acquired_at is None:
+                self._record_never_dispatched(exc, time.monotonic() - started)
+            raise
+        finally:
+            watchdog.stop()
+
+    def _record_never_dispatched(self, exc: Exception, waited: float) -> None:
+        """Put a never-dispatched call in the ledger, so the wait is attributable.
+
+        Written as an `llm_call` with ok=False rather than only a log line: the run's ledger is
+        where "what did this stage do" is answered, and a stage that waited ten minutes for a
+        lane and gave up did something worth seeing there. The lane's own numbers go with it —
+        full, backing off, or pacing are three different faults with three different fixes.
+        """
+        try:
+            state = {}
             try:
-                out = fn(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001 — classify then re-raise unchanged
-                if is_rate_limit_error(exc):
-                    self._limiter.report_rate_limited(self._provider)
-                self._log_pacing(slot, started, work_started, failed=True)
-                raise
-            self._limiter.report_ok(self._provider)
-            self._log_pacing(slot, started, work_started, failed=False)
-            return out
+                state = self._limiter.lane_state(self._provider)
+            except Exception:  # noqa: BLE001 — a limiter without the accessor still records
+                pass
+            _log.warning(
+                "model dispatch NEVER STARTED provider=%s engine=%s waited=%.1fs "
+                "in_flight=%s/%s backoff=%ss pacing=%ss: %s",
+                self._provider, self.engine, waited,
+                state.get("in_flight"), state.get("limit"),
+                state.get("backoff_remaining_seconds"), state.get("pacing_wait_seconds"),
+                exc,
+            )
+            record_llm_call(
+                engine_name=self.engine,
+                usage={"model": getattr(self.settings, "claude_cli_model", "") or ""},
+                latency_ms=int(waited * 1000), ok=False,
+                error=f"never dispatched: {exc}",
+            )
+        except Exception:  # noqa: BLE001 — a diagnostic never breaks a dispatch
+            pass
 
     def _log_pacing(self, slot, started: float, work_started: float, *, failed: bool) -> None:
         """One line per dispatch: how long the lane held it, how long the work took."""

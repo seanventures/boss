@@ -7,6 +7,7 @@ from apps.api.app.db import database_is_reachable, get_engine
 
 from .config import get_worker_settings
 from .control_plane import ControlPlaneClient
+from . import runner
 from .runner import run_worker_cycle
 
 
@@ -30,6 +31,10 @@ _STOPPING = False
 def _request_stop(signum, _frame) -> None:
     global _STOPPING
     _STOPPING = True
+    # And tell the RUNNER, whose lease-heartbeat thread is the only thing still able to act:
+    # the main thread is blocked inside execute_job. It hands the running job back by
+    # shortening the lease, so a deploy costs seconds of recovery instead of a full 300s TTL.
+    runner.SHUTDOWN.set()
     LOGGER.info("worker_stop_requested signal=%s", signum)
 
 

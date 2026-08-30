@@ -48,6 +48,9 @@ export type ActivityLogQuery = {
   run_id?: string;
   /** One AI agent, by role key. */
   agent?: string;
+  /** Which BOSS process said it: "api" | "worker". Rows from sources that do not record a
+   *  process are excluded rather than guessed at, so this narrows to container logs. */
+  service?: string;
   since?: string;
   until?: string;
   sort?: string;
@@ -73,6 +76,9 @@ export type ActivityLogItem = {
   runId: string;
   /** The AI agent that produced it, by role key. */
   agent: string;
+  /** Which BOSS process emitted it: "api" | "worker". Empty for sources that do not record a
+   *  process — left empty rather than guessed, so the filter never claims a wrong origin. */
+  service: string;
   /** The readable body of a transcript turn — what was said, or what a tool returned. Empty
    *  for every other source, which carry structured `data` instead. */
   body: string;
@@ -122,6 +128,7 @@ export function activityLogSearchParams(
   setIfPresent(params, "source", query.source);
   setIfPresent(params, "run_id", query.run_id);
   setIfPresent(params, "agent", query.agent);
+  setIfPresent(params, "service", query.service);
   setIfPresent(params, "since", query.since);
   setIfPresent(params, "until", query.until);
   if (query.sort && SORT_SET.has(query.sort)) {
@@ -181,6 +188,7 @@ function mapActivityLogItem(value: unknown): ActivityLogItem[] {
       stage: asText(value.stage),
       runId: asText(value.run_id),
       agent: asText(value.agent),
+      service: asText(value.service),
       body: asText(value.body),
       createdAt: asText(value.created_at),
       data: isPlainObject(value.data) ? value.data : {},

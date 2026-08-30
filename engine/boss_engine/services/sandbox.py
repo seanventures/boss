@@ -246,9 +246,45 @@ class EphemeralSandbox:
         # A feedback-iteration clones its own accumulated branch (base_branch == work_branch),
         # so it is already checked out — `checkout -b` would fail on an existing branch. In
         # that case stay on it (diff() is relative to HEAD, so we produce only the new delta).
+        self.resumed_from_checkpoint = False
         if self.work_branch != base_branch:
-            self._git(["checkout", "-b", self.work_branch])
+            # RESUME THE WORK BRANCH IF IT ALREADY EXISTS.
+            #
+            # Stages checkpoint by pushing their files to this branch, so "a failure costs the
+            # CURRENT stage, never the run" (see _checkpoint_stage). That promise was only half
+            # built: the write side pushed, and this side branched from `base_branch` and
+            # ignored the pushed commits entirely. So every re-delivery — a deploy that killed
+            # the worker mid-stage, a crash, a lost lease — cloned a tree with none of the
+            # completed work in it and re-derived it from nothing. Measured in the comment on
+            # the write-tests prompt: ~4.6 min and ~$1 to rewrite a suite that already existed.
+            #
+            # Checking the branch out instead restores every checkpointed stage, which is what
+            # makes the checkpoint worth taking. A branch that does not exist yet — the normal
+            # first run — falls through to exactly the old behaviour.
+            if self._remote_branch_exists(self.work_branch, token=token):
+                self._git(["fetch", "--depth", str(depth), "origin",
+                           f"{self.work_branch}:refs/remotes/origin/{self.work_branch}"],
+                          redact=token)
+                self._git(["checkout", "-b", self.work_branch,
+                           f"refs/remotes/origin/{self.work_branch}"])
+                self.resumed_from_checkpoint = True
+                _log.info(
+                    "sandbox resumed task=%s branch=%s — work branch already existed, "
+                    "checkpointed stages restored instead of re-run",
+                    self.task_id, self.work_branch,
+                )
+            else:
+                self._git(["checkout", "-b", self.work_branch])
         return self.path
+
+    def _remote_branch_exists(self, branch: str, *, token: Optional[str]) -> bool:
+        """Ask the remote, rather than assuming. Never fatal: if the check itself fails we
+        branch from base as before, which is the pre-existing behaviour and always safe."""
+        try:
+            out = self._git(["ls-remote", "--heads", "origin", branch], redact=token)
+            return bool((out or "").strip())
+        except Exception:  # noqa: BLE001
+            return False
 
     # Common build/test artifacts a coding agent's test run can generate — kept
     # out of the diff so PRs contain only real source changes.

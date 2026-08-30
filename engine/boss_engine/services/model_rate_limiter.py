@@ -200,6 +200,23 @@ class ModelRateLimiter:
         with self._cond:
             return self._lane(provider).limit
 
+    def lane_state(self, provider: str) -> dict:
+        """One lane's live state, cheap enough to read from a watchdog every few seconds.
+
+        `snapshot()` builds every lane and the whole config block; this answers the only
+        question a caller blocked in `_acquire` has — WHY is there no slot — and the answer is
+        one of three numbers: the lane is full, it is backing off, or it is pacing.
+        """
+        with self._cond:
+            lane = self._lane(provider)
+            now = self._time()
+            return {
+                "in_flight": lane.in_flight,
+                "limit": lane.limit,
+                "backoff_remaining_seconds": round(max(0.0, lane.backoff_until - now), 1),
+                "pacing_wait_seconds": round(max(0.0, lane.next_earliest - now), 1),
+            }
+
     def snapshot(self) -> dict:
         """Process-local limiter state for observability. Lanes appear only after use."""
         with self._cond:
