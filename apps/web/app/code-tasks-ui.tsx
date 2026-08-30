@@ -2270,28 +2270,15 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
       </div>
 
       <div className="ct-block">
-        <div className="ct-block-title">Run it / iterate</div>
-        {/* Row: preview the built app */}
-        <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          {run.pull_request_url ? (
-            <PreviewControls runId={run.id} livePreviews={livePreviews} />
-          ) : (
-            <span className="detail">▶ Preview available once a PR is open. Checks do not have to pass — a run ships its PR with any findings attached — so this appears as soon as the run produces a change.</span>
-          )}
-        </div>
-        {/* Row: plain operator-triggered retry. Separate from the feedback flow below, which
-            asks an agent to diagnose and propose one — when the findings are already on screen
-            the operator just wants to run it again. */}
-        {run.status !== "running" && run.status !== "queued" ? (
-          <div className="ct-outcome" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-            <RetryControls
-              runId={run.id}
-              failingGates={(run.finalize_ctx?.advisory_failing_gates
-                ?? run.finalize_ctx?.failing_gates
-                ?? []) as string[]}
-            />
-          </div>
-        ) : null}
+        <div className="ct-block-title">Iterate</div>
+        {/* PREVIEW AND RETRY USED TO BE REPEATED HERE.
+            Both are in the action bar at the top of this page, so this block rendered a second
+            "Open preview" and a second "Retry" for the same run — two controls that do the same
+            thing, in two places, and the operator has to work out whether they differ. They do
+            not. What is left here is the work that cannot be a button: describing a change and
+            proposing it, overriding a finding, and the feedback that needs a form.
+            Preview needs no explanation of its absence either: the bar above says "no PR yet"
+            in the same place the preview controls would otherwise be. */}
         {/* Separate row: iterate on the same task with feedback */}
         {(run.status === "completed" || run.status === "failed" || run.status === "blocked") ? (
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.09)" }}>
@@ -2748,7 +2735,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                     It was only in "Run it / iterate" further down the page — the same fault
                     the PR link and preview had before they were moved up: the thing you open
                     this page to do, somewhere you have to scroll to find. */}
-                {active.status === "failed" || active.status === "blocked" ? (
+                {active.status !== "running" && active.status !== "queued" ? (
                   <RetryControls runId={active.id} compact
                                  failingGates={(active.finalize_ctx?.advisory_failing_gates
                                    ?? active.finalize_ctx?.failing_gates

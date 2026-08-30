@@ -245,6 +245,20 @@ it("does not drag a paragraph into the button bar with it", () => {
     const bar = ui.slice(ui.indexOf('data-testid="ct-detail-actionbar"'),
                          ui.indexOf('data-testid="ct-detail-ask"'));
     expect(bar).toContain("<RetryControls runId={active.id} compact");
+    // Every state the lower one covered, so removing that one loses nothing — including
+    // `completed`, where a retry is how a shipped run clears a remaining ✗.
+    expect(bar).toContain('active.status !== "running" && active.status !== "queued"');
+  });
+
+  it("does not then repeat preview and retry further down the same page", () => {
+    // Two controls that do the same thing, in two places, and the operator has to work out
+    // whether they differ. They do not.
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ui = readFileSync(join(root, "app/code-tasks-ui.tsx"), "utf8");
+    expect(ui).toContain('<div className="ct-block-title">Iterate</div>');
+    // Exactly one mount of each in the detail page: the action bar's.
+    expect(ui.match(/<PreviewControls/g)?.length).toBe(1);
+    expect(ui.match(/<RetryControls/g)?.length).toBe(1);
   });
 
   it("stops any child forcing the bar wider than its column", () => {
