@@ -153,6 +153,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  // Lifted out of the builder so forking can land the operator on the thing they just made.
+  const [builderTarget, setBuilderTarget] = useState<string>("");
 
   const load = useCallback(async () => {
     const [caps, cat, inst, live] = await Promise.all([
@@ -239,15 +241,38 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
               workflow_key: key,
               input: { directive: "Describe the work here", title: "New work" },
             })}
-          onFork={(key) =>
-            act(`Fork ${key}`, "fork", {
-              workflow_key: key, new_key: `${key}_custom`, new_name: `${key} (yours)`,
-            })}
+          onFork={async (key) => {
+            const entry = catalogue.find((c) => c.key === key);
+            // A UNIQUE KEY PER FORK.
+            //
+            // `${key}_custom` collided the second time anyone forked the same workflow, and a
+            // 409 with the notice scrolled off the top of a long page is indistinguishable
+            // from a button that does nothing — which is exactly how this was reported.
+            const taken = new Set(installed.map((i) => i.workflow_key));
+            let candidate = `${key}_custom`;
+            for (let n = 2; taken.has(candidate); n += 1) candidate = `${key}_custom_${n}`;
+            const result = await act(`Fork ${entry?.name ?? key}`, "fork", {
+              workflow_key: key,
+              new_key: candidate,
+              new_name: `${entry?.name ?? key} (yours)`,
+            });
+            // IT IS CALLED "FORK TO EDIT", SO GO AND EDIT IT.
+            //
+            // On success the only visible change was a line of text at the top of the page:
+            // the new workflow appears in the BUILDER's dropdown, on a tab the operator is not
+            // looking at. Landing them in the editor with it selected is what the button says
+            // it does.
+            if (result.ok) {
+              const created = (result.data as { definition?: { id: string } })?.definition;
+              if (created?.id) setBuilderTarget(created.id);
+              setTab("builder");
+            }
+          }}
         />
       ) : (
         <BuilderView
           capabilities={capabilities} riskFloor={riskFloor} installed={installed}
-          busy={busy}
+          busy={busy} target={builderTarget} setTarget={setBuilderTarget}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
         />
       )}
@@ -367,12 +392,20 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
   onStart: (key: string) => void;
   onFork: (key: string) => void;
 }) {
-  const have = useMemo(() => new Set(installed.map((i) => i.workflow_key)), [installed]);
+  // Only the CATALOGUE ones count toward "installed". `installed` also holds the customer's own
+  // forks, so counting all of them read "14 of 12 installed in this project" — a number that
+  // cannot be true and makes the reader doubt everything else on the card.
+  const have = useMemo(
+    () => new Set(installed.filter((i) => i.is_catalogue).map((i) => i.workflow_key)),
+    [installed],
+  );
+  const mine = useMemo(() => installed.filter((i) => !i.is_catalogue).length, [installed]);
   return (
     <div className="dw-catalogue">
       <div className="dw-runs-head">
         <span className="detail">
-          {have.size} of {catalogue.length} installed in this project
+          {have.size} of {catalogue.length} standard workflows installed
+          {mine > 0 ? ` · ${mine} of your own` : ""}
         </span>
         <button type="button" className="cap-btn" onClick={onInstall} disabled={!!busy}
                 data-testid="dw-install">
@@ -436,23 +469,24 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
 
 /* ── Builder ─────────────────────────────────────────────────────────────────── */
 
-function BuilderView({ capabilities, riskFloor, installed, busy, onSave }: {
+function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarget, onSave }: {
   capabilities: Capability[];
   riskFloor: number;
   installed: Installed[];
   busy: string | null;
+  target: string;
+  setTarget: (id: string) => void;
   onSave: (definitionId: string, spec: Record<string, unknown>) => void;
 }) {
   // Only a customer's OWN workflows can be edited. Offering a catalogue one here and refusing
   // on save would be a control that lies about what it does.
   const editable = useMemo(() => installed.filter((i) => !i.is_catalogue), [installed]);
-  const [target, setTarget] = useState<string>("");
   const [draft, setDraft] = useState<Draft[]>([]);
   const [dragging, setDragging] = useState<number | null>(null);
 
   useEffect(() => {
     if (!target && editable.length) setTarget(editable[0].id);
-  }, [editable, target]);
+  }, [editable, target, setTarget]);
 
   const add = (capability: Capability) =>
     setDraft((current) => [

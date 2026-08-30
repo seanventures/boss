@@ -785,12 +785,18 @@ export default function ConsoleShell({
           <button
             type="button"
             className="bx-chip hide-sm"
-            title={live ? "Live: auto-refreshing every 7s — click to pause" : "Paused — click to resume live updates"}
+            title={live
+              ? (refreshPending
+                 ? "Fetching the latest data — click to pause live updates"
+                 : "Live: auto-refreshing — click to pause")
+              : "Paused — click to resume live updates"}
             onClick={() => setLive((v) => !v)}
             style={{ cursor: "pointer" }}
           >
+            {/* A refresh in flight shows HERE: same chip, no layout shift, gone when it
+                lands. Enough to answer "is it updating?" without occupying the page. */}
             <span className={live ? "dot green bx-pulse" : "dot"} />
-            {live ? "Live" : "Paused"}
+            {live ? (refreshPending ? "Syncing" : "Live") : "Paused"}
           </button>
 
           <button type="button" className="bx-kbd" onClick={() => setPaletteOpen(true)}>
@@ -819,13 +825,21 @@ export default function ConsoleShell({
         {/* A thin bar rather than a spinner over the content: the panels that HAVE arrived are
             usable while the rest land, and covering them would make a fast console feel slower
             than a slow one. */}
-        {settling || refreshPending ? (
+        {/* THE FIRST PAINT ONLY. NOT THE BACKGROUND REFRESH.
+            `refreshPending` was here too, and it is true for the whole server re-render — 20
+            seconds and more on this console — against an interval computed from that same
+            cost. The result was a bar that never went off: an indicator meant to explain why
+            the page was still filling up became a permanent piece of furniture that explained
+            nothing and could not be dismissed.
+            A background refresh is background. The data is already on screen, so it raises
+            none of the questions the first load does; it belongs in the Live chip, which is
+            already there and does not move anything. */}
+        {settling ? (
           <div className="bx-loading" role="status" aria-live="polite"
                data-testid="console-loading">
             <span className="bx-loading-bar" aria-hidden />
             <span className="bx-loading-text">
-              {settling ? "Loading the console — panels fill in as they arrive"
-                        : "Refreshing"}
+              Loading the console — panels fill in as they arrive
             </span>
           </div>
         ) : null}

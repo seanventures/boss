@@ -165,3 +165,31 @@ describe("the route handler refuses what it does not know", () => {
     expect(ROUTE).toContain("unknown action");
   });
 });
+
+describe("an action's outcome reaches the person who caused it", () => {
+  it("counts only standard workflows against the catalogue total", () => {
+    // Counting the customer's own forks too read "14 of 12 installed in this project" — a
+    // number that cannot be true, which makes a reader doubt everything else on the card.
+    expect(UI).toContain("installed.filter((i) => i.is_catalogue)");
+  });
+
+  it("gives every fork a key that is not already taken", () => {
+    // `${key}_custom` collided the second time anyone forked the same workflow, and a 409
+    // whose notice is scrolled off the top of a long page is indistinguishable from a button
+    // that does nothing.
+    expect(UI).toContain("for (let n = 2; taken.has(candidate); n += 1)");
+  });
+
+  it("lands the operator in the editor, because the button says 'fork to edit'", () => {
+    // On success the only visible change was one line of text at the top of a page the
+    // operator had scrolled away from; the new workflow appeared in a dropdown on a tab they
+    // were not looking at.
+    expect(UI).toContain('setTab("builder")');
+    expect(UI).toContain("setBuilderTarget(created.id)");
+  });
+
+  it("keeps the notice on screen while the page scrolls", () => {
+    const rule = CSS.slice(CSS.indexOf(".dw-notice {"), CSS.indexOf(".dw-empty"));
+    expect(rule).toContain("position: sticky");
+  });
+});

@@ -896,9 +896,16 @@ h1, h2, h3, h4, h5, h6 {
 }
 .dw-tab:hover { color: var(--ink); }
 .dw-tab[data-active="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+/* STICKY, because the outcome has to reach the person who caused it.
+   The catalogue is a long scrolling grid, so a notice at the top of the component is off
+   screen by the time you have scrolled to the card you are clicking — and a refusal nobody
+   sees is indistinguishable from a button that does nothing, which is exactly how a working
+   fork got reported as broken. */
 .dw-notice {
+  position: sticky; top: 104px; z-index: 5;
   margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 0.78rem;
   background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-soft);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
 }
 .dw-empty { padding: 26px; text-align: center; color: var(--muted); }
 .dw-empty p { margin: 0 0 6px; }

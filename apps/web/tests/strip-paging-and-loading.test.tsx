@@ -90,13 +90,18 @@ describe("the console says when it is still filling up", () => {
     expect(SHELL).toContain("setSettling(false)");
   });
 
-  it("also shows while a refresh is in flight", () => {
-    expect(SHELL).toContain("{settling || refreshPending ?");
+  it("does NOT stay up for the background refresh", () => {
+    // `refreshPending` is true for the whole server re-render — 20 seconds and more here —
+    // against an interval computed from that same cost, so the bar never went off. An
+    // indicator that cannot be dismissed and explains nothing is furniture.
+    expect(SHELL).toContain("{settling ? (");
+    expect(SHELL).not.toContain("{settling || refreshPending ?");
   });
 
-  it("says which of the two is happening", () => {
-    expect(SHELL).toContain("Loading the console");
-    expect(SHELL).toContain('"Refreshing"');
+  it("puts refresh feedback in the Live chip instead", () => {
+    // Same chip, no layout shift, gone when it lands. Enough to answer "is it updating?"
+    // without occupying the page.
+    expect(SHELL).toContain('refreshPending ? "Syncing" : "Live"');
   });
 
   it("is a bar, not a blocking overlay", () => {
