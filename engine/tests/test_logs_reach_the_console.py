@@ -208,3 +208,40 @@ def test_it_actually_captures_what_it_claims_to(monkeypatch):
     assert any("npm install" in m for m in messages), "the allowlisted INFO line was not captured"
     assert any("a real warning" in m for m in messages)
     assert not any("chatter" in m for m in messages), "un-allowlisted INFO leaked in"
+
+
+def test_capture_announces_itself_so_an_empty_log_is_unambiguous(monkeypatch):
+    """After deploying, `app_logs` was empty and there was no way to tell "capture is live and
+    nothing noteworthy has happened" from "capture is broken". They look identical and they
+    need opposite responses.
+
+    Written straight to the queue, not through logging: a self-test that depends on the thing
+    it is testing proves nothing.
+    """
+    import boss_engine.db as db
+
+    written: list[dict] = []
+
+    class _Conn:
+        def execute(self, _stmt, params=None):
+            written.append(params or {})
+
+    class _Ctx:
+        def __enter__(self): return _Conn()
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(db, "begin", lambda _engine: _Ctx())
+    monkeypatch.setattr(log_capture, "_handler", None)
+
+    handler = log_capture.install(object(), service="api")
+    try:
+        deadline = time.time() + 6
+        while not written and time.time() < deadline:
+            time.sleep(0.2)
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+
+    assert any("activity-log capture installed for api" in str(w.get("m")) for w in written)
+    # Not routed through logging, which is what it is meant to verify.
+    assert "self._q.put_nowait" in inspect.getsource(log_capture.ActivityLogHandler.note)

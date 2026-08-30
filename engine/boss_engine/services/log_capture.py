@@ -156,6 +156,17 @@ class ActivityLogHandler(logging.Handler):
         self._stop.set()
         super().close()
 
+    def note(self, message: str, *, level: str = "info") -> None:
+        """Queue a record directly, bypassing the logging machinery."""
+        try:
+            self._q.put_nowait({
+                "level": level, "logger": "boss_engine.services.log_capture",
+                "message": message[:_MESSAGE_LIMIT], "project_id": None,
+                "run_id": None, "service": self._service,
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
     @property
     def dropped(self) -> int:
         return self._dropped
@@ -187,6 +198,14 @@ def install(engine, *, service: str) -> Optional[ActivityLogHandler]:
             if root.level > logging.INFO:
                 root.setLevel(logging.INFO)
             _handler = handler
+            # ANNOUNCE ITSELF, so an empty log is unambiguous.
+            #
+            # After deploying, `app_logs` was empty and there was no way to tell "capture is
+            # live and nothing noteworthy has happened" from "capture is broken". They look
+            # identical and they need opposite responses. One row at startup settles it, and it
+            # is written straight to the queue rather than through logging — a self-test that
+            # depends on the thing it is testing proves nothing.
+            handler.note(f"activity-log capture installed for {service}")
             return handler
         except Exception:  # noqa: BLE001
             return None
