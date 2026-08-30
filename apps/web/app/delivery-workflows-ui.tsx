@@ -146,6 +146,56 @@ type WorkflowSpec = {
 const TABS = ["running", "catalogue", "builder"] as const;
 type Tab = (typeof TABS)[number];
 
+/**
+ * The builder's glyphs.
+ *
+ * Same approach as the nav's: inline SVG on a 16px grid, `currentColor` throughout, so an icon
+ * dims and brightens with the label beside it instead of needing a second set of active rules.
+ * A whole icon package for eleven glyphs is a lot of bytes for eleven glyphs.
+ *
+ * Each says what the control DOES rather than decorating it — import is an arrow landing in a
+ * tray, reset is an arrow going back, create is a check. The words stay: an icon-only control
+ * in a builder is a guessing game.
+ */
+const WF_ICONS: Record<string, React.ReactNode> = {
+  // Editing — a pencil on a line.
+  edit: <><path d="M11.3 2.2a1.7 1.7 0 0 1 2.4 2.4L6 12.3l-3.2.9.9-3.2 7.6-7.8Z" /><path d="M10.2 3.4l2.4 2.4" /></>,
+  // New — a plus, boxed, because it makes a new thing rather than adding to this one.
+  plus: <><rect x="1.8" y="1.8" width="12.4" height="12.4" rx="3" /><path d="M8 5.2v5.6M5.2 8h5.6" /></>,
+  // Import — steps landing on the canvas.
+  importIn: <><path d="M8 1.8v7.4" /><path d="M5.2 6.6 8 9.4l2.8-2.8" /><path d="M2.4 10.6v1.8a1.8 1.8 0 0 0 1.8 1.8h7.6a1.8 1.8 0 0 0 1.8-1.8v-1.8" /></>,
+  // Import again — the same arrow, going round.
+  again: <><path d="M13.6 8a5.6 5.6 0 1 1-1.7-4" /><path d="M13.8 1.9v3.4h-3.4" /></>,
+  // Create — it exists now.
+  check: <><path d="M2.6 8.4 6.2 12l7.2-8" /></>,
+  // Cancel.
+  x: <><path d="M4 4l8 8M12 4l-8 8" /></>,
+  // Save a new version — a document with a tick.
+  save: <><path d="M3.2 2.4h6.2l3.4 3.4v7.8a1 1 0 0 1-1 1H3.2a1 1 0 0 1-1-1V3.4a1 1 0 0 1 1-1Z" /><path d="M9.2 2.4v3.6h3.6" /><path d="M5.4 10.2 7 11.8l3-3.4" /></>,
+  // Reset — back to how it was.
+  reset: <><path d="M2.4 8a5.6 5.6 0 1 0 1.7-4" /><path d="M2.2 1.9v3.4h3.4" /></>,
+  // A fact, not a warning.
+  info: <><circle cx="8" cy="8" r="6.2" /><path d="M8 7.4v3.4M8 5.2h.01" /></>,
+  // Steps — the shape the canvas draws.
+  steps: <><rect x="2.2" y="2.2" width="11.6" height="3.4" rx="1.2" /><rect x="2.2" y="10.4" width="11.6" height="3.4" rx="1.2" /><path d="M8 5.6v4.8" /></>,
+  // An empty canvas.
+  empty: <><rect x="1.8" y="3" width="12.4" height="10" rx="2" strokeDasharray="2.6 2.2" /><path d="M8 6.6v2.8M6.6 8h2.8" /></>,
+};
+
+function WfIcon({ id }: { id: keyof typeof WF_ICONS | string }) {
+  const d = WF_ICONS[id];
+  // No placeholder box for an unknown id: an empty square beside a label reads as a broken
+  // image, while the label on its own reads as a control without an icon, which is what it is.
+  if (!d) return null;
+  return (
+    <svg className="dw-icon" viewBox="0 0 16 16" width="15" height="15" fill="none"
+         stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"
+         aria-hidden focusable="false">
+      {d}
+    </svg>
+  );
+}
+
 /** One value from a step's output, short enough for a single line. */
 function summarise(value: unknown): string {
   if (value === null || value === undefined) return "—";
@@ -1224,7 +1274,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           {!creating ? (
             <div className="dw-head-picker">
               <label className="field">
-                <span>Editing</span>
+                <span><WfIcon id="edit" /> Editing</span>
                 <select className="input" value={target}
                         onChange={(e) => setTarget(e.target.value)} data-testid="dw-target">
                   {/* The tab is called "Build your own", and until now the only way in was to
@@ -1266,7 +1316,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               onCreate(name, spec, importedFrom?.key);
             }}>
               <label className="field">
-                <span>Name</span>
+                <span><WfIcon id="edit" /> Name</span>
                 <input className="input" autoFocus value={newName}
                        placeholder={defaultImportName || "Name it"}
                        onChange={(e) => setNewName(e.target.value)}
@@ -1274,7 +1324,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                        aria-label="Name for the new workflow" data-testid="dw-new-name" />
               </label>
               <label className="field dw-new-from">
-                <span>Start from</span>
+                <span><WfIcon id="importIn" /> Start from</span>
                 <select className="input" value={importFrom} data-testid="dw-new-from"
                         onChange={(e) => setImportFrom(e.target.value)}>
                   <option value="">Nothing — an empty workflow</option>
@@ -1293,31 +1343,33 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               <button type="button" className="cap-btn" data-testid="dw-import-steps"
                       onClick={() => void importSteps()}
                       disabled={!!busy || !importFrom || importing}>
+                <WfIcon id={importedFrom ? "again" : "importIn"} />
                 {importing ? "Importing…" : importedFrom ? "Import again" : "Import steps"}
               </button>
               <button type="submit" className="cap-btn primary"
                       disabled={!!busy || !(newName.trim() || defaultImportName)}
                       data-testid="dw-new-confirm">
-                Create
+                <WfIcon id="check" /> Create
               </button>
               <button type="button" className="cap-btn" onClick={cancelCreating}>
-                Cancel
+                <WfIcon id="x" /> Cancel
               </button>
               {importError ? (
                 <span className="detail dw-new-error" data-testid="dw-import-error">
-                  Could not import — {importError}
+                  <WfIcon id="info" /> Could not import — {importError}
                 </span>
               ) : importedFrom ? (
                 // Said in the panel, because the panel is where the operator still is. The
                 // point of the whole change is that they do NOT get moved somewhere else.
                 <span className="detail dw-new-hint" data-testid="dw-imported">
+                  <WfIcon id="steps" />
                   {importedFrom.steps} step{importedFrom.steps === 1 ? "" : "s"} from{" "}
                   <strong>{importedFrom.name}</strong> are on the canvas. Change them, then
                   press Create — nothing is saved until you do.
                 </span>
               ) : !newName.trim() && !importFrom ? (
                 <span className="detail dw-new-hint" data-testid="dw-new-hint">
-                  Name it, or pick something to start from.
+                  <WfIcon id="info" /> Name it, or pick something to start from.
                 </span>
               ) : null}
             </form>
@@ -1331,7 +1383,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   button competing with Save for the eye. */}
               <button type="button" className="cap-btn dw-new-cta" disabled={!!busy}
                       onClick={beginCreating} data-testid="dw-new">
-                <span className="dw-new-plus" aria-hidden>+</span> New workflow
+                <WfIcon id="plus" /> New workflow
               </button>
             </>
           )}
@@ -1346,14 +1398,15 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               <button type="button" className="cap-btn" disabled={!!busy}
                       onClick={reset} data-testid="dw-reset"
                       title={`Put the steps back the way ${loaded.forked_from.name} has them`}>
-                Reset to the standard
+                <WfIcon id="reset" /> Reset to the standard
               </button>
             ) : null}
             {!creating ? (
               <button type="button" className="cap-btn primary"
                       disabled={!!busy || !target || draft.length === 0}
                       onClick={() => onSave(target, spec)} data-testid="dw-save">
-                {busy === "Save" ? "Saving…" : `Save as a new version`}
+                <WfIcon id="save" />
+                {busy === "Save" ? "Saving…" : "Save as a new version"}
               </button>
             ) : null}
           </span>
@@ -1370,11 +1423,14 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
             Reading the current steps…
           </p>
         ) : draft.length === 0 ? (
-          <p className="detail dw-canvas-empty">
-            {target
-              ? "No steps yet — add them from the left, in the order they should run."
-              : "Start a new workflow, or fork one of the standards to change it."}
-          </p>
+          <div className="dw-canvas-empty" data-testid="dw-canvas-empty">
+            <span className="dw-empty-mark" aria-hidden><WfIcon id="empty" /></span>
+            <p className="detail">
+              {target
+                ? "No steps yet — add them from the left, in the order they should run."
+                : "Start a new workflow, or fork one of the standards to change it."}
+            </p>
+          </div>
         ) : (
           <ol className="dw-draft">
             {draft.map((step, index) => {

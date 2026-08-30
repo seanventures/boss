@@ -506,8 +506,8 @@ describe("the builder header asks one question at a time", () => {
 
   it("labels the name field, because it took the labelled slot", () => {
     // An unlabelled box beside a labelled dropdown reads as part of the dropdown.
-    expect(UI).toContain("<span>Name</span>");
-    expect(UI).toContain("<span>Start from</span>");
+    expect(UI).toContain('<span><WfIcon id="edit" /> Name</span>');
+    expect(UI).toContain('<span><WfIcon id="importIn" /> Start from</span>');
   });
 
   it("makes creating LOOK like a different mode", () => {
@@ -629,5 +629,45 @@ describe("Import fills the canvas; only Create writes anything", () => {
   it("puts the previous canvas back on Cancel", () => {
     // Abandoning the idea must leave the operator exactly where they were.
     expect(UI).toContain("if (stashed) setDraft(stashed);");
+  });
+});
+
+
+describe("the builder has icons, and they mean something", () => {
+  it("draws them inline rather than pulling in an icon package", () => {
+    // A whole library for eleven glyphs is a lot of bytes for eleven glyphs, and the nav
+    // already settled this question.
+    expect(UI).toContain("const WF_ICONS: Record<string, React.ReactNode>");
+    expect(UI).toContain('stroke="currentColor"');
+  });
+
+  it("uses currentColor so a glyph dims with its label", () => {
+    // Otherwise every disabled and hover state needs a second rule for the icon.
+    expect(CSS).toContain(".dw-icon");
+    expect(UI).not.toContain('stroke="#');
+  });
+
+  it("renders nothing for an unknown id", () => {
+    // An empty square beside a label reads as a broken image; the label alone reads as a
+    // control without an icon, which is what it is.
+    expect(UI).toContain("if (!d) return null;");
+  });
+
+  it("keeps the words", () => {
+    // An icon-only control in a builder is a guessing game.
+    expect(UI).toContain('<WfIcon id="check" /> Create');
+    expect(UI).toContain('<WfIcon id="x" /> Cancel');
+    expect(UI).toContain('<WfIcon id="reset" /> Reset to the standard');
+  });
+
+  it("swaps the import glyph once something has been imported", () => {
+    // "Import again" is a repeat, not a first import, and the arrow says so.
+    expect(UI).toContain('<WfIcon id={importedFrom ? "again" : "importIn"} />');
+  });
+
+  it("gives the empty canvas a shape rather than a lone sentence", () => {
+    // A centred line on a large blank panel reads as a page that failed to load.
+    expect(UI).toContain('data-testid="dw-canvas-empty"');
+    expect(CSS).toContain(".dw-empty-mark");
   });
 });

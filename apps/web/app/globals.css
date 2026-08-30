@@ -1151,7 +1151,9 @@ h1, h2, h3, h4, h5, h6 {
 .dw-head-left { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .dw-head-picker { display: grid; gap: 3px; }
 .dw-head-picker .field { display: grid; gap: 3px; min-width: 230px; }
-.dw-head-picker .field > span {
+.dw-head-picker .field > span,
+.dw-new .field > span {
+  display: inline-flex; align-items: center; gap: 5px;
   font-size: 0.62rem; letter-spacing: .1em; text-transform: uppercase;
   color: var(--faint, var(--muted));
 }
@@ -1173,8 +1175,33 @@ h1, h2, h3, h4, h5, h6 {
   border-color: var(--accent); color: var(--accent);
 }
 .dw-new-cta:disabled { opacity: .5; }
-.dw-new-plus { font-size: 1.1em; line-height: 1; margin-right: 3px; }
-.dw-canvas-empty { padding: 30px 10px; text-align: center; }
+/* ICONS.
+   Sized in em so a glyph tracks the label it sits beside rather than being pinned to one
+   button size, and `currentColor` so it dims and brightens with that label instead of needing
+   its own disabled and hover rules. Slightly optically raised: a 15px box on a 13px cap-height
+   sits low otherwise. */
+.dw-icon { width: 1.05em; height: 1.05em; flex: 0 0 auto; vertical-align: -0.16em; }
+/* Every control in this bar is icon-then-label, so they align as a set. */
+.dw-canvas-head .cap-btn,
+.dw-new .cap-btn { display: inline-flex; align-items: center; gap: 6px; }
+/* A label's glyph is quieter than its text — it is a signpost, not the message. */
+.dw-head-picker .field > span .dw-icon,
+.dw-new .field > span .dw-icon { opacity: .65; }
+/* THE EMPTY CANVAS.
+   A centred sentence on a large blank panel reads as a page that failed to load. A dashed
+   mark gives it a shape, and says the space is WAITING for something rather than broken. */
+.dw-canvas-empty {
+  display: grid; justify-items: center; gap: 10px;
+  padding: 42px 16px; text-align: center;
+}
+.dw-canvas-empty .detail { margin: 0; max-width: 42ch; line-height: 1.5; }
+.dw-empty-mark {
+  display: grid; place-items: center; width: 46px; height: 46px; border-radius: 12px;
+  color: var(--faint, var(--muted));
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.dw-empty-mark .dw-icon { width: 22px; height: 22px; vertical-align: 0; }
 /* A SEQUENCE, NOT A PILE.
    The steps run in order and the canvas has to say so. Evenly-spaced identical boxes read as
    an unordered list, which is exactly the wrong mental model for a thing whose order is its
@@ -1307,9 +1334,19 @@ h1, h2, h3, h4, h5, h6 {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
 }
-.dw-new-hint { align-self: center; font-size: 0.68rem; flex-basis: 100%; }
+/* The line under the panel's controls. Icon and text on one baseline, wrapping as a block
+   rather than squeezing between two buttons. */
+.dw-new-hint {
+  display: flex; align-items: flex-start; gap: 6px;
+  align-self: center; font-size: 0.68rem; flex-basis: 100%; line-height: 1.45;
+}
+.dw-new-hint .dw-icon { margin-top: 1px; opacity: .8; }
 .dw-new-hint strong { color: var(--ink-soft); font-weight: 600; }
-.dw-new-error { align-self: center; font-size: 0.68rem; flex-basis: 100%; color: var(--red, #f85149); }
+.dw-new-error {
+  display: flex; align-items: flex-start; gap: 6px;
+  align-self: center; font-size: 0.68rem; flex-basis: 100%; line-height: 1.45;
+  color: var(--red, #f85149);
+}
 .dw-new .input { min-width: 170px; }
 .dw-new-from .input { min-width: 210px; }
 .dw-spec-error {
