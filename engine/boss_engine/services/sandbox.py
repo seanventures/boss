@@ -51,6 +51,43 @@ _SHELL_METACHARS = "&|;<>`"
 
 _log = logging.getLogger(__name__)
 
+#: Where package and browser downloads are kept BETWEEN sandboxes.
+#:
+#: Every stage gets a fresh shallow clone in a fresh temp dir — `provision` is per task, and
+#: the warm-pool / per-repo cache that would avoid this is a microVM feature that is still
+#: stubbed. So `npm install` and `playwright install` run again for each one, and with no
+#: shared cache they re-download rather than re-link. Playwright browsers alone are hundreds of
+#: megabytes.
+#:
+#: THIS CHANGES NOTHING ABOUT WHAT IS INSTALLED. npm still resolves from the lockfile and
+#: verifies integrity; Playwright still checks it has the exact browser build it expects. The
+#: cache only decides whether the bytes come off the network or off the disk, so a stale or
+#: missing cache is a slow run, never a wrong one.
+#:
+#: Outside the clone on purpose: anything under the working tree is deleted with it, and
+#: `git add -A` would otherwise sweep it into the diff.
+_TOOL_CACHE_ROOT = os.environ.get("BOSS_SANDBOX_TOOL_CACHE", "/var/tmp/boss-tool-cache")
+
+
+def _shared_tool_caches() -> dict:
+    """Env pointing npm and Playwright at a cache that outlives one sandbox."""
+    try:
+        npm = Path(_TOOL_CACHE_ROOT) / "npm"
+        pw = Path(_TOOL_CACHE_ROOT) / "playwright"
+        npm.mkdir(parents=True, exist_ok=True)
+        pw.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        # An unwritable cache path must not stop a build: fall back to the tool defaults and
+        # simply be as slow as before.
+        _log.warning("sandbox tool cache unavailable at %s (%s); running uncached",
+                     _TOOL_CACHE_ROOT, exc)
+        return {}
+    return {
+        "npm_config_cache": str(npm),
+        "PLAYWRIGHT_BROWSERS_PATH": str(pw),
+    }
+
+
 
 def _looks_like_shell(command: str) -> bool:
     import shlex as _shlex
@@ -269,7 +306,7 @@ class EphemeralSandbox:
             restore_note = maybe_restore_for_command(workdir, command)
         except Exception as exc:  # noqa: BLE001 — verify must still run
             restore_note = f"[boss] sandbox.restore failed {type(exc).__name__}: {exc}\n"
-        env = {**os.environ, "CI": "1"}
+        env = {**os.environ, "CI": "1", **_shared_tool_caches()}
         # Image-global `playwright` (browser install CLI) has no `test` command.
         # Prefer the app's node_modules/.bin so @playwright/test / vite win.
         try:

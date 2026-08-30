@@ -97,3 +97,37 @@ def test_every_sandbox_command_says_how_long_it_took():
     # The duration that is logged is the same one returned, not a second measurement that
     # could disagree with it.
     assert "duration_ms=_ms," in src
+
+
+def test_package_and_browser_downloads_are_cached_between_sandboxes():
+    """Every stage gets a fresh clone, so every stage re-runs `npm install` and
+    `playwright install`. Without a shared cache those RE-DOWNLOAD — Playwright's browsers
+    alone are hundreds of megabytes — for bytes that are byte-identical each time."""
+    from boss_engine.services import sandbox
+
+    caches = sandbox._shared_tool_caches()
+    assert caches["npm_config_cache"].endswith("/npm")
+    assert caches["PLAYWRIGHT_BROWSERS_PATH"].endswith("/playwright")
+
+    src = inspect.getsource(sandbox)
+    # Applied to the env every command runs under.
+    assert 'env = {**os.environ, "CI": "1", **_shared_tool_caches()}' in src
+
+
+def test_the_cache_lives_outside_the_working_tree():
+    """Anything under the clone is deleted with it, and `git add -A` would sweep it into the
+    diff — a cache inside the tree is both useless and dangerous."""
+    from boss_engine.services import sandbox
+
+    for path in sandbox._shared_tool_caches().values():
+        assert "/tmp/boss-tool-cache" in path or not path.startswith("."), path
+
+
+def test_an_unwritable_cache_does_not_break_the_build():
+    """A cache is an optimisation. If the path cannot be created the run must still work —
+    just as slowly as before — rather than failing on a directory."""
+    from boss_engine.services import sandbox
+
+    src = inspect.getsource(sandbox._shared_tool_caches)
+    assert "return {}" in src
+    assert "running uncached" in src
