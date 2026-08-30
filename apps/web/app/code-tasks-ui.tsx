@@ -752,7 +752,17 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running, 
   if (previewStarting) {
     return <button className="cap-btn primary" disabled>Preview starting…</button>;
   }
-  if (running) {
+  // ONLY WHEN THERE IS NOTHING TO SHOW YET.
+  //
+  // This checked `running` FIRST, while the badge above it applies the opposite precedence —
+  // "shipped beats running beats failed". An app with three attempts, one shipped and a
+  // follow-up building, therefore rendered the badge SHIPPED and the button "Building…" at the
+  // same time, and disabled the only useful control on a working app because a LATER attempt
+  // was in flight. Both facts were true; the card just disagreed with itself.
+  //
+  // Shipped wins here too. A build in progress is real information, but it belongs beside the
+  // action, not in place of it.
+  if (running && !shipped) {
     return (
       <button className="cap-btn primary" disabled
               title="The build is still running — there is nothing to preview yet">
@@ -3147,7 +3157,14 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                       <span className="cap-badge tone-blue">{groupIdentity(members).kind}</span>
                     ) : null}
                     <span className={`cap-badge tone-${statusTone(groupStatus)}`}>
-                      {anyShipped ? "shipped" : anyRunning ? "building" : groupStatus}
+                      {/* Both facts, when both are true. `anyShipped ? … : anyRunning ? …`
+                          reported only the first one, so an app that had shipped AND had a
+                          follow-up building announced itself as simply "shipped" — and the
+                          in-flight work, which is the thing that is about to change what you
+                          are looking at, appeared nowhere on the card. */}
+                      {anyShipped && anyRunning ? "shipped · building"
+                        : anyShipped ? "shipped"
+                        : anyRunning ? "building" : groupStatus}
                     </span>
                     {/* What the operator has, in words: how many attempts, and whether the
                         most recent one went wrong. Both facts at once, so a working app is not
