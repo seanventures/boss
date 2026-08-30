@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -41,6 +43,11 @@ class Agent:
     api: str
     project: str
     actor: str = "verification-agent"
+    #: Skip TLS verification. For a tailnet-internal host whose CA this machine does not carry
+    #: — Python does not read the system keychain the way curl does, so a host curl trusts can
+    #: still fail here. NEVER for a public endpoint: it is opt-in, per-run, and printed in the
+    #: report so a result obtained this way says so.
+    insecure: bool = False
     results: list[Result] = field(default_factory=list)
     _forked_key: Optional[str] = None
     _run_id: Optional[str] = None
@@ -54,8 +61,14 @@ class Agent:
         data = json.dumps(payload).encode() if payload is not None else None
         request = urllib.request.Request(url, data=data, method=method)
         request.add_header("Content-Type", "application/json")
+        # Production requires a key. Read from the environment rather than an argument so it
+        # never lands in a shell history or a CI log.
+        key = os.environ.get("BOSS_API_KEY") or os.environ.get("BOSS_CONSOLE_API_KEY")
+        if key:
+            request.add_header("Authorization", f"Bearer {key}")
         try:
-            with urllib.request.urlopen(request, timeout=90) as response:
+            context = ssl._create_unverified_context() if self.insecure else None
+            with urllib.request.urlopen(request, timeout=90, context=context) as response:
                 body = response.read().decode()
                 return response.status, (json.loads(body) if body else None)
         except urllib.error.HTTPError as error:
@@ -329,7 +342,8 @@ class Agent:
             by_phase.setdefault(result.phase, []).append(result)
 
         print("\nDELIVERY WORKFLOWS — VERIFICATION")
-        print(f"{self.api}  ·  project {self.project}\n")
+        print(f"{self.api}  ·  project {self.project}"
+              + ("  ·  TLS NOT VERIFIED" if self.insecure else "") + "\n")
         for phase in sorted(by_phase):
             print(f"  Phase {phase}")
             for result in by_phase[phase]:
@@ -352,14 +366,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api", default="http://127.0.0.1:8010")
     parser.add_argument("--project", default="boss-dogfood")
+    parser.add_argument("--insecure", action="store_true",
+                        help="skip TLS verification (tailnet-internal hosts only)")
     parser.add_argument("--skip-run", action="store_true",
                         help="skip the live run, which starts real work")
     args = parser.parse_args()
 
-    agent = Agent(api=args.api.rstrip("/"), project=args.project)
-    status, _ = agent._call("GET", "/v1/delivery-workflows/capabilities")
+    agent = Agent(api=args.api.rstrip("/"), project=args.project, insecure=args.insecure)
+    status, body = agent._call("GET", "/v1/delivery-workflows/capabilities")
     if status == 0:
-        print(f"Cannot reach {agent.api}. Is the API running?")
+        print(f"Cannot reach {agent.api}: {(body or {}).get('detail', 'no response')}")
+        return 1
+    if status in (401, 403):
+        # Said plainly, because "cannot reach" for an auth failure sends somebody to check the
+        # network for twenty minutes.
+        print(f"{agent.api} refused the request ({status}). "
+              "Set BOSS_API_KEY to a console key and try again.")
         return 1
 
     agent.verify_separation()
