@@ -489,29 +489,50 @@ def delete_definition(
             "before deleting it."
         )
 
+    # The mapping goes either way: whatever happens to the definition, no new work should be
+    # routed to it.
     connection.execute(
         text("DELETE FROM workflow_mappings WHERE workflow_version_id IN "
              "(SELECT id FROM workflow_versions WHERE workflow_definition_id=:id)"),
         {"id": definition_id},
     )
-    # The definition row goes; its versions stay, because completed runs point at them and a
-    # run whose spec has vanished cannot be read back.
-    connection.execute(
-        text("UPDATE workflow_versions SET status='archived' "
-             "WHERE workflow_definition_id=:id AND status <> 'archived'"),
+
+    # HAS IT EVER RUN?
+    #
+    # This decides between two genuinely different acts, and the database enforces the
+    # difference: `workflow_versions` cascades from the definition, so deleting one that has
+    # history would take the specs with it — and a finished run whose spec has vanished cannot
+    # be read back. `workflow_runs` has no cascade at all, so the delete simply fails.
+    #
+    # Never run  -> a mistake, and removing it leaves nothing behind.
+    # Has runs   -> RETIRED. It leaves the picker, its history stays readable.
+    ever = connection.execute(
+        text("SELECT count(*) FROM workflow_runs WHERE workflow_definition_id=:id"),
         {"id": definition_id},
-    )
-    connection.execute(
-        text("DELETE FROM workflow_definitions WHERE id=:id AND project_id=:project_id"),
-        {"id": definition_id, "project_id": project_id},
-    )
+    ).scalar() or 0
+
+    if int(ever):
+        connection.execute(
+            text("UPDATE workflow_definitions SET status='retired', updated_at=now() "
+                 "WHERE id=:id AND project_id=:project_id"),
+            {"id": definition_id, "project_id": project_id},
+        )
+        outcome = "retired"
+    else:
+        connection.execute(
+            text("DELETE FROM workflow_definitions WHERE id=:id AND project_id=:project_id"),
+            {"id": definition_id, "project_id": project_id},
+        )
+        outcome = "deleted"
+
     emit_event(
-        connection, project_id, "workflow.definition_deleted", actor,
+        connection, project_id, f"workflow.definition_{outcome}", actor,
         "workflow_definition", definition_id,
-        {"workflow_key": definition["workflow_key"], "name": definition["name"]},
+        {"workflow_key": definition["workflow_key"], "name": definition["name"],
+         "runs": int(ever)},
     )
-    return {"deleted": definition_id, "workflow_key": definition["workflow_key"],
-            "name": definition["name"]}
+    return {"outcome": outcome, "id": definition_id, "runs": int(ever),
+            "workflow_key": definition["workflow_key"], "name": definition["name"]}
 
 
 def require_editable(definition: dict[str, Any]) -> None:
