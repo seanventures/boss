@@ -169,9 +169,13 @@ export function ActivityLog({
   projectId,
   actor,
   runId,
+  runTitles = {},
 }: {
   projectId: string;
   actor: string;
+  /** run id -> the app's name. The scope banner said only "crun_2f0a15b2…", which is true and
+   *  tells the reader nothing about which app they are looking at. */
+  runTitles?: Record<string, string>;
   /** Scope every query to ONE work task. Normally arrives as `?run=` instead — see below —
    *  but a caller that already knows the run can pass it directly. */
   runId?: string;
@@ -355,7 +359,15 @@ export function ActivityLog({
         // They arrived from a run page, so this view is already narrowed to one build. Without
         // saying so, the log reads as though the whole project only ever did this.
         <p className="alog-scope" data-testid="activity-scope">
-          <span>Scoped to one work task</span>
+          <span>Showing only</span>
+          {/* The NAME first, because that is what the operator came here about. The id stays —
+              it is what they would paste into a query or a bug report — but it is no longer
+              the only thing on the line. */}
+          {runTitles[scopedRun] ? (
+            <strong className="alog-scope-name" data-testid="activity-scope-name">
+              {runTitles[scopedRun]}
+            </strong>
+          ) : null}
           <code className="mono">{scopedRun}</code>
           <button
             type="button"

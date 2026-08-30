@@ -163,6 +163,7 @@ import { CapabilitiesView } from "./capabilities-ui";
 import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
+import { appIdentity } from "./app-identity";
 import { CodeTasksHome } from "./code-tasks-ui";
 import { OrgChartArea, WorkforceArea } from "./workforce-ui";
 import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
@@ -7149,7 +7150,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               component, and the Factory links across with pushState — a client-side navigation
               that never re-runs it. Threading it through props would have worked on a reload
               and silently done nothing on the click that matters. */}
-          <ActivityLog projectId={activeProjectId} actor={activeActorId} />
+          <ActivityLog
+            projectId={activeProjectId} actor={activeActorId}
+            // NAMES, NOT IDS. Arriving here from a run, the scope banner said
+            // "Scoped to one work task crun_2f0a15b2…" — which is the truth and tells the
+            // reader nothing about WHICH app they are looking at. The page already has every
+            // run's title, so no extra fetch is needed to say it.
+            runTitles={Object.fromEntries(codeTasksFeed.items.map((t) => [
+              t.id, appIdentity({ title: t.title ?? "" }).name || t.id,
+            ]))}
+          />
         </section>
 
         <section className="panel-stack" data-area="work" aria-label="Task runs">

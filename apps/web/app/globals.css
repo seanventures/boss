@@ -6978,6 +6978,9 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .ct-split-detail { min-width: 0; }
 
+/* The app's name in the Activity Log scope banner, ahead of its id. */
+.alog-scope-name { color: var(--ink); font-weight: 600; }
+
 /* AN ACTION BAR CANNOT BE ALLOWED TO GROW WITHOUT LIMIT.
    Moving "Approve & ship" up brought its effect line with it — a sentence naming every app the
    merge would deploy — and it shoved everything after it off the right of the screen. That was
