@@ -14,6 +14,7 @@ where it executes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import os
 from pathlib import Path
 import shlex
@@ -46,6 +47,9 @@ _SHELL_OPERATORS = frozenset({"&&", "||", "|", ";", ";;", ">", ">>", "<", "&"})
 
 #: Characters that mean something to a shell when they are NOT inside quotes.
 _SHELL_METACHARS = "&|;<>`"
+
+
+_log = logging.getLogger(__name__)
 
 
 def _looks_like_shell(command: str) -> bool:
@@ -286,11 +290,24 @@ class EphemeralSandbox:
                 timeout=limit,
                 check=False,
             )
+            _ms = int((time.monotonic() - started) * 1000)
+            # WHICH COMMAND ATE THE FIVE MINUTES.
+            #
+            # `duration_ms` was returned to the caller and, for everything except the recorded
+            # test commands, dropped. So a stage that spent four of its five minutes installing
+            # dependencies into a freshly cloned temp dir — which every stage gets, because
+            # provision shallow-clones per task and the per-repo cache is a microVM feature
+            # that is still stubbed — looked exactly like a stage that spent five minutes
+            # running tests. One line per command, so the next slow run says so itself.
+            _log.info(
+                "sandbox cmd task=%s exit=%s %dms  %s",
+                self.task_id, completed.returncode, _ms, command[:160],
+            )
             return CommandResult(
                 command=command,
                 argv=argv,
                 exit_code=completed.returncode,
-                duration_ms=int((time.monotonic() - started) * 1000),
+                duration_ms=_ms,
                 timed_out=False,
                 stdout=restore_note + self._truncate(completed.stdout),
                 stderr=self._truncate(completed.stderr),

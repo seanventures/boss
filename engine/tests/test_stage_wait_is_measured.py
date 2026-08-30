@@ -78,3 +78,22 @@ def test_the_guest_stage_records_the_split_and_cannot_break_a_run():
     # A diagnostic that can fail a build is worse than no diagnostic.
     rec = src[src.index("def _record_stage_timing"):]
     assert "except Exception:" in rec[:rec.index("def _phase")]
+
+
+def test_every_sandbox_command_says_how_long_it_took():
+    """Which command ate the five minutes.
+
+    `duration_ms` was returned to the caller and, for everything except the recorded test
+    commands, dropped. So a stage that spent four of its five minutes installing dependencies
+    into a freshly cloned temp dir — which every stage gets, because `provision` shallow-clones
+    per task and the per-repo cache is a microVM feature that is still stubbed — was
+    indistinguishable from a stage that spent five minutes running tests.
+    """
+    from boss_engine.services import sandbox
+
+    src = inspect.getsource(sandbox)
+    assert "_log = logging.getLogger(__name__)" in src
+    assert "sandbox cmd task=%s exit=%s %dms" in src
+    # The duration that is logged is the same one returned, not a second measurement that
+    # could disagree with it.
+    assert "duration_ms=_ms," in src
