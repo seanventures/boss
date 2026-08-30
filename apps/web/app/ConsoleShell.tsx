@@ -32,6 +32,7 @@ import {
   List,
   MagnifyingGlass,
   CaretRight,
+  FlowArrow,
   Heartbeat,
   Siren,
   PaintBrush,
@@ -70,6 +71,7 @@ type AreaId =
   | "decisions"
   | "work"
   | "activity"
+  | "delivery_workflows"
   | "portfolio"
   | "discovery"
   | "meetings"
@@ -145,6 +147,7 @@ const ICONS = {
   apps: Rocket,
   shepherd: Code,
   delivery: Code,
+  delivery_workflows: FlowArrow,
   monitoring: Heartbeat,
   reliability: Heartbeat,
   "ai-sre": Siren,
@@ -177,6 +180,7 @@ const AREAS: AreaDef[] = [
   { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
   { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
+  { id: "delivery_workflows", label: "Workflows", sub: "How work moves — pick a path, watch it, build your own", group: "Run", icon: ICONS.delivery_workflows },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring, parent: "observability" },

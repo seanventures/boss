@@ -94,6 +94,16 @@ budget:
   what: spend against cap
   risk: a total that is actually the sum of one page of runs
 
+delivery_workflows:
+  to: boss
+  what: >
+    customer delivery workflows -- the twelve BOSS ships, what is running on them, and a
+    builder for your own
+  risk: >
+    a builder that disagreed with the runtime. The palette, the risk floor and the validation
+    messages all come from the engine's capability registry, so a workflow that saves is a
+    workflow that runs.
+
 workforce:
   to: factory
   what: >

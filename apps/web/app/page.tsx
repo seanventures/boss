@@ -86,6 +86,7 @@ import { FocusedAgents } from "./focused-agents-ui";
 import { AgentProcesses } from "./agent-process-ui";
 import { ProcessManager } from "./process-manager-ui";
 import { ActivityLog } from "./activity-log-ui";
+import { DeliveryWorkflows } from "./delivery-workflows-ui";
 import { FactoryFlowBoard } from "./factory-flow-ui";
 import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
@@ -7149,6 +7150,17 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             unavailable={sandboxFeed.unavailable}
             host={sandboxFeed.host}
           />
+        </section>
+
+        <section className="panel-stack" data-area="delivery_workflows"
+                 aria-label="Delivery workflows">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Workflows</span>
+              <h2>The path work takes — pick one, watch it, build your own.</h2>
+            </div>
+          </div>
+          <DeliveryWorkflows projectId={activeProjectId} actor={activeActorId} />
         </section>
 
         <section className="panel-stack" data-area="activity" aria-label="Activity log">

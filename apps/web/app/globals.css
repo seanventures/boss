@@ -883,6 +883,136 @@ h1, h2, h3, h4, h5, h6 {
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Delivery workflows ───────────────────────────────────────────────────────
+   Three things in one screen: pick a path, watch one run, build your own. The
+   builder and the run view share a vocabulary on purpose — a gate looks the same
+   whether you are placing it or waiting on it. */
+.dw { display: grid; gap: 14px; }
+.dw-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.dw-tab {
+  padding: 8px 14px; border: 0; background: transparent; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: 0.82rem;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.dw-tab:hover { color: var(--ink); }
+.dw-tab[data-active="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.dw-notice {
+  margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 0.78rem;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-soft);
+}
+.dw-empty { padding: 26px; text-align: center; color: var(--muted); }
+.dw-empty p { margin: 0 0 6px; }
+
+/* Status, as a word in a shape. Never colour alone. */
+.dw-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-family: var(--mono, monospace); font-size: 0.62rem; letter-spacing: .06em;
+  border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+}
+.dw-badge[data-tone="ok"]   { color: var(--green, #3fb950); border-color: rgba(63,185,80,.4); }
+.dw-badge[data-tone="bad"]  { color: var(--red, #f85149);   border-color: rgba(248,81,73,.4); }
+.dw-badge[data-tone="wait"] { color: var(--amber, #d29922); border-color: rgba(210,153,34,.4); }
+.dw-badge[data-tone="live"] { color: var(--accent);         border-color: var(--accent); }
+
+.dw-runs { display: grid; gap: 10px; }
+.dw-runs-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dw-run { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+.dw-run-head {
+  width: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; background: transparent; border: 0; cursor: pointer;
+  color: var(--ink); font: inherit; text-align: left;
+}
+.dw-run-name { font-weight: 600; }
+.dw-run-progress {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono, monospace); font-size: 0.68rem; color: var(--muted);
+}
+.dw-bar { display: block; width: 90px; height: 3px; border-radius: 2px; background: var(--border); }
+.dw-bar > i { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+/* "Waiting on the release manager" is the sentence an operator needs. "Waiting" alone sends
+   them to ask three people who it is waiting on. */
+.dw-waiting { color: var(--amber, #d29922); font-size: 0.74rem; }
+.dw-blocked { margin: 0; padding: 0 14px 10px; color: var(--red, #f85149); font-size: 0.76rem; }
+
+.dw-steps { margin: 0; padding: 0 14px 12px 34px; display: grid; gap: 6px; }
+.dw-step { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.78rem; }
+.dw-step-id { font-family: var(--mono, monospace); color: var(--ink-soft); }
+.dw-gate {
+  font-family: var(--mono, monospace); font-size: 0.6rem; letter-spacing: .06em;
+  color: var(--amber, #d29922); border: 1px solid rgba(210,153,34,.4);
+  border-radius: 4px; padding: 1px 5px;
+}
+.dw-due, .dw-timeout { font-size: 0.68rem; }
+.dw-timeout { color: var(--amber, #d29922); }
+.dw-step-error { width: 100%; margin: 2px 0 0 28px; color: var(--red, #f85149); font-size: 0.72rem; }
+.dw-step-out {
+  width: 100%; margin: 2px 0 0 28px; color: var(--muted);
+  font-family: var(--mono, monospace); font-size: 0.68rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.dw-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.dw-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  background: var(--surface-1); display: grid; gap: 8px; align-content: start;
+}
+.dw-card header { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+.dw-card h4 { margin: 0; font-size: 0.95rem; }
+.dw-class {
+  font-family: var(--mono, monospace); font-size: 0.62rem; color: var(--muted);
+}
+/* The steps in order, so the shape of a workflow is legible before it is chosen. */
+.dw-flow { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.dw-flow li {
+  font-family: var(--mono, monospace); font-size: 0.62rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+}
+.dw-flow li[data-gate] { color: var(--amber, #d29922); border-color: rgba(210,153,34,.4); }
+.dw-facts { display: flex; gap: 12px; margin: 0; font-size: 0.72rem; color: var(--muted); }
+.dw-facts [data-emphasis] { color: var(--amber, #d29922); }
+.dw-needs { margin: 0; font-size: 0.72rem; }
+.dw-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+.dw-builder { display: grid; grid-template-columns: 260px 1fr; gap: 14px; align-items: start; }
+.dw-palette {
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px;
+  background: var(--surface-1); display: grid; gap: 4px; align-content: start;
+}
+.dw-palette h4 { margin: 0 0 4px; font-size: 0.8rem; }
+.dw-palette-item {
+  display: grid; gap: 2px; text-align: left; padding: 7px 9px; cursor: pointer;
+  border: 1px solid transparent; border-radius: 7px; background: transparent;
+  color: var(--ink-soft); font: inherit;
+}
+.dw-palette-item:hover { background: var(--surface-2); border-color: var(--border); }
+.dw-palette-label { font-size: 0.8rem; font-weight: 600; }
+.dw-palette-summary { font-size: 0.68rem; line-height: 1.35; }
+.dw-floor { margin: 8px 2px 0; font-size: 0.68rem; line-height: 1.4; }
+
+.dw-canvas { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface-1); }
+.dw-canvas-head { display: flex; align-items: end; gap: 12px; justify-content: space-between; }
+.dw-canvas-empty { padding: 30px 10px; text-align: center; }
+.dw-draft { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.dw-draft-step {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+  cursor: grab;
+}
+.dw-draft-step:active { cursor: grabbing; }
+.dw-draft-grip { color: var(--faint, var(--muted)); letter-spacing: -2px; }
+.dw-draft-n {
+  font-family: var(--mono, monospace); font-size: 0.66rem; color: var(--muted);
+  min-width: 18px;
+}
+.dw-draft-label { font-size: 0.84rem; font-weight: 600; }
+.dw-draft-approval { margin-left: auto; max-width: 110px; font-size: 0.72rem; padding: 3px 6px; }
+.dw-draft-moves { display: inline-flex; gap: 3px; }
+.dw-draft-moves .cap-btn { padding: 2px 7px; font-size: 0.7rem; }
+
+@media (max-width: 900px) {
+  .dw-builder { grid-template-columns: 1fr; }
+}
+
 /* ── Console loading indicator ────────────────────────────────────────────────
    The console streams: panels arrive one at a time and a count can read "12" for
    a second before it reads 200. Without this, that looks like missing data. */

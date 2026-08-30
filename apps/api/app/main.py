@@ -16,6 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, WebS
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from sqlalchemy import text
+from uuid import uuid4
 from sqlalchemy.exc import ProgrammingError
 
 from boss_engine.ports import configure_engine_ports
@@ -19720,6 +19721,240 @@ def apply_delivery_workflow(payload: dict) -> dict:
             actor=actor,
         )
         return {"applied": mapping, "workflow_key": workflow_key, "work_class": work_class}
+
+
+@app.get("/v1/delivery-workflows/runs")
+def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
+    """Live and recent delivery runs, each with where it has got to.
+
+    One query for the list and one for the steps, rather than a call per run: a project with
+    twenty workflows in flight should cost two round trips to render, not twenty-one.
+    """
+    with begin(engine) as connection:
+        runs = connection.execute(
+            text(
+                """
+                SELECT r.id, r.status, r.actor, r.input, r.blocked_reason, r.error,
+                       r.created_at, r.updated_at, r.completed_at,
+                       d.workflow_key, d.name AS workflow_name, v.version
+                FROM workflow_runs r
+                JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+                JOIN workflow_versions v ON v.id = r.workflow_version_id
+                WHERE r.project_id = :project_id
+                  AND COALESCE(d.namespace, 'system') = 'product'
+                ORDER BY r.updated_at DESC
+                LIMIT :limit
+                """
+            ),
+            {"project_id": project_id, "limit": max(1, min(100, limit))},
+        ).mappings().all()
+        if not runs:
+            return {"project_id": project_id, "runs": []}
+
+        ids = [r["id"] for r in runs]
+        steps = connection.execute(
+            text(
+                """
+                SELECT workflow_run_id, step_id, step_kind, status, output, evidence,
+                       last_error, decision_id, binding_snapshot,
+                       started_at, completed_at, attempt
+                FROM workflow_step_runs
+                WHERE workflow_run_id = ANY(:ids)
+                ORDER BY created_at, iteration
+                """
+            ),
+            {"ids": ids},
+        ).mappings().all()
+
+    by_run: dict[str, list] = {r: [] for r in ids}
+    for step in steps:
+        snapshot = step["binding_snapshot"] or {}
+        by_run[step["workflow_run_id"]].append({
+            "step_id": step["step_id"],
+            "kind": step["step_kind"],
+            "status": step["status"],
+            "capability": (step["output"] or {}).get("capability"),
+            "output": step["output"] or {},
+            "evidence": step["evidence"] or [],
+            "error": step["last_error"],
+            "decision_id": step["decision_id"],
+            # What an operator asks about a waiting step: who, and by when.
+            "approval": snapshot.get("approval") or {},
+            "due_at": snapshot.get("due_at"),
+            "timeout_applied": snapshot.get("timeout_applied"),
+            "attempt": step["attempt"],
+            "started_at": step["started_at"].isoformat() if step["started_at"] else None,
+            "completed_at": step["completed_at"].isoformat() if step["completed_at"] else None,
+        })
+
+    out = []
+    for run in runs:
+        run_steps = by_run.get(run["id"], [])
+        done = sum(1 for s in run_steps if s["status"] in ("succeeded", "skipped"))
+        current = next(
+            (s for s in run_steps if s["status"] in ("waiting", "running", "leased", "ready")),
+            None,
+        )
+        out.append({
+            "id": run["id"],
+            "status": run["status"],
+            "workflow_key": run["workflow_key"],
+            "workflow_name": run["workflow_name"],
+            "version": run["version"],
+            "actor": run["actor"],
+            "input": run["input"] or {},
+            "blocked_reason": run["blocked_reason"],
+            "error": run["error"],
+            "steps": run_steps,
+            "step_count": len(run_steps),
+            "steps_done": done,
+            "current_step": current["step_id"] if current else None,
+            # Says what it is waiting FOR, not just that it is waiting.
+            "waiting_on": (
+                current.get("approval", {}).get("approver_role") or "a decision"
+                if current and current["status"] == "waiting" else None
+            ),
+            "created_at": run["created_at"].isoformat() if run["created_at"] else None,
+            "updated_at": run["updated_at"].isoformat() if run["updated_at"] else None,
+        })
+    return {"project_id": project_id, "runs": out}
+
+
+@app.post("/v1/delivery-workflows/fork")
+def fork_delivery_workflow(payload: dict) -> dict:
+    """Copy a workflow into one the customer owns and can edit.
+
+    Forking rather than editing in place is what keeps "reset to the standard" meaningful and
+    keeps the customer's diff against it visible.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    source_key = str(payload.get("workflow_key") or "").strip()
+    new_key = str(payload.get("new_key") or "").strip()
+    new_name = str(payload.get("new_name") or "").strip()
+    actor = str(payload.get("actor") or "operator").strip()
+    if not project_id or not source_key or not new_key:
+        raise HTTPException(
+            status_code=400, detail="project_id, workflow_key and new_key are required"
+        )
+
+    with begin(engine) as connection:
+        source = connection.execute(
+            text(
+                "SELECT d.id, d.name, d.description, v.id AS version_id, v.spec "
+                "FROM workflow_definitions d "
+                "JOIN workflow_versions v ON v.workflow_definition_id = d.id "
+                "WHERE d.project_id=:p AND d.workflow_key=:k "
+                "AND COALESCE(d.namespace,'system')='product' "
+                "ORDER BY v.version DESC LIMIT 1"
+            ),
+            {"p": project_id, "k": source_key},
+        ).mappings().first()
+        if source is None:
+            raise HTTPException(
+                status_code=404, detail=f"no delivery workflow '{source_key}' to fork"
+            )
+        try:
+            definition = workflow_runtime.create_definition(
+                connection, project_id=project_id, workflow_key=new_key,
+                name=new_name or f"{source['name']} (copy)",
+                description=source["description"], actor=actor,
+                namespace=workflow_runtime.PRODUCT_NAMESPACE,
+                is_catalogue=False,
+                forked_from_version_id=source["version_id"],
+            )
+        except workflow_runtime.WorkflowConflictError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        version = workflow_runtime.publish_version(
+            connection, project_id=project_id, definition_id=definition["id"],
+            spec=source["spec"], actor=actor,
+        )
+        return {"definition": definition, "version": version,
+                "forked_from": source["version_id"]}
+
+
+@app.post("/v1/delivery-workflows/save")
+def save_delivery_workflow(payload: dict) -> dict:
+    """Publish a new version of a customer's own workflow.
+
+    Saving never mutates a published version — it produces version N+1, so runs in flight keep
+    the version they started on and saving cannot change the meaning of work already underway.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    definition_id = str(payload.get("definition_id") or "").strip()
+    spec = payload.get("spec")
+    actor = str(payload.get("actor") or "operator").strip()
+    if not project_id or not definition_id or not isinstance(spec, dict):
+        raise HTTPException(
+            status_code=400, detail="project_id, definition_id and spec are required"
+        )
+    with begin(engine) as connection:
+        try:
+            definition = workflow_runtime.require_namespace(
+                connection, project_id, definition_id, workflow_runtime.PRODUCT_NAMESPACE
+            )
+            workflow_runtime.require_editable(definition)
+            version = workflow_runtime.publish_version(
+                connection, project_id=project_id, definition_id=definition_id,
+                spec=spec, actor=actor,
+            )
+        except workflow_runtime.WorkflowNamespaceError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowValidationError as error:
+            # 422 with the reason: this is what the builder shows next to the step.
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except workflow_runtime.WorkflowConflictError:
+            return {"unchanged": True, "note": "This is identical to the current version."}
+        return {"version": version}
+
+
+@app.post("/v1/delivery-workflows/start")
+def start_delivery_workflow(payload: dict) -> dict:
+    """Launch a piece of work on a workflow."""
+    project_id = str(payload.get("project_id") or "").strip()
+    work_class = str(payload.get("work_class") or "").strip()
+    workflow_key = str(payload.get("workflow_key") or "").strip()
+    actor = str(payload.get("actor") or "operator").strip()
+    run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
+    if not project_id or not (work_class or workflow_key):
+        raise HTTPException(
+            status_code=400,
+            detail="project_id and one of work_class or workflow_key are required",
+        )
+    with begin(engine) as connection:
+        version_id = None
+        if workflow_key:
+            version_id = connection.execute(
+                text(
+                    "SELECT v.id FROM workflow_versions v "
+                    "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                    "WHERE d.project_id=:p AND d.workflow_key=:k "
+                    "AND COALESCE(d.namespace,'system')='product' "
+                    "ORDER BY v.version DESC LIMIT 1"
+                ),
+                {"p": project_id, "k": workflow_key},
+            ).scalar()
+            if not version_id:
+                raise HTTPException(
+                    status_code=404, detail=f"no delivery workflow '{workflow_key}'"
+                )
+        try:
+            run = workflow_runtime.start_run(
+                connection, project_id=project_id, actor=actor, input_data=run_input,
+                dedupe_key=str(payload.get("dedupe_key") or "")
+                           or f"delivery:{work_class or workflow_key}:{uuid4().hex[:12]}",
+                workflow_version_id=version_id,
+                selector_kind=None if version_id else "work_class",
+                selector_value=None if version_id else work_class,
+            )
+        except workflow_runtime.WorkflowMappingNotFoundError as error:
+            # The honest failure: nobody chose a workflow for this class of work. Picking one
+            # anyway is how work silently follows a process nobody agreed to.
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except workflow_runtime.WorkflowBindingBlockedError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"run": run}
 
 
 @app.get("/v1/delivery-workflows")
