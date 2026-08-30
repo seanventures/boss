@@ -39,6 +39,15 @@ export type ActivityLogQuery = {
   status?: string;
   actor?: string;
   entity_type?: string;
+  /** verbose | info | warn | error — how loudly a row speaks, which is a different question
+   *  from `status` (what happened to the work). */
+  level?: string;
+  /** One stream, or "infra" for the three that describe BOSS operating itself. */
+  source?: string;
+  /** One work task. */
+  run_id?: string;
+  /** One AI agent, by role key. */
+  agent?: string;
   since?: string;
   until?: string;
   sort?: string;
@@ -52,11 +61,21 @@ export type ActivityLogItem = {
   source: string;
   kind: string;
   status: ActivityLogStatus;
+  /** The log level. Defaults to "info" for a payload from an older API, so a mixed-version
+   *  deployment shows rows at a sane level rather than dropping them out of every filter. */
+  level: string;
   title: string;
   actor: string;
   entityType: string;
   entityId: string;
   stage: string;
+  /** The work task this row belongs to, when it belongs to one. */
+  runId: string;
+  /** The AI agent that produced it, by role key. */
+  agent: string;
+  /** The readable body of a transcript turn — what was said, or what a tool returned. Empty
+   *  for every other source, which carry structured `data` instead. */
+  body: string;
   createdAt: string;
   data: Record<string, unknown>;
 };
@@ -99,6 +118,10 @@ export function activityLogSearchParams(
   setIfPresent(params, "status", query.status);
   setIfPresent(params, "actor", query.actor);
   setIfPresent(params, "entity_type", query.entity_type);
+  setIfPresent(params, "level", query.level);
+  setIfPresent(params, "source", query.source);
+  setIfPresent(params, "run_id", query.run_id);
+  setIfPresent(params, "agent", query.agent);
   setIfPresent(params, "since", query.since);
   setIfPresent(params, "until", query.until);
   if (query.sort && SORT_SET.has(query.sort)) {
@@ -148,11 +171,17 @@ function mapActivityLogItem(value: unknown): ActivityLogItem[] {
       source: asText(value.source),
       kind: asText(value.kind),
       status: mapStatus(value.status),
+      // "info" rather than "" when absent: an API that predates levels should render its rows
+      // at a sane level, not have them vanish from every level filter.
+      level: asText(value.level) || "info",
       title: asText(value.title),
       actor: asText(value.actor),
       entityType: asText(value.entity_type),
       entityId: asText(value.entity_id),
       stage: asText(value.stage),
+      runId: asText(value.run_id),
+      agent: asText(value.agent),
+      body: asText(value.body),
       createdAt: asText(value.created_at),
       data: isPlainObject(value.data) ? value.data : {},
     },

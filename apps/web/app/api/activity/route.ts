@@ -23,6 +23,10 @@ export const dynamic = "force-dynamic";
  *  a typo cannot silently widen a query the operator thinks they narrowed. */
 const FORWARD = [
   "project_id", "q", "kind", "status", "actor", "entity_type",
+  // The facets the log viewer reasons in: how loud, which stream, which work task, which AI
+  // agent. A param missing from this list is dropped silently, so adding a filter to the UI
+  // without adding it here narrows nothing and looks like the filter is broken.
+  "level", "source", "run_id", "agent",
   "since", "until", "sort", "order", "limit", "offset",
 ] as const;
 

@@ -94,6 +94,19 @@ budget:
   what: spend against cap
   risk: a total that is actually the sum of one page of runs
 
+workforce:
+  to: factory
+  what: >
+    every agent ranked by the work it actually produced -- volume, spend and quality, from
+    llm_calls and agent_process_steps
+  risk: >
+    ranking by success rate alone. It is ~100% for everyone, so 28 agents drew 28 identical
+    bars and the screen said nothing. Bar LENGTH is volume; colour is quality.
+
+org_chart:
+  to: org
+  what: who reports to whom, and which seats are unfilled
+
 org:
   to: org
   what: agent roles and ownership

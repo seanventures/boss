@@ -174,6 +174,13 @@ const V1_COMMUNITY_PRIMARY_NAV = new Set([
   "meetings",
   "delivery",   // labelled "CI/CD" in the nav — the id and the label differ
   "monitoring",
+
+  // The log itself, directly under Observability. A dashboard tells you something is wrong;
+  // this is where you go next, and until it was here the only way to reach it was a URL you
+  // had to already know. It is also the one place the 40-90 minutes of a build are legible —
+  // which agent said what, which tool it ran, what came back — so a self-hosted operator with
+  // no access to our infrastructure can debug their own builds. That is not a paid feature.
+  "activity",
 ]);
 
 /**

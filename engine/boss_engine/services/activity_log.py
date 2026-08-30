@@ -27,7 +27,21 @@ except ImportError:  # pragma: no cover - sibling slice may land later
 ActivityStatus = str  # ok | failed | waiting | stuck | info
 ActivitySeverity = str  # info | warn | error
 
-SOURCES = ("event", "process_step", "job", "deadletter", "receipt")
+SOURCES = ("event", "process_step", "job", "deadletter", "receipt",
+           "llm_call", "agent_turn")
+
+#: The four levels an operator reads at, coarsest last.
+#:
+#: `status` (ok/failed/waiting/stuck/info) answers "what happened to this piece of work".
+#: `level` answers "how loudly should this speak", which is a different question and the one a
+#: log viewer is built around. A transcript is mostly VERBOSE by nature; without a level to
+#: filter on, turning per-turn capture on would have buried the events people actually read.
+LEVELS = ("verbose", "info", "warn", "error")
+
+#: Sources that describe BOSS operating ITSELF rather than building a customer's app. The
+#: console offers this as one filter because "is BOSS healthy" and "is my project healthy" are
+#: separate questions asked by separate people.
+INFRA_SOURCES = ("job", "deadletter", "receipt")
 SORTS = ("created_at", "status", "kind")
 ORDERS = ("asc", "desc")
 STATUSES = ("ok", "failed", "waiting", "stuck", "info")
@@ -315,6 +329,17 @@ def _time_clauses(
 
 
 def _matches_q(item: Mapping[str, Any], q: str) -> bool:
+    """Does this row contain the operator's text?
+
+    Runs AFTER the source query has already narrowed by full-text index, and is not redundant
+    with it. Full-text answers "does this row contain these WORDS, stemmed"; this answers "does
+    this row contain this TEXT", which is what someone searching a log means. Confirming here
+    also means search correctness never rests on trusting that each loader really applied its
+    WHERE clause — a loader that forgot would leak every row into every search.
+
+    `body` is included, or the confirmation would discard exactly the transcript rows the
+    content index just found.
+    """
     needle = q.casefold()
     haystack = " ".join(
         (
@@ -323,9 +348,24 @@ def _matches_q(item: Mapping[str, Any], q: str) -> bool:
             _text(item.get("entity_type")),
             _text(item.get("entity_id")),
             _text(item.get("title")),
+            _text(item.get("body")),
         )
     ).casefold()
     return needle in haystack
+
+
+def _level_for(severity: str, status_value: str) -> str:
+    """The level a classified row is read at.
+
+    Derived from the severity the classifier already produces rather than invented alongside
+    it: two independent notions of "how bad is this" drift, and then the level filter and the
+    status filter disagree about the same row.
+    """
+    if severity == "error" or status_value == "failed":
+        return "error"
+    if severity == "warn" or status_value == "stuck":
+        return "warn"
+    return "info"
 
 
 def _item(
@@ -339,20 +379,38 @@ def _item(
     created_at: Any,
     data: Mapping[str, Any],
     classify_row: Mapping[str, Any],
+    level: Optional[str] = None,
+    run_id: Optional[str] = None,
+    agent: Optional[str] = None,
+    body: str = "",
+    sql_matched: bool = False,
 ) -> dict[str, Any]:
     classified = _classify(classify_row)
+    status_value = classified["status"]
     return {
         "id": id,
         "source": source,
         "kind": kind,
-        "status": classified["status"],
+        "status": status_value,
+        "level": level or _level_for(classified.get("severity", "info"), status_value),
         "title": classified["title"],
         "actor": actor,
         "entity_type": entity_type,
         "entity_id": entity_id,
         "stage": classified["stage"],
+        # The work task and the AI agent, as first-class filters. Both were reachable only by
+        # knowing which `entity_id` convention a given source happened to use.
+        "run_id": run_id or "",
+        "agent": agent or "",
         "created_at": _iso(created_at),
         "data": _redact_data(data),
+        # The readable body of a turn. Empty for every other source, which have structured
+        # `data` instead.
+        "body": body,
+        # Set when the SOURCE QUERY already applied the search. Python must not filter it a
+        # second time: the SQL matched on content that `_matches_q` cannot see, so re-checking
+        # would throw away exactly the rows full-text search just found.
+        "_sql_matched": sql_matched,
     }
 
 
@@ -363,14 +421,24 @@ def _load_events(
     since: Any,
     until: Any,
     cap: int,
+    q: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
+    search = ""
+    if q:
+        # Mirrors idx_events_fts. Without it, every text search was a sequential scan of the
+        # project's entire history — 46,774 rows on dogfood — filtered in Python afterwards.
+        # Identical expression to idx_events_fts, `translate` included.
+        search = (" AND to_tsvector('english', translate(coalesce(event_type, '') || ' ' || "
+                  "coalesce(actor, '') || ' ' || coalesce(entity_type, '') || ' ' || "
+                  "coalesce(entity_id, ''), '._-', '   ')) @@ plainto_tsquery('english', translate(:q, '._-', '   '))")
+        params = {**params, "q": q}
     rows = _fetch_rows(
         connection,
         f"""
         SELECT id, event_type, actor, entity_type, entity_id, data, created_at
         FROM events
-        WHERE project_id = :project_id{extra}
+        WHERE project_id = :project_id{extra}{search}
         ORDER BY created_at DESC
         LIMIT :cap
         """,
@@ -380,6 +448,7 @@ def _load_events(
     for row in rows:
         event_type = _text(row.get("event_type"))
         data = _as_mapping(row.get("data"))
+        entity_id = _text(row.get("entity_id"))
         items.append(
             _item(
                 id=_text(row.get("id")),
@@ -387,10 +456,14 @@ def _load_events(
                 kind=event_type,
                 actor=_text(row.get("actor")),
                 entity_type=_text(row.get("entity_type")),
-                entity_id=_text(row.get("entity_id")),
+                entity_id=entity_id,
                 created_at=row.get("created_at"),
                 data=data,
                 classify_row={"event_type": event_type, "kind": event_type},
+                # An event about a run IS activity for that run — that is what makes the
+                # per-project log on the run page complete rather than transcript-only.
+                run_id=entity_id if entity_id.startswith("crun_") else "",
+                sql_matched=bool(q),
             )
         )
     return items
@@ -403,6 +476,7 @@ def _load_process_steps(
     since: Any,
     until: Any,
     cap: int,
+    q: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -450,6 +524,7 @@ def _load_jobs(
     since: Any,
     until: Any,
     cap: int,
+    q: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     status_list = ", ".join(f"'{name}'" for name in JOB_STATUSES)
@@ -492,6 +567,7 @@ def _load_deadletters(
     since: Any,
     until: Any,
     cap: int,
+    q: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -536,6 +612,7 @@ def _load_receipts(
     since: Any,
     until: Any,
     cap: int,
+    q: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     extra, params = _time_clauses(since, until)
     rows = _fetch_rows(
@@ -570,6 +647,162 @@ def _load_receipts(
     return items
 
 
+def _load_llm_calls(
+    connection: Connection,
+    project_id: str,
+    *,
+    since: Any,
+    until: Any,
+    cap: int,
+    q: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """One row per model INVOCATION: which agent, which model, how long, what it cost.
+
+    The summary layer above the transcript. A run's shape — "the engineer ran for eight
+    minutes, the reviewer for five, security failed in a millisecond" — is legible here without
+    reading a single turn.
+    """
+    extra, params = _time_clauses(since, until)
+    rows = _fetch_rows(
+        connection,
+        f"""
+        SELECT id, code_task_run_id, stage, role, engine, model, total_tokens,
+               cost_usd_micros, latency_ms, retries, turns, ok, error, created_at
+        FROM llm_calls
+        WHERE project_id = :project_id{extra}
+        ORDER BY created_at DESC
+        LIMIT :cap
+        """,
+        {"project_id": project_id, "cap": cap, **params},
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        ok = bool(row.get("ok"))
+        stage = _text(row.get("stage"))
+        role = _text(row.get("role"))
+        model = _text(row.get("model"))
+        kind = f"llm.{stage or 'call'}"
+        data = {
+            "stage": stage, "role": role, "model": model,
+            "engine": _text(row.get("engine")),
+            "total_tokens": int(row.get("total_tokens") or 0),
+            "cost_usd": round(int(row.get("cost_usd_micros") or 0) / 1_000_000, 4),
+            "latency_ms": int(row.get("latency_ms") or 0),
+            "retries": int(row.get("retries") or 0),
+            "turns": int(row.get("turns") or 0),
+            "ok": ok,
+            "error": _text(row.get("error")),
+        }
+        # A call that failed is an error; one that needed retries got there the hard way and an
+        # operator chasing a slow build wants to see it.
+        level = "error" if not ok else ("warn" if int(row.get("retries") or 0) else "info")
+        items.append(
+            _item(
+                id=_text(row.get("id")),
+                source="llm_call",
+                kind=kind,
+                actor=role or "agent",
+                entity_type="code_task_run",
+                entity_id=_text(row.get("code_task_run_id")),
+                created_at=row.get("created_at"),
+                data=data,
+                classify_row={"kind": kind, "status": "ok" if ok else "failed",
+                              "stage": stage},
+                level=level,
+                run_id=_text(row.get("code_task_run_id")),
+                agent=role,
+                body=f"{model or 'model'} · {int(row.get('turns') or 0)} turns"
+                     + (f" · {_text(row.get('error'))}" if not ok else ""),
+            )
+        )
+    return items
+
+
+def _load_agent_turns(
+    connection: Connection,
+    project_id: str,
+    *,
+    since: Any,
+    until: Any,
+    cap: int,
+    q: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """The conversation itself — what the agent was told, said, ran, and got back.
+
+    This is the source the whole feature exists for. It is also the only one where the search
+    term is worth pushing into SQL: `content` is free text over the largest table here, and an
+    ILIKE across a month of transcripts is exactly the scan a log viewer must not do.
+    """
+    extra, params = _time_clauses(since, until)
+    search = ""
+    if q:
+        # Matches the GIN index in db/schema.sql. `plainto_tsquery` treats the operator's words
+        # as words rather than as tsquery syntax, so a search for "npm ERR!" is a search and not
+        # a syntax error.
+        # `translate` must match idx_agent_turns_fts exactly — an expression index is only
+        # used for the expression it was built on. It splits dotted/underscored identifiers
+        # into words, without which "shepherd" cannot match "shepherd.proposed".
+        #
+        # BOTH SIDES, or neither works. Splitting only the indexed document left the query
+        # asking for the compound token "zzq-activity-unique-abc123", which by construction is
+        # not in an index that stores its parts — so a search for the exact text of a row
+        # returned nothing.
+        search = (" AND to_tsvector('english', translate(coalesce(content, ''), '._-', '   ')) "
+                  "@@ plainto_tsquery('english', translate(:q, '._-', '   '))")
+        params = {**params, "q": q}
+    rows = _fetch_rows(
+        connection,
+        f"""
+        SELECT id, code_task_run_id, stage, role_key, engine, model, turn_index,
+               direction, tool_name, content, content_bytes, truncated, tokens,
+               level, ok, error, created_at
+        FROM agent_turns
+        WHERE project_id = :project_id{extra}{search}
+        ORDER BY created_at DESC, turn_index DESC
+        LIMIT :cap
+        """,
+        {"project_id": project_id, "cap": cap, **params},
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        direction = _text(row.get("direction"))
+        tool = _text(row.get("tool_name"))
+        role = _text(row.get("role_key"))
+        ok = bool(row.get("ok"))
+        kind = f"turn.{direction}" + (f".{tool}" if tool else "")
+        items.append(
+            _item(
+                id=_text(row.get("id")),
+                source="agent_turn",
+                kind=kind,
+                actor=role or "agent",
+                entity_type="code_task_run",
+                entity_id=_text(row.get("code_task_run_id")),
+                created_at=row.get("created_at"),
+                data={
+                    "direction": direction, "tool": tool,
+                    "model": _text(row.get("model")),
+                    "stage": _text(row.get("stage")),
+                    "turn_index": int(row.get("turn_index") or 0),
+                    "tokens": int(row.get("tokens") or 0),
+                    # A clipped turn must never read as a short one.
+                    "truncated": bool(row.get("truncated")),
+                    "content_bytes": int(row.get("content_bytes") or 0),
+                },
+                classify_row={"kind": kind, "status": "ok" if ok else "failed",
+                              "stage": _text(row.get("stage"))},
+                # The level was decided at write time, from the content. Re-deriving it here
+                # from the kind alone would lose everything the body said.
+                level=_text(row.get("level")) or "verbose",
+                run_id=_text(row.get("code_task_run_id")),
+                agent=role,
+                body=_text(row.get("content")),
+                sql_matched=bool(q),
+            )
+        )
+    return items
+
+
 def _count_all(connection: Connection, project_id: str, *, since: Any, until: Any) -> int:
     """Total activity rows for the project, across every source.
 
@@ -580,7 +813,10 @@ def _count_all(connection: Connection, project_id: str, *, since: Any, until: An
     """
     extra, params = _time_clauses(since, until)
     total = 0
-    for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts"):
+    # Every source the loaders read, or the count and the list disagree — and a total that is
+    # smaller than the rows on screen is worse than no total.
+    for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts",
+                  "llm_calls", "agent_turns"):
         rows = _fetch_rows(
             connection,
             f"SELECT count(*) AS n FROM {table} WHERE project_id = :project_id{extra}",
@@ -598,7 +834,22 @@ _SOURCE_LOADERS = (
     _load_jobs,
     _load_deadletters,
     _load_receipts,
+    _load_llm_calls,
+    _load_agent_turns,
 )
+
+#: Which loader serves which source, so a `source=` filter can skip the other six queries
+#: entirely rather than loading everything and discarding it in Python. Reading one run's
+#: transcript is the common case and it should not cost a scan of the receipts table.
+_LOADERS_BY_SOURCE = {
+    "event": _load_events,
+    "process_step": _load_process_steps,
+    "job": _load_jobs,
+    "deadletter": _load_deadletters,
+    "receipt": _load_receipts,
+    "llm_call": _load_llm_calls,
+    "agent_turn": _load_agent_turns,
+}
 
 
 class ActivityLogService:
@@ -623,6 +874,10 @@ class ActivityLogService:
         status: Optional[str] = None,
         actor: Optional[str] = None,
         entity_type: Optional[str] = None,
+        level: Optional[str] = None,
+        source: Optional[str] = None,
+        run_id: Optional[str] = None,
+        agent: Optional[str] = None,
         since: Any = None,
         until: Any = None,
         sort: Optional[str] = "created_at",
@@ -642,6 +897,23 @@ class ActivityLogService:
         status_filter = _text(status)
         actor_filter = _text(actor)
         entity_type_filter = _text(entity_type)
+        level_filter = _text(level).lower()
+        source_filter = _text(source).lower()
+        run_filter = _text(run_id)
+        agent_filter = _text(agent)
+        if level_filter and level_filter not in LEVELS:
+            raise ValueError(f"level must be one of: {', '.join(LEVELS)}")
+        # "infra" is not a source; it is the THREE sources that describe BOSS operating itself.
+        # Offered as one word because "is BOSS healthy" is a different question from "is my
+        # project healthy", asked by a different person.
+        if source_filter == "infra":
+            selected_sources = list(INFRA_SOURCES)
+        elif source_filter:
+            if source_filter not in SOURCES:
+                raise ValueError(f"source must be one of: {', '.join(SOURCES)}, infra")
+            selected_sources = [source_filter]
+        else:
+            selected_sources = list(SOURCES)
 
         # HOW MANY ROWS EACH SOURCE MAY RETURN.
         #
@@ -661,6 +933,7 @@ class ActivityLogService:
         #             project that has them, which is worse than being slow.
         filters_active = bool(
             needle or kind_filter or status_filter or actor_filter or entity_type_filter
+            or level_filter or run_filter or agent_filter
         )
         exact = (
             not filters_active
@@ -671,15 +944,28 @@ class ActivityLogService:
 
         items: list[dict[str, Any]] = []
         source_counts: list[int] = []
-        for loader in _SOURCE_LOADERS:
-            loaded = loader(connection, project, since=since, until=until, cap=cap)
+        for source_name in selected_sources:
+            loader = _LOADERS_BY_SOURCE[source_name]
+            # Only the transcript loader knows how to search in SQL; the rest ignore `q` and
+            # are filtered in Python below, exactly as before.
+            loaded = loader(connection, project, since=since, until=until, cap=cap,
+                            q=needle or None)
             source_counts.append(len(loaded))
             items.extend(loaded)
         # A source that returned exactly its cap probably had more to give.
         capped = not exact and any(count >= cap for count in source_counts)
 
         if needle:
+            # SQL narrowed; this confirms. See `_matches_q`: the index makes the search fast,
+            # this keeps it meaning what an operator thinks it means, and neither step alone is
+            # enough.
             items = [item for item in items if _matches_q(item, needle)]
+        if level_filter:
+            items = [item for item in items if item["level"] == level_filter]
+        if run_filter:
+            items = [item for item in items if item["run_id"] == run_filter]
+        if agent_filter:
+            items = [item for item in items if item["agent"] == agent_filter]
         if kind_filter:
             if kind_filter in SOURCES:
                 items = [item for item in items if item["source"] == kind_filter]
@@ -704,7 +990,13 @@ class ActivityLogService:
             reverse=reverse,
         )
 
-        page = items[parsed_offset : parsed_offset + parsed_limit]
+        page = [
+            # `_sql_matched` is an internal handshake between a loader and the filter below it.
+            # Leaking it would put an implementation detail into a payload we intend to show
+            # customers, and into every test that asserts on an item's shape.
+            {key: value for key, value in item.items() if key != "_sql_matched"}
+            for item in items[parsed_offset : parsed_offset + parsed_limit]
+        ]
 
         # `total` used to be len(items), which was only true because every row was loaded.
         # Now the sources are bounded, so it is counted where it can be counted and declared

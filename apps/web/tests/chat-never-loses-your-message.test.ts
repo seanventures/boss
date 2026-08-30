@@ -78,11 +78,23 @@ describe("the composer", () => {
     expect(src).toContain("if (!typed) return;");
   });
 
-  it("sends the trimmed text, not the raw field", () => {
-    // The context block now carries an explicit terminator, so stripping it back out for the
-    // reader is a marker lookup rather than a guess about blank lines. What this test guards —
-    // that the operator's text is sent whole, after the facts — is unchanged.
-    expect(src).toContain("`${appFacts}\\n${APP_FACTS_END}\\n\\n${typed}`");
+  it("sends the operator's words and NOTHING else", () => {
+    // The strongest form of "never loses your message": nothing is added to it.
+    //
+    // The console used to prepend ~20 lines of run context to every question. The operator
+    // could see it — their sentence buried under a wall of text they did not write — and it
+    // did not even work, because a summary is not a PRD: asked to read the PRD or the diff,
+    // BOSS answered that they were "not present in the searchable data" while the PRD sat in
+    // the database. Scope now travels as external_ref and the server puts it in the SYSTEM
+    // prompt, which the operator never sees and the model always gets.
+    expect(src).toContain('fd.set("message", typed);');
+    expect(src).not.toContain("APP_FACTS_END}");   // no longer composed into the message
+    expect(src).not.toMatch(/appFacts\s*\?/);      // and no branch that could bring it back
+  });
+
+  it("still hands the agent the run id, so scope is not lost with the block", () => {
+    // Deleting the context block only works because something else carries the subject.
+    expect(src).toContain('fd.set("external_ref", sel)');
   });
 });
 

@@ -154,6 +154,47 @@ def record_llm_call(
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
 
 
+def record_agent_turns(
+    turns: list,
+    *,
+    engine_name: str,
+    model: Optional[str] = None,
+    stage: Optional[str] = None,
+    prompt: Optional[str] = None,
+) -> int:
+    """Persist a captured agent<->model conversation against the ambient run context.
+
+    Sits beside `record_llm_call` deliberately: the two describe the same invocation at
+    different resolutions — one row for the ledger, one row per turn for the operator — and
+    resolving project/run/stage/role in one place is what keeps them agreeing with each other.
+
+    Never raises. A transcript that cannot be written must not fail the build it describes.
+    """
+    try:
+        from ..db import begin
+        from .agent_turns import capture_enabled, record_turns
+
+        if not capture_enabled():
+            return 0
+        ctx = _llm_ctx.get()
+        resolved_stage = stage or ctx.get("stage")
+        with begin(ctx.get("db_engine")) as c:
+            return record_turns(
+                c,
+                turns,
+                project_id=ctx.get("project_id"),
+                code_task_run_id=ctx.get("run_id"),
+                stage=resolved_stage,
+                role_key=role_for_stage(resolved_stage),
+                engine=engine_name,
+                model=model,
+                prompt=prompt,
+            )
+    except Exception as exc:  # noqa: BLE001 — see above
+        log.warning("agent turn capture failed (non-fatal): %s", exc)
+        return 0
+
+
 # ── Operator read APIs (query / rollup over llm_calls) ─────────────────────────
 
 _SUMMARY_GROUP_COLS = {

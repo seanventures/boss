@@ -280,6 +280,17 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def prune_activity_log(self) -> dict[str, Any]:
+        """Age captured transcripts out of the activity log past the retention window.
+
+        Goes through the API rather than the worker touching the database directly, like every
+        other sweep here: one place owns the retention floor, so it cannot be shortened by
+        deploying a differently-configured worker.
+        """
+        response = self._client.post("/v1/activity/retention/prune", json={})
+        response.raise_for_status()
+        return response.json()
+
     def acquire_model_gateway_lease(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/model-gateway/leases", json=payload)
         response.raise_for_status()

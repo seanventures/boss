@@ -64,6 +64,13 @@ export type TokenRecommendation = {
   potentialSavingUsdMicros: number;
   potentialTokenSaving: number;
   source: string;
+  /** Which stage a per-stage rule fired for.
+   *
+   *  Rules like `stage_over_token_cap` loop over stages and emit ONE recommendation PER
+   *  STAGE — same kind, same source, different stage. The API sends this discriminator and
+   *  the mapper used to drop it, which left the card with no way to tell two findings apart.
+   *  Absent on project-wide rules. */
+  stage?: string;
 };
 
 export type TokenRecommendationsFeed = {
@@ -324,6 +331,7 @@ export async function fetchTokenRecommendations(
         potentialSavingUsdMicros: Number(rec.potential_saving_usd_micros ?? 0),
         potentialTokenSaving: Number(rec.potential_token_saving ?? 0),
         source: String(rec.source ?? "token_efficiency"),
+        stage: rec.stage == null ? undefined : String(rec.stage),
       })),
       apiReachable: true,
     };

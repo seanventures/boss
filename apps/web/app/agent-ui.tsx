@@ -122,10 +122,9 @@ type ProposedAction = {
   why?: string;
 };
 
-export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
+export function AgentChat({ projectId, actor, initialTaskId }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** What BOSS already knows about the app this conversation is about. */
-  appFacts?: string;
 }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -267,14 +266,19 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
     // and reasonably concluded their message had been lost.
     const typed = String(fd.get("message") ?? "").trim();
     if (!typed) return;
-    if (appFacts) {
-      // An explicit terminator, because a blank line is not a boundary: the facts contain
-      // blank lines and so do people's questions, and any heuristic over them gets one of the
-      // two wrong. With this the split is exact.
-      fd.set("message", `${appFacts}\n${APP_FACTS_END}\n\n${typed}`);
-    } else {
-      fd.set("message", typed);
-    }
+    // THE MESSAGE IS WHAT THEY TYPED. NOTHING ELSE.
+    //
+    // This used to prepend a block of run facts to every question, because the agent had no
+    // idea which app a thread was about. Two things were wrong with it. The operator could
+    // SEE it — their own words buried under a wall of context they never wrote, which no
+    // amount of stripping on render reliably hid, because the server echoes the stored
+    // message back. And it did not even work: the facts were a summary, so asked to read the
+    // PRD or the diff the agent answered that they were "not present in the searchable data"
+    // while the PRD sat in the database.
+    //
+    // Scope now travels in `external_ref` (below) and the server puts it in the SYSTEM prompt,
+    // where it is invisible; the agent calls read_spec to fetch the real PRD itself.
+    fd.set("message", typed);
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     startTransition(async () => {
@@ -297,7 +301,14 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           `⚠ No answer after ${AGENT_STALL_SECONDS}s. The turn may still be running on the ` +
           "server — nothing was cancelled. Reopen this thread in a moment to see whether it " +
           "landed, or send the message again." }]);
-        refreshThreads();
+        // NOT refreshThreads() HERE.
+        //
+        // It fires a server action, and server actions serialise: this one queues behind the
+        // turn that has not answered. React keeps the transition pending until everything
+        // started inside it settles, so the composer stayed disabled until the original turn
+        // finished — 131 seconds against a 120 second bound, and the whole point of the bound
+        // is to give control back. Deferred outside the transition instead.
+        window.setTimeout(() => refreshThreads(), 0);
         return;
       }
       if (r.ok && r.data) {
@@ -445,23 +456,6 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             <div className="agent-chat-empty">
               <div className="agent-empty-mark" aria-hidden>◆</div>
               <p className="agent-empty-lead">Ask BOSS about this work.</p>
-              {/* ABOUT THIS APP, not four fixed prompts.
-                  The generic set said the same thing whatever you were looking at, so it never
-                  referred to the work in front of you. These are derived from what BOSS
-                  RECORDED about this run — findings it deferred, checks that never ran, tests
-                  that missed an injected bug, acceptance criteria with no test — so each one
-                  names a real gap in this build. The generic set is the fallback for when
-                  there is no run in context at all. */}
-              <div className="agent-suggests">
-                {suggestions.map((q) => (
-                  <button type="button" className="agent-suggest" key={q}
-                          title={q}
-                          data-testid={`agent-suggest-${q.slice(0, 12)}`}
-                          onClick={() => { setInput(q); }}>
-                    {q}
-                  </button>
-                ))}
-              </div>
             </div>
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>
@@ -555,6 +549,30 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           </div>
         ) : null}
 
+        {/* ABOUT THIS APP, AND STILL THERE ON TURN TWO.
+            These lived inside the empty state, so they existed only until you said anything —
+            which is backwards: on the first turn you do not yet know what to ask, and by the
+            third you have read an answer and want the obvious follow-up. A conversation is
+            exactly when a suggestion is worth most.
+
+            They are derived from what BOSS RECORDED about this run — findings it deferred,
+            checks that never ran, tests that missed an injected bug, acceptance criteria with
+            no test — so each one names a real gap in this build rather than a generic prompt
+            that reads the same whatever you are looking at. */}
+        {suggestions.length > 0 ? (
+          <div className="agent-suggests agent-suggests-bar" data-testid="agent-suggests">
+            {suggestions.map((q) => (
+              <button type="button" className="agent-suggest" key={q}
+                      title={q}
+                      disabled={busy}
+                      data-testid={`agent-suggest-${q.slice(0, 12)}`}
+                      onClick={() => { setInput(q); }}>
+                {q}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones —
             "why did this run take 152 minutes and what went wrong" plus the context that makes
             it answerable — and a one-line field that scrolls sideways hides what you typed at
@@ -563,7 +581,10 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
         {/* ONE SURFACE. The field and its controls were a bare input with a Send button beside
             it, which reads as a form on a page rather than a place to talk. */}
         <form className="agent-composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
-          <textarea className="agent-input" value={input} disabled={busy}
+          {/* NOT disabled while BOSS is working. A turn here can run for two minutes, and
+              locking the field means you cannot draft the follow-up, correct a typo, or even
+              select what you wrote to copy it. Only SEND is held. */}
+          <textarea className="agent-input" value={input}
             aria-label="Message BOSS"
             placeholder="Ask BOSS…"
             // Three lines, not one. The useful questions here are the long ones — "why did

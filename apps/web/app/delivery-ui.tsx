@@ -486,7 +486,10 @@ export function DeliveryPipeline({ initial, secrets, deployments }: {
       <section className="ct-block">
         <div className="ct-block-title">Apps and where they deploy</div>
         <div className="mr-grid ct-tiles" style={{ marginTop: 10 }}>
-          {data.targets.map((t) => (
+          {/* `|| []`, like its two neighbours. A payload with `configured: true` and no
+              targets is not hypothetical — it is what a partially-written record looks
+              like — and this was the one read of the three that would have thrown. */}
+          {(data.targets || []).map((t) => (
             <DeliveryTargetCard
               key={t.id}
               target={t}

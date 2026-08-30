@@ -883,6 +883,215 @@ h1, h2, h3, h4, h5, h6 {
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Nested nav sections ──────────────────────────────────────────────────────
+   Observability holds Monitoring and the Activity log. The section itself has no
+   screen, so it must not look like a destination: no active state, and a caret
+   that says plainly it opens rather than navigates. */
+.bx-nav-parent { cursor: pointer; }
+.bx-nav-parent .bx-nav-caret {
+  margin-left: auto; opacity: .5;
+  transition: transform .16s ease, opacity .16s ease;
+}
+.bx-nav-section[data-open] .bx-nav-parent .bx-nav-caret { transform: rotate(90deg); opacity: .8; }
+/* A section holding the current page is dimmer than the page itself — it points at where you
+   are without competing with it. */
+.bx-nav-parent[data-holds-active] { color: var(--ink); }
+
+.bx-nav-children {
+  /* The rail is the nesting cue that survives a narrow sidebar, where indentation alone
+     stops reading as hierarchy. */
+  margin: 2px 0 4px 18px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.bx-nav-child { font-size: 0.86em; }
+/* A collapsed section showing only the active child: no rail, because there is no list to
+   nest — just the reminder of where you are. */
+.bx-nav-children[data-collapsed] { border-left-color: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bx-nav-parent .bx-nav-caret { transition: none; }
+}
+
+/* Which control plane this console is reading.
+   Quiet by default — it is reassurance, not an alert — and loud when it is a LOCAL one, because
+   a laptop database wearing production's chrome is how "where did my forty projects go" starts. */
+.bx-control-host {
+  margin-top: 4px; padding-left: 16px;
+  font-family: var(--mono, monospace); font-size: 0.62rem; letter-spacing: .02em;
+  color: var(--faint, var(--muted));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bx-control-host[data-local] { color: var(--amber, #d29922); }
+
+/* ── Activity log ─────────────────────────────────────────────────────────────
+   A log viewer, not a table of rows that happen to be logs. What that means here:
+   the level is legible at a glance and in WORDS, a transcript turn can be opened
+   in place without losing your position in the sequence, and the body is
+   monospaced because it is output, not prose. */
+.alog-scope {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 12px; padding: 8px 12px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--muted); font-size: 0.76rem;
+}
+.alog-scope code { color: var(--ink-soft); }
+
+.alog-levels {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.alog-level {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); font-family: var(--mono, monospace);
+  font-size: 0.66rem; letter-spacing: .1em;
+  transition: color .14s ease, border-color .14s ease, background .14s ease;
+}
+.alog-level:hover { color: var(--ink); border-color: var(--border-strong); }
+.alog-level[data-active="true"] { color: var(--ink); background: var(--surface-3); border-color: var(--border-strong); }
+.alog-level[data-level="error"]   { color: var(--red, #f85149); }
+.alog-level[data-level="warn"]    { color: var(--amber, #d29922); }
+.alog-level[data-level="verbose"] { opacity: .75; }
+.alog-level-n { font-size: 0.6rem; opacity: .65; }
+.alog-verbose-toggle {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: 8px;
+  color: var(--muted); font-size: 0.72rem; cursor: pointer;
+}
+
+/* The level, in the scan column. Colour is the fast signal and the word is the reliable one --
+   a screenshot, a printout and a colour-blind reader all keep the word. */
+.alog-tag {
+  display: inline-block; min-width: 58px; text-align: center;
+  padding: 2px 6px; border-radius: 4px;
+  font-family: var(--mono, monospace); font-size: 0.6rem; letter-spacing: .08em;
+  border: 1px solid transparent;
+}
+.alog-tag[data-level="error"]   { color: var(--red, #f85149);   border-color: rgba(248,81,73,.35);  background: rgba(248,81,73,.08); }
+.alog-tag[data-level="warn"]    { color: var(--amber, #d29922); border-color: rgba(210,153,34,.35); background: rgba(210,153,34,.08); }
+.alog-tag[data-level="info"]    { color: var(--ink-soft);       border-color: var(--border); }
+.alog-tag[data-level="verbose"] { color: var(--faint, var(--muted)); border-color: transparent; }
+
+/* The first line of a turn, under its title. Without this every transcript row reads
+   "Turn Completion" and the log is a list of shapes rather than a record of work. */
+.alog-preview {
+  display: block; margin-top: 2px;
+  color: var(--muted); font-size: 0.72rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 62ch;
+}
+
+.alog-body-row > td { padding: 0 12px 12px; }
+.alog-body {
+  margin: 0; padding: 10px 12px; border-radius: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  max-height: 420px; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: var(--mono, monospace); font-size: 0.72rem; line-height: 1.5;
+  color: var(--ink-soft);
+}
+.alog-truncated { margin: 6px 0 0; color: var(--amber, #d29922); font-size: 0.7rem; }
+
+/* An expanded row stays visually joined to its body. */
+tr[data-expanded] { background: var(--surface-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .alog-level { transition: none; }
+}
+
+/* ── Project strip ────────────────────────────────────────────────────────────
+   Every project across BOSS, under the top bar. Sticky beneath it rather than
+   scrolling away: the whole point is answering "what is running" from inside
+   whatever area you are already reading. */
+.bx-strip {
+  position: sticky;
+  top: 62px;                       /* exactly the topbar's height — any gap shows page through */
+  z-index: 29;                     /* under the topbar, over the content */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 28px;
+  background: rgba(3, 7, 18, 0.82);
+  backdrop-filter: saturate(150%) blur(14px);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.76rem;
+}
+.bx-strip-label {
+  flex: 0 0 auto;
+  font-family: var(--mono, monospace);
+  font-size: 0.62rem; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--faint, var(--muted));
+}
+/* The projects scroll; the label and the filter do not. With everything in one flex row a
+   sixth project pushed the filter off the right of the screen. */
+.bx-strip-scroll {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 2px;
+  overflow-x: auto; scrollbar-width: thin;
+  mask-image: linear-gradient(to right, transparent 0, #000 8px, #000 calc(100% - 16px), transparent 100%);
+}
+.bx-strip-scroll::-webkit-scrollbar { height: 4px; }
+.bx-strip-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.bx-strip-item {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 12px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  font: inherit; white-space: nowrap;
+  border-left: 1px solid var(--border);
+  transition: background .14s ease, color .14s ease;
+}
+.bx-strip-item:first-child { border-left: 0; }
+.bx-strip-item:hover { background: var(--surface-2); color: var(--ink); }
+.bx-strip-name {
+  font-weight: 600; max-width: 190px; overflow: hidden; text-overflow: ellipsis;
+}
+.bx-strip-stage, .bx-strip-pct {
+  font-family: var(--mono, monospace); font-size: 0.66rem;
+  color: var(--faint, var(--muted)); letter-spacing: .04em;
+}
+.bx-strip-alert {
+  font-family: var(--mono, monospace); font-size: 0.62rem; letter-spacing: .08em;
+  color: var(--amber, #d29922);
+}
+.bx-strip-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--muted);
+}
+/* Colour AND a word everywhere it matters: the stage and percentage sit beside the dot, so
+   the dot is never the only carrier of meaning. */
+.bx-strip-dot[data-status="RUNNING"] { background: var(--green, #3fb950); }
+.bx-strip-dot[data-status="GATED"]   { background: var(--amber, #d29922); }
+.bx-strip-dot[data-status="STUCK"]   { background: var(--red, #f85149); }
+.bx-strip-dot[data-status="DONE"]    { background: var(--accent); }
+
+.bx-strip-note { color: var(--muted); font-size: 0.72rem; }
+.bx-strip-error { color: var(--red, #f85149); }
+
+.bx-strip-filters { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
+.bx-strip-filter {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--faint, var(--muted));
+  font-family: var(--mono, monospace); font-size: 0.64rem; letter-spacing: .1em;
+  transition: color .14s ease, background .14s ease;
+}
+.bx-strip-filter:hover { color: var(--ink); background: var(--surface-2); }
+.bx-strip-filter[data-active="true"] { color: var(--ink); background: var(--surface-3); }
+.bx-strip-filter-n {
+  font-size: 0.6rem; opacity: .6;
+}
+
+@media (max-width: 900px) {
+  /* The label is the first thing to go: the chips say what they are. */
+  .bx-strip { padding: 0 14px; gap: 8px; }
+  .bx-strip-label { display: none; }
+  .bx-strip-stage { display: none; }
+}
+
 .bx-topbar-title {
   font-family: var(--display);
   font-weight: 700;
@@ -6445,6 +6654,53 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .ct-detail-actions { width: 100%; }
 }
 
+/* ONE BAR, NOT FIVE UNRELATED CHIPS.
+   Every control here was a different height and a different weight — a link, a filled button,
+   a badge, a ghost button — so the row read as leftovers rather than the set of things you
+   came to this page to do. They now share a baseline, an icon slot and a hit area; only the
+   PRIMARY action keeps the filled treatment, so the eye still lands on it first. */
+.ct-detail-actions .cap-btn,
+.ct-detail-actions .cap-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  min-height: 32px; padding: 6px 13px; border-radius: 9px; line-height: 1;
+  white-space: nowrap;
+}
+.ct-detail-actions .cap-btn.primary { padding: 6px 16px; }
+.ct-detail-actions .cap-btn svg { flex: 0 0 auto; opacity: .85; }
+.ct-detail-actions .cap-btn:hover svg { opacity: 1; }
+.ct-detail-actions a.cap-btn { text-decoration: none; }
+.ct-detail-actions .cap-btn {
+  transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease;
+}
+.ct-detail-actions .cap-btn:hover { transform: translateY(-1px); }
+.ct-detail-actions .cap-btn:active { transform: none; }
+
+/* A status pill is not a button; it must not look pressable. */
+.ct-detail-actions .cap-badge { cursor: default; font-weight: 600; letter-spacing: .01em; }
+.ct-live-pill { text-transform: none; }
+.ct-live-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--green, #3fb950); box-shadow: 0 0 0 0 currentColor;
+  animation: ct-live-pulse 2s ease-out infinite;
+}
+/* "running" is a claim about RIGHT NOW, and a static dot makes it a claim about whenever the
+   page last rendered. The pulse is the only element on this bar that moves, so it reads as
+   liveness rather than decoration. */
+@keyframes ct-live-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(63, 185, 80, .55); }
+  70%  { box-shadow: 0 0 0 6px rgba(63, 185, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
+}
+.spin { animation: ct-spin .9s linear infinite; }
+@keyframes ct-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ct-detail-actions .cap-btn:hover { transform: none; }
+  .ct-live-dot, .spin { animation: none; }
+  /* Without the pulse the dot still has to say "live", so it keeps a static ring. */
+  .ct-live-dot { box-shadow: 0 0 0 3px rgba(63, 185, 80, .22); }
+}
+
 /* ── Workforce: motion that is still there when you look ──────────────────── */
 /*
  * The v2 version of this page shipped three times looking static, and each time the reason was
@@ -6546,6 +6802,29 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .agent-suggest:hover {
   border-color: var(--accent); color: var(--ink); transform: translateY(-1px);
+}
+.agent-suggest:disabled { opacity: .5; cursor: default; transform: none; }
+
+/* The persistent strip above the composer.
+   Wrapping is wrong here: these sit between the transcript and the input, so four long
+   chips on four lines would push the composer down and eat the conversation every time a
+   new one arrived. One row that scrolls sideways keeps the composer where the eye left it,
+   however many suggestions there are. */
+.agent-suggests-bar {
+  max-width: none; justify-content: flex-start; flex-wrap: nowrap;
+  gap: 6px; padding: 8px 2px 2px; overflow-x: auto; scrollbar-width: thin;
+  border-top: 1px solid var(--border);
+  /* Fades at the edge so a chip cut off by the scroll reads as "there is more", not as a
+     chip that was rendered wrong. */
+  mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 18px), transparent 100%);
+}
+.agent-suggests-bar::-webkit-scrollbar { height: 5px; }
+.agent-suggests-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.agent-suggests-bar .agent-suggest {
+  flex: 0 0 auto; padding: 6px 12px; font-size: 12px;
+  /* A suggestion is a sentence; the chip is a handle for it. Truncate rather than let one
+     long question set the height of the whole strip — the full text is in `title`. */
+  max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
 /* Messages as bubbles: the shape says who is speaking, so the label above each one goes. */

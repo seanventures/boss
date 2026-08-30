@@ -373,14 +373,35 @@ def test_the_operator_correction_outranks_the_pinned_run():
     assert "a preview is serving, a build exists" in text
 
 
-def test_the_console_context_block_does_not_pin_the_run():
-    """The block is built in the web app, so the rule has to hold there too."""
-    src = pathlib.Path("apps/web/app/code-tasks-ui.tsx").read_text(encoding="utf-8")
-    i = src.index("[app context]")
-    block = src[i:i + 3000]
-    assert "STARTING POINT, not a restriction" in block
-    assert "correction outranks this block" in block
-    assert "latest_successful_run" in src
+def test_the_scope_note_does_not_pin_the_run():
+    """Same rule, new home.
+
+    The console used to build this as a "[app context]" block and prepend it to the operator's
+    message — visible to them, and useless for the questions it existed to answer, because a
+    summary of a run is not a PRD. Scope now travels as `external_ref` and the server writes it
+    into the SYSTEM prompt. The rule it carried has to survive the move: naming a run must not
+    stop BOSS looking at the app's other runs when the operator says to.
+    """
+    from boss_engine.services import intent_router
+    src = pathlib.Path(intent_router.__file__).read_text(encoding="utf-8")
+    note = src[src.index("def _scope_note"):src.index("def _answer(")]
+    assert "STARTING POINT, not a restriction" in note
+    assert "correction outranks this block" in note
+    # And it says nothing at all on a general thread, rather than inventing a subject.
+    assert "if not external_ref:" in note and 'return ""' in note
+
+
+def test_the_console_no_longer_prepends_context_to_the_operators_message():
+    """What the operator sends is what the operator typed."""
+    src = pathlib.Path("apps/web/app/agent-ui.tsx").read_text(encoding="utf-8")
+    assert 'fd.set("message", typed);' in src
+    # Nothing composes the block into an outgoing message any more...
+    assert "APP_FACTS_END}" not in src
+    assert "${appFacts}" not in src
+    # ...but the READERS stay. Threads sent before this change still hold the block in their
+    # stored text, and deleting the stripper would un-hide it in every old conversation —
+    # fixing today's transcripts by breaking yesterday's.
+    assert "stripAppFacts" in src
 
 
 @pytest.mark.parametrize("reply", [

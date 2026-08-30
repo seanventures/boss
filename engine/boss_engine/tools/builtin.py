@@ -1358,6 +1358,146 @@ def _register_governance_tools(reg: ToolRegistry) -> None:
         }
 
     @reg.tool(
+        "read_spec",
+        # DESCRIBE THE TOOL. DO NOT INSTRUCT THE ASSISTANT.
+        #
+        # This description was first written as directives — "Call it FIRST", "read the PRD",
+        # "there is no other way". The CLI backend renders every tool description into one
+        # prompt, so the model read those as orders addressed to it and reached for its own
+        # (blocked) Read tool, which killed the turn: every tool-using question in the console
+        # started failing the moment this tool was registered. Steering belongs in the system
+        # prompt; a description says what the tool returns.
+        "Returns an app's specification and how it was delivered: the PRD or brief, the "
+        "acceptance criteria, the test commands, the implementation and review summaries, the "
+        "files changed and the pull request. Covers questions about an app's intent, scope, "
+        "coverage gaps, or what to build next. Accepts a code task run id, a meeting run id, "
+        "or an app name.",
+        _obj({"run_id": {"type": "string",
+                         "description": "code task run id (crun_...) or meeting run id (mrun_...); "
+                                        "omit to use the run this conversation is scoped to"},
+              "app": {"type": "string",
+                      "description": "app/run title instead of an id, e.g. 'UnitFlip'"}}),
+    )
+    def read_spec(ctx, *, project_id, actor, args):
+        """The spec, from wherever this app's spec actually landed.
+
+        BOSS could read its own source, its logs, its hosts and arbitrary SQL, and could not
+        read the one document that says what an app was FOR. Asked "what should we build next
+        for UnitFlip", it chained tools for two minutes and answered that "the PR description,
+        diff, and any related PRD documents are not present in the searchable data" — while the
+        PRD sat in `meeting_runs.state`, openable in the console, two clicks from the question.
+
+        A spec reaches an app by three different routes and no single table holds all three:
+          * built from a meeting  -> meeting_runs.state->>'prd_markdown', joined on task_id
+          * published as a doc    -> artifacts, joined on task_id
+          * a direct code task    -> code_task_runs.spec.instructions (for a meeting-born task
+                                     this IS the PRD, because the directive is set from it)
+        So look in all three and say which one answered. Returning "not found" when the
+        document exists on a route you did not check is the failure being fixed here.
+        """
+        run_id = (args.get("run_id") or "").strip()
+        app = (args.get("app") or "").strip()
+        with ctx.begin() as c:
+            row = None
+            if run_id.startswith("mrun_"):
+                m = c.execute(
+                    _text("SELECT id, task_id, directive, state FROM meeting_runs "
+                          "WHERE id = :r AND project_id = :p"),
+                    {"r": run_id, "p": project_id},
+                ).mappings().first()
+                if m is None:
+                    return {"ok": False, "error": f"no meeting run {run_id}"}
+                st = m["state"] or {}
+                if isinstance(st, str):
+                    st = json.loads(st or "{}")
+                return _json_safe({
+                    "ok": True, "source": "meeting_runs.state.prd_markdown",
+                    "meeting_run_id": m["id"], "task_id": m["task_id"],
+                    "directive": m["directive"],
+                    "prd_markdown": st.get("prd_markdown"),
+                    "synthesis": st.get("synthesis"),
+                })
+            if run_id:
+                row = c.execute(
+                    _text("SELECT id, task_id, title, status, spec, state, pull_request_url "
+                          "FROM code_task_runs WHERE id = :r AND project_id = :p"),
+                    {"r": run_id, "p": project_id},
+                ).mappings().first()
+                if row is None:
+                    return {"ok": False, "error": f"no code task run {run_id}"}
+            else:
+                # By name, newest first. An app is usually rebuilt several times and the
+                # operator means the latest one.
+                like = f"%{app}%" if app else "%"
+                row = c.execute(
+                    _text("SELECT id, task_id, title, status, spec, state, pull_request_url "
+                          "FROM code_task_runs WHERE project_id = :p AND title ILIKE :t "
+                          "ORDER BY created_at DESC LIMIT 1"),
+                    {"p": project_id, "t": like},
+                ).mappings().first()
+                if row is None:
+                    return {"ok": False, "error": f"no app matching {app!r}"}
+
+            run = dict(row)
+            spec = run.get("spec") or {}
+            state = run.get("state") or {}
+            if isinstance(spec, str):
+                spec = json.loads(spec or "{}")
+            if isinstance(state, str):
+                state = json.loads(state or "{}")
+
+            prd, source = None, "code_task_runs.spec.instructions"
+            if run.get("task_id"):
+                m = c.execute(
+                    _text("SELECT id, state FROM meeting_runs WHERE task_id = :t "
+                          "AND project_id = :p ORDER BY created_at DESC LIMIT 1"),
+                    {"t": run["task_id"], "p": project_id},
+                ).mappings().first()
+                if m is not None:
+                    st = m["state"] or {}
+                    if isinstance(st, str):
+                        st = json.loads(st or "{}")
+                    if st.get("prd_markdown"):
+                        prd = st["prd_markdown"]
+                        source = f"meeting_runs.state.prd_markdown ({m['id']})"
+                if prd is None:
+                    a = c.execute(
+                        _text("SELECT title, content FROM artifacts WHERE task_id = :t "
+                              "AND project_id = :p AND title ILIKE 'PRD%' "
+                              "ORDER BY created_at DESC LIMIT 1"),
+                        {"t": run["task_id"], "p": project_id},
+                    ).mappings().first()
+                    if a is not None:
+                        content = a["content"] or {}
+                        if isinstance(content, str):
+                            content = json.loads(content or "{}")
+                        prd = content.get("markdown") or content.get("body")
+                        if prd:
+                            source = f"artifacts ({a['title']})"
+        if prd is None:
+            prd = spec.get("instructions")
+
+        return _json_safe({
+            "ok": True,
+            "source": source,
+            "run_id": run["id"],
+            "app": run["title"],
+            "status": run["status"],
+            "task_id": run.get("task_id"),
+            "pull_request_url": run.get("pull_request_url"),
+            # The spec, in the words it was written in.
+            "prd_or_brief": prd,
+            "acceptance_criteria": spec.get("acceptance_criteria"),
+            "test_commands": spec.get("test_commands"),
+            # What was actually built against it. The gap between these two IS the answer to
+            # "what did we miss" and "what should we build next".
+            "implementation_summary": state.get("impl_summary") or state.get("summary"),
+            "review_summary": state.get("review_summary"),
+            "files_changed": state.get("impl_files") or state.get("diff_summary"),
+            "tests_passed": state.get("tests_passed"),
+        })
+
+    @reg.tool(
         "explain_run",
         "WHY a code-task run took as long as it did, cost what it cost, or ended how it "
         "ended. Returns the wall-clock breakdown per phase (the phase that dominated is "

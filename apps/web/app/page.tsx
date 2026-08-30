@@ -219,7 +219,7 @@ import {
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
-import { PROJECT_ID } from "../lib/client";
+import { API_URL, PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
 import { fetchIdentityProvidersFeed } from "../lib/identity-providers";
 import { IdentityProvidersCatalogView } from "./identity-providers-ui";
@@ -896,6 +896,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         budgetState: status.budgetState,
         deadletters: deadletterCount,
         pendingDecisions: status.pendingDecisions,
+        // Read here, on the server, because this is the URL the page's fetches actually use.
+        controlPlane: API_URL,
       }}
       scope={{
         project: activeProject?.name ?? activeProjectId,
@@ -7151,6 +7153,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
           <FactoryFlowBoard projectId={activeProjectId} actor={activeActorId} />
+          {/* The viewer reads `?run=` itself. It cannot be passed from here: this is a server
+              component, and the Factory links across with pushState — a client-side navigation
+              that never re-runs it. Threading it through props would have worked on a reload
+              and silently done nothing on the click that matters. */}
           <ActivityLog projectId={activeProjectId} actor={activeActorId} />
         </section>
 

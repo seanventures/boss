@@ -99,6 +99,16 @@ def list_activity(
     status: Optional[str] = Query(default=None),
     actor: Optional[str] = Query(default=None),
     entity_type: Optional[str] = Query(default=None),
+    # The facets an operator actually reasons in: how loud, which stream, which work task,
+    # which AI agent. Everything above this line predates per-turn capture.
+    level: Optional[str] = Query(default=None, description="verbose | info | warn | error"),
+    source: Optional[str] = Query(
+        default=None,
+        description="event | process_step | job | deadletter | receipt | llm_call | "
+                    "agent_turn | infra (jobs+deadletters+receipts together)",
+    ),
+    run_id: Optional[str] = Query(default=None, description="one work task (crun_...)"),
+    agent: Optional[str] = Query(default=None, description="one AI agent, by role key"),
     since: Optional[str] = Query(default=None),
     until: Optional[str] = Query(default=None),
     sort: str = Query(default="created_at"),
@@ -135,6 +145,10 @@ def list_activity(
                 status=_clean(status),
                 actor=_clean(actor),
                 entity_type=_clean(entity_type),
+                level=_clean(level),
+                source=_clean(source),
+                run_id=_clean(run_id),
+                agent=_clean(agent),
                 since=_clean(since),
                 until=_clean(until),
                 sort=sort_key,
@@ -150,3 +164,26 @@ def list_activity(
 
 
 __all__ = ["router"]
+
+
+@router.post("/v1/activity/retention/prune")
+def prune_activity_retention(payload: Optional[dict] = None) -> dict[str, Any]:
+    """Age log rows out of the retention window. Called hourly by the worker.
+
+    The floor lives in the service, not here, so a caller cannot ask for a shorter window than
+    an operator debugging a customer build needs. Deletes ROWS from the transcript table only —
+    never files, and never the audit stream.
+    """
+    from boss_engine.services.activity_retention import prune, retention_days
+
+    requested = None
+    if isinstance(payload, dict) and payload.get("days") is not None:
+        try:
+            requested = int(payload["days"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="days must be an integer")
+
+    with begin(get_engine()) as connection:
+        result = prune(connection, days=requested)
+    result["floor_days"] = retention_days()
+    return result

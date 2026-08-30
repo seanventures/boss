@@ -41,6 +41,9 @@ def _install_signal_handlers() -> None:
             # Not the main thread, or a platform without the signal — never fatal.
             LOGGER.debug("signal_handler_unavailable signal=%s", sig, exc_info=True)
 QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
+#: Hourly. Retention is a slow-moving fact — nothing ages out between two minutes — and the
+#: delete is batched, so running it often would be pure lock churn on a table the console reads.
+ACTIVITY_RETENTION_INTERVAL_SECONDS = 3600
 # The shepherd watches in-flight work. Often enough that a duplicate is killed before it
 # costs anything real, rare enough that it is never the busiest thing on the box.
 SHEPHERD_WATCH_INTERVAL_SECONDS = 120
@@ -53,6 +56,7 @@ FACTORY_FLOW_INTERVAL_SECONDS = 45
 _last_shepherd_watch_monotonic = 0.0
 _last_shepherd_autopilot_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
+_last_activity_retention_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
 _last_focused_agent_monotonic = 0.0
 _last_agent_process_monotonic = 0.0
@@ -285,6 +289,27 @@ def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
         LOGGER.debug("qa_benchmark_sweep_failed", exc_info=True)
 
 
+def _prune_activity_log(client: ControlPlaneClient) -> None:
+    """Age out captured transcripts past the retention window.
+
+    Per-turn capture writes hundreds of rows per build and BOSS builds continuously, so this is
+    the one log in the system that grows without a natural bound. Deletes ROWS only — no files,
+    no directories, and nothing that records what BOSS built.
+
+    Swallowed like every other sweep: housekeeping that can kill the worker is worse than
+    housekeeping that skips an hour.
+    """
+    global _last_activity_retention_monotonic
+    now = time.monotonic()
+    if now - _last_activity_retention_monotonic < ACTIVITY_RETENTION_INTERVAL_SECONDS:
+        return
+    try:
+        client.prune_activity_log()
+        _last_activity_retention_monotonic = now
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("activity_retention_failed", exc_info=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="BOSS worker shell")
     parser.add_argument(
@@ -346,6 +371,7 @@ def main() -> None:
                 _watch_running_tasks(client)
                 _run_shepherd_autopilot(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
+                _prune_activity_log(client)
                 # Interruptible sleep: an idle worker that is asked to stop should not hold the
                 # deploy open for a full poll interval doing nothing.
                 for _ in range(max(1, int(settings.poll_interval_seconds))):

@@ -33,6 +33,8 @@ from typing import Any
 import pytest
 from sqlalchemy.exc import ProgrammingError
 
+from boss_engine.services.activity_log import SOURCES  # noqa: E402
+
 ITEM_KEYS = {
     "id",
     "source",
@@ -46,7 +48,6 @@ ITEM_KEYS = {
     "created_at",
     "data",
 }
-SOURCES = {"event", "process_step", "job", "deadletter", "receipt"}
 STATUSES = {"ok", "failed", "waiting", "stuck", "info"}
 OPTIONAL_TABLES = (
     "jobs",
@@ -528,6 +529,7 @@ def test_does_not_invent_success_and_empty_payload_stays_empty(service):
 # --------------------------------------------------------------------------- #
 from boss_engine.services.activity_log import (  # noqa: E402
     FILTERED_SCAN_CAP,
+    SOURCES,
     ActivityLogService,
 )
 
@@ -559,7 +561,7 @@ def test_an_unfiltered_page_does_not_load_the_whole_history():
 
     assert len(out["items"]) == 50
     # Each source asked for exactly what the page could contain, and no more.
-    assert _caps_used(conn) == [50] * 5
+    assert _caps_used(conn) == [50] * len(SOURCES)
 
 
 def test_the_bound_covers_the_offset_not_just_the_page():
@@ -568,7 +570,7 @@ def test_the_bound_covers_the_offset_not_just_the_page():
     conn = FakeActivityConn()
     _many_events(conn, 500)
     out = _service().query(conn, "proj_a", limit=50, offset=200)
-    assert _caps_used(conn) == [250] * 5
+    assert _caps_used(conn) == [250] * len(SOURCES)
     assert len(out["items"]) == 50
 
 
@@ -612,7 +614,7 @@ def test_a_filtered_search_reaches_past_the_page():
                                   created_at=base + timedelta(seconds=i)))
     out = _service().query(conn, "proj_a", status="failed", limit=50)
     assert [i["id"] for i in out["items"]] == ["ev_old_fail"]
-    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * 5
+    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * len(SOURCES)
 
 
 def test_a_truncated_search_says_so_rather_than_implying_completeness():
@@ -641,7 +643,7 @@ def test_sorting_by_status_does_not_use_the_recency_bound():
     conn = FakeActivityConn()
     _many_events(conn, 300)
     _service().query(conn, "proj_a", sort="status", limit=50)
-    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * 5
+    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * len(SOURCES)
 
 
 def test_ascending_order_does_not_use_the_recency_bound():
@@ -649,7 +651,7 @@ def test_ascending_order_does_not_use_the_recency_bound():
     conn = FakeActivityConn()
     _many_events(conn, 300)
     _service().query(conn, "proj_a", order="asc", limit=50)
-    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * 5
+    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * len(SOURCES)
 
 
 def test_every_source_is_bounded():

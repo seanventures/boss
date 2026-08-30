@@ -24,7 +24,10 @@ function norm(s: string): string {
   return (s ?? "")
     .normalize("NFKC")
     .replace(/[  ]/g, " ")
-    .replace(/[‑–—]/g, "-")
+    // U+2010 HYPHEN and U+2012 FIGURE DASH belong here too. They are what a model emits when
+    // it writes "Pull‐Request", they are NOT the ASCII hyphen, and leaving them out meant the
+    // name matched no pattern below and rendered with a character the operator cannot type.
+    .replace(/[\u2010\u2011\u2012\u2013\u2014]/g, "-")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'");
 }
@@ -99,8 +102,10 @@ export function appIdentity(run: AppRun): {
   }
   // "PRD: BugBox — …" — boilerplate as a PREFIX, which the whole-line check cannot see.
   // Left in, the split on ":" handed back "PRD" as the app's name.
+  // "PRD: BugBox" and "PRD — BugBox" are the same sentence. This only accepted the colon, so
+  // the dash form survived, split into ["PRD", "BugBox"], and the app was named PRD.
   named = named.replace(
-    /^\s*(product requirements document|prd|design|spec|specification|overview)\s*:\s*/i, "");
+    /^\s*(product requirements document|prd|design|spec|specification|overview)\s*[:\-]\s*/i, "");
   named = named.trim().replace(/[:\-–—]+$/, "").trim()
     .replace(/\((?:working title|draft|v\d[\d.]*)\)/i, "").trim();
 
@@ -129,10 +134,54 @@ export function appIdentity(run: AppRun): {
   // LAST GATE. Everything above tries to find a real name; this makes sure a document TYPE
   // never reaches the card as one. "Product Requirements Document" is what the artifact is,
   // not what the product is called — and left through, four different apps read identically.
-  const final = BOILERPLATE.test(unadorn(name)) ? "" : name;
+  // THE NAME WAS FOUND, THEN THROWN AWAY.
+  //
+  // "PRD — Pull-Request Review-Time Tracker (PR-RTT)" split into head "PRD" and tail
+  // "Pull-Request Review-Time Tracker (PR-RTT)". The gate below correctly refused to call an
+  // app "PRD" — and then rendered "Untitled app" with the real name sitting directly above it
+  // as the descriptor chip. Every card built from a titled PRD read Untitled while displaying
+  // its own title.
+  //
+  // If the head is a document type, the tail is not a subtitle. It is the name.
+  let final = BOILERPLATE.test(unadorn(name)) ? "" : name;
+  let kind = tail;
+  if (!final && tail) {
+    const promoted = tail.split(/\s+[-–—]\s+|:\s+/);
+    const head = (promoted[0] || tail).trim();
+    if (head && !BOILERPLATE.test(unadorn(head))) {
+      final = head;
+      kind = promoted.slice(1).join(" — ").trim();
+    }
+  }
   return {
     name: final.slice(0, 46) || "Untitled app",
-    kind: tail ? tail.slice(0, 44) : undefined,
+    kind: kind ? kind.slice(0, 44) : undefined,
     label: label || undefined,
   };
+}
+
+/**
+ * Name an app from the RUNS THAT BUILT IT, not from whichever one sorted first.
+ *
+ * A card takes its name from `members[0]`, and a follow-up run is titled after the work it is
+ * doing — "Follow-up: deferred review findings — 📄 Product Requirements Document" — which
+ * carries no product name at all. When that run led the group, a shipped app with a perfectly
+ * good name on its other runs rendered as "Untitled app".
+ *
+ * Any run in the group can supply the name; they are all the same app. Falls back to the first
+ * run's identity so a group where genuinely nobody knows the name still returns its label and
+ * descriptor rather than nothing.
+ */
+export function groupIdentity(runs: AppRun[]): ReturnType<typeof appIdentity> {
+  const first = appIdentity(runs[0] ?? {});
+  if (first.name !== "Untitled app") return first;
+  for (const run of runs.slice(1)) {
+    const id = appIdentity(run);
+    if (id.name !== "Untitled app") {
+      // Keep the LEADING run's label ("follow-up"): it says what this card's newest work is,
+      // which is not something the run that supplied the name can tell you.
+      return { ...id, label: first.label ?? id.label };
+    }
+  }
+  return first;
 }

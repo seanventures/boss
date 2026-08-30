@@ -54,22 +54,47 @@ type Overview = {
 const usd = (micros: number | null | undefined) =>
   micros == null ? "—" : `$${(micros / 1e6).toFixed(2)}`;
 
+/** An overview, or the reason there isn't one.
+ *
+ *  `getShepherdOverviewAction` RETURNS `{error}` rather than throwing, so the page's
+ *  `.catch(() => null)` never fires and the error object arrives here dressed as data. It is
+ *  truthy, so the "still loading" guard passes it through, and the first property read off
+ *  `spend` threw — taking the whole console down with a client-side exception because one
+ *  endpoint had a bad minute.
+ *
+ *  A payload is only an Overview if it carries the field the panel is about.
+ */
+function readOverview(value: unknown): { data: Overview | null; error: string | null } {
+  if (!value || typeof value !== "object") return { data: null, error: null };
+  const record = value as Record<string, unknown>;
+  if (record.error) return { data: null, error: String(record.error) };
+  if (!record.spend || typeof record.spend !== "object") {
+    // Not an error and not usable. Saying so beats rendering zeros: "productive $0.00" is a
+    // claim about the world, and this panel exists to say whether spend is being wasted.
+    return { data: null, error: "The shepherd overview came back without a spend summary." };
+  }
+  return { data: value as Overview, error: null };
+}
+
 export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
   // Server-rendered on first paint. The first version relied entirely on a browser fetch and
   // showed "Loading shepherd…" forever if anything about that call failed — including a CORS
   // block that is invisible outside the browser. Data arrives with the page; the client only
   // refreshes it.
-  const [data, setData] = useState<Overview | null>(initial ?? null);
-  const [err, setErr] = useState<string | null>(null);
+  const first = readOverview(initial);
+  const [data, setData] = useState<Overview | null>(first.data);
+  const [err, setErr] = useState<string | null>(first.error);
   const [busy, setBusy] = useState(false);
 
   // Through a SERVER ACTION, not a browser fetch: the api sends no CORS headers, so a
   // cross-origin call from the console is blocked before it leaves. Every other panel here
   // does the same.
   const load = async () => {
-    const d = await getShepherdOverviewAction();
-    if (d?.error) setErr(String(d.error));
-    else { setData(d as Overview); setErr(null); }
+    // Same reader as the server payload, so a refresh cannot admit a shape the first render
+    // rejected. The old `d as Overview` cast was the other half of this bug.
+    const next = readOverview(await getShepherdOverviewAction());
+    if (next.error) setErr(next.error);
+    else if (next.data) { setData(next.data); setErr(null); }
   };
   useEffect(() => {
     load();
@@ -90,8 +115,8 @@ export function ShepherdConsole({ initial }: { initial?: Overview | null }) {
   if (err) return <div className="detail" style={{ color: "#f85149" }}>Shepherd: {err}</div>;
   if (!data) return <div className="detail">Loading shepherd…</div>;
 
-  const prod = data.spend.productive ?? 0;
-  const waste = data.spend.unproductive ?? 0;
+  const prod = data.spend?.productive ?? 0;
+  const waste = data.spend?.unproductive ?? 0;
   const total = prod + waste;
   const wastePct = total ? Math.round((waste / total) * 100) : 0;
 

@@ -25,7 +25,33 @@ from typing import Optional, Protocol
 
 from ..config import Settings
 from ..schemas import FileChange
-from .llm_telemetry import record_llm_call
+from .agent_turns import capture_enabled, parse_stream
+from .llm_telemetry import record_agent_turns, record_llm_call
+
+
+def _parse_cli_output(stdout: str) -> Optional[dict]:
+    """The CLI's result object, from either output format.
+
+    Returns None when stdout is neither a single JSON object nor a stream containing a terminal
+    result event — the caller turns that into the same "returned non-JSON" error it always did.
+
+    Captured turns ride along under `_turns`, a private key the callers pop off before anyone
+    else sees the dict. Threading them through a second return value would have meant changing
+    every call site of a function that sits in the middle of the build pipeline.
+    """
+    if not (stdout or "").strip():
+        return None
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict):
+            return data                      # classic --output-format json
+    except Exception:
+        pass
+    result, turns = parse_stream(stdout)
+    if result is None:
+        return None
+    result["_turns"] = turns
+    return result
 from .scheduling import low_priority
 from .model_rate_limiter import (
 
@@ -434,29 +460,56 @@ class ClaudeCodeAgent:
             # that was never actually judged.
             _max_turns = int(max_turns)
             timeout = max(timeout, min(3600, int(max_turns) * 30))
-        cmd = [
-            self._claude_bin(),
-            "-p",
-            "--output-format", "json",
-            "--max-turns", str(_max_turns),
-            "--allowedTools", allowed,
-            "--permission-mode", permission,
-        ]
-        if resume_session_id:
-            # Token optimization: continue the prior session instead of cold-starting —
-            # the follow-up rides the warm prompt cache (repo context + conversation are
-            # cache READS, not fresh ingestion). Used by the repair loop.
-            cmd += ["--resume", resume_session_id]
+        # STREAM THE TURNS, OR DO NOT.
+        #
+        # `--output-format json` returns ONE object: the final result, a token count and
+        # "num_turns: 45". That is the whole reason the longest phase of every build was
+        # unobservable — forty-five turns of reasoning, edits and test runs reduced to a
+        # number. `stream-json` emits a line per turn AND still ends with the identical result
+        # event, so the transcript costs nothing but parsing.
+        #
+        # Behind a switch that defaults ON but degrades to the old shape: `_parse_cli_output`
+        # accepts either form, so if a CLI version stops streaming, builds keep working and
+        # only the transcript is lost.
+        capturing = capture_enabled()
         model = model or getattr(self.settings, "claude_cli_model", None)
-        if model:
-            cmd += ["--model", model]
-        # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
-        # "--- SECTION ---" header) must never be read as a CLI option.
-        # Single choke point: every stage (build AND review) goes through _invoke, so the
-        # batching rule is applied uniformly here rather than in each prompt builder.
-        cmd += ["--", prompt + _PARALLEL_TOOLS_RULE]
+
+        def base_cmd(stream: bool) -> list[str]:
+            """The argv for one attempt. Rebuilt per attempt so capture can be dropped."""
+            argv = [
+                self._claude_bin(),
+                "-p",
+                # `stream-json` emits a line per turn AND still ends with the identical result
+                # event `--output-format json` would have returned, which is why the transcript
+                # could be added without changing a single caller in the build pipeline.
+                *(("--output-format", "stream-json", "--verbose")
+                  if stream else ("--output-format", "json")),
+                "--max-turns", str(_max_turns),
+                "--allowedTools", allowed,
+                "--permission-mode", permission,
+            ]
+            if resume_session_id:
+                # Token optimization: continue the prior session instead of cold-starting —
+                # the follow-up rides the warm prompt cache (repo context + conversation are
+                # cache READS, not fresh ingestion). Used by the repair loop.
+                argv += ["--resume", resume_session_id]
+            if model:
+                argv += ["--model", model]
+            # `--` ends option parsing: a prompt that BEGINS with a dash (e.g. a
+            # "--- SECTION ---" header) must never be read as a CLI option.
+            # Single choke point: every stage (build AND review) goes through _invoke, so the
+            # batching rule is applied uniformly here rather than in each prompt builder.
+            return argv + ["--", prompt + _PARALLEL_TOOLS_RULE]
         last_error = ""
         for attempt in range(3):
+            # CAPTURE MUST NEVER COST A BUILD.
+            #
+            # `stream-json` is the only reason this function's flags changed, and it runs on
+            # every customer build. If a CLI version ever rejects the flag or emits a stream
+            # this cannot read, the right outcome is a build that succeeds without a
+            # transcript — not a build that fails with one. `capturing` is cleared below on the
+            # first such failure and these flags rebuild without it.
+            cmd = base_cmd(capturing)
             try:
                 # Popen rather than run(), so the pid is known and can be registered. A
                 # reaper that scans `ps` cannot tell which seat a claude process occupies;
@@ -489,20 +542,23 @@ class ClaudeCodeAgent:
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
             if proc.returncode == 0:
-                try:
-                    return json.loads(proc.stdout)
-                except Exception as exc:
+                parsed = _parse_cli_output(proc.stdout)
+                if parsed is None:
+                    if capturing:
+                        # Succeeded, but produced output this cannot read. That is a capture
+                        # problem, not a build problem: drop the transcript and re-run plainly.
+                        capturing = False
+                        last_error = "unreadable stream output; retried without capture"
+                        continue
                     raise RuntimeError(
                         f"claude code agent returned non-JSON: {proc.stdout[:300]}"
-                    ) from exc
+                    )
+                return parsed
             # Non-zero exit: the CLI still prints its result JSON on stdout; the
             # human-readable reason lives in `result` (e.g. "You've hit your monthly
             # spend limit …"). Surface THAT instead of an opaque JSON prefix.
             detail = (proc.stderr or proc.stdout or "")[:300]
-            try:
-                data = json.loads(proc.stdout)
-            except Exception:
-                data = None
+            data = _parse_cli_output(proc.stdout)
             if isinstance(data, dict):
                 if data.get("subtype") == "error_max_turns":
                     # Ran out of turns ≠ failed: it's a PARTIAL attempt. Return it like a
@@ -519,6 +575,14 @@ class ClaudeCodeAgent:
                 if reason or subtype:
                     detail = " — ".join(p for p in (subtype, reason[:220]) if p)
             last_error = f"claude code agent exited {proc.returncode}: {detail}"
+            if capturing and data is None:
+                # Non-zero exit AND nothing parseable — which is what a CLI that rejects
+                # `--output-format stream-json` looks like. Every other failure mode still
+                # prints a result object, so this is specifically the "flag not supported"
+                # shape. Retry without capture before treating it as a real failure: a
+                # transcript is never worth a customer's build.
+                capturing = False
+                continue
             # TRANSIENT infra errors (dropped connection, overloaded upstream, gateway
             # blips) must not fail a whole governed run — retry the invocation with a
             # short backoff. Anything non-transient (spend limit, bad flags, real agent
@@ -591,6 +655,10 @@ class ClaudeCodeAgent:
         turns = int(data.get("num_turns") or 0)
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
+        # The same invocation at the other resolution: one ledger row above, one row per turn
+        # here. Popped off the dict so nothing downstream ever sees the transcript.
+        record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
+                           model=model or usage.get("model"), prompt=prompt)
         return {
             "summary": _as_text(data.get("result")).strip() or "(no summary returned)",
             "usage": usage,
@@ -616,6 +684,8 @@ class ClaudeCodeAgent:
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000),
                         turns=int(data.get("num_turns") or 0), stage="research")
+        record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
+                           model=model or usage.get("model"), stage="research", prompt=prompt)
         return {
             "summary": _as_text(data.get("result")).strip() or "",
             "usage": usage,
@@ -637,6 +707,8 @@ class ClaudeCodeAgent:
         turns = int(data.get("num_turns") or 0)
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
+        record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
+                           model=usage.get("model"), prompt=prompt)
 
         # Authoritative verification: BOSS re-runs the test commands itself.
         tests = [sandbox.run(cmd) for cmd in spec.test_commands]

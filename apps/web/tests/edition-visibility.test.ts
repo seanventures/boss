@@ -269,7 +269,14 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).toContain('data-area-nav="budget"');
     // Cut from Community on 2026-08-18 — see the reasons recorded in lib/edition.ts.
     expect(html).not.toContain('data-area-nav="work"');
-    expect(html).not.toContain('data-area-nav="activity"');
+    // "activity" was cut with it and came BACK on 2026-08-30, deliberately.
+    //
+    // What it was then: a thin feed of events, worth less than the nav row it cost. What it is
+    // now: the only place a build's 40-90 minutes are legible — which agent said what, which
+    // tool it ran, what came back — with levels, indexed search and a month of retention. A
+    // self-hosted operator has no access to our infrastructure, so this is the only way they
+    // can debug their own builds, and that is not something to charge for.
+    expect(html).toContain('data-area-nav="activity"');
     expect(html).not.toContain('data-area-nav="reliability"');
     expect(html).not.toContain('data-area-nav="reports"');
     const enterpriseNav = html.match(

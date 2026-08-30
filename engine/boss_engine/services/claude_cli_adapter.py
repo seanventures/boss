@@ -106,7 +106,18 @@ class ClaudeCliAdapter:
             self._claude_bin(),
             "-p", prompt,
             "--output-format", "json",
-            "--max-turns", "2",
+            # NOT 2. A TURN SPENT REACHING FOR A BLOCKED TOOL WAS FATAL.
+            #
+            # BOSS drives the loop and this process is meant to be pure reasoning, so Claude
+            # Code's own tools are denied. But denying them does not stop the model from
+            # TRYING: it burns a turn, gets refused, and with a 2-turn ceiling the run ends at
+            # `stop_reason: tool_use` and exits 1 — which surfaced as "I could not answer
+            # that" for every tool-using question in the console.
+            #
+            # It was latent and count-sensitive: 52 registered tools answered fine and the
+            # 53rd tipped it over, so it would have looked like whichever tool was added last
+            # broke the console. Leave room to recover from one stray attempt.
+            "--max-turns", "6",
             "--disallowedTools", self._BLOCKED_TOOLS,  # pure completion, no tool use
         ]
         model = getattr(self.settings, "claude_cli_model", None)
@@ -232,15 +243,32 @@ class ClaudeCliAdapter:
             '{"thought": "<brief reasoning>", "tool_calls": [{"name": "<tool>", "arguments": {<args>}}]}\n\n'
             "When you are completely done and need no more tools, reply:\n"
             '{"thought": "<brief reasoning>", "final": "<your complete final answer>"}\n\n'
+            # THE LIST BELOW IS DATA, NOT A TOOLBELT.
+            #
+            # This process runs inside Claude Code, which has a tool system of its own. Given a
+            # long "AVAILABLE TOOLS" list, the model stopped emitting JSON and started trying
+            # to CALL those names through its own mechanism — they are denied, it retried,
+            # burned every turn and the run ended `stop_reason: tool_use`, exit 1. It even
+            # narrated the confusion, reporting that "ToolSearch" had failed: a Claude Code
+            # concept that has nothing to do with BOSS. The pull scales with the size of the
+            # list, so it appeared only once the registry crossed ~53 tools and looked like
+            # whichever tool was added last had broken the console.
+            "The following are BOSS's tools, not yours. You cannot invoke them and must not "
+            "try; NAME one in the JSON above and BOSS executes it, then gives you the result "
+            "on the next turn.\n\n"
             f"{self._render_tools(tools)}\n\n"
             "RULES:\n"
             "- Call tools to gather REAL data before asserting facts; never invent numbers, "
             "files, or page content.\n"
             "- Arguments MUST conform to the tool's schema.\n"
             "- Emit tool_calls only for tools listed above.\n"
+            "- You have NO tools of your own here. Do not read files, search, or run "
+            "commands yourself — you cannot, and attempting it wastes the turn. The tools "
+            "listed above are executed by BOSS after you name them in JSON.\n"
             "- Keep 'thought' short. Put the actual deliverable in 'final'.\n\n"
             f"=== CONVERSATION SO FAR ===\n{convo}\n=== END CONVERSATION ===\n\n"
-            "Reply now with exactly one JSON object for the next step:"
+            "Reply now with exactly one JSON object for the next step. Output the JSON "
+            "directly as your message — do not attempt to use any tool of your own to do it:"
         )
 
     # ---------------------------------------------------------------- api
