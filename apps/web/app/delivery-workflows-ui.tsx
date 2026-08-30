@@ -647,6 +647,10 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
   }, [bindingRef, bindable]);
 
   const blocked = chosen !== null && chosen.risk >= riskFloor && !chosen.trusted;
+  // How many things can ACTUALLY be picked, which is not the same as how many servers exist.
+  const choices = bindable.skills.length
+    + bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0);
+  const unreachable = bindable.mcp_servers.filter((m) => !m.reachable).map((m) => m.name);
 
   return (
     <form className="dw-define-form" data-testid="dw-define-form" onSubmit={async (e) => {
@@ -735,15 +739,22 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
 
       <div className="dw-define-actions">
         <button type="submit" className="cap-btn" data-testid="dw-define-save"
-                disabled={!!busy || !label.trim() || !bindingRef}>
+                disabled={!!busy || !label.trim() || !bindingRef || choices === 0}>
           Define
         </button>
         <button type="button" className="cap-btn" onClick={onCancel}>Cancel</button>
       </div>
-      {bindable.skills.length === 0 && bindable.mcp_servers.length === 0 ? (
-        <p className="detail">
-          This project has no skills or MCP servers registered yet, so there is nothing to bind
-          a step to.
+      {choices === 0 ? (
+        // Counted in CHOICES, not in servers. A project with three registered MCP servers that
+        // are all unreachable has three empty groups in the dropdown and nothing to pick — and
+        // saying nothing there reads as a broken control rather than an empty one.
+        <p className="detail dw-define-empty" data-testid="dw-define-empty">
+          Nothing to bind a step to yet.{" "}
+          {unreachable.length
+            ? `${unreachable.join(", ")} ${unreachable.length === 1 ? "is" : "are"} `
+              + "registered but not answering, so their tools cannot be listed. "
+            : ""}
+          Register a skill, or connect an MCP server, and it will appear here.
         </p>
       ) : null}
     </form>

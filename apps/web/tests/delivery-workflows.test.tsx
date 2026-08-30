@@ -397,8 +397,16 @@ describe("a customer can define their own step", () => {
     expect(UI).toContain('data-testid="dw-define-blocked"');
   });
 
-  it("says so when there is nothing to bind to", () => {
-    expect(UI).toContain("no skills or MCP servers registered yet");
+  it("says so when there is nothing to bind to, counting CHOICES not servers", () => {
+    // A project with three registered MCP servers that are all unreachable has three empty
+    // groups in the dropdown and nothing to pick. Counting servers would call that "fine".
+    expect(UI).toContain("Nothing to bind a step to yet.");
+    expect(UI).toContain("bindable.mcp_servers.reduce((n, server) => n + server.tools.length, 0)");
+    expect(UI).toContain("|| choices === 0}");
+  });
+
+  it("names the unreachable servers rather than leaving an empty dropdown unexplained", () => {
+    expect(UI).toContain("registered but not answering");
   });
 });
 

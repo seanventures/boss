@@ -1201,6 +1201,10 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0; font-size: 0.7rem; color: var(--red, #f85149);
 }
 .dw-define-actions { display: flex; gap: 6px; }
+.dw-define-empty {
+  margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 0.68rem; line-height: 1.4;
+  border: 1px dashed var(--border); color: var(--faint, var(--muted));
+}
 
 .dw-soon { margin-top: 8px; }
 .dw-soon summary { cursor: pointer; font-size: 0.7rem; }
