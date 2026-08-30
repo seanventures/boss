@@ -883,6 +883,50 @@ h1, h2, h3, h4, h5, h6 {
   border-bottom: 1px solid var(--border);
 }
 
+/* ── Console loading indicator ────────────────────────────────────────────────
+   The console streams: panels arrive one at a time and a count can read "12" for
+   a second before it reads 200. Without this, that looks like missing data. */
+.bx-loading {
+  position: sticky;
+  top: 62px;                 /* directly under the topbar, above the project strip */
+  z-index: 31;               /* over the strip, which is also sticky */
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 28px 6px;
+  background: rgba(3, 7, 18, 0.9);
+  backdrop-filter: saturate(150%) blur(14px);
+  border-bottom: 1px solid var(--border);
+}
+.bx-loading-text {
+  font-family: var(--mono, monospace); font-size: 0.62rem; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--faint, var(--muted));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* An INDETERMINATE bar. A percentage would be a lie — the console does not know how many of
+   its feeds are still outstanding, and a progress bar that invents a number is worse than one
+   that only says "still working". */
+.bx-loading-bar {
+  flex: 1 1 auto; height: 2px; border-radius: 2px; overflow: hidden;
+  background: var(--border);
+  position: relative;
+}
+.bx-loading-bar::after {
+  content: ""; position: absolute; inset: 0;
+  width: 34%; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: bx-loading-sweep 1.15s ease-in-out infinite;
+}
+@keyframes bx-loading-sweep {
+  0%   { transform: translateX(-40%); }
+  100% { transform: translateX(320%); }
+}
+
+@media (max-width: 900px) { .bx-loading { padding-left: 14px; padding-right: 14px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* No sweep, but the bar must still read as "busy" — so it stays, filled and static. */
+  .bx-loading-bar::after { animation: none; width: 100%; opacity: .5; }
+}
+
 /* ── Nested nav sections ──────────────────────────────────────────────────────
    Observability holds Monitoring and the Activity log. The section itself has no
    screen, so it must not look like a destination: no active state, and a caret
@@ -1070,6 +1114,23 @@ tr[data-expanded] { background: var(--surface-2); }
 
 .bx-strip-note { color: var(--muted); font-size: 0.72rem; }
 .bx-strip-error { color: var(--red, #f85149); }
+
+/* Paging arrows. Forty projects with four visible needs a control, not a fade — a fade at the
+   edge reads as a style, and an operator scanning for a project concludes the rest are absent. */
+.bx-strip-pager { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
+.bx-strip-page {
+  width: 22px; height: 22px; padding: 0; border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); font-size: 13px; line-height: 1;
+  transition: color .14s ease, border-color .14s ease, background .14s ease;
+}
+.bx-strip-page:hover:not(:disabled) {
+  color: var(--ink); border-color: var(--border-strong); background: var(--surface-2);
+}
+/* Dimmed, not hidden: an arrow that disappears at the end makes the row jump and the other
+   arrow move under the cursor. */
+.bx-strip-page:disabled { opacity: .3; cursor: default; }
 
 .bx-strip-filters { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
 .bx-strip-filter {

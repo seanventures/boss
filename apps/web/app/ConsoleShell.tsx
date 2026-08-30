@@ -299,6 +299,23 @@ export default function ConsoleShell({
       else next.add(id);
       return next;
     });
+  // IS THE PAGE STILL FILLING UP?
+  //
+  // This console streams: the server sends HTML as its ~55 feeds answer, so panels appear one
+  // at a time and a list can read "12 code tasks" for a second before it reads 200. Watching
+  // that with no indicator, the honest conclusion is that projects are missing — which is
+  // exactly the conclusion that got drawn.
+  //
+  // Starts TRUE and is cleared after mount, deliberately: the server renders it as loading, so
+  // the streamed HTML carries the bar before any client JS exists to set it. A flag that only
+  // became true on the client would miss the entire window it exists for.
+  const [settling, setSettling] = useState(true);
+  useEffect(() => {
+    // One frame after hydration — long enough for the client fetches each panel fires on mount
+    // to be in flight, so the bar does not blink off and straight back on.
+    const t = window.setTimeout(() => setSettling(false), 1200);
+    return () => window.clearTimeout(t);
+  }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [live, setLive] = useState(true);
@@ -795,6 +812,20 @@ export default function ConsoleShell({
             strip, in v1's header: status, stage and progress per project, filterable, and one
             click into the project itself. It fetches on its own through a route handler, so a
             slow or missing overview delays this strip and nothing else on the page. */}
+        {/* A thin bar rather than a spinner over the content: the panels that HAVE arrived are
+            usable while the rest land, and covering them would make a fast console feel slower
+            than a slow one. */}
+        {settling || refreshPending ? (
+          <div className="bx-loading" role="status" aria-live="polite"
+               data-testid="console-loading">
+            <span className="bx-loading-bar" aria-hidden />
+            <span className="bx-loading-text">
+              {settling ? "Loading the console — panels fill in as they arrive"
+                        : "Refreshing"}
+            </span>
+          </div>
+        ) : null}
+
         <ProjectStrip projectId={scope.projectId ?? scope.project} />
 
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
