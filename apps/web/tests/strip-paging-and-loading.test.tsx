@@ -241,3 +241,34 @@ describe("the rest of the Factory list is reachable", () => {
     expect(CT).toContain('data-testid="ct-home-all-error"');
   });
 });
+
+describe("the loading bar stays up until the page has actually arrived", () => {
+  const SHELL2 = codeOnly("app/ConsoleShell.tsx");
+
+  it("waits for the document, not a fixed 1.2 seconds", () => {
+    // Measured on goldeneye: the Factory page is 9.2 MB and streams for 10.4s. The bar cleared
+    // 1200ms after hydration — early in that stream — so for the remaining ~9 seconds cards
+    // kept appearing with nothing saying so. A list still arriving looks exactly like a list
+    // that is short.
+    expect(SHELL2).toContain('document.readyState === "complete"');
+    expect(SHELL2).toContain('window.addEventListener("load"');
+  });
+
+  it("keeps a floor so a fast page does not blink it", () => {
+    expect(SHELL2).toContain("window.setTimeout(r, 1200)");
+  });
+
+  it("keeps a ceiling, because an indicator that cannot go away is the last bug", () => {
+    // The previous bar became permanent furniture that explained nothing.
+    expect(SHELL2).toContain("window.setTimeout(finish, 60_000)");
+  });
+
+  it("shows elapsed seconds, so it reads as working rather than stuck", () => {
+    expect(SHELL2).toContain('data-testid="console-loading-elapsed"');
+    expect(SHELL2).toContain("settledFor >= 3 ?");
+  });
+
+  it("does not jitter the sentence as the number ticks", () => {
+    expect(CSS).toContain("font-variant-numeric: tabular-nums");
+  });
+});

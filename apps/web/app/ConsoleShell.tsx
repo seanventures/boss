@@ -314,11 +314,44 @@ export default function ConsoleShell({
   // the streamed HTML carries the bar before any client JS exists to set it. A flag that only
   // became true on the client would miss the entire window it exists for.
   const [settling, setSettling] = useState(true);
+  //: How long this load has been going, so the bar is visibly ALIVE rather than a static
+  //: sentence that could equally mean "stuck".
+  const [settledFor, setSettledFor] = useState(0);
   useEffect(() => {
-    // One frame after hydration — long enough for the client fetches each panel fires on mount
-    // to be in flight, so the bar does not blink off and straight back on.
-    const t = window.setTimeout(() => setSettling(false), 1200);
-    return () => window.clearTimeout(t);
+    // UNTIL THE PAGE HAS ACTUALLY ARRIVED, NOT FOR A FIXED 1.2 SECONDS.
+    //
+    // Measured on goldeneye: the Factory page is 9.2 MB and streams for 10.4 seconds. The bar
+    // was cleared 1200ms after hydration, which happens early in that stream — so for the
+    // remaining ~9 seconds cards kept appearing with nothing on screen saying so. A list that
+    // is still arriving looks exactly like a list that is short, and the honest conclusion
+    // from a page that has stopped saying it is busy is that the rest is not coming.
+    //
+    // `load` is the right signal because this console STREAMS its HTML: it fires when the
+    // document and its subresources are done, which is the moment the last card lands.
+    let done = false;
+    const finish = () => { if (!done) { done = true; setSettling(false); } };
+
+    // A floor, so a genuinely fast page does not blink the bar on and straight off.
+    const floor = new Promise<void>((r) => window.setTimeout(r, 1200));
+    const arrived = document.readyState === "complete"
+      ? Promise.resolve()
+      : new Promise<void>((r) => window.addEventListener("load", () => r(), { once: true }));
+    // A ceiling, because an indicator that CANNOT go away is the failure the last one had —
+    // it became permanent furniture that explained nothing.
+    const ceiling = window.setTimeout(finish, 60_000);
+    const ticking = window.setInterval(
+      () => setSettledFor((n) => n + 1), 1000);
+
+    void Promise.all([floor, arrived]).then(() => {
+      window.clearTimeout(ceiling);
+      window.clearInterval(ticking);
+      finish();
+    });
+    return () => {
+      done = true;
+      window.clearTimeout(ceiling);
+      window.clearInterval(ticking);
+    };
   }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -840,6 +873,13 @@ export default function ConsoleShell({
             <span className="bx-loading-bar" aria-hidden />
             <span className="bx-loading-text">
               Loading the console — panels fill in as they arrive
+              {/* The elapsed count is the difference between "it is working" and "it has
+                  stopped". Only after a few seconds: on a fast load it would be noise. */}
+              {settledFor >= 3 ? (
+                <span className="bx-loading-elapsed" data-testid="console-loading-elapsed">
+                  {settledFor}s
+                </span>
+              ) : null}
             </span>
           </div>
         ) : null}
