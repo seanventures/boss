@@ -153,11 +153,58 @@ export function appIdentity(run: AppRun): {
       kind = promoted.slice(1).join(" — ").trim();
     }
   }
+  // THE DIRECTIVE THAT ASKED FOR THE APP, when the title is only a document type.
+  //
+  // "📄 Product Requirements Document" carries no product name, and neither does the follow-up
+  // run titled after it, so every run in the group yielded "Untitled app" — while
+  // `finalize_ctx.origin.title` held "Build a tool that turns meeting notes into draft
+  // tickets." the whole time. The app always knew what it was; nothing asked it.
+  // `final` can already BE the sentinel: "Untitled app" is assigned as a default further up,
+  // and it is not boilerplate, so it survives the gate as though it were a real name. Checking
+  // only for emptiness here silently skipped the fallback on the exact cards that needed it.
+  if (!final || final === "Untitled app") {
+    const fromBrief = directiveName(run);
+    if (fromBrief) return { name: fromBrief, kind: kind ? kind.slice(0, 44) : undefined,
+                            label: label || undefined };
+  }
   return {
     name: final.slice(0, 46) || "Untitled app",
     kind: kind ? kind.slice(0, 44) : undefined,
     label: label || undefined,
   };
+}
+
+/** Generic heads that carry no meaning on their own: "a tool that X" is really about X. */
+const GENERIC_HEAD =
+  /^(tool|app|application|web ?app|site|website|service|system|platform|dashboard|bot)\b\s*(that|which|to|for|which)?\s*/i;
+
+/**
+ * A product name from the one-line brief a human actually wrote.
+ *
+ * Deliberately last: a real title always wins. This exists so that a run whose title is a
+ * document type still names its card something a person recognises, instead of the four
+ * different apps built from a PRD all reading "Untitled app".
+ */
+export function directiveName(run: AppRun): string {
+  const origin = (run.finalize_ctx ?? {}).origin as { title?: unknown } | undefined;
+  const raw = typeof origin?.title === "string" ? origin.title : "";
+  if (!raw.trim()) return "";
+  // The brief's FIRST sentence is the ask; everything after it is context ("Who it is for: …").
+  let s = norm(raw).split(/\n/)[0].split(/(?<=[.!?])\s/)[0].trim();
+  s = s
+    .replace(/^\s*(please\s+)?(build|create|make|write|design|develop)\s+/i, "")
+    .replace(/^\s*(me\s+)?(a|an|the)\s+/i, "")
+    .replace(GENERIC_HEAD, "")
+    .replace(/[.\s]+$/, "")
+    .trim();
+  if (!s || BOILERPLATE.test(unadorn(s))) return "";
+  const words = s.split(/\s+/).slice(0, 6);
+  const titled = words
+    .map((w) => (w === w.toUpperCase() && w.length > 1
+      ? w
+      : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+  return titled.slice(0, 46);
 }
 
 /**

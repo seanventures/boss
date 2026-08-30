@@ -182,3 +182,44 @@ def test_a_live_transcript_is_not_written_a_second_time_at_the_end():
     src = inspect.getsource(ClaudeCodeAgent.run_role)
     assert '_turns_live' in src, "the caller does not know the transcript is already stored"
     assert 'if not data.pop("_turns_live", False):' in src
+
+
+# ── The context has to cross the thread boundary ───────────────────────────────
+
+def test_the_reader_thread_sees_the_callers_context():
+    """The bug my first version shipped, and the reason it looked like it worked.
+
+    `record_agent_turns` resolves project_id / run_id / db_engine from a ContextVar, and a NEW
+    THREAD STARTS WITH A FRESH CONTEXT — it does not inherit the creator's. The prompt row is
+    written on the main thread before the readers start, so it appeared; every streamed turn was
+    written from the reader thread with an empty context. `begin(None)` falls back to a default
+    engine rather than raising, so nothing errored and nothing was attributable. Live tracing
+    looked wired up and produced exactly one row per stage.
+
+    Observed in production: 6 minutes into an implement, 1 turn.
+    """
+    import contextvars
+
+    var = contextvars.ContextVar("probe", default={})
+    var.set({"run_id": "crun_probe"})
+    seen: list[dict] = []
+
+    child = _spawn("print('{\"type\":\"a\"}')")
+    _drain(child, timeout=30, on_line=lambda _l: seen.append(var.get()))
+
+    assert seen, "the consumer never ran"
+    assert seen[0] == {"run_id": "crun_probe"}, (
+        "the reader thread lost the caller's context, so turns would be written unattributed")
+
+
+def test_the_context_is_copied_on_the_calling_thread():
+    """`copy_context()` must be evaluated where the context exists. Calling it inside the
+    thread would copy the thread's own empty context and change nothing."""
+    import inspect
+
+    from boss_engine.services import code_agent
+
+    src = inspect.getsource(code_agent._drain)
+    body = src[:src.index("for t in threads:")]
+    assert "contextvars.copy_context()" in body
+    assert "target=ctx.run" in body, "the pump does not run inside the copied context"

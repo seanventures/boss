@@ -15,6 +15,7 @@ Design (architecture doc §3, "Own Layer 2"):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import contextvars
 import json
 import os
 import re
@@ -93,10 +94,23 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
             except Exception:  # noqa: BLE001
                 pass
 
+    # CARRY THE CALLER'S CONTEXT INTO THE READER THREADS.
+    #
+    # `record_agent_turns` resolves project_id / run_id / db_engine from a ContextVar, and a new
+    # thread starts with a FRESH context — it does not inherit the creator's. So the first
+    # version wrote its prompt row (main thread, before these start) and then silently lost
+    # every streamed turn: `begin(None)` falls back to a default engine rather than raising, so
+    # the rows went nowhere attributable and nothing errored. Live tracing looked wired up and
+    # produced exactly one row per stage.
+    #
+    # `copy_context()` is evaluated HERE, on the calling thread, which is the only place the
+    # context exists.
+    ctx = contextvars.copy_context()
     threads = [
-        threading.Thread(target=_pump, args=(child.stdout, out_lines, True),
+        threading.Thread(target=ctx.run, args=(_pump, child.stdout, out_lines, True),
                          name="claude-stdout", daemon=True),
-        threading.Thread(target=_pump, args=(child.stderr, err_chunks, False),
+        threading.Thread(target=contextvars.copy_context().run,
+                         args=(_pump, child.stderr, err_chunks, False),
                          name="claude-stderr", daemon=True),
     ]
     for t in threads:
