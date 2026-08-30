@@ -218,13 +218,42 @@ spec is already a graph, so a graph canvas can come later without a data migrati
 **Validation is continuous, not on save.** A step whose capability the project cannot satisfy is
 marked in the canvas as you place it, with the reason and the fix.
 
-### 3.7 Custom steps (deferred, by request)
+### 3.7 Custom steps — BUILT
 
-Phase 6. A customer-defined step that binds skills and tools they attach. Deferred because it
-needs the parts the earlier phases build: a capability registry to model against, a risk floor
-to sit under, and provenance on customer-supplied tools (`toolchain_sources` already records
-that). Until then, `skill` and `integration` steps remain available for anything the catalogue
-does not cover.
+A named, reusable step a customer defines: `workflow_custom_steps` holds the label, the thing it
+binds, and the inputs it declares. It appears in the same builder palette as the eighteen
+built-in capabilities, and runs through `workflow_capability_runner` like any other step.
+
+**The risk tier is never a field the customer fills in.** It is resolved from whatever the step
+binds — the skill's registered `config.risk_tier`, or the MCP server's tier and its per-tool
+override — at publish time and again at run time. An unclassified binding resolves to the FLOOR,
+not to zero: a tool nobody has looked at is treated as dangerous. Without this, "custom step"
+would be the documented way around every approval gate in the product.
+
+**Two binding kinds, not three.** A skill and an MCP tool are each independently callable. An
+integration connection is not — in BOSS it grants authority *to* a skill (`capability_resolutions`)
+and is never invoked on its own — so offering it would have produced a step that publishes and
+then has nothing to run. To use an integration, bind the skill that runs through it.
+
+**Defining a step is what grants the runner permission to call the skill.** Skills declare their
+`allowed_callers`, and none of them named a workflow runner that did not exist when they were
+written — so without a grant every custom step is denied on its first run. The grant is explicit
+(somebody chose this skill, by name, in this project), scoped (only to skills a definition row
+exists for), recorded (`workflow.custom_step_created` names the actor), and revocable (delete the
+step). It widens *who may call*, never *what may be done*: risk tier, cost, policy and data
+boundary reach the runtime exactly as the registry wrote them.
+
+Two runtime gaps had to be closed to make this real, and both mattered independently of custom
+steps:
+
+* An approved gate never resumed. The runtime's resume logic only handles `decision`-kind steps,
+  so a capability gate opened, a person approved it, and the step waited forever.
+* `approval.mode: manual` was stored on a step and then ignored at run time, which made the risk
+  floor advisory — a step marked "always requires a person" was claimed and executed unattended.
+
+Gates now open for **any** step whose effective approval is manual, and `gate_completes_step`
+distinguishes the two kinds that wait: an approval gate (answering it *is* the work) from an
+ordinary step awaiting sign-off (answering it only unblocks the work).
 
 ---
 
@@ -289,9 +318,10 @@ Each phase is shippable on its own and leaves the system working.
 - **Risk:** low mechanically, **high in consequence** — this is where a mistake lets something
   ship unreviewed. Gets the most adversarial testing.
 
-### Phase 6 — Custom steps
-- Customer-attached skills and tools, under provenance and the risk floor.
-- **Risk:** highest. Deliberately last.
+### Phase 6 — Custom steps — DONE
+- Customer-attached skills and MCP tools, under provenance and the risk floor.
+- `workflow_custom_steps` + palette + define form + runner dispatch + the permission grant.
+- **Risk:** highest, as expected — it surfaced two live holes in the approval floor (see §3.7).
 
 ---
 
@@ -307,3 +337,10 @@ Each phase is shippable on its own and leaves the system working.
    pause-for-a-human, or compensate-and-roll-back? The runtime supports both.
 5. **How much of the twelve to seed first.** All of them in Phase 2, or the three most common
    (#1, #2, #3) to get the shape right before writing the other nine?
+6. **Unclassified skills.** Every skill registered in `boss-dogfood` today has no `risk_tier` in
+   its config, so every custom step bound to one resolves to the floor and always stops for a
+   person. That is the safe direction, but it means a customer's first custom step always gates.
+   Classifying the shipped skills is the fix; guessing zero for them is not.
+7. **Triggers.** Schedule, webhook and data-change starts. Every competitor has them, BOSS has
+   none — a workflow can only be started by hand or by a mapping. This is the one genuine gap
+   the competitor research turned up that is still open.
