@@ -22,6 +22,28 @@ BOILERPLATE = re.compile(
     r"^(product requirements document|prd|design|spec|specification|overview|summary|"
     r"web app|version\b.*|introduction|document)\b[\s:–—-]*$", re.I)
 
+def _unadorn(s: str) -> str:
+    """Drop a leading emoji or symbol so the boilerplate test can see the words behind it.
+
+    THE RENDERER FIXED THIS AND THIS FILE DID NOT, which made the same oversight far worse
+    here. `BOILERPLATE` is anchored at ^, and the pipeline titles its PRD runs
+    "📄 Product Requirements Document" — so the check never fired, the document TYPE became the
+    app's name, and `stable_app_id` hashed it. Every app ever built from a PRD was therefore
+    stamped with the SAME app_id, the console unioned them on that token, and clicking one app
+    showed another's runs under a third one's name.
+
+    In the renderer this is a wrong label. Here it is a wrong identity, written down.
+    """
+    i = 0
+    while i < len(s) and (
+        s[i].isspace()
+        or unicodedata.category(s[i]).startswith("S")   # emoji and other symbols
+        or s[i] in "\u200d\ufe0f\u2022\u00b7*_>#"   # ZWJ, variation selector, bullets
+    ):
+        i += 1
+    return s[i:].strip()
+
+
 def _norm(s: str) -> str:
     s = unicodedata.normalize("NFKC", s or "")
     return (s.replace(" ", " ").replace(" ", " ")
@@ -63,7 +85,7 @@ def project_name(text: str) -> tuple[str, str, str]:
         named = m.group(1)
     else:
         for line in t.splitlines():
-            line = line.strip().lstrip("#").strip()
+            line = _unadorn(line.strip().lstrip("#"))
             if not line or BOILERPLATE.match(line):
                 continue
             line = re.sub(r"\s*[-–—]\s*(product requirements document|prd)\b.*$", "", line, flags=re.I)
@@ -95,6 +117,10 @@ def project_name(text: str) -> tuple[str, str, str]:
         drop = {"web", "app", "application", "site", "website", "tool"}
         words = [w for w in name.split() if w.lower() not in drop] or name.split()
         name = " ".join(w if w.isupper() else w.capitalize() for w in words[:4])
+    # LAST GATE, matching the renderer's. A document TYPE must never reach a caller as a
+    # product name — least of all `stable_app_id`, which would hash it into shared identity.
+    if BOILERPLATE.match(_unadorn(name)):
+        name = ""
     return name[:42] or "Untitled app", blurb[:70], label
 
 
