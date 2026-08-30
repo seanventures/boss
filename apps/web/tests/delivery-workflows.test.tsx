@@ -671,3 +671,16 @@ describe("the builder has icons, and they mean something", () => {
     expect(CSS).toContain(".dw-empty-mark");
   });
 });
+
+describe("the panel's buttons wrap as a group", () => {
+  it("keeps Import, Create and Cancel together", () => {
+    // Loose, they broke apart at the console's width and Cancel dropped onto a line of its
+    // own, which reads as a layout fault rather than a wrap.
+    expect(UI).toContain('<span className="dw-new-actions">');
+    expect(CSS).toContain(".dw-new-actions { display: inline-flex;");
+  });
+
+  it("does not let a label break mid-button", () => {
+    expect(CSS).toContain(".dw-canvas-head .cap-btn, .dw-new .cap-btn { white-space: nowrap; }");
+  });
+});

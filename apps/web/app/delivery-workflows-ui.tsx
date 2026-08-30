@@ -1337,6 +1337,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   ))}
                 </select>
               </label>
+              {/* The three buttons are ONE group, so they wrap together. Left loose they broke
+                  apart at this width and Cancel dropped onto a line of its own, which reads as
+                  a layout fault rather than a wrap. */}
+              <span className="dw-new-actions">
               {/* Import is a SEPARATE, non-destructive step: it fills the canvas below and
                   nothing else. Pressing it twice, or picking a different source and pressing
                   it again, is safe — no workflow exists yet to duplicate. */}
@@ -1354,6 +1358,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               <button type="button" className="cap-btn" onClick={cancelCreating}>
                 <WfIcon id="x" /> Cancel
               </button>
+              </span>
               {importError ? (
                 <span className="detail dw-new-error" data-testid="dw-import-error">
                   <WfIcon id="info" /> Could not import — {importError}
