@@ -318,19 +318,23 @@ describe("the catalogue card is scannable across twelve of them", () => {
 });
 
 describe("build your own actually lets you build one", () => {
-  it("offers a New workflow control", () => {
+  it("offers a way to author one, not only to fork", () => {
     // The tab was called "Build your own" and the only way in was to fork something, so a
-    // screen that promised authorship offered only editing.
-    expect(UI).toContain('data-testid="dw-new"');
-    expect(UI).toContain("New workflow");
+    // screen that promised authorship offered only editing. It is now the second TAB.
+    expect(UI).toContain('data-testid="dw-tab-new"');
+    expect(UI).toContain("Create a new one");
   });
 
-  it("gives it more weight than the controls around it", () => {
+  it("makes authoring a mode you are IN, not a button among buttons", () => {
     // Flat and evenly weighted, the row gave "+ New workflow" the same presence as "Reset to
     // the standard" — so the one control that STARTS something read as the least important
-    // thing on the line, on the tab whose entire purpose is authoring.
-    expect(UI).toContain("dw-new-cta");
-    expect(CSS).toContain(".dw-new-cta");
+    // thing on the line. Tinting it helped; being a tab settles it, because a tab also says
+    // which mode you are currently in, which a button never did.
+    expect(UI).toContain('role="tablist"');
+    expect(UI).toContain("aria-selected={creating}");
+    expect(UI).toContain("aria-selected={!creating}");
+    expect(CSS).toContain(".dw-mode-tab");
+    expect(CSS).toContain('.dw-mode-tab[aria-selected="true"]');
   });
 
   it("keeps a single solid button, so two do not compete", () => {
@@ -344,8 +348,27 @@ describe("build your own actually lets you build one", () => {
   });
 
   it("separates 'edit that one' from 'start a new one'", () => {
-    expect(UI).toContain("dw-head-divider");
+    // They are two jobs. Sharing one header, "Editing: X" sat beside "Start from: Y" and the
+    // operator had to work out which of the two workflows the controls acted on — which is how
+    // a project ends up with 54 definitions named "(copy)" and "(copy 2)".
+    expect(UI).toContain('data-testid="dw-tab-edit"');
+    expect(UI).toContain('data-testid="dw-tab-new"');
     expect(UI).toContain('<div className="dw-head-left">');
+  });
+
+  it("switching tabs uses the mode changes that already existed", () => {
+    // beginCreating stashes the canvas, cancelCreating restores it. The tabs must drive THOSE,
+    // not a second, parallel notion of which mode the screen is in.
+    const tabs = UI.slice(UI.indexOf('role="tablist"'), UI.indexOf('dw-canvas-head'));
+    expect(tabs).toContain("cancelCreating()");
+    expect(tabs).toContain("beginCreating()");
+  });
+
+  it("does not act when you press the tab you are already on", () => {
+    // Re-entering create would blank a canvas the operator is part way through.
+    const tabs = UI.slice(UI.indexOf('role="tablist"'), UI.indexOf('dw-canvas-head'));
+    expect(tabs).toContain("if (creating) cancelCreating()");
+    expect(tabs).toContain("if (!creating) beginCreating()");
   });
 
   it("can start from an existing workflow, including a standard", () => {

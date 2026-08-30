@@ -1258,6 +1258,31 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                     aria-label="Dismiss">×</button>
           </p>
         ) : null}
+        {/* TWO TABS, BECAUSE THEY ARE TWO JOBS.
+            Editing an existing workflow and authoring a new one were one screen separated only
+            by a button: "Editing: Standard Product Delivery" sat beside "Start from: Backend
+            Service Setup", and the operator had to work out which of the two workflows the
+            controls acted on. The project has 54 definitions, a large share of them named
+            "(copy)" and "(copy 2)" — accidental forks are the predictable result of a screen
+            that does not say which mode it is in.
+
+            The modes already existed; only the way in and out did not. `beginCreating` stashes
+            the canvas and `cancelCreating` restores it, so the tabs are a faithful control for
+            state that was always there — no behaviour changes, the choice is just visible. */}
+        <div className="dw-mode-tabs" role="tablist" aria-label="What do you want to do?">
+          <button type="button" role="tab" className="dw-mode-tab"
+                  aria-selected={!creating} data-testid="dw-tab-edit"
+                  disabled={!!busy}
+                  onClick={() => { if (creating) cancelCreating(); }}>
+            <WfIcon id="edit" /> Edit an existing workflow
+          </button>
+          <button type="button" role="tab" className="dw-mode-tab"
+                  aria-selected={creating} data-testid="dw-tab-new"
+                  disabled={!!busy}
+                  onClick={() => { if (!creating) beginCreating(); }}>
+            <WfIcon id="plus" /> Create a new one
+          </button>
+        </div>
         <div className="dw-canvas-head" data-mode={creating ? "creating" : "editing"}>
           {/* ONE QUESTION AT A TIME.
               "Editing: Standard Product Delivery" beside "Start from: Backend Service Setup"
@@ -1378,20 +1403,11 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                 </span>
               ) : null}
             </form>
-          ) : (
-            <>
-              {/* A divider, because "edit that one" and "start a new one" are different
-                  intentions and the gap alone did not say so. */}
-              <span className="dw-head-divider" aria-hidden />
-              {/* Accent-tinted rather than solid: loud enough to be the obvious way into
-                  authoring — which is what this tab is FOR — without becoming a second solid
-                  button competing with Save for the eye. */}
-              <button type="button" className="cap-btn dw-new-cta" disabled={!!busy}
-                      onClick={beginCreating} data-testid="dw-new">
-                <WfIcon id="plus" /> New workflow
-              </button>
-            </>
-          )}
+          ) : null}
+          {/* The "+ New workflow" button that used to live here is now the second TAB. A
+              divider and an accent-tinted CTA were both attempts to say "this is a different
+              intention" inside a row that still mixed the two; a tablist says it outright, and
+              says which one you are in. */}
           </div>
           {/* Hidden while creating, for the same reason: both act on the workflow in the
               dropdown that is no longer on screen. */}

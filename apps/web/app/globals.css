@@ -1142,6 +1142,34 @@ h1, h2, h3, h4, h5, h6 {
    than "here is what you are editing, and here is what you can do to it". The groups now sit
    at their natural width and the actions are pushed right by margin, which keeps them together
    instead of stretching the row apart. */
+/* TWO JOBS, TWO TABS.
+   Editing an existing workflow and authoring a new one shared one header, separated only by a
+   button, so "Editing: X" sat beside "Start from: Y" and the operator had to work out which of
+   the two the controls acted on. The project accumulated 54 definitions, many of them "(copy)"
+   and "(copy 2)" — accidental forks are what a screen that does not state its mode produces.
+   The selected tab is the one carrying the surface colour, so the panel below reads as its
+   body rather than as a separate thing. */
+.dw-mode-tabs {
+  display: flex; gap: 4px; margin-bottom: -1px; position: relative; z-index: 1;
+  flex-wrap: wrap;
+}
+.dw-mode-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 15px; min-height: 34px;
+  font: inherit; font-size: 0.78rem; font-weight: 500; cursor: pointer;
+  color: var(--muted);
+  border: 1px solid var(--border); border-bottom-color: transparent;
+  border-radius: 9px 9px 0 0;
+  background: transparent;
+}
+.dw-mode-tab:hover:not(:disabled) { color: var(--ink-soft); background: var(--surface-2); }
+.dw-mode-tab[aria-selected="true"] {
+  background: var(--surface-2); color: var(--ink);
+  font-weight: 600; border-bottom-color: var(--surface-2);
+}
+.dw-mode-tab:disabled { opacity: .5; cursor: default; }
+/* Squared off where it meets the tabs, so the selected tab and the panel are one shape. */
+.dw-canvas-head { border-top-left-radius: 0; }
 .dw-canvas-head {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   padding: 12px 14px; margin-bottom: 4px;
