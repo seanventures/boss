@@ -356,22 +356,24 @@ describe("build your own actually lets you build one", () => {
     expect(UI).toContain('{i.is_catalogue ? " (standard)" : ""}');
   });
 
-  it("imports by forking, rather than by a second copy path", () => {
-    // Forking already copies the steps AND records where they came from, which is what makes
-    // "reset to the standard" work on the result. A separate import would be a worse fork.
-    expect(UI).toContain("if (importFrom) onImport(importFrom, name);");
-    expect(UI).toContain('act(`Import ${name}`, "fork"');
+  it("still records where imported steps came from", () => {
+    // Import no longer forks on the spot, but the lineage it used to create is what makes
+    // "Reset to the standard" mean anything — so Create forks when there was a source.
+    expect(UI).toContain('act(`Create ${name}`, "fork", { workflow_key: fromKey, new_name: name })');
+    expect(UI).toContain('act(`Create ${name}`, "create", { name })');
   });
 
-  it("says which of the two it is about to do", () => {
-    expect(UI).toContain('{importFrom ? "Import" : "Create"}');
+  it("writes the edited steps, not only the ones it copied", () => {
+    // Fork stores the SOURCE's steps. Whatever was changed on the canvas before Create has to
+    // be written straight after, or the operator's edits are silently dropped.
+    expect(UI).toContain('act(`Save ${name}`, "save", { definition_id: created.id, spec })');
   });
 
   it("selects what was just created", () => {
     // Creating something and leaving the operator to find it in a dropdown is the failure
     // "fork to edit" already had.
-    const create = UI.slice(UI.indexOf("onCreate={async (name)"));
-    expect(create.slice(0, 400)).toContain("setBuilderTarget(created.id)");
+    const create = UI.slice(UI.indexOf("onCreate={async (name, spec, fromKey)"));
+    expect(create.slice(0, 1600)).toContain("setBuilderTarget(created.id)");
   });
 
   it("does not make a customer invent an identifier", () => {
@@ -581,5 +583,51 @@ describe("the header carries a fact, not just controls", () => {
 
   it("keeps the two actions together instead of flinging them apart", () => {
     expect(CSS).toContain(".dw-canvas-actions { display: inline-flex; gap: 6px; align-items: center; margin-left: auto; }");
+  });
+});
+
+
+describe("Import fills the canvas; only Create writes anything", () => {
+  it("does not create a workflow when Import is pressed", () => {
+    // Import used to fork server-side on the spot, so a workflow appeared in the project
+    // before the operator had decided anything and the screen jumped into editing it.
+    expect(UI).toContain('data-testid="dw-import-steps"');
+    expect(UI).toContain("const importSteps = useCallback(async () => {");
+    // It reads the spec. It does not post.
+    const fn = UI.slice(UI.indexOf("const importSteps = useCallback"));
+    const body = fn.slice(0, fn.indexOf("}, [importFrom"));
+    expect(body).toContain('view: "spec"');
+    expect(body).not.toContain("post(");
+  });
+
+  it("stays in the new-workflow panel afterwards", () => {
+    // The whole point: the operator is not moved somewhere else.
+    const fn = UI.slice(UI.indexOf("const importSteps = useCallback"));
+    expect(fn.slice(0, fn.indexOf("}, [importFrom"))).not.toContain("setCreating(false)");
+  });
+
+  it("says what landed on the canvas, in the panel", () => {
+    expect(UI).toContain('data-testid="dw-imported"');
+    expect(UI).toContain("nothing is saved until you do");
+  });
+
+  it("can be pressed again with a different source", () => {
+    // Safe precisely because nothing was written the first time.
+    expect(UI).toContain('importedFrom ? "Import again" : "Import steps"');
+  });
+
+  it("starts the new workflow on an EMPTY canvas", () => {
+    // Otherwise the steps of the workflow being edited look like the new one's.
+    expect(UI).toContain("const beginCreating = useCallback(() => {");
+    expect(UI).toContain("setStashed(draft);");
+  });
+
+  it("does not load the selected workflow's steps over the new ones", () => {
+    expect(UI).toContain("if (creating) return;");
+  });
+
+  it("puts the previous canvas back on Cancel", () => {
+    // Abandoning the idea must leave the operator exactly where they were.
+    expect(UI).toContain("if (stashed) setDraft(stashed);");
   });
 });

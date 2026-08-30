@@ -448,6 +448,72 @@ def require_namespace(
     return dict(row)
 
 
+def delete_definition(
+    connection: Connection, project_id: str, definition_id: str, actor: str
+) -> dict[str, Any]:
+    """Remove a customer's own workflow.
+
+    "Build your own" without this is a list that only grows: every fork, every import and every
+    mistake stays in the picker forever, and a project ends up offering several entries with the
+    same name and no way to tell them apart. That is the state this was written in.
+
+    THREE THINGS IT REFUSES, and each is a way to lose work rather than tidy it:
+
+      * A catalogue workflow — the twelve BOSS ships are not the customer's to delete.
+      * Anything outside the product namespace — same rule as every other product entry point.
+      * A workflow with a RUN THAT IS STILL GOING. Deleting the definition under a live run
+        strands it: the runtime reads the spec to decide what comes next, so it would be a run
+        that cannot finish and cannot say why.
+
+    Finished runs are kept and so are the versions they pin, because a run's history has to stay
+    readable after the workflow it came from is gone. Only the definition and its mappings go —
+    which is what stops it appearing in the picker.
+    """
+    definition = require_namespace(connection, project_id, definition_id, PRODUCT_NAMESPACE)
+    require_editable(definition)
+
+    live = connection.execute(
+        text(
+            """
+            SELECT count(*) FROM workflow_runs
+            WHERE workflow_definition_id = :id
+              AND status IN ('running', 'waiting', 'queued', 'validating')
+            """
+        ),
+        {"id": definition_id},
+    ).scalar() or 0
+    if int(live):
+        raise WorkflowConflictError(
+            f"'{definition['name']}' has {int(live)} run"
+            f"{'' if int(live) == 1 else 's'} still going. Let them finish, or cancel them, "
+            "before deleting it."
+        )
+
+    connection.execute(
+        text("DELETE FROM workflow_mappings WHERE workflow_version_id IN "
+             "(SELECT id FROM workflow_versions WHERE workflow_definition_id=:id)"),
+        {"id": definition_id},
+    )
+    # The definition row goes; its versions stay, because completed runs point at them and a
+    # run whose spec has vanished cannot be read back.
+    connection.execute(
+        text("UPDATE workflow_versions SET status='archived' "
+             "WHERE workflow_definition_id=:id AND status <> 'archived'"),
+        {"id": definition_id},
+    )
+    connection.execute(
+        text("DELETE FROM workflow_definitions WHERE id=:id AND project_id=:project_id"),
+        {"id": definition_id, "project_id": project_id},
+    )
+    emit_event(
+        connection, project_id, "workflow.definition_deleted", actor,
+        "workflow_definition", definition_id,
+        {"workflow_key": definition["workflow_key"], "name": definition["name"]},
+    )
+    return {"deleted": definition_id, "workflow_key": definition["workflow_key"],
+            "name": definition["name"]}
+
+
 def require_editable(definition: dict[str, Any]) -> None:
     """Refuse to edit a catalogue workflow in place.
 

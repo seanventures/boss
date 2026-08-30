@@ -374,32 +374,34 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           }}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
-          onCreate={async (name) => {
-            const result = await act(`Create ${name}`, "create", { name });
-            // Select what was just made. Creating something and leaving the operator to find it
-            // in a dropdown is the same failure "fork to edit" had.
-            if (result.ok) {
-              const created = (result.data as { definition?: { id: string } })?.definition;
-              if (created?.id) {
-                setBuilderTarget(created.id);
-                setJustMade({ id: created.id, name });
-              }
+          onCreate={async (name, spec, fromKey) => {
+            // TWO CALLS, AND THE ORDER MATTERS.
+            //
+            // When the steps came from somewhere, `fork` is what records where — which is the
+            // only thing that makes "Reset to the standard" mean anything later. Fork copies
+            // the SOURCE's steps though, so whatever the operator changed on the canvas is
+            // written straight after as the next version. Starting from nothing needs no
+            // lineage, so it is a plain create.
+            const result = fromKey
+              ? await act(`Create ${name}`, "fork", { workflow_key: fromKey, new_name: name })
+              : await act(`Create ${name}`, "create", { name });
+            if (!result.ok) return;
+            const created = (result.data as { definition?: { id: string } })?.definition;
+            if (!created?.id) return;
+
+            const steps = (spec as { steps?: unknown[] })?.steps ?? [];
+            if (steps.length) {
+              // Silent on a no-op: forking already stored these exact steps, and the runtime
+              // answers an identical spec with "unchanged" rather than a new version.
+              await act(`Save ${name}`, "save", { definition_id: created.id, spec });
             }
-          }}
-          onImport={async (sourceKey, name) => {
-            const result = await act(`Import ${name}`, "fork", {
-              workflow_key: sourceKey, new_name: name,
+            setBuilderTarget(created.id);
+            setJustMade({
+              id: created.id, name,
+              from: fromKey
+                ? installed.find((i) => i.workflow_key === fromKey)?.name
+                : undefined,
             });
-            if (result.ok) {
-              const created = (result.data as { definition?: { id: string } })?.definition;
-              if (created?.id) {
-                setBuilderTarget(created.id);
-                setJustMade({
-                  id: created.id, name,
-                  from: installed.find((i) => i.workflow_key === sourceKey)?.name,
-                });
-              }
-            }
           }}
         />
       )}
@@ -782,7 +784,7 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
                       customSteps, bindable, onDefineStep, onRemoveStep,
                       justMade, onDismissJustMade,
-                      target, setTarget, onSave, onCreate, onImport }: {
+                      target, setTarget, onSave, onCreate }: {
   capabilities: Capability[];
   blocks: Block[];
   riskFloor: number;
@@ -801,8 +803,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   target: string;
   setTarget: (id: string) => void;
   onSave: (definitionId: string, spec: Record<string, unknown>) => void;
-  onCreate: (name: string) => void;
-  onImport: (sourceKey: string, name: string) => void;
+  /** Creates the workflow AND writes the steps that are on the canvas. `fromKey` is the
+   *  workflow the steps were imported from, so the lineage that makes "Reset to the standard"
+   *  meaningful survives — importing into the canvas would otherwise lose it. */
+  onCreate: (name: string, spec: Record<string, unknown>, fromKey?: string) => void;
 }) {
   // Only a customer's OWN workflows can be edited. Offering a catalogue one here and refusing
   // on save would be a control that lies about what it does.
@@ -816,6 +820,16 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [importFrom, setImportFrom] = useState("");
+  /** The canvas as it was before "New workflow" was pressed, so Cancel puts it back rather
+   *  than leaving the operator on an empty canvas for a workflow they did not change. */
+  const [stashed, setStashed] = useState<Draft[] | null>(null);
+  /** Which workflow's steps are currently on the canvas, and how many came across. Set by
+   *  Import, cleared by Cancel — this is what lets the panel say what it just did without
+   *  anything having been saved. */
+  const [importedFrom, setImportedFrom] = useState<{ key: string; name: string; steps: number } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+
 
   /** What an import would be called if the operator names nothing. Shown as the placeholder,
    *  so the name the workflow WILL get is visible before the button is pressed.
@@ -866,6 +880,61 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       };
     }), []);
 
+  /** Open the new-workflow panel on an EMPTY canvas. */
+  const beginCreating = useCallback(() => {
+    setStashed(draft);
+    setDraft([]);
+    setImportedFrom(null);
+    setImportError(null);
+    setNewName("");
+    setImportFrom("");
+    setCreating(true);
+  }, [draft]);
+
+  const cancelCreating = useCallback(() => {
+    setCreating(false);
+    setNewName("");
+    setImportFrom("");
+    setImportedFrom(null);
+    setImportError(null);
+    if (stashed) setDraft(stashed);
+    setStashed(null);
+  }, [stashed]);
+
+  /** IMPORT BRINGS THE STEPS HERE. IT DOES NOT SAVE ANYTHING.
+   *
+   *  It used to fork server-side on the spot: a workflow appeared in the project before the
+   *  operator had decided anything, and the screen jumped into editing it. Nothing is written
+   *  now until Create — Import only fills the canvas, so the steps can be changed first and
+   *  abandoning the idea leaves nothing behind. */
+  const importSteps = useCallback(async () => {
+    if (!importFrom) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const params = new URLSearchParams({
+        view: "spec", project_id: projectId, key: importFrom,
+      });
+      const r = await fetch(`/api/delivery-workflows?${params}`, { cache: "no-store" });
+      const body = (await r.json()) as WorkflowSpec & { error?: string };
+      if (!r.ok || !body?.spec?.steps) {
+        setImportError(body?.error ?? "could not read that workflow's steps");
+        return;
+      }
+      const steps = toDraft(body.spec.steps);
+      setDraft(steps);
+      setImportedFrom({
+        key: importFrom,
+        name: installed.find((i) => i.workflow_key === importFrom)?.name ?? importFrom,
+        steps: steps.length,
+      });
+    } catch (e) {
+      setImportError(String((e as Error)?.message ?? e));
+    } finally {
+      setImporting(false);
+    }
+  }, [importFrom, projectId, toDraft, installed]);
+
   // OPEN WITH WHAT IS THERE.
   //
   // The builder started empty, so changing one step of a ten-step workflow meant rebuilding
@@ -883,6 +952,12 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   );
 
   useEffect(() => {
+    // WHILE CREATING, THE CANVAS IS THE NEW WORKFLOW'S.
+    //
+    // Nothing exists on the server yet, so there is no spec to load — and loading the selected
+    // workflow's steps over the ones just imported is exactly the confusion between "the one
+    // you are editing" and "the one you are making" that this flow had.
+    if (creating) return;
     if (!targetKey) { setLoaded(null); setDraft([]); return; }
     let live = true;
     setLoadingSpec(true);
@@ -913,7 +988,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       }
     })();
     return () => { live = false; };
-  }, [targetKey, projectId, toDraft]);
+  }, [targetKey, projectId, toDraft, creating]);
 
   /** Put it back the way the standard has it. */
   const reset = useCallback(() => {
@@ -1181,35 +1256,21 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           {creating ? (
             <form className="dw-new" onSubmit={(e) => {
               e.preventDefault();
-              // A NAME IS NOT REQUIRED TO COPY SOMETHING.
+              // CREATE IS THE ONLY THING THAT WRITES.
               //
-              // Import was disabled until a name was typed, and a disabled button that does not
-              // say it is disabled reads as broken — which is exactly how it was reported. When
-              // you are starting from an existing workflow there is an obvious name available,
-              // so use it and let the operator rename afterwards.
+              // Import used to fork on the spot, so a workflow appeared in the project before
+              // the operator had decided anything and the screen jumped straight into editing
+              // it. Now the canvas is filled first, changed if they want, and only saved here.
               const name = newName.trim() || defaultImportName;
               if (!name) return;
-              // IMPORT IS A FORK WITH A NAME YOU CHOSE.
-              //
-              // Starting from an existing workflow and starting from nothing differ only in
-              // where the steps come from, and forking already copies steps AND records what
-              // they came from — which is what makes "reset to the standard" work on the
-              // result. A separate import path would have been a second, worse fork.
-              if (importFrom) onImport(importFrom, name);
-              else onCreate(name);
-              setNewName("");
-              setImportFrom("");
-              setCreating(false);
+              onCreate(name, spec, importedFrom?.key);
             }}>
-              {/* Labelled, like the control beside it. It replaced "Editing" in this slot, so
-                  it has to say what mode the header is in — an unlabelled box next to a
-                  labelled dropdown reads as part of the dropdown. */}
               <label className="field">
                 <span>Name</span>
                 <input className="input" autoFocus value={newName}
                        placeholder={defaultImportName || "Name it"}
                        onChange={(e) => setNewName(e.target.value)}
-                       onKeyDown={(e) => { if (e.key === "Escape") setCreating(false); }}
+                       onKeyDown={(e) => { if (e.key === "Escape") cancelCreating(); }}
                        aria-label="Name for the new workflow" data-testid="dw-new-name" />
               </label>
               <label className="field dw-new-from">
@@ -1226,18 +1287,35 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   ))}
                 </select>
               </label>
+              {/* Import is a SEPARATE, non-destructive step: it fills the canvas below and
+                  nothing else. Pressing it twice, or picking a different source and pressing
+                  it again, is safe — no workflow exists yet to duplicate. */}
+              <button type="button" className="cap-btn" data-testid="dw-import-steps"
+                      onClick={() => void importSteps()}
+                      disabled={!!busy || !importFrom || importing}>
+                {importing ? "Importing…" : importedFrom ? "Import again" : "Import steps"}
+              </button>
               <button type="submit" className="cap-btn primary"
                       disabled={!!busy || !(newName.trim() || defaultImportName)}
                       data-testid="dw-new-confirm">
-                {importFrom ? "Import" : "Create"}
+                Create
               </button>
-              <button type="button" className="cap-btn"
-                      onClick={() => { setCreating(false); setNewName(""); setImportFrom(""); }}>
+              <button type="button" className="cap-btn" onClick={cancelCreating}>
                 Cancel
               </button>
-              {/* The one case where the button IS still disabled, said out loud rather than
-                  left for the operator to work out by clicking a control that does nothing. */}
-              {!newName.trim() && !importFrom ? (
+              {importError ? (
+                <span className="detail dw-new-error" data-testid="dw-import-error">
+                  Could not import — {importError}
+                </span>
+              ) : importedFrom ? (
+                // Said in the panel, because the panel is where the operator still is. The
+                // point of the whole change is that they do NOT get moved somewhere else.
+                <span className="detail dw-new-hint" data-testid="dw-imported">
+                  {importedFrom.steps} step{importedFrom.steps === 1 ? "" : "s"} from{" "}
+                  <strong>{importedFrom.name}</strong> are on the canvas. Change them, then
+                  press Create — nothing is saved until you do.
+                </span>
+              ) : !newName.trim() && !importFrom ? (
                 <span className="detail dw-new-hint" data-testid="dw-new-hint">
                   Name it, or pick something to start from.
                 </span>
@@ -1252,7 +1330,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   authoring — which is what this tab is FOR — without becoming a second solid
                   button competing with Save for the eye. */}
               <button type="button" className="cap-btn dw-new-cta" disabled={!!busy}
-                      onClick={() => setCreating(true)} data-testid="dw-new">
+                      onClick={beginCreating} data-testid="dw-new">
                 <span className="dw-new-plus" aria-hidden>+</span> New workflow
               </button>
             </>

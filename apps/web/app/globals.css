@@ -1307,7 +1307,9 @@ h1, h2, h3, h4, h5, h6 {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
 }
-.dw-new-hint { align-self: center; font-size: 0.68rem; }
+.dw-new-hint { align-self: center; font-size: 0.68rem; flex-basis: 100%; }
+.dw-new-hint strong { color: var(--ink-soft); font-weight: 600; }
+.dw-new-error { align-self: center; font-size: 0.68rem; flex-basis: 100%; color: var(--red, #f85149); }
 .dw-new .input { min-width: 170px; }
 .dw-new-from .input { min-width: 210px; }
 .dw-spec-error {

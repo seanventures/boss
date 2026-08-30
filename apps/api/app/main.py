@@ -20189,6 +20189,32 @@ def save_delivery_workflow(payload: dict) -> dict:
         return {"version": version}
 
 
+@app.delete("/v1/delivery-workflows/{definition_id}")
+def delete_delivery_workflow(definition_id: str, project_id: str,
+                             actor: str = "operator") -> dict:
+    """Remove one of the customer's own workflows.
+
+    Without this the picker only grows: every fork, import and mistake stays forever, and a
+    project ends up listing several entries with the same name and no way to tell them apart.
+    Refuses catalogue workflows, anything outside the product namespace, and anything with a
+    run still going — see `delete_definition` for why each would lose work rather than tidy it.
+    """
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        try:
+            return workflow_runtime.delete_definition(
+                connection, project_id, definition_id, actor)
+        except workflow_runtime.WorkflowNamespaceError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        except workflow_runtime.WorkflowNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except workflow_runtime.WorkflowConflictError as error:
+            # 409, with the count: "it has 2 runs still going" is actionable, "cannot delete"
+            # is not.
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.post("/v1/delivery-workflows/start")
 def start_delivery_workflow(payload: dict) -> dict:
     """Launch a piece of work on a workflow."""
