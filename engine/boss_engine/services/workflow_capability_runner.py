@@ -27,7 +27,7 @@ from typing import Any, Optional
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import workflows
+from . import workflow_custom_steps as custom_steps, workflows
 from .core import create_blocking_decision, emit_event, now_utc
 from .workflow_capabilities import CAPABILITY_KEYS, get as get_capability
 
@@ -106,7 +106,15 @@ def _run_context(connection: Connection, run_id: str) -> dict[str, Any]:
     run_input = connection.execute(
         text("SELECT input FROM workflow_runs WHERE id=:r"), {"r": run_id}
     ).scalar()
-    return {"steps": steps, "input": run_input if isinstance(run_input, dict) else {}}
+    # run_id and step count travel with the context because a custom step's MCP call needs
+    # them to build its effect-receipt dedupe key — the thing that stops a retried step from
+    # sending the same message twice.
+    return {
+        "steps": steps,
+        "input": run_input if isinstance(run_input, dict) else {},
+        "run_id": run_id,
+        "step_index": len(rows),
+    }
 
 
 def _tool_registry():
@@ -147,6 +155,24 @@ def execute_step(
     it, and "step failed" with no reason is the thing this exists to avoid.
     """
     binding = step.get("binding") or {}
+
+    # A step the customer defined. Checked first because it is the only kind that has no
+    # capability key at all — falling through to the capability lookup would report it as an
+    # unknown capability, which is true and useless.
+    if binding.get("custom_step"):
+        try:
+            return custom_steps.execute(
+                connection, getattr(ctx, "settings", None),
+                project_id=project_id, actor=actor, step=step,
+                inputs=_resolve_inputs(binding.get("inputs") or {}, context),
+                run_id=str(context.get("run_id") or ""),
+                step_index=int(context.get("step_index") or 0),
+            )
+        except custom_steps.CustomStepError as error:
+            # Translated, not wrapped: the runner's failure path records
+            # CapabilityExecutionError, and the customer's sentence is the part worth keeping.
+            raise CapabilityExecutionError(str(error)) from error
+
     key = str(binding.get("capability") or "")
     if key not in CAPABILITY_KEYS:
         raise CapabilityExecutionError(f"unknown capability '{key}'.")
@@ -174,14 +200,77 @@ def execute_step(
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
     return {"capability": key, "tool": capability.tool, **output}
 
+def _gate_subject(
+    connection: Connection, project_id: str, spec_step: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """What a person has to approve before this step, or None if it just runs.
+
+    TWO DIFFERENT THINGS END UP WAITING HERE, and the difference is `completes_step`:
+
+      * A gate capability — `approve_release` and its siblings. The approval IS the work, so
+        answering it finishes the step.
+      * An ordinary step whose approval mode is manual, including every custom step above the
+        risk floor. The approval only unblocks it; the step still has to run afterwards.
+
+    Collapsing the two would either finish real work nobody did, or leave a gate waiting for a
+    tool call that does not exist.
+    """
+    binding = spec_step.get("binding") or {}
+    approval = spec_step.get("approval") or {}
+    requested = str(approval.get("mode") or "").lower() or None
+
+    custom_key = str(binding.get("custom_step") or "")
+    if custom_key:
+        definition = custom_steps.get(connection, project_id, custom_key)
+        if definition is None or not definition["usable"] or not definition["enabled"]:
+            # Not gated, so it reaches execute_step and fails there with the sentence naming
+            # what is actually wrong. Gating it instead would ask a person to approve a step
+            # that cannot run, and an unusable step defaults to the risk floor — so a deleted
+            # skill would have produced an approval request rather than an error.
+            return None
+        if custom_steps.approval_for(
+            {"risk_tier": definition["risk_tier"]}, requested
+        ) != "manual":
+            return None
+        return {
+            "key": custom_key,
+            "label": definition["label"],
+            "summary": (
+                f"Approve before '{definition['label']}' runs. It calls "
+                f"{definition['risk_source']} at risk tier {definition['risk_tier']}."
+            ),
+            "risk_tier": definition["risk_tier"],
+            "completes_step": False,
+        }
+
+    key = str(binding.get("capability") or "")
+    if key not in CAPABILITY_KEYS:
+        return None
+    capability = get_capability(key)
+    if capability.is_gate:
+        return {
+            "key": key, "label": capability.label, "summary": capability.summary,
+            "risk_tier": max(2, capability.risk_tier), "completes_step": True,
+        }
+    if str(approval.get("mode") or "").lower() == "manual":
+        # The floor said manual and the runner has to honour it. Before this, `forced_manual`
+        # was stored on the step and then ignored at run time, which made the whole risk floor
+        # advisory — a tier-3 capability marked "requires a person" ran unattended.
+        return {
+            "key": key, "label": capability.label,
+            "summary": f"Approve before '{capability.label}' runs.",
+            "risk_tier": capability.risk_tier, "completes_step": False,
+        }
+    return None
+
 
 def _open_gate(
     connection: Connection, project_id: str, run: dict[str, Any], step_row: dict[str, Any]
 ) -> None:
-    """Turn a gate step into a decision a person can answer, and leave it waiting."""
+    """Turn a step that needs approval into a decision a person can answer, and leave it
+    waiting."""
     spec_step = step_row.get("_spec") or {}
-    binding = spec_step.get("binding") or {}
-    capability = get_capability(str(binding.get("capability")))
+    subject = step_row["_subject"]
     approval = spec_step.get("approval") or {}
     # Matches core.create_blocking_decision exactly: it takes a question and a recommendation,
     # returns the decision id, and defaults to HOLD — which is the behaviour a gate wants. A
@@ -190,16 +279,16 @@ def _open_gate(
         connection,
         project_id,
         run.get("task_id"),
-        f"{capability.label}: {run.get('workflow_key') or 'workflow'}",
+        f"{subject['label']}: {run.get('workflow_key') or 'workflow'}",
         {
-            "capability": capability.key,
+            "capability": subject["key"],
             "step_id": step_row["step_id"],
             "workflow_run_id": run["id"],
             "approver_role": approval.get("approver_role"),
         },
         {"estimated_usd": 0.0},
-        capability.summary,
-        risk_tier=max(2, capability.risk_tier),
+        subject["summary"],
+        risk_tier=max(2, int(subject["risk_tier"])),
     )
     # The deadline goes on the step, not in a scheduler somewhere else. A timeout you cannot
     # see from the row that is waiting is a timeout nobody can explain when it fires.
@@ -221,6 +310,9 @@ def _open_gate(
             "decision_id": decision_id,
             "snapshot": json.dumps({
                 "approval": approval,
+                # Recorded, not recomputed on resume: the answer to "did approving this finish
+                # it?" must not change if the workflow is edited while somebody is deciding.
+                "gate_completes_step": bool(subject["completes_step"]),
                 "opened_at": now_utc().isoformat(),
                 "due_at": (
                     (now_utc() + timedelta(hours=float(sla_hours))).isoformat()
@@ -232,8 +324,99 @@ def _open_gate(
     emit_event(
         connection, project_id, "workflow.gate_opened", run.get("actor") or "workflow",
         "workflow_step_run", step_row["id"],
-        {"capability": capability.key, "step_id": step_row["step_id"]},
+        {"capability": subject["key"], "step_id": step_row["step_id"]},
     )
+
+def _resume_answered_gates(
+    connection: Connection, project_id: str, run: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Act on gates a person has now answered.
+
+    Without this the gate was a dead end: it opened, somebody approved it, and the step stayed
+    `waiting` forever because the runtime's own resume logic only knows about `decision`-kind
+    steps. A gate that cannot be passed is worse than no gate — the work never happens and
+    nothing says why.
+    """
+    rows = connection.execute(
+        text(
+            """
+            SELECT s.id, s.step_id, s.binding_snapshot, s.iteration, d.status AS decision_status
+            FROM workflow_step_runs s
+            JOIN decisions d ON d.id = s.decision_id
+            WHERE s.workflow_run_id = :run_id
+              AND s.status = 'waiting'
+              AND s.step_kind = 'capability'
+              AND d.status IN ('approved', 'rejected', 'expired')
+            """
+        ),
+        {"run_id": run["id"]},
+    ).mappings().all()
+
+    acted: list[dict[str, Any]] = []
+    for row in rows:
+        snapshot = row["binding_snapshot"] or {}
+        if row["decision_status"] != "approved":
+            workflows._block_run(
+                connection, run["id"],
+                f"step '{row['step_id']}' was {row['decision_status']}",
+            )
+            acted.append({"run_id": run["id"], "step_id": row["step_id"],
+                          "outcome": f"gate_{row['decision_status']}"})
+            continue
+
+        if snapshot.get("gate_completes_step", True):
+            # The approval was the work. Same direct UPDATE the timeout sweep uses, and for the
+            # same reason: this step is leased by nobody, so `complete_step` would refuse it.
+            connection.execute(
+                text(
+                    """
+                    UPDATE workflow_step_runs
+                    SET status='succeeded',
+                        output = CAST(:output AS JSONB),
+                        evidence = COALESCE(evidence,'[]'::jsonb) || CAST(:evidence AS JSONB),
+                        completed_at = now(), updated_at = now()
+                    WHERE id = :id AND status = 'waiting'
+                    """
+                ),
+                {
+                    "id": row["id"],
+                    "output": json.dumps({"approved_by": "person", "outcome": "approved"}),
+                    "evidence": json.dumps([{"kind": "approval", "decided_by": "person"}]),
+                },
+            )
+            workflows.advance_run(connection, project_id, run["id"])
+            outcome = "gate_passed"
+        else:
+            # The approval only unblocked it. Back to `ready` so the ordinary claim-and-execute
+            # path runs it — with decision_id still set, which is what stops it being gated a
+            # second time on the next tick.
+            connection.execute(
+                text(
+                    """
+                    UPDATE workflow_step_runs
+                    SET status='ready', updated_at=now(),
+                        binding_snapshot = COALESCE(binding_snapshot,'{}'::jsonb)
+                                           || CAST(:patch AS JSONB)
+                    WHERE id=:id AND status='waiting'
+                    """
+                ),
+                {"id": row["id"],
+                 "patch": json.dumps({"approved_at": now_utc().isoformat()})},
+            )
+            connection.execute(
+                text("UPDATE workflow_runs SET status='running', updated_at=now() "
+                     "WHERE id=:id AND status='waiting'"),
+                {"id": run["id"]},
+            )
+            outcome = "approved_released"
+
+        emit_event(
+            connection, project_id, "workflow.gate_answered", run.get("actor") or "workflow",
+            "workflow_step_run", row["id"],
+            {"step_id": row["step_id"], "outcome": outcome},
+        )
+        acted.append({"run_id": run["id"], "step_id": row["step_id"], "outcome": outcome})
+    return acted
 
 
 def tick(
@@ -274,8 +457,14 @@ def tick(
             spec = workflows._run_spec(connection, run_id)
             spec_steps = {s["id"]: s for s in spec.get("steps", [])}
 
-            # Gates first: they are not claimable work, and leaving them until after the claim
-            # would let the runner treat a waiting approval as an idle step forever.
+            # Answered gates first, so a step approved a moment ago is released in the same
+            # tick rather than waiting for the next one.
+            performed.extend(_resume_answered_gates(
+                connection, project_id, {**dict(run), "id": run_id}
+            ))
+
+            # Then gates to open: they are not claimable work, and leaving them until after the
+            # claim would let the runner treat a waiting approval as an idle step forever.
             gates = connection.execute(
                 text(
                     """
@@ -288,15 +477,15 @@ def tick(
             ).mappings().all()
             for row in gates:
                 spec_step = spec_steps.get(row["step_id"]) or {}
-                key = str((spec_step.get("binding") or {}).get("capability") or "")
-                if key in CAPABILITY_KEYS and get_capability(key).is_gate:
+                subject = _gate_subject(connection, project_id, spec_step)
+                if subject is not None:
                     _open_gate(
                         connection, project_id, {**dict(run), "id": run_id},
-                        {**dict(row), "_spec": spec_step},
+                        {**dict(row), "_spec": spec_step, "_subject": subject},
                     )
                     performed.append(
                         {"run_id": run_id, "step_id": row["step_id"],
-                         "capability": key, "outcome": "gate_opened"}
+                         "capability": subject["key"], "outcome": "gate_opened"}
                     )
 
             claimed = workflows.claim_step(

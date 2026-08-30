@@ -31,6 +31,35 @@ type Capability = {
   approval_forced_manual: boolean;
 };
 
+/** A step this customer defined, bound to one of their own skills or MCP tools. The risk
+ *  tier is RESOLVED from whatever it binds — it is never something the customer typed. */
+type CustomStep = {
+  step_key: string;
+  label: string;
+  summary: string;
+  binding_kind: "skill" | "mcp_tool";
+  skill_id: string | null;
+  mcp_tool_name: string | null;
+  inputs: { name: string; required: boolean; description: string }[];
+  produces: string[];
+  enabled: boolean;
+  risk_tier: number;
+  risk_source: string | null;
+  trusted: boolean;
+  usable: boolean;
+  unusable_reason: string | null;
+  approval_forced_manual: boolean;
+};
+
+type Bindable = {
+  skills: { skill_id: string; risk_tier: number; trusted: boolean; unclassified: boolean }[];
+  mcp_servers: {
+    id: string; name: string; risk_tier: number; trusted: boolean; reachable: boolean;
+    error?: string;
+    tools: { name: string; description: string; risk_tier: number }[];
+  }[];
+};
+
 type CatalogueEntry = {
   key: string;
   name: string;
@@ -88,6 +117,8 @@ type Draft = {
   id: string;
   kind: string;
   capability?: string;
+  /** Set instead of `capability` when the step is one the customer defined. */
+  customStep?: string;
   approval?: string;
   config?: Record<string, unknown>;
 };
@@ -174,6 +205,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [riskFloor, setRiskFloor] = useState(2);
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
+  const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
+  const [bindable, setBindable] = useState<Bindable>({ skills: [], mcp_servers: [] });
   const [runs, setRuns] = useState<Run[]>([]);
   // Loading, failed and empty are three different things. A screen that renders nothing while
   // it loads and nothing when the API is down says "you have no workflows" in both cases.
@@ -186,14 +219,15 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [builderTarget, setBuilderTarget] = useState<string>("");
 
   const load = useCallback(async () => {
-    const [caps, cat, inst, live] = await Promise.all([
+    const [caps, cat, inst, live, mine] = await Promise.all([
       get<{ capabilities: Capability[]; blocks: Block[]; manual_approval_risk_floor: number }>(
         "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
       get<{ runs: Run[] }>("runs", projectId),
+      get<{ steps: CustomStep[]; bindable: Bindable }>("custom_steps", projectId),
     ]);
-    const failure = [caps, cat, inst, live].find((r) => "error" in r) as { error: string } | undefined;
+    const failure = [caps, cat, inst, live, mine].find((r) => "error" in r) as { error: string } | undefined;
     if (failure) {
       setState("failed");
       setError(failure.error);
@@ -205,6 +239,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     setCatalogue((cat as { items: CatalogueEntry[] }).items ?? []);
     setInstalled((inst as { items: Installed[] }).items ?? []);
     setRuns((live as { runs: Run[] }).runs ?? []);
+    setCustomSteps((mine as { steps?: CustomStep[] }).steps ?? []);
+    setBindable((mine as { bindable?: Bindable }).bindable
+                ?? { skills: [], mcp_servers: [] });
     setState("ready");
     setError(null);
   }, [projectId]);
@@ -304,6 +341,29 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         <BuilderView
           capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
           installed={installed} projectId={projectId}
+          customSteps={customSteps} bindable={bindable}
+          onDefineStep={async (fields) => {
+            const result = await act(`Define ${fields.label}`, "define_step", fields);
+            if (result.ok) await load();
+            return result;
+          }}
+          onRemoveStep={async (stepKey) => {
+            setBusy(`Remove ${stepKey}`);
+            try {
+              const r = await fetch(
+                `/api/delivery-workflows?project_id=${encodeURIComponent(projectId)}`
+                  + `&step_key=${encodeURIComponent(stepKey)}`
+                  + `&actor=${encodeURIComponent(actor)}`,
+                { method: "DELETE" },
+              );
+              const body = await r.json();
+              if (!r.ok) { setError(body?.error ?? `API returned ${r.status}`); return; }
+              setNotice(`Removed ${stepKey}`);
+              await load();
+            } finally {
+              setBusy(null);
+            }
+          }}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
           onCreate={async (name) => {
@@ -543,13 +603,167 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
 
 /* ── Builder ─────────────────────────────────────────────────────────────────── */
 
+/** Defining a step: name it, choose what it runs, say what it needs.
+ *
+ *  There is deliberately NO risk field. The tier comes from the skill or MCP tool being bound
+ *  and is shown here as a consequence of that choice — a customer who could type their own
+ *  number would have a documented way past every approval gate in the product.
+ */
+function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCancel }: {
+  bindable: Bindable;
+  riskFloor: number;
+  busy: string | null;
+  projectId: string;
+  onDefine: (fields: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }>;
+  onCancel: () => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [summary, setSummary] = useState("");
+  // One control, not two. "skill:github.create_pr" / "mcp:<server>:<tool>" keeps the choice a
+  // single decision — picking a kind and then a thing is two ways to get it half-made.
+  const [bindingRef, setBindingRef] = useState("");
+  const [inputs, setInputs] = useState("");
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const chosen = useMemo(() => {
+    if (bindingRef.startsWith("skill:")) {
+      const id = bindingRef.slice(6);
+      const skill = bindable.skills.find((s) => s.skill_id === id);
+      return skill
+        ? { risk: skill.risk_tier, trusted: skill.trusted, unclassified: skill.unclassified,
+            what: id }
+        : null;
+    }
+    if (bindingRef.startsWith("mcp:")) {
+      const [, serverId, ...rest] = bindingRef.split(":");
+      const server = bindable.mcp_servers.find((m) => m.id === serverId);
+      const tool = server?.tools.find((t) => t.name === rest.join(":"));
+      return server && tool
+        ? { risk: tool.risk_tier, trusted: server.trusted, unclassified: false,
+            what: `${server.name} · ${tool.name}` }
+        : null;
+    }
+    return null;
+  }, [bindingRef, bindable]);
+
+  const blocked = chosen !== null && chosen.risk >= riskFloor && !chosen.trusted;
+
+  return (
+    <form className="dw-define-form" data-testid="dw-define-form" onSubmit={async (e) => {
+      e.preventDefault();
+      setFailure(null);
+      const [kind, ...rest] = bindingRef.split(":");
+      const fields: Record<string, unknown> = {
+        project_id: projectId,
+        label: label.trim(),
+        summary: summary.trim(),
+        binding_kind: kind === "skill" ? "skill" : "mcp_tool",
+        inputs: inputs.split(",").map((i) => i.trim()).filter(Boolean),
+      };
+      if (kind === "skill") {
+        fields.skill_id = rest.join(":");
+      } else {
+        fields.mcp_server_id = rest[0];
+        fields.mcp_tool_name = rest.slice(1).join(":");
+      }
+      const result = await onDefine(fields);
+      if (!result.ok) setFailure(result.error ?? "could not define the step");
+    }}>
+      <label className="field">
+        <span>Name</span>
+        <input className="input" autoFocus value={label} data-testid="dw-define-label"
+               placeholder="File a compliance ticket"
+               onChange={(e) => setLabel(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>Runs</span>
+        <select className="input" value={bindingRef} data-testid="dw-define-binding"
+                onChange={(e) => setBindingRef(e.target.value)}>
+          <option value="">Choose a skill or tool</option>
+          {bindable.skills.length ? (
+            <optgroup label="Your skills">
+              {bindable.skills.map((skill) => (
+                <option key={skill.skill_id} value={`skill:${skill.skill_id}`}>
+                  {skill.skill_id}{skill.unclassified ? " (unclassified)" : ""}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          {bindable.mcp_servers.map((server) => (
+            <optgroup key={server.id}
+                      label={server.reachable ? server.name : `${server.name} (unreachable)`}>
+              {server.tools.map((tool) => (
+                <option key={tool.name} value={`mcp:${server.id}:${tool.name}`}>
+                  {tool.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>Needs</span>
+        <input className="input" value={inputs} data-testid="dw-define-inputs"
+               placeholder="ticket, severity"
+               onChange={(e) => setInputs(e.target.value)} />
+      </label>
+      <label className="field">
+        <span>What it does</span>
+        <input className="input" value={summary} placeholder="Optional, one line"
+               onChange={(e) => setSummary(e.target.value)} />
+      </label>
+
+      {/* The consequence of the binding, stated before the step is created rather than at
+          publish time when the workflow is already drawn. */}
+      {chosen ? (
+        <p className="detail dw-define-risk" data-testid="dw-define-risk">
+          Risk tier {chosen.risk}, from {chosen.what}
+          {chosen.unclassified ? " — nobody has classified this skill, so it is treated as "
+                                 + "the floor" : ""}
+          {chosen.risk >= riskFloor
+            ? ". This step will always stop for a person."
+            : ". This step can run automatically."}
+        </p>
+      ) : null}
+      {blocked ? (
+        <p className="detail dw-define-blocked" data-testid="dw-define-blocked">
+          This is untrusted and at tier {chosen?.risk}. You can define it, but a workflow using
+          it will not publish until it has been reviewed.
+        </p>
+      ) : null}
+      {failure ? <p className="detail dw-define-error">{failure}</p> : null}
+
+      <div className="dw-define-actions">
+        <button type="submit" className="cap-btn" data-testid="dw-define-save"
+                disabled={!!busy || !label.trim() || !bindingRef}>
+          Define
+        </button>
+        <button type="button" className="cap-btn" onClick={onCancel}>Cancel</button>
+      </div>
+      {bindable.skills.length === 0 && bindable.mcp_servers.length === 0 ? (
+        <p className="detail">
+          This project has no skills or MCP servers registered yet, so there is nothing to bind
+          a step to.
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
+
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
+                      customSteps, bindable, onDefineStep, onRemoveStep,
                       target, setTarget, onSave, onCreate, onImport }: {
   capabilities: Capability[];
   blocks: Block[];
   riskFloor: number;
   installed: Installed[];
   projectId: string;
+  customSteps: CustomStep[];
+  bindable: Bindable;
+  onDefineStep: (fields: Record<string, unknown>) =>
+    Promise<{ ok: boolean; error?: string }>;
+  onRemoveStep: (stepKey: string) => void;
   busy: string | null;
   target: string;
   setTarget: (id: string) => void;
@@ -569,6 +783,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [importFrom, setImportFrom] = useState("");
+  const [defining, setDefining] = useState(false);
 
   useEffect(() => {
     if (!target && editable.length) setTarget(editable[0].id);
@@ -583,6 +798,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         id: String(step.id),
         kind: String(step.kind ?? "capability"),
         capability: binding.capability ? String(binding.capability) : undefined,
+        customStep: binding.custom_step ? String(binding.custom_step) : undefined,
         approval: approval.mode ? String(approval.mode) : "auto",
         // Everything that is not id/kind/binding/approval/next is the block's own
         // configuration — wait_seconds, workflow_version_id — and must survive a round trip
@@ -667,6 +883,18 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       config: {},
     }]);
 
+  /** A step the customer defined. Its approval mode follows the resolved risk tier, so a
+   *  tier-3 tool arrives on the canvas already marked manual rather than being switched
+   *  silently at save time. */
+  const addCustom = (step: CustomStep) =>
+    setDraft((current) => [...current, {
+      id: nextId(current, step.step_key),
+      kind: "capability",
+      customStep: step.step_key,
+      approval: step.approval_forced_manual ? "manual" : "auto",
+      config: {},
+    }]);
+
   /** A control block: wait, an approval gate, or another workflow. */
   const addBlock = (block: Block) =>
     setDraft((current) => [...current, {
@@ -694,6 +922,21 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         // runtime looks for `wait_seconds` and `workflow_version_id`.
         return { id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}), next };
       }
+      if (step.customStep) {
+        const defined = customSteps.find((c) => c.step_key === step.customStep);
+        return {
+          id: step.id,
+          kind: "capability",
+          binding: {
+            custom_step: step.customStep,
+            inputs: Object.fromEntries(
+              (defined?.inputs ?? []).map((i) => [i.name, { from_input: i.name }]),
+            ),
+          },
+          approval: { mode: step.approval },
+          next,
+        };
+      }
       const capability = capabilities.find((c) => c.key === step.capability);
       return {
         id: step.id,
@@ -710,7 +953,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         next,
       };
     }),
-  }), [draft, capabilities]);
+  }), [draft, capabilities, customSteps]);
 
   return (
     <div className="dw-builder">
@@ -734,6 +977,57 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           Anything at risk tier {riskFloor} or above always requires a person. That is not
           configurable.
         </p>
+
+        {/* THE CUSTOMER'S OWN STEPS, in the same palette as the built-in ones. A separate
+            drawer for "your" steps would make people learn which of their steps BOSS wrote. */}
+        <h4 className="dw-palette-heading">Your steps</h4>
+        {customSteps.length === 0 ? (
+          <p className="detail dw-palette-summary">
+            None yet. A step of your own runs one of your skills or an MCP tool — filing a
+            ticket, telling a compliance system, running your own scanner.
+          </p>
+        ) : null}
+        {customSteps.map((c) => (
+          <button key={c.step_key} type="button" className="dw-palette-item dw-palette-mine"
+                  onClick={() => addCustom(c)} disabled={!!busy || !c.usable}
+                  data-testid={`dw-palette-custom-${c.step_key}`}
+                  title={c.usable
+                    ? `${c.summary || c.label} · runs ${c.risk_source}`
+                    : (c.unusable_reason ?? "")}>
+            <span className="dw-palette-label">{c.label}</span>
+            {c.approval_forced_manual ? (
+              <span className="dw-gate">always approved</span>
+            ) : null}
+            <span className="detail dw-palette-summary">
+              {/* What it RUNS, not what it was named. A step called "Cleanup" bound to a
+                  tier-3 tool should not read as harmless in the palette. */}
+              {c.usable ? `runs ${c.risk_source}` : c.unusable_reason}
+            </span>
+            <span className="dw-palette-remove" role="button" tabIndex={0}
+                  aria-label={`Remove ${c.label}`}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault(); e.stopPropagation(); onRemoveStep(c.step_key);
+                    }
+                  }}
+                  onClick={(e) => { e.stopPropagation(); onRemoveStep(c.step_key); }}>×</span>
+          </button>
+        ))}
+        {defining ? (
+          <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
+                          projectId={projectId}
+                          onCancel={() => setDefining(false)}
+                          onDefine={async (fields) => {
+                            const result = await onDefineStep(fields);
+                            if (result.ok) setDefining(false);
+                            return result;
+                          }} />
+        ) : (
+          <button type="button" className="cap-btn dw-define" disabled={!!busy}
+                  onClick={() => setDefining(true)} data-testid="dw-define-step">
+            + Define a step
+          </button>
+        )}
 
         {/* CONTROL BLOCKS. The runtime has supported these since it was written and the
             builder never offered them, so a customer could only ever author a straight line.
@@ -870,6 +1164,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
           <ol className="dw-draft">
             {draft.map((step, index) => {
               const capability = capabilities.find((c) => c.key === step.capability);
+              const mine = customSteps.find((c) => c.step_key === step.customStep);
               return (
                 <li key={step.id} className="dw-draft-step" draggable
                     data-dragging={dragging === index || undefined}
@@ -882,17 +1177,21 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   <span className="dw-draft-grip" aria-hidden>⋮⋮</span>
                   <span className="dw-draft-n">{index + 1}</span>
                   <span className="dw-draft-label">
-                    {step.kind === "capability"
-                      ? capability?.label ?? step.capability
-                      : blocks.find((b) => b.kind === step.kind)?.label ?? step.kind}
+                    {step.kind !== "capability"
+                      ? blocks.find((b) => b.kind === step.kind)?.label ?? step.kind
+                      : step.customStep
+                        ? mine?.label ?? step.customStep
+                        : capability?.label ?? step.capability}
                   </span>
+                  {step.customStep ? <span className="dw-draft-kind">yours</span> : null}
                   {/* A control block is visibly a different sort of thing from a work step. */}
                   {step.kind !== "capability" ? (
                     <span className="dw-draft-kind">flow</span>
                   ) : null}
                   <select className="input dw-draft-approval" value={step.approval}
                           disabled={step.kind !== "capability"
-                                    || capability?.approval_forced_manual}
+                                    || capability?.approval_forced_manual
+                                    || mine?.approval_forced_manual}
                           onChange={(e) => setDraft((c) =>
                             c.map((s, i) => (i === index ? { ...s, approval: e.target.value } : s)))}
                           aria-label={`Approval for ${step.id}`}>

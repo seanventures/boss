@@ -155,7 +155,10 @@ def _mcp_skill_spec(
         "cost": {"estimator": "fixed", "category": "tool"},
         "retry": {"max_attempts": 2, "backoff": "exponential"},
         "permissions": {
-            "allowed_callers": ["agent_loop"],
+            # The customer workflow runner calls MCP tools through this same governed path, so
+            # it is named here. This spec is synthesized by BOSS, not supplied by a tenant —
+            # widening it does not widen anything a customer controls.
+            "allowed_callers": ["agent_loop", "workflow_runner"],
             "required_permissions": ["mcp_call"],
         },
         "data_boundary": server.get("data_boundary") or "internal",
@@ -176,6 +179,7 @@ def _invoke_mcp_skill(
     run_id: str,
     step: int,
     actor: str,
+    caller: str = "agent_loop",
 ) -> dict[str, Any]:
     tool_name = str(tool.get("name") or "tool")
     skill_spec = _mcp_skill_spec(server, tool)
@@ -247,7 +251,7 @@ def _invoke_mcp_skill(
         connection,
         project_id,
         str(skill_spec["id"]),
-        "agent_loop",
+        caller,
         args,
         mock=False,
         executor=execute,

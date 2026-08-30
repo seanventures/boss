@@ -1157,6 +1157,51 @@ h1, h2, h3, h4, h5, h6 {
   margin: 12px 0 2px; font-size: 0.68rem; letter-spacing: .1em; text-transform: uppercase;
   color: var(--faint, var(--muted));
 }
+/* A step the customer defined. Marked, but not walled off into its own drawer — it belongs in
+   the same palette as the built-in ones. */
+.dw-palette-mine { position: relative; padding-right: 24px; }
+.dw-palette-mine .dw-palette-label::before {
+  content: "◆"; margin-right: 5px; color: var(--accent); font-size: 0.6rem;
+  vertical-align: 1px;
+}
+.dw-palette-item:disabled { opacity: .55; cursor: not-allowed; }
+/* Removing one. Only visible on hover or keyboard focus: a delete control sitting permanently
+   beside every step invites the click it should discourage. */
+.dw-palette-remove {
+  position: absolute; top: 6px; right: 6px; width: 17px; height: 17px; line-height: 15px;
+  text-align: center; border-radius: 4px; font-size: 0.72rem; cursor: pointer;
+  color: var(--faint, var(--muted)); opacity: 0; transition: opacity .12s ease;
+}
+.dw-palette-mine:hover .dw-palette-remove,
+.dw-palette-remove:focus-visible { opacity: 1; }
+.dw-palette-remove:hover { background: rgba(248,81,73,.14); color: var(--red, #f85149); }
+
+.dw-define { margin-top: 8px; justify-self: start; }
+.dw-define-form {
+  display: grid; gap: 7px; margin-top: 8px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+}
+.dw-define-form .field { display: grid; gap: 3px; }
+.dw-define-form .field > span {
+  font-size: 0.66rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint, var(--muted));
+}
+.dw-define-form .input { width: 100%; font-size: 0.76rem; }
+/* The consequence of the binding, said while the customer is still choosing it. */
+.dw-define-risk {
+  margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 0.68rem; line-height: 1.4;
+  border: 1px solid var(--border); background: var(--surface-1);
+}
+.dw-define-blocked {
+  margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 0.68rem; line-height: 1.4;
+  color: var(--amber, #d29922); border: 1px solid rgba(210,153,34,.35);
+  background: rgba(210,153,34,.06);
+}
+.dw-define-error {
+  margin: 0; font-size: 0.7rem; color: var(--red, #f85149);
+}
+.dw-define-actions { display: flex; gap: 6px; }
+
 .dw-soon { margin-top: 8px; }
 .dw-soon summary { cursor: pointer; font-size: 0.7rem; }
 .dw-soon-item { margin: 6px 0 0; font-size: 0.68rem; line-height: 1.4; }

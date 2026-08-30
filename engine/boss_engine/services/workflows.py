@@ -18,6 +18,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
+from .workflow_custom_steps import validate_step as defined_step_problems
 from .workflow_capabilities import (
     approval_mode_for as effective_approval_mode,
     validate_custom_step as custom_step_problems,
@@ -208,7 +209,25 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(binding, dict):
             raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
         step["binding"] = binding
-        if kind == "capability":
+        if kind == "capability" and binding.get("custom_step"):
+            # A step the customer defined. It cannot be checked here — whether the skill it
+            # binds still exists, and what risk tier it really carries, are facts about the
+            # project, not about the spec. `_validate_bindings` does it with a connection in
+            # hand; this pass only confirms the shape.
+            if not str(binding.get("custom_step") or "").strip():
+                raise WorkflowValidationError(
+                    f"step '{step_id}' does not say which custom step it runs."
+                )
+            approval = dict(step.get("approval") or {})
+            mode = str(approval.get("mode", "auto")).lower()
+            if mode not in ("auto", "manual"):
+                raise WorkflowValidationError(
+                    f"step '{step_id}' approval mode must be 'auto' or 'manual'."
+                )
+            approval["mode"] = mode
+            approval.setdefault("on_timeout", "block")
+            step["approval"] = approval
+        elif kind == "capability":
             # Every problem at once. A builder that surfaces one error at a time makes a
             # customer fix a workflow five times to publish it once.
             problems = capability_problems(step)
@@ -608,6 +627,19 @@ def publish_version(
     if not definition:
         raise WorkflowNotFoundError("Workflow definition not found.")
     normalized = validate_workflow_spec(spec)
+
+    # Custom steps are checked HERE as well as at start_run, and only these. Their risk tier
+    # comes from the skill or MCP server they bind, so this is the first moment the real tier
+    # is knowable — and the builder is where the customer can still do something about it.
+    # Everything else stays at start_run, where it has always been: applying the rest of the
+    # binding checks at publish would fail workflows that publish now and bind later.
+    if str(definition.get("namespace") or SYSTEM_NAMESPACE) == PRODUCT_NAMESPACE:
+        for step in normalized["steps"]:
+            if (step.get("binding") or {}).get("custom_step"):
+                problems = defined_step_problems(connection, project_id, step)
+                if problems:
+                    raise WorkflowBindingBlockedError(" ".join(problems))
+
     digest = json_hash(normalized)
     existing = connection.execute(
         text(
@@ -986,6 +1018,14 @@ def _validate_bindings(
                 problems = custom_step_problems(step, _skill_facts(row))
                 if problems:
                     raise WorkflowBindingBlockedError(" ".join(problems))
+        if step["kind"] == "capability" and binding.get("custom_step"):
+            # THE ONLY PLACE A CUSTOM STEP'S REAL RISK CAN BE SEEN. The tier comes from the
+            # skill or MCP server it binds, which means it takes a connection and a project to
+            # read — and it is re-read here on every publish, because a step that was tier 0
+            # when it was drawn can be tier 3 by the time it is published.
+            problems = defined_step_problems(connection, project_id, step)
+            if problems:
+                raise WorkflowBindingBlockedError(" ".join(problems))
         if step["kind"] == "integration":
             if not _table_exists(connection, "integration_connections"):
                 raise WorkflowBindingBlockedError(

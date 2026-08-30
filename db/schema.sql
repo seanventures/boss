@@ -3029,6 +3029,46 @@ CREATE TABLE IF NOT EXISTS agent_process_steps (
 CREATE INDEX IF NOT EXISTS idx_agent_process_steps_run
   ON agent_process_steps(run_id, created_at);
 
+-- A step a CUSTOMER defined, bound to something they already have: one of their skills, a
+-- tool on one of their MCP servers, or an integration connection.
+--
+-- The eighteen built-in capabilities cover how software gets delivered; this is for the work
+-- that is specific to one company — "file it in our tracker", "tell the compliance system",
+-- "run our own scanner".
+--
+-- RISK IS NOT A FIELD A CUSTOMER FILLS IN. It is resolved from whatever the step is bound to,
+-- every time the step is validated and every time it runs. A self-declared risk tier would be
+-- the documented way around the approval floor: name your step "harmless", bind it to a tool
+-- that deletes production, and the gate never fires.
+CREATE TABLE IF NOT EXISTS workflow_custom_steps (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  step_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  summary TEXT,
+  -- Two kinds, because two things are independently callable. An integration is deliberately
+  -- NOT a third: in BOSS an integration connection grants authority to a skill, it is not
+  -- something you can invoke on its own. To use one, bind the skill that runs through it.
+  binding_kind TEXT NOT NULL
+    CHECK (binding_kind IN ('skill', 'mcp_tool')),
+  -- Set per binding_kind. Checked in the service rather than by a constraint so the error an
+  -- operator sees is a sentence rather than a violated check name.
+  skill_id TEXT,
+  mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE SET NULL,
+  mcp_tool_name TEXT,
+  -- [{name, required, description}] — what the step asks for on the canvas.
+  inputs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- Names a later step can read out of this one.
+  produces JSONB NOT NULL DEFAULT '[]'::jsonb,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(project_id, step_key)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_custom_steps_project
+  ON workflow_custom_steps(project_id, enabled, label);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

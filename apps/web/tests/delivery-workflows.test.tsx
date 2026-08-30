@@ -67,7 +67,10 @@ describe("the risk floor is visible before a step is placed", () => {
   it("locks the approval control on a step that cannot be automatic", () => {
     // A control block has no approval of its own either — only capability steps do.
     expect(UI).toContain('disabled={step.kind !== "capability"');
-    expect(UI).toContain("|| capability?.approval_forced_manual}");
+    // Both kinds of step: a built-in capability above the floor, and a custom step whose
+    // resolved tier is above it. Either one must refuse to be switched back to auto.
+    expect(UI).toContain("|| capability?.approval_forced_manual");
+    expect(UI).toContain("|| mine?.approval_forced_manual}");
   });
 
   it("states the rule in words", () => {
@@ -362,5 +365,92 @@ describe("build your own actually lets you build one", () => {
     // New workflow button had just made.
     const api = codeOnly("../../apps/api/app/main.py");
     expect(api).toContain("LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id");
+  });
+});
+
+describe("a customer can define their own step", () => {
+  it("offers the form from the builder palette", () => {
+    expect(UI).toContain('data-testid="dw-define-step"');
+    expect(UI).toContain('data-testid="dw-define-form"');
+  });
+
+  it("NEVER offers a risk field", () => {
+    // The whole design rests on this. A customer who could type their own tier would have a
+    // documented way past every approval gate in the product, so the form must not have the
+    // control at all — not a disabled one, not a hidden one.
+    const form = UI.slice(UI.indexOf("function DefineStepForm"), UI.indexOf("function BuilderView"));
+    expect(form).not.toContain("setRiskTier");
+    expect(form).not.toContain('name="risk_tier"');
+    expect(form).not.toContain("risk_tier:");
+  });
+
+  it("says what the binding costs before the step is created", () => {
+    expect(UI).toContain('data-testid="dw-define-risk"');
+    expect(UI).toContain("This step will always stop for a person.");
+  });
+
+  it("names an unclassified skill as unclassified rather than as tier 0", () => {
+    expect(UI).toContain("nobody has classified this skill");
+  });
+
+  it("warns that an untrusted binding will not publish", () => {
+    expect(UI).toContain('data-testid="dw-define-blocked"');
+  });
+
+  it("says so when there is nothing to bind to", () => {
+    expect(UI).toContain("no skills or MCP servers registered yet");
+  });
+});
+
+describe("a customer's own steps are first-class in the palette", () => {
+  it("lists them beside the built-in ones", () => {
+    expect(UI).toContain('dw-palette-custom-${c.step_key}');
+    expect(UI).toContain("Your steps");
+  });
+
+  it("shows what a step RUNS, not only what it was called", () => {
+    // A step called "Cleanup" bound to a tier-3 tool must not read as harmless.
+    expect(UI).toContain("runs ${c.risk_source}");
+  });
+
+  it("cannot place a step whose binding is gone", () => {
+    expect(UI).toContain("disabled={!!busy || !c.usable}");
+    expect(UI).toContain("c.unusable_reason");
+  });
+
+  it("arrives on the canvas already manual when the tier forces it", () => {
+    expect(UI).toContain("approval: step.approval_forced_manual ?");
+  });
+
+  it("will not let the approval be switched back to auto", () => {
+    expect(UI).toContain("|| mine?.approval_forced_manual");
+  });
+
+  it("emits the binding the runtime reads", () => {
+    expect(UI).toContain("custom_step: step.customStep");
+  });
+
+  it("reads one back off a saved spec, so editing does not drop it", () => {
+    expect(UI).toContain("customStep: binding.custom_step");
+  });
+});
+
+describe("the custom-step endpoints exist on both sides", () => {
+  it("the route proxies them", () => {
+    expect(ROUTE).toContain("custom_steps:");
+    expect(ROUTE).toContain("define_step:");
+    expect(ROUTE).toContain("export async function DELETE");
+  });
+
+  it("the API resolves risk rather than accepting it", () => {
+    const api = codeOnly("../../apps/api/app/main.py");
+    expect(api).toContain('@app.get("/v1/delivery-workflows/custom-steps")');
+    expect(api).toContain('@app.post("/v1/delivery-workflows/custom-steps")');
+    // The create endpoint must not read a risk tier off the payload.
+    const create = api.slice(
+      api.indexOf("def create_delivery_custom_step"),
+      api.indexOf("def delete_delivery_custom_step"),
+    );
+    expect(create).not.toContain('payload.get("risk_tier")');
   });
 });

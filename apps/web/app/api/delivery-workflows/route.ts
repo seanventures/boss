@@ -14,7 +14,9 @@ export const dynamic = "force-dynamic";
 
 const VIEWS: Record<string, (project: string) => string> = {
   catalogue: () => "/v1/delivery-workflows/catalogue",
-  capabilities: () => "/v1/delivery-workflows/capabilities",
+  capabilities: (p) => `/v1/delivery-workflows/capabilities?project_id=${encodeURIComponent(p)}`,
+  custom_steps: (p) =>
+    `/v1/delivery-workflows/custom-steps?project_id=${encodeURIComponent(p)}`,
   installed: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
 };
@@ -79,6 +81,7 @@ const ACTIONS: Record<string, string> = {
   save: "/v1/delivery-workflows/save",
   start: "/v1/delivery-workflows/start",
   advance: "/v1/delivery-workflows/run-capabilities",
+  define_step: "/v1/delivery-workflows/custom-steps",
 };
 
 export async function POST(req: Request) {
@@ -111,6 +114,37 @@ export async function POST(req: Request) {
       // The API's own message, forwarded verbatim. These are the sentences the builder shows
       // beside a step — "step 'd' is risk tier 2 and always requires a person" is the whole
       // point, and replacing it with "request failed" would waste it.
+      const detail = (parsed as { detail?: string })?.detail;
+      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+                               { status: r.status });
+    }
+    return NextResponse.json(parsed);
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
+/** Removing a step a customer defined. Separate from POST because it is the one destructive
+ *  thing this screen does, and routing it through the same `action` switch as "save" would
+ *  make a typo in an action name capable of deleting something. */
+export async function DELETE(req: Request) {
+  const params = new URL(req.url).searchParams;
+  const project = params.get("project_id")?.trim() ?? "";
+  const key = params.get("step_key")?.trim() ?? "";
+  const actor = params.get("actor")?.trim() || "operator";
+  if (!project || !key) {
+    return NextResponse.json({ error: "project_id and step_key are required" }, { status: 400 });
+  }
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/delivery-workflows/custom-steps/${encodeURIComponent(key)}`
+        + `?project_id=${encodeURIComponent(project)}&actor=${encodeURIComponent(actor)}`,
+      { method: "DELETE", headers: authHeaders({}), cache: "no-store" },
+    );
+    const raw = await r.text();
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { parsed = { detail: raw }; }
+    if (!r.ok) {
       const detail = (parsed as { detail?: string })?.detail;
       return NextResponse.json({ error: detail || `API returned ${r.status}` },
                                { status: r.status });

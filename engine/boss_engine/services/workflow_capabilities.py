@@ -28,6 +28,10 @@ from typing import Any, Mapping, Optional
 #: See `approval_mode_for` — governance that configuration can switch off is not governance.
 MANUAL_APPROVAL_RISK_FLOOR = 2
 
+#: What one customer-defined step is assumed to take. It calls a single tool, so minutes rather
+#: than the tens of minutes a build or a deploy takes.
+CUSTOM_STEP_MINUTES = 3
+
 
 @dataclass(frozen=True)
 class Capability:
@@ -493,7 +497,14 @@ def estimate_minutes(spec: Mapping[str, Any]) -> int:
     for step in spec.get("steps") or []:
         if step.get("kind") != "capability":
             continue
-        key = str((step.get("binding") or {}).get("capability") or "")
+        binding = step.get("binding") or {}
+        if binding.get("custom_step"):
+            # A customer's step calls one tool; there is nothing to estimate from. Counted at a
+            # flat few minutes rather than zero, because a workflow whose custom steps are free
+            # reads as faster than it is.
+            total += CUSTOM_STEP_MINUTES
+            continue
+        key = str(binding.get("capability") or "")
         if key in CAPABILITY_KEYS:
             total += get(key).typical_minutes
     return total

@@ -19615,16 +19615,27 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
 
 
 @app.get("/v1/delivery-workflows/capabilities")
-def list_delivery_capabilities() -> dict:
+def list_delivery_capabilities(project_id: str | None = None) -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
         blocks,
         palette,
     )
+    from boss_engine.services import workflow_custom_steps as custom_steps
+
+    # The project's own steps belong in the same palette as the built-in ones — a customer
+    # should not have to know which of their steps BOSS wrote. Optional, because the palette is
+    # also browsed before a project is chosen.
+    custom: list[dict] = []
+    if project_id and database_is_reachable(engine):
+        with begin(engine) as connection:
+            custom = [s for s in custom_steps.list_steps(connection, project_id)
+                      if s["enabled"]]
 
     return {
         "capabilities": palette(),
+        "custom_steps": custom,
         # Control blocks the runtime has always supported and the builder never offered, so a
         # customer could only ever author a straight line.
         "blocks": blocks(),
@@ -19634,6 +19645,123 @@ def list_delivery_capabilities() -> dict:
             "workflow asks for."
         ),
     }
+
+
+@app.get("/v1/delivery-workflows/custom-steps")
+def list_delivery_custom_steps(project_id: str) -> dict:
+    """A project's own steps, plus everything it could bind a new one to.
+
+    The bindable lists come back with the SAME risk tiers the floor will use, so the builder
+    can say "this will need an approval" while the customer is choosing — rather than after
+    they try to publish.
+    """
+    from boss_engine.services.workflow_capabilities import MANUAL_APPROVAL_RISK_FLOOR
+    from boss_engine.services import workflow_custom_steps as custom_steps
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+
+    with begin(engine) as connection:
+        steps = custom_steps.list_steps(connection, project_id)
+        skills = connection.execute(
+            text("SELECT skill_id, config, provenance FROM project_skills "
+                 "WHERE project_id=:p AND enabled ORDER BY skill_id"),
+            {"p": project_id},
+        ).mappings().all()
+        servers = connection.execute(
+            text("SELECT id, name, url, risk_tier, provenance, tool_risk_overrides "
+                 "FROM mcp_servers WHERE project_id=:p AND enabled ORDER BY name"),
+            {"p": project_id},
+        ).mappings().all()
+
+    bindable_skills = []
+    for row in skills:
+        config = row["config"] if isinstance(row["config"], dict) else {}
+        provenance = row["provenance"] if isinstance(row["provenance"], dict) else {}
+        declared = config.get("risk_tier")
+        bindable_skills.append({
+            "skill_id": row["skill_id"],
+            "risk_tier": int(declared) if declared is not None
+                         else custom_steps.UNKNOWN_RISK,
+            "trusted": bool(provenance.get("trusted", False)),
+            # Said here rather than left for the customer to infer from a number.
+            "unclassified": declared is None,
+        })
+
+    mcp = MCPClient(get_settings(), timeout=6.0)
+    bindable_servers = []
+    for row in servers:
+        overrides = (row["tool_risk_overrides"]
+                     if isinstance(row["tool_risk_overrides"], dict) else {})
+        provenance = row["provenance"] if isinstance(row["provenance"], dict) else {}
+        entry = {
+            "id": row["id"], "name": row["name"],
+            "risk_tier": int(row["risk_tier"] if row["risk_tier"] is not None
+                             else custom_steps.UNKNOWN_RISK),
+            "trusted": bool(provenance.get("trusted", False)),
+            "tools": [], "reachable": True,
+        }
+        try:
+            for tool in (mcp.list_tools(row["url"]) or []):
+                name = tool.get("name")
+                entry["tools"].append({
+                    "name": name,
+                    "description": tool.get("description", ""),
+                    "risk_tier": int(overrides[name]) if name in overrides
+                                 else entry["risk_tier"],
+                })
+        except Exception as error:
+            # An unreachable server is shown, not hidden. Hiding it would look like the server
+            # was never registered, and the customer would add it again.
+            entry["reachable"] = False
+            entry["error"] = f"{type(error).__name__}: {error}"
+        bindable_servers.append(entry)
+
+    return {
+        "steps": steps,
+        "bindable": {"skills": bindable_skills, "mcp_servers": bindable_servers},
+        "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
+    }
+
+
+@app.post("/v1/delivery-workflows/custom-steps")
+def create_delivery_custom_step(payload: dict) -> dict:
+    """Define a step. The risk tier is NOT accepted from the caller — it is resolved from
+    whatever the step binds, which is what stops "custom step" being a way around the floor."""
+    from boss_engine.services import workflow_custom_steps as custom_steps
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        with begin(engine) as connection:
+            return custom_steps.create(
+                connection,
+                project_id=project_id,
+                label=str(payload.get("label") or ""),
+                summary=str(payload.get("summary") or ""),
+                binding_kind=str(payload.get("binding_kind") or ""),
+                skill_id=payload.get("skill_id") or None,
+                mcp_server_id=payload.get("mcp_server_id") or None,
+                mcp_tool_name=payload.get("mcp_tool_name") or None,
+                inputs=payload.get("inputs"),
+                produces=payload.get("produces"),
+                step_key=payload.get("step_key") or None,
+                actor=str(payload.get("actor") or "operator"),
+            )
+    except custom_steps.CustomStepError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.delete("/v1/delivery-workflows/custom-steps/{step_key}")
+def delete_delivery_custom_step(step_key: str, project_id: str, actor: str = "operator") -> dict:
+    from boss_engine.services import workflow_custom_steps as custom_steps
+
+    with begin(engine) as connection:
+        removed = custom_steps.delete(connection, project_id, step_key, actor)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"no custom step '{step_key}'")
+    return {"deleted": step_key}
 
 
 @app.get("/v1/delivery-workflows/catalogue")
@@ -19997,10 +20125,15 @@ def fork_delivery_workflow(payload: dict) -> dict:
             )
         except workflow_runtime.WorkflowConflictError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        version = workflow_runtime.publish_version(
-            connection, project_id=project_id, definition_id=definition["id"],
-            spec=source["spec"], actor=actor,
-        )
+        try:
+            version = workflow_runtime.publish_version(
+                connection, project_id=project_id, definition_id=definition["id"],
+                spec=source["spec"], actor=actor,
+            )
+        except workflow_runtime.WorkflowBindingBlockedError as error:
+            # Forking a workflow whose custom step has since lost its skill. Named, because
+            # "fork failed" would send somebody looking at the fork rather than the binding.
+            raise HTTPException(status_code=422, detail=str(error)) from error
         return {"definition": definition, "version": version,
                 "forked_from": source["version_id"]}
 
@@ -20036,6 +20169,12 @@ def save_delivery_workflow(payload: dict) -> dict:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except workflow_runtime.WorkflowValidationError as error:
             # 422 with the reason: this is what the builder shows next to the step.
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except workflow_runtime.WorkflowBindingBlockedError as error:
+            # Same treatment, and for the same reason. A custom step's risk tier is resolved
+            # from the skill it binds, so "this step always requires a person" is raised here
+            # rather than by spec validation — and without this it reached the builder as a
+            # bare 500, which tells a customer nothing about what to change.
             raise HTTPException(status_code=422, detail=str(error)) from error
         except workflow_runtime.WorkflowConflictError:
             return {"unchanged": True, "note": "This is identical to the current version."}

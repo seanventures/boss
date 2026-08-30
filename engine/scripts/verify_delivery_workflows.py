@@ -335,6 +335,97 @@ class Agent:
 
     # ── Report ────────────────────────────────────────────────────────────────
 
+    # ── Phase 7: steps the customer defines ───────────────────────────────────
+
+    def verify_custom_steps(self) -> None:
+        """A customer's own step is as easy to add as a standard one, and NOT easier to get
+        away with. Every check here is really the same claim from a different angle: the risk
+        tier comes from what the step binds, never from the customer."""
+        status, body = self._call(
+            "GET", f"/v1/delivery-workflows/custom-steps?project_id={self.project}")
+        reachable = status == 200
+        self.check(
+            "7", "a project can be asked what steps it has and what it could bind",
+            reachable,
+            f"HTTP {status}" if not reachable else
+            f"{len(body.get('steps', []))} defined, "
+            f"{len(body.get('bindable', {}).get('skills', []))} skills and "
+            f"{len(body.get('bindable', {}).get('mcp_servers', []))} MCP servers available",
+            "the builder could not offer a custom step at all",
+        )
+        if not reachable:
+            return
+
+        bindable = body.get("bindable", {})
+        floor = body.get("manual_approval_risk_floor")
+        self.check(
+            "7", "every bindable thing arrives with the tier the floor will use",
+            all("risk_tier" in s for s in bindable.get("skills", []))
+            and all("risk_tier" in m for m in bindable.get("mcp_servers", [])),
+            f"floor={floor}",
+            "the builder would say a step can run automatically and the runner would stop it",
+        )
+        # An unreachable MCP server must be SHOWN, not hidden — hiding it looks like it was
+        # never registered and the customer adds it twice.
+        unreachable = [m["name"] for m in bindable.get("mcp_servers", [])
+                       if not m.get("reachable", True)]
+        self.check(
+            "7", "an unreachable MCP server is shown rather than silently dropped",
+            all("reachable" in m for m in bindable.get("mcp_servers", [])),
+            f"unreachable: {unreachable or 'none'}",
+            "a registered server would vanish from the list and be added again",
+        )
+
+        # THE ONE THAT MATTERS. Try to define a step that declares itself harmless. The API
+        # must ignore the field entirely — if this ever passes, every gate in the product is
+        # optional.
+        status, created = self._call("POST", "/v1/delivery-workflows/custom-steps", {
+            "project_id": self.project,
+            "label": "Verification probe",
+            "binding_kind": "skill",
+            "skill_id": "__verification_probe_no_such_skill__",
+            "risk_tier": 0,
+            "actor": self.actor,
+        })
+        if status == 200:
+            declared_own_risk = created.get("risk_tier") == 0
+            self.check(
+                "7", "a customer cannot declare their own step harmless",
+                not declared_own_risk,
+                f"asked for tier 0, resolved to tier {created.get('risk_tier')} "
+                f"from {created.get('risk_source')}",
+                "'custom step' would be the documented way past every approval gate",
+            )
+            self.check(
+                "7", "a step bound to something that does not exist refuses to run",
+                created.get("usable") is False,
+                str(created.get("unusable_reason")),
+                "a workflow would appear to run and quietly do nothing",
+            )
+            self._call(
+                "DELETE",
+                f"/v1/delivery-workflows/custom-steps/{created.get('step_key')}"
+                f"?project_id={self.project}&actor={self.actor}",
+            )
+        else:
+            # Rejecting it outright is also correct — the skill does not exist.
+            self.check(
+                "7", "a step bound to a skill the project does not have is refused",
+                status in (400, 422),
+                f"HTTP {status}: {(created or {}).get('detail')}",
+                "a step could be defined against a skill that can never run",
+            )
+
+        status, palette = self._call(
+            "GET", f"/v1/delivery-workflows/capabilities?project_id={self.project}")
+        self.check(
+            "7", "a customer's steps reach the same palette as the built-in ones",
+            status == 200 and "custom_steps" in (palette or {}),
+            f"HTTP {status}, {len((palette or {}).get('custom_steps', []))} of the "
+            "customer's own",
+            "people would have to learn which of their steps BOSS wrote",
+        )
+
     def report(self) -> int:
         failed = [r for r in self.results if not r.passed]
         by_phase: dict[str, list[Result]] = {}
@@ -388,6 +479,7 @@ def main() -> int:
     agent.verify_capabilities()
     agent.verify_catalogue()
     agent.verify_console_surface()
+    agent.verify_custom_steps()
     if not args.skip_run:
         agent.verify_it_runs()
     return agent.report()
