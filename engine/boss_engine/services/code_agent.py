@@ -613,6 +613,14 @@ class ClaudeCodeAgent:
             the complete stdout remains the source of truth either way.
             """
             parser = StreamParser()
+            # COUNTS ROWS ACTUALLY WRITTEN, not turns parsed. The caller skips the final batch
+            # write when the transcript is already stored, and deciding that from "the parser
+            # saw turns" lost the whole transcript when the writes themselves went nowhere: the
+            # reader thread had an empty context, `begin(None)` fell back to a default engine
+            # instead of raising, and a run whose call reported 48 turns stored 4. Only a write
+            # that REPORTS having written may cancel the fallback.
+            written = {"rows": 0}
+
             # Turn -1, written before the first line arrives: "what was it asked" is the first
             # question anyone has, and it should not wait for the answer.
             try:
@@ -626,11 +634,13 @@ class ClaudeCodeAgent:
                 if not produced:
                     return
                 try:
-                    record_agent_turns(produced, engine_name=self.engine, model=live_model)
+                    written["rows"] += int(
+                        record_agent_turns(produced, engine_name=self.engine,
+                                           model=live_model) or 0)
                 except Exception:  # noqa: BLE001
                     pass
 
-            return _on_line, parser
+            return _on_line, parser, written
 
         for attempt in range(3):
             # CAPTURE MUST NEVER COST A BUILD.
@@ -643,9 +653,9 @@ class ClaudeCodeAgent:
             cmd = base_cmd(capturing)
             # Live tracing only makes sense while we are asking for the stream format. Without
             # `capturing` there are no per-turn events to read.
-            on_line, live_parser = (
+            on_line, live_parser, live_written = (
                 _live_sink(model or getattr(self.settings, "claude_cli_model", "") or "")
-                if capturing and capture_enabled() else (None, None)
+                if capturing and capture_enabled() else (None, None, {"rows": 0})
             )
             try:
                 # Popen rather than run(), so the pid is known and can be registered. A
@@ -701,7 +711,7 @@ class ClaudeCodeAgent:
                 raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
             if proc.returncode == 0:
                 parsed = _parse_cli_output(proc.stdout)
-                if parsed is not None and live_parser is not None and live_parser.turns:
+                if parsed is not None and live_written["rows"] > 0:
                     # ALREADY PERSISTED, TURN BY TURN, WHILE THE STAGE RAN. Handing the same
                     # turns back would write every row twice. The flag tells the caller the
                     # transcript (including the prompt row) is already on disk.

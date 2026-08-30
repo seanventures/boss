@@ -223,3 +223,39 @@ def test_the_context_is_copied_on_the_calling_thread():
     body = src[:src.index("for t in threads:")]
     assert "contextvars.copy_context()" in body
     assert "target=ctx.run" in body, "the pump does not run inside the copied context"
+
+
+# ── The fallback must not be cancelled by a write that did not happen ──────────
+
+def test_the_batch_write_is_only_skipped_when_rows_were_really_written():
+    """The regression this shipped with, and the worst kind: it LOST data.
+
+    The caller skips the final batch write when the transcript is already stored. That was
+    decided from "the live parser saw turns" — which is true even when every write failed. With
+    the reader threads running on an empty context, `begin(None)` fell back to a default engine
+    rather than raising, so nothing errored, the parser had its turns, the batch write was
+    cancelled, and a run whose call reported 48 turns stored 4.
+
+    Before the streaming change all 48 would have been written at the end. A diagnostic feature
+    must never be able to destroy the data it is meant to expose.
+    """
+    import inspect
+
+    from boss_engine.services.code_agent import ClaudeCodeAgent
+
+    src = inspect.getsource(ClaudeCodeAgent._invoke)
+    assert 'live_written["rows"] > 0' in src, (
+        "the batch write is cancelled on parsed turns rather than on persisted rows")
+    assert "live_parser.turns:" not in src
+
+
+def test_the_sink_counts_rows_returned_by_the_recorder():
+    """`record_agent_turns` returns the number of rows it wrote; 0 means it did not."""
+    import inspect
+
+    from boss_engine.services.code_agent import ClaudeCodeAgent
+
+    src = inspect.getsource(ClaudeCodeAgent._invoke)
+    sink = src[src.index("def _live_sink"):src.index("for attempt in range(3)")]
+    assert "record_agent_turns(produced" in sink
+    assert 'written["rows"] +=' in sink
