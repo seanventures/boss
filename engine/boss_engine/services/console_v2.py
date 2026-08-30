@@ -323,7 +323,7 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
             WHERE project_id = :p
               AND created_at > now() - interval '90 days'
             ORDER BY created_at DESC
-            LIMIT 400
+            LIMIT 2000
             """
         ),
         {"p": project_id},
@@ -393,6 +393,17 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
         })
 
     projects.sort(key=lambda p: p["updated_at"] or "", reverse=True)
+    # WHAT WAS TRIMMED, SAID OUT LOUD.
+    #
+    # Two caps stack here and neither used to be visible. The row window above decides which
+    # apps EXIST at all — at 400 rows, goldeneye's 474 runs meant whole apps never entered the
+    # grouping, and no `limit` the caller passed could bring them back. That one is now wide
+    # enough to hold the project rather than a page of it.
+    #
+    # This one only decides how many are RETURNED, which is a legitimate page — but a page that
+    # does not say it is a page reads as the whole list, and the strip has been showing 40 of
+    # 59 as though 40 were all of them.
+    total_projects = len(projects)
     projects = projects[:limit]
 
     gates = int(connection.execute(
@@ -409,6 +420,8 @@ def company_overview(connection, project_id: str, *, limit: int = 40) -> dict[st
         "burn": {"spent_usd": round(spend_micros / 1_000_000, 2), "cap_usd": None},
         "gates": gates,
         "projects": projects,
+        "total_projects": total_projects,
+        "truncated": total_projects > len(projects),
         # Autonomy is a real setting in the artifact, not decoration. Reported honestly as the
         # only mode BOSS actually implements today rather than faking a switch that does
         # nothing — see CONSOLE_V2_MIGRATION.md §5.

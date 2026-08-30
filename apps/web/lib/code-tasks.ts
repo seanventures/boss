@@ -81,6 +81,9 @@ export type CodeTaskFeed = {
   apiReachable: boolean;
   blockedReason?: string;
   items: CodeTaskRun[];
+  /** How many exist under the same filter. `items.length` is what fitted in the window. */
+  total: number;
+  truncated: boolean;
 };
 
 /**
@@ -98,6 +101,8 @@ export function emptyCodeTaskFeed(reason?: string, projectId = PROJECT_ID): Code
     apiReachable: false,
     blockedReason: reason,
     items: [],
+    total: 0,
+    truncated: false,
   };
 }
 
@@ -136,7 +141,16 @@ export async function fetchCodeTasksFeed(
     // the whole window. Raising the limit again only moves it, and this response is already
     // 1.41 MB at 200.
     const res = await client.getCodeTasks(resolved, codeTaskLimitFor(area), true);
-    return { projectId: resolved, apiReachable: true, items: res.code_tasks ?? [] };
+    const items = res.code_tasks ?? [];
+    return {
+      projectId: resolved,
+      apiReachable: true,
+      items,
+      // Falls back to what arrived when the API does not report a total, so the count never
+      // claims fewer tasks than the screen is currently drawing.
+      total: typeof res.total === "number" ? res.total : items.length,
+      truncated: Boolean(res.truncated),
+    };
   } catch (error) {
     if (error instanceof BossApiError) {
       return emptyCodeTaskFeed(error.message, resolved);

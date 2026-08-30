@@ -22,8 +22,12 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "missing project_id" }, { status: 400 });
   }
   try {
+    // 100, not the endpoint's default of 40. goldeneye has 59 apps and the strip was showing
+    // the first 40 as though that were all of them — the same false absence this strip exists
+    // to prevent. 100 is the endpoint's own ceiling and the rows are small (the response is
+    // trimmed to six fields below), so this costs far less than the list feeds do.
     const r = await fetch(
-      `${API_URL}/v1/console/v2/overview?project_id=${encodeURIComponent(projectId)}`,
+      `${API_URL}/v1/console/v2/overview?project_id=${encodeURIComponent(projectId)}&limit=100`,
       { headers: authHeaders({}), cache: "no-store" },
     );
     if (!r.ok) {
@@ -32,7 +36,12 @@ export async function GET(req: Request) {
     const d = (await r.json()) as Record<string, unknown>;
     // Only what the strip draws. The overview also carries burn, gates and autonomy, and
     // shipping those to a header that never renders them is bytes on every refresh.
-    return NextResponse.json({ projects: d.projects ?? [] });
+    return NextResponse.json({
+      projects: d.projects ?? [],
+      // Forwarded so the strip can say "40 of 59" rather than implying it has them all.
+      total: d.total_projects ?? (Array.isArray(d.projects) ? d.projects.length : 0),
+      truncated: Boolean(d.truncated),
+    });
   } catch (e) {
     return NextResponse.json(
       { error: String((e as Error)?.message ?? e) },

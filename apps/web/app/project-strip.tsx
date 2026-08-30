@@ -49,36 +49,75 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("ALL");
 
-  useEffect(() => {
+  // What exists versus what arrived. A strip that shows 40 of 59 and says nothing is making
+  // the same false claim of absence as one that shows nothing at all.
+  const [total, setTotal] = useState(0);
+  // True only while a REFRESH is in flight, never during the first load — the first load has
+  // its own "loading" state, and showing both makes the header flicker twice.
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async (mode: "first" | "refresh") => {
     if (!projectId) return;
-    let live = true;
-    void fetch(`/api/projects-strip?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" })
-      .then(async (r) => {
-        const body = (await r.json()) as { projects?: StripProject[]; error?: string };
-        if (!live) return;
-        if (!r.ok) {
+    if (mode === "refresh") setRefreshing(true);
+    try {
+      const r = await fetch(
+        `/api/projects-strip?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+      const body = (await r.json()) as
+        { projects?: StripProject[]; total?: number; error?: string };
+      if (!r.ok) {
+        // A FAILED REFRESH MUST NOT EMPTY A GOOD STRIP.
+        //
+        // Blanking what is already on screen because a later poll failed is worse than showing
+        // slightly stale rows: the operator loses the list they were reading, for a reason they
+        // cannot see. Only the first load is allowed to end in the failed state.
+        if (mode === "first") {
           setState("failed");
           setError(body.error ?? `API returned ${r.status}`);
-          return;
         }
+        return;
+      }
         // SAME NAME AS THE CARD IT OPENS.
         //
         // The overview returns the raw run title — "PRD — Pull‐Request Review‐Time Tracker",
         // with a U+2010 hyphen the operator cannot type. Reading a strip that says one thing
         // and a card that says another is worse than either alone, so both go through the one
         // function that decides what an app is called.
-        setProjects((body.projects ?? []).map((p) => ({
-          ...p, title: appIdentity({ title: p.title }).name,
-        })));
-        setState("ready");
-      })
-      .catch((e) => {
-        if (!live) return;
+      setProjects((body.projects ?? []).map((p) => ({
+        ...p, title: appIdentity({ title: p.title }).name,
+      })));
+      setTotal(Number(body.total ?? (body.projects ?? []).length));
+      setState("ready");
+      setError(null);
+    } catch (e) {
+      if (mode === "first") {
         setState("failed");
         setError(String((e as Error)?.message ?? e));
-      });
-    return () => { live = false; };
+      }
+    } finally {
+      setRefreshing(false);
+    }
   }, [projectId]);
+
+  useEffect(() => { void load("first"); }, [load]);
+
+  // IT HAS TO KEEP PULLING.
+  //
+  // The strip fetched once on mount and then never again, so a project that started, gated or
+  // shipped after the page opened simply never appeared — and the header that is supposed to
+  // answer "what is happening right now" was answering "what was happening when you arrived".
+  // Thirty seconds is slow enough to be free and fast enough that a gate does not sit unseen.
+  useEffect(() => {
+    if (!projectId) return;
+    const timer = setInterval(() => { void load("refresh"); }, 30_000);
+    // Coming back to the tab is the moment the answer is most likely to be stale, and the
+    // moment somebody is actually looking at it.
+    const onVisible = () => { if (!document.hidden) void load("refresh"); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [projectId, load]);
 
   const counts = useMemo(() => {
     const out = {} as Record<Filter, number>;
@@ -225,7 +264,24 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
 
   return (
     <nav className="bx-strip" aria-label="Projects" data-state="ready" data-testid="bx-strip">
-      <span className="bx-strip-label">Projects</span>
+      <span className="bx-strip-label">
+        Projects
+        {/* WHAT IS MISSING, ON THE LABEL THAT CLAIMS TO LIST THEM.
+            Shown only when the strip does not have them all — a count beside every list is
+            noise, a count beside a truncated one is the whole point. */}
+        {total > projects.length ? (
+          <span className="bx-strip-of" data-testid="bx-strip-of">
+            {projects.length} of {total}
+          </span>
+        ) : null}
+        {/* Refresh is a state of the label, not a banner. A bar that appears at the top of the
+            page every thirty seconds is the thing that was called "very annoying", and it was
+            right — the strip is already the place you look to see whether this is current. */}
+        {refreshing ? (
+          <span className="bx-strip-syncing" data-testid="bx-strip-syncing"
+                title="Checking for new projects">Syncing</span>
+        ) : null}
+      </span>
 
       <div className="bx-strip-scroll" ref={scroller}>
         {shown.map((p) => (

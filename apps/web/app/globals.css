@@ -1201,6 +1201,23 @@ h1, h2, h3, h4, h5, h6 {
   margin: 0; font-size: 0.7rem; color: var(--red, #f85149);
 }
 .dw-define-actions { display: flex; gap: 6px; }
+/* "of 244 — showing the newest", beside the Factory count that used to imply it had them all. */
+.ct-home-of {
+  margin-left: 6px; font-size: 0.7rem; color: var(--faint, var(--muted));
+}
+
+/* "40 of 59" beside the Projects label, only when the strip is short of the full set. */
+.bx-strip-of {
+  margin-left: 6px; font-size: 0.6rem; letter-spacing: .04em;
+  color: var(--faint, var(--muted));
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+}
+/* Refresh, said where you are already looking rather than as a bar across the top. */
+.bx-strip-syncing {
+  margin-left: 6px; font-size: 0.58rem; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); opacity: .85;
+}
+
 .dw-define-empty {
   margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 0.68rem; line-height: 1.4;
   border: 1px dashed var(--border); color: var(--faint, var(--muted));

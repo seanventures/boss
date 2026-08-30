@@ -2333,10 +2333,13 @@ function isInternalRun(run: { title?: string }): boolean {
   return INTERNAL_RUN.test((run.title ?? "").trim());
 }
 
-export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
+export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = [], apiReachable, previews = [], previewBlockedReason, benchmarks = [], actor = "executive_console", githubPlane, githubPlaneLabel, githubFullName }: {
   projectId: string;
   orgId?: string;
   codeTasks: CodeTaskRun[];
+  /** How many exist, against how many arrived. Defaults to what arrived, so a caller that
+   *  does not know the total never makes the screen claim tasks are missing. */
+  codeTaskTotal?: number;
   meetings?: { id: string; title?: string; status?: string; created_at?: string; task_id?: string | null }[];
   apiReachable: boolean;
   previews?: PreviewRec[];
@@ -2523,6 +2526,10 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
     setTasks((prev) => (next.length === 0 && prev.length > 0 ? prev : next));
   }, []);
   useEffect(() => { keepIfEmpty(codeTasks); }, [codeTasks, keepIfEmpty]);
+
+  // Never below what is on screen: `tasks` can hold rows a later empty fetch chose not to
+  // clobber, and "showing 12 of 8" would be worse than saying nothing.
+  const shownTotal = Math.max(codeTaskTotal ?? tasks.length, tasks.length);
   const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string,
                                         kind?: "meeting" | "code" | "existing") => {
     setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error, kind } }));
@@ -2702,7 +2709,17 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
     <div className="ct">
       {previewListError}
       <div className="ct-home-bar">
-        <span className="ct-home-count">{tasks.length} code task{tasks.length === 1 ? "" : "s"}</span>
+        <span className="ct-home-count">
+          {tasks.length} code task{tasks.length === 1 ? "" : "s"}
+          {/* "200 code tasks" beside a project that has 244 is not a count, it is a window
+              reported as a total. The operator's next thought is "where did the rest go", and
+              nothing on the screen used to answer it. */}
+          {shownTotal > tasks.length ? (
+            <span className="ct-home-of" data-testid="ct-home-of">
+              of {shownTotal} — showing the newest
+            </span>
+          ) : null}
+        </span>
         {githubPlane ? (
           <span className="detail" data-testid="code-tasks-github-plane">
             {githubPlane === "mission_control_binding"

@@ -1084,7 +1084,15 @@ export type CodeTaskRun = {
   error?: string | null;
 };
 
-export type CodeTasksResponse = { code_tasks: CodeTaskRun[] };
+export type CodeTasksResponse = {
+  code_tasks: CodeTaskRun[];
+  /** How many runs match the same filter, so a caller can tell a full window from a page.
+   *  Optional: an older API that does not send it leaves the count as-is rather than
+   *  reporting zero, which would read as "no tasks" on a list that plainly has some. */
+  total?: number;
+  limit?: number;
+  truncated?: boolean;
+};
 
 export type QaBenchmarkApp = {
   id: string;

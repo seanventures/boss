@@ -9671,13 +9671,21 @@ def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50,
     project_id = resolve_list_project_id(project_id)
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
-    from .services.code_task_service import list_code_task_runs
+    from .services.code_task_service import count_code_task_runs, list_code_task_runs
     with begin(engine) as c:
+        items = [summarise_run_for_list(r)
+                 for r in list_code_task_runs(c, project_id, limit,
+                                              exclude_internal=exclude_internal)]
+        # `total` under the SAME filter, so the console can say "200 of 244" instead of
+        # implying that 200 is all there is. Without it a full window and a truncated one look
+        # identical, and the Factory has been reporting the second as the first.
+        total = count_code_task_runs(c, project_id, exclude_internal=exclude_internal)
         return {
             "project_id": project_id,
-            "code_tasks": [summarise_run_for_list(r)
-                           for r in list_code_task_runs(c, project_id, limit,
-                                                        exclude_internal=exclude_internal)],
+            "code_tasks": items,
+            "total": total,
+            "limit": int(limit),
+            "truncated": total > len(items),
         }
 
 

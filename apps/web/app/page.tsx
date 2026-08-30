@@ -7017,6 +7017,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             projectId={activeProjectId}
             orgId={activeOrgId}
             codeTasks={codeTasksFeed.items}
+            codeTaskTotal={codeTasksFeed.total}
             // A panel that is RUNNING has no code run yet, so Factory -- which lists runs --
             // could not show it at all. The work existed and the page that tracks work said
             // nothing, which is why a convened meeting looked like a dead button.

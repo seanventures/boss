@@ -94,3 +94,64 @@ def test_asking_for_everything_still_returns_everything():
     list_code_task_runs(conn, "proj", 50)
     assert "NOT LIKE" not in conn.sql
     assert conn.params == {"p": "proj", "lim": 50}
+
+
+class CountingConn(RecordingConn):
+    """Same recorder, but `scalar()` — which is what a count reads."""
+
+    def __init__(self, total=0):
+        super().__init__()
+        self.total = total
+
+    def execute(self, statement, params=None):
+        self.sql = " ".join(str(statement).split())
+        self.params = dict(params or {})
+        outer = self
+
+        class _R:
+            def scalar(self):
+                return outer.total
+
+        return _R()
+
+
+def test_the_count_uses_the_same_filter_as_the_list():
+    """A count that disagrees with its own list is worse than no count.
+
+    "200 of 244" is only useful if the 244 was counted the way the 200 was selected — otherwise
+    the screen invents a number of missing tasks that do not exist.
+    """
+    from boss_engine.services.code_task_service import count_code_task_runs
+
+    listing = RecordingConn()
+    list_code_task_runs(listing, "p1", 200, exclude_internal=True)
+    counting = CountingConn(total=244)
+    count_code_task_runs(counting, "p1", exclude_internal=True)
+
+    # One NOT LIKE per internal prefix, in both statements.
+    assert listing.sql.count("NOT LIKE") == len(INTERNAL_RUN_PREFIXES)
+    assert counting.sql.count("NOT LIKE") == len(INTERNAL_RUN_PREFIXES)
+    # The same prefixes, not merely the same number of them.
+    assert ({k: v for k, v in listing.params.items() if k.startswith("pre")}
+            == {k: v for k, v in counting.params.items() if k.startswith("pre")})
+
+
+def test_the_count_reads_no_payload_columns():
+    """Counting must stay cheap. The list is 1.41 MB at 200 rows BECAUSE of these columns, and
+    a count that dragged them along would put that cost on every page load twice."""
+    from boss_engine.services.code_task_service import count_code_task_runs
+
+    conn = CountingConn(total=244)
+    count_code_task_runs(conn, "p1", exclude_internal=True)
+
+    assert conn.sql.startswith("SELECT count(*)")
+    for heavy in ("spec", "state", "usage", "finalize_ctx"):
+        assert heavy not in conn.sql, f"the count is dragging {heavy} along"
+
+
+def test_an_unfiltered_count_counts_everything():
+    from boss_engine.services.code_task_service import count_code_task_runs
+
+    conn = CountingConn(total=474)
+    assert count_code_task_runs(conn, "p1") == 474
+    assert "NOT LIKE" not in conn.sql

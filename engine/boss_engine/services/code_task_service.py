@@ -153,6 +153,34 @@ def list_code_task_runs(connection, project_id: str, limit: int = 50,
     return [_row_to_run(r) for r in rows]
 
 
+def count_code_task_runs(
+    connection, project_id: str, *, exclude_internal: bool = False
+) -> int:
+    """How many runs there ACTUALLY are, under the same filter as the list.
+
+    A window with no total behind it cannot tell "these are all of them" from "these are the
+    first 200 of 244", and the console has been reporting the first as though it were the
+    second. Counting is cheap — it reads no payload columns, which is what made the list
+    expensive in the first place.
+
+    Built from the same `where` construction as the list on purpose: a count that disagrees
+    with its own list is worse than no count.
+    """
+    if hasattr(connection, "list_runs"):          # the in-memory test double has no SQL
+        return len(connection.list_runs(project_id, 10_000))
+    where = "project_id = :p"
+    params: dict = {"p": project_id}
+    if exclude_internal:
+        clauses = []
+        for i, prefix in enumerate(_internal_run_prefixes()):
+            clauses.append(f"lower(coalesce(title, '')) NOT LIKE :pre{i}")
+            params[f"pre{i}"] = f"{prefix}%"
+        where += " AND " + " AND ".join(clauses)
+    return int(connection.execute(
+        sql(f"SELECT count(*) FROM code_task_runs WHERE {where}"), params
+    ).scalar() or 0)
+
+
 _DEPLOYABILITY_NOTE = (
     "\n\nDEPLOYABILITY (required for any network service): bind the host from the HOST env var "
     "(default 0.0.0.0) and the port from the PORT env var, with sensible fallbacks. Do NOT hardcode "

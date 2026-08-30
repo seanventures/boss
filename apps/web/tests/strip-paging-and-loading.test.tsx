@@ -127,3 +127,81 @@ describe("the console says when it is still filling up", () => {
     expect(CSS.slice(at, at + 120)).toContain("width: 100%");
   });
 });
+
+/**
+ * Three caps stacked between the database and the header, and none of them said so.
+ *
+ * Measured on goldeneye: 474 code-task runs, of which 244 are real work and 59 group into
+ * apps. The strip asked for the endpoint's default of 40 and drew 40 as though that were all
+ * of them; the overview only ever read the newest 400 runs, so apps beyond that window could
+ * not be returned at any limit; and the Factory heading read "200 code tasks" for a project
+ * that had 244. Each one silently converted "the first page" into "everything".
+ */
+describe("the strip does not pretend a page is the whole list", () => {
+  const ROUTE = codeOnly("app/api/projects-strip/route.ts");
+
+  it("asks for more than the endpoint's default of 40", () => {
+    expect(ROUTE).toContain("limit=100");
+  });
+
+  it("forwards how many actually exist", () => {
+    expect(ROUTE).toContain("total: d.total_projects");
+  });
+
+  it("says '40 of 59' on the label, and only when it is short", () => {
+    expect(STRIP).toContain("{total > projects.length ? (");
+    expect(STRIP).toContain("of {total}");
+  });
+});
+
+describe("the strip keeps pulling", () => {
+  it("refreshes on a timer, not once on mount", () => {
+    // It fetched once and never again, so a project that started, gated or shipped after the
+    // page opened never appeared — the header answered "what was happening when you arrived".
+    expect(STRIP).toContain("setInterval");
+    expect(STRIP).toContain("30_000");
+  });
+
+  it("refreshes when the tab is looked at again", () => {
+    expect(STRIP).toContain("visibilitychange");
+  });
+
+  it("shows that it is syncing WITHOUT a bar across the top", () => {
+    // The full-width refreshing bar was the thing that got called "very annoying", correctly:
+    // it was on screen for the whole 20s+ re-render. The state belongs on the label.
+    expect(STRIP).toContain('data-testid="bx-strip-syncing"');
+    expect(CSS).toContain(".bx-strip-syncing");
+  });
+
+  it("does not blank a good strip when a later refresh fails", () => {
+    // Losing the list you were reading, for a reason you cannot see, is worse than stale rows.
+    expect(STRIP).toContain('if (mode === "first") {');
+  });
+
+  it("does not show the syncing chip during the very first load", () => {
+    // The first load has its own state; showing both makes the header flicker twice.
+    expect(STRIP).toContain('if (mode === "refresh") setRefreshing(true);');
+  });
+});
+
+describe("the Factory count is a count, not a window", () => {
+  const CT = codeOnly("app/code-tasks-ui.tsx");
+  const FEED = codeOnly("lib/code-tasks.ts");
+
+  it("says what it is short by", () => {
+    expect(CT).toContain("{shownTotal > tasks.length ? (");
+    expect(CT).toContain("of {shownTotal}");
+  });
+
+  it("never claims fewer than it is drawing", () => {
+    // `tasks` can hold rows a later empty fetch chose not to clobber; "showing 12 of 8" would
+    // be worse than saying nothing at all.
+    expect(CT).toContain("Math.max(codeTaskTotal ?? tasks.length, tasks.length)");
+  });
+
+  it("falls back to what arrived when the API sends no total", () => {
+    // An older API that does not report one must not make the console say "0 code tasks" over
+    // a list that plainly has some.
+    expect(FEED).toContain('typeof res.total === "number" ? res.total : items.length');
+  });
+});
