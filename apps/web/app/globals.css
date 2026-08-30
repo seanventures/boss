@@ -1371,6 +1371,19 @@ h1, h2, h3, h4, h5, h6 {
 
 @media (max-width: 900px) {
   .dw-builder { grid-template-columns: 1fr; }
+  /* The builder's toolbar stops trying to be a bar. Left as a row it forces its own width and
+     pushes the canvas past the edge of a narrow window. */
+  .dw-canvas-head { align-items: stretch; }
+  .dw-head-left { width: 100%; }
+  .dw-head-picker { flex: 1 1 100%; }
+  .dw-head-picker .field, .dw-new .field { min-width: 0; width: 100%; }
+  .dw-head-divider { display: none; }
+  .dw-canvas-actions { margin-left: 0; width: 100%; }
+  .dw-canvas-actions .cap-btn, .dw-new-actions .cap-btn { flex: 1 1 auto; justify-content: center; }
+  .dw-new-actions { width: 100%; }
+  /* A step's controls stack rather than squeezing the label to nothing. */
+  .dw-draft-step { flex-wrap: wrap; }
+  .dw-draft-approval { margin-left: 0; }
 }
 
 /* ── Console loading indicator ────────────────────────────────────────────────
@@ -6921,6 +6934,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
  * opening the third one moved the second under the cursor — the list lost its shape exactly
  * when you were trying to navigate it.
  */
+/* THE LIST COLUMN HAS A HARD FLOOR, SO THE SPLIT NEEDS A BREAKPOINT.
+   minmax(280px, …) never collapses: below roughly 900px the 280px list plus the gap plus a
+   detail pane that has its own content width adds up to more than the window, and the page
+   runs off the right-hand edge. The builder already collapsed at 900px; this did not. */
 .ct-split {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -6960,6 +6977,29 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 .ct-split-detail { min-width: 0; }
+
+/* NARROW: ONE COLUMN, LIST ABOVE DETAIL.
+   Below the breakpoint there is no room for a master-detail split, so it stops being one. The
+   list also stops being sticky — a pane pinned to the top of a single-column page eats the
+   screen the detail needs. */
+@media (max-width: 900px) {
+  .ct-split, .ct-split[data-docked="true"] { grid-template-columns: minmax(0, 1fr); }
+  .ct-split-list { position: static; }
+  /* Docked, the list collapses to a 44px rail — which is a rail with nowhere to sit once the
+     columns are stacked. Hidden instead, and the detail keeps the whole width. */
+  .ct-split[data-docked="true"] .ct-split-list { display: none; }
+  /* The action bar wraps already; on a narrow screen its buttons share the row evenly rather
+     than each one forcing its own width and the last one falling off the edge. */
+  .ct-detail-actionbar, .ct-detail-actions { width: 100%; }
+  .ct-detail-actions .cap-btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* PHONE: the cards stop pretending to be a grid. `minmax(320px, 1fr)` is wider than a phone,
+   so a single column of 320px boxes overflowed a 360px viewport once padding was counted. */
+@media (max-width: 560px) {
+  .mr-grid, .ct-tiles { grid-template-columns: minmax(0, 1fr) !important; }
+  .ct-detail-actions .cap-btn { flex: 1 1 100%; }
+}
 /* Title left, preview right — the action at the top, where it is looked for. */
 .ct-detail-head {
   display: flex; align-items: flex-start; justify-content: space-between;
