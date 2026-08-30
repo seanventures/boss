@@ -303,7 +303,6 @@ describe("ConsoleShell edition-aware nav", () => {
     const skills = readFileSync(resolve(__dirname, "../app/skills-import-ui.tsx"), "utf8");
 
     expect(page).toContain("<OnboardingHelpCard");
-    expect(page).toContain("<PreviewsPanel");
     expect(page).toContain("<DecisionInbox");
     expect(page).toContain("<SkillImportForm");
     expect(page).toContain("<PackImportForm");

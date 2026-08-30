@@ -92,7 +92,6 @@ import { fetchWorkOrchestrationFeed } from "../lib/work-orchestration";
 import { WorkOrchestration } from "./work-orchestration-ui";
 import { PackExportButton, PackImportForm } from "./packs-import-ui";
 import { SkillExportButton, SkillImportForm } from "./skills-import-ui";
-import { PreviewsPanel } from "./previews-ui";
 import { DecisionInbox } from "./decision-inbox-ui";
 import { MetatronCaptain } from "./metatron-captain-ui";
 import { fetchAuthSession } from "../lib/auth-session";
@@ -7031,26 +7030,6 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             githubPlaneLabel={wipStatus?.githubPlaneReason}
             githubFullName={wipStatus?.githubFullName}
           />
-          <article className="stack-card">
-            <div className="section-head">
-              <div>
-                <span className="eyebrow">Previews</span>
-                <h3>Operator Views — fixture HTML is not a customer app.</h3>
-              </div>
-            </div>
-            <PreviewsPanel
-              // A preview row that says only prev_680d… cannot be told apart from the app the
-              // reader is actually looking at. The run already knows its name.
-              runTitles={Object.fromEntries(codeTasksFeed.items.map((t) => [
-                t.id,
-                (t.title ?? "").replace(/^Web app — #?\s*(PRD:)?\s*/i, "").split(/[—:\n]/)[0].trim().slice(0, 40)
-                  || t.id,
-              ]))}
-              feed={previewFeed}
-              projectId={activeProjectId}
-              actor={activeActorId}
-            />
-          </article>
         </section>
 
         <section data-area="foundations" aria-label="Design foundations">

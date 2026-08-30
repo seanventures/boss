@@ -169,22 +169,38 @@ describe("Mission Control Previews honesty", () => {
     expect(markup).toContain(PREVIEW_FIXTURE_CTA);
   });
 
-  it("wires Mission Control Previews + fixture POST without claiming a live app", () => {
+  it("does NOT put the operator fixture panel on the customer's Factory page", () => {
+    // It described itself accurately — "Operator Views — fixture HTML is not a customer app",
+    // "Create fixture View (not a customer app)" — and that is the point: a harness for
+    // proving the View gateway without a microVM does not belong on the page a customer opens
+    // to look at their apps. On goldeneye it had become 47 expired rows, each repeating
+    // "cannot approve: preview status is 'expired'", under a heading about fixtures.
+    //
+    // Preview itself is untouched. Open preview, the status chip, Startup logs and Rebuild
+    // preview are on the app's own detail bar and always were — that is where an action about
+    // an app belongs, next to the app.
     const root = join(dirname(fileURLToPath(import.meta.url)), "..");
     const page = readFileSync(join(root, "app/page.tsx"), "utf8");
-    expect(page).toContain("<PreviewsPanel");
-    expect(page).toContain("fixture HTML is not a customer app");
-    expect(page).toContain('data-area="code_tasks"');
-    const previewsMount = page.slice(
-      page.indexOf('data-area="code_tasks"'),
-      page.indexOf("<PreviewsPanel") + 200,
-    );
-    expect(previewsMount).toContain("<PreviewsPanel");
-    expect(previewsMount).toContain("fixture HTML is not a customer app");
-    expect(page).not.toMatch(/View opens a live app/i);
+    expect(page).not.toContain("<PreviewsPanel");
+    expect(page).not.toContain("fixture HTML is not a customer app");
+
+    // The endpoint stays, because the harness is still worth having — just not there.
     const actions = readFileSync(join(root, "app/actions.ts"), "utf8");
     expect(actions).toContain("/v1/previews/fixture");
     expect(actions).toContain("createPreviewFixtureAction");
+  });
+
+  it("moves the one action that would otherwise have been lost", () => {
+    // "Approve & ship" existed ONLY in that panel. Removing the section without moving it
+    // would have deleted the merge-and-deploy control from the console.
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ui = readFileSync(join(root, "app/code-tasks-ui.tsx"), "utf8");
+    expect(ui).toContain('import { ApprovePreview } from "./previews-ui"');
+    expect(ui).toContain("<ApprovePreview preview={live} />");
+    // Beside the PR it merges, not in a second place further down the page.
+    const bar = ui.slice(ui.indexOf('data-testid="ct-detail-actionbar"'),
+                         ui.indexOf('data-testid="ct-detail-ask"'));
+    expect(bar).toContain("ApprovePreview");
   });
 
   it("surfaces list failures instead of implying 0 running success", () => {

@@ -1824,7 +1824,7 @@ def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -
 def list_previews(
     engine, project_id: str, limit: int = 50, settings: Optional[Settings] = None
 ) -> list[dict]:
-    """Reap expired previews (tear down + mark) and return recent ones."""
+    """Reap expired previews (tear down, mark, and eventually forget) and return recent ones."""
     with begin(engine) as c:
         expired = c.execute(text(
             "SELECT id,pid,mode,container_id,sandbox_task_id FROM app_previews "
@@ -1832,6 +1832,25 @@ def list_previews(
         for r in expired:
             _teardown(dict(r), settings)
             c.execute(text("UPDATE app_previews SET status='expired' WHERE id=:id"), {"id": r["id"]})
+
+        # AND THEN FORGET THE OLD ONES.
+        #
+        # Expiring marked rows but never removed them, so `app_previews` only grew. Measured on
+        # goldeneye: 50 rows, of which 47 expired, 1 failed, 1 stopped and 1 actually running.
+        #
+        # That is not merely untidy. This query returns the newest N rows whatever their status
+        # and callers filter for live ones afterwards, so a window that is 94% dead can push a
+        # genuinely running preview for an older app out of it entirely — the preview exists,
+        # and the app's card cannot see it.
+        #
+        # Seven days, and only for previews that are already finished. A preview's life is an
+        # hour; a week-old expired row has no reader. The run history it belonged to lives in
+        # code_task_runs and is untouched.
+        c.execute(text(
+            "DELETE FROM app_previews "
+            "WHERE status IN ('expired','stopped','failed') "
+            "  AND COALESCE(expires_at, created_at) < now() - interval '7 days'"))
+
         rows = c.execute(text(
             "SELECT id,run_id,repo,branch,url,port,mode,substrate,build_substrate,sandbox_task_id,"
             "status,error,failure_kind,expires_at,created_at "

@@ -31,6 +31,7 @@ import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
 import { forgetRunDeployment, loadRunDeployment } from "../lib/run-deployments";
 import { operatorPreviewOpenHref } from "../lib/code-tasks";
+import { ApprovePreview } from "./previews-ui";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
 import {
@@ -2702,6 +2703,18 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                       .slice(0, 2)}
                   />
                 ) : null}
+                {/* APPROVE & SHIP, BESIDE THE PR IT MERGES.
+                    This was only ever in the separate "Previews" panel further down the page —
+                    a second place to look for an action about the app already open, sitting
+                    under a heading that called itself an operator fixture view. It renders
+                    itself as nothing when there is no gate, says WHY when the gate refuses,
+                    and states what the click will deploy before it is clicked. */}
+                {(() => {
+                  const live = previews.find(
+                    (p) => p.run_id === active.id
+                      && (p.status === "running" || p.status === "verified"));
+                  return live ? <ApprovePreview preview={live} /> : null;
+                })()}
                 {/* WHAT HAPPENED DURING THOSE 40 MINUTES.
                     A build runs for forty to ninety minutes and its longest phase used to be a
                     single row — "solo, 45 turns". This opens the log already scoped to THIS

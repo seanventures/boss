@@ -38,7 +38,14 @@ function resolveHref(href: string): string {
  * The gate is fetched BEFORE the button renders so the row can say what approving will do,
  * and refuse when it would do nothing.
  */
-function ApprovePreview({ preview }: { preview: PreviewRec }) {
+/**
+ * Approve the merge, and ship what that merges.
+ *
+ * Exported because it now lives on the app's own detail bar, beside the PR it merges and the
+ * preview it was judged from. It used to sit only in a separate "Previews" panel further down
+ * the page — a second place to look for an action about the app you already had open.
+ */
+export function ApprovePreview({ preview }: { preview: PreviewRec }) {
   const [gate, setGate] = React.useState<any>(null);
   const [state, action] = useActionState(approvePreviewAction, null);
 
