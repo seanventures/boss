@@ -1070,21 +1070,35 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       </aside>
 
       <section className="dw-canvas" aria-label="Your workflow">
-        <div className="dw-canvas-head">
-          <label className="field">
-            <span>Editing</span>
-            <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}
-                    data-testid="dw-target">
-              {/* The tab is called "Build your own", and until now the only way in was to fork
-                  something — so a screen that promised authorship offered only editing. */}
-              {editable.length === 0
-                ? <option value="">Nothing of your own yet</option>
-                : null}
-              {editable.map((i) => (
-                <option key={i.id} value={i.id}>{i.name}</option>
-              ))}
-            </select>
-          </label>
+        <div className="dw-canvas-head" data-mode={creating ? "creating" : "editing"}>
+          {/* ONE QUESTION AT A TIME.
+              "Editing: Standard Product Delivery" beside "Start from: Backend Service Setup"
+              asks the operator to hold two different workflows in mind and says nothing about
+              which the buttons act on — and the answer was "the one you are not making". While
+              a new workflow is being named, the controls that belong to the old one (which one
+              you are editing, reset it, save it) are not just noise, they are wrong. */}
+          {/* TWO GROUPS, NOT FIVE CONTROLS IN A ROW.
+              Left is what you are working on — which workflow, or the new one you are naming.
+              Right is what happens to it. Flat and evenly weighted, the row gave "+ New
+              workflow" the same presence as "Reset to the standard", so the one control that
+              starts something read as the least important thing on the line. */}
+          <div className="dw-head-left">
+          {!creating ? (
+            <label className="field">
+              <span>Editing</span>
+              <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}
+                      data-testid="dw-target">
+                {/* The tab is called "Build your own", and until now the only way in was to fork
+                    something — so a screen that promised authorship offered only editing. */}
+                {editable.length === 0
+                  ? <option value="">Nothing of your own yet</option>
+                  : null}
+                {editable.map((i) => (
+                  <option key={i.id} value={i.id}>{i.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
 
           {creating ? (
             <form className="dw-new" onSubmit={(e) => {
@@ -1103,10 +1117,16 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               setImportFrom("");
               setCreating(false);
             }}>
-              <input className="input" autoFocus value={newName} placeholder="Name it"
-                     onChange={(e) => setNewName(e.target.value)}
-                     onKeyDown={(e) => { if (e.key === "Escape") setCreating(false); }}
-                     aria-label="Name for the new workflow" data-testid="dw-new-name" />
+              {/* Labelled, like the control beside it. It replaced "Editing" in this slot, so
+                  it has to say what mode the header is in — an unlabelled box next to a
+                  labelled dropdown reads as part of the dropdown. */}
+              <label className="field">
+                <span>New workflow</span>
+                <input className="input" autoFocus value={newName} placeholder="Name it"
+                       onChange={(e) => setNewName(e.target.value)}
+                       onKeyDown={(e) => { if (e.key === "Escape") setCreating(false); }}
+                       aria-label="Name for the new workflow" data-testid="dw-new-name" />
+              </label>
               <label className="field dw-new-from">
                 <span>Start from</span>
                 <select className="input" value={importFrom} data-testid="dw-new-from"
@@ -1131,27 +1151,40 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
               </button>
             </form>
           ) : (
-            <button type="button" className="cap-btn" disabled={!!busy}
-                    onClick={() => setCreating(true)} data-testid="dw-new">
-              + New workflow
-            </button>
+            <>
+              {/* A divider, because "edit that one" and "start a new one" are different
+                  intentions and the gap alone did not say so. */}
+              <span className="dw-head-divider" aria-hidden />
+              {/* Accent-tinted rather than solid: loud enough to be the obvious way into
+                  authoring — which is what this tab is FOR — without becoming a second solid
+                  button competing with Save for the eye. */}
+              <button type="button" className="cap-btn dw-new-cta" disabled={!!busy}
+                      onClick={() => setCreating(true)} data-testid="dw-new">
+                <span className="dw-new-plus" aria-hidden>+</span> New workflow
+              </button>
+            </>
           )}
-          <span className="dw-canvas-actions">
+          </div>
+          {/* Hidden while creating, for the same reason: both act on the workflow in the
+              dropdown that is no longer on screen. */}
+          <span className="dw-canvas-actions" hidden={creating}>
             {/* RESET TO THE STANDARD. Only offered when there is something to reset TO — a
                 fork records what it came from, and a workflow written from scratch has no
                 original, so the control would be a lie on one of them. */}
-            {loaded?.forked_from ? (
+            {!creating && loaded?.forked_from ? (
               <button type="button" className="cap-btn" disabled={!!busy}
                       onClick={reset} data-testid="dw-reset"
                       title={`Put the steps back the way ${loaded.forked_from.name} has them`}>
                 Reset to the standard
               </button>
             ) : null}
-            <button type="button" className="cap-btn primary"
-                    disabled={!!busy || !target || draft.length === 0}
-                    onClick={() => onSave(target, spec)} data-testid="dw-save">
-              {busy === "Save" ? "Saving…" : `Save as a new version`}
-            </button>
+            {!creating ? (
+              <button type="button" className="cap-btn primary"
+                      disabled={!!busy || !target || draft.length === 0}
+                      onClick={() => onSave(target, spec)} data-testid="dw-save">
+                {busy === "Save" ? "Saving…" : `Save as a new version`}
+              </button>
+            ) : null}
           </span>
         </div>
 

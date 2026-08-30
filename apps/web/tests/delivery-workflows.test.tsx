@@ -322,7 +322,26 @@ describe("build your own actually lets you build one", () => {
     // The tab was called "Build your own" and the only way in was to fork something, so a
     // screen that promised authorship offered only editing.
     expect(UI).toContain('data-testid="dw-new"');
-    expect(UI).toContain("+ New workflow");
+    expect(UI).toContain("New workflow");
+  });
+
+  it("gives it more weight than the controls around it", () => {
+    // Flat and evenly weighted, the row gave "+ New workflow" the same presence as "Reset to
+    // the standard" — so the one control that STARTS something read as the least important
+    // thing on the line, on the tab whose entire purpose is authoring.
+    expect(UI).toContain("dw-new-cta");
+    expect(CSS).toContain(".dw-new-cta");
+  });
+
+  it("keeps a single solid button, so two do not compete", () => {
+    // Accent-tinted, not solid: prominent without turning the header into two primary buttons
+    // arguing about which one the operator meant.
+    expect(CSS).toContain("background: color-mix(in srgb, var(--accent) 12%, transparent)");
+  });
+
+  it("separates 'edit that one' from 'start a new one'", () => {
+    expect(UI).toContain("dw-head-divider");
+    expect(UI).toContain('<div className="dw-head-left">');
   });
 
   it("can start from an existing workflow, including a standard", () => {
@@ -460,5 +479,26 @@ describe("the custom-step endpoints exist on both sides", () => {
       api.indexOf("def delete_delivery_custom_step"),
     );
     expect(create).not.toContain('payload.get("risk_tier")');
+  });
+});
+
+describe("the builder header asks one question at a time", () => {
+  it("hides 'Editing' while a new workflow is being named", () => {
+    // "Editing: Standard Product Delivery" beside "Start from: Backend Service Setup" asks the
+    // operator to hold two workflows in mind, and says nothing about which the buttons act on.
+    expect(UI).toContain("{!creating ? (");
+    expect(UI).toContain('data-mode={creating ? "creating" : "editing"}');
+  });
+
+  it("hides the controls that would act on the OTHER workflow", () => {
+    // Reset and Save apply to the one in the dropdown that is no longer on screen. Leaving
+    // them visible is not merely noisy — clicking either does something to a workflow the
+    // operator is not looking at.
+    expect(UI).toContain('<span className="dw-canvas-actions" hidden={creating}>');
+    expect(UI).toContain("{!creating && loaded?.forked_from ? (");
+  });
+
+  it("labels the name field, because it took the labelled slot", () => {
+    expect(UI).toContain("<span>New workflow</span>");
   });
 });

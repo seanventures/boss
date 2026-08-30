@@ -1119,7 +1119,33 @@ h1, h2, h3, h4, h5, h6 {
 .dw-floor { margin: 8px 2px 0; font-size: 0.68rem; line-height: 1.4; }
 
 .dw-canvas { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface-1); }
-.dw-canvas-head { display: flex; align-items: end; gap: 12px; justify-content: space-between; }
+.dw-canvas-head {
+  display: flex; align-items: end; gap: 12px; justify-content: space-between;
+  flex-wrap: wrap;
+  /* The two groups sit on a shelf of their own, so the header reads as a control bar rather
+     than as the first row of the canvas. */
+  padding-bottom: 12px; border-bottom: 1px solid var(--border);
+}
+/* WHAT YOU ARE WORKING ON. */
+.dw-head-left { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.dw-head-left .field { min-width: 210px; }
+.dw-head-divider {
+  width: 1px; align-self: stretch; min-height: 30px; background: var(--border);
+  margin: 0 2px;
+}
+/* THE WAY IN TO AUTHORING. Accent-tinted, not solid — prominent without turning the header
+   into two primary buttons arguing about which one you meant. */
+.dw-new-cta {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent); font-weight: 600; padding: 8px 16px;
+}
+.dw-new-cta:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent); color: var(--accent);
+}
+.dw-new-cta:disabled { opacity: .5; }
+.dw-new-plus { font-size: 1.05em; line-height: 1; margin-right: 1px; }
 .dw-canvas-empty { padding: 30px 10px; text-align: center; }
 /* A SEQUENCE, NOT A PILE.
    The steps run in order and the canvas has to say so. Evenly-spaced identical boxes read as
@@ -1237,7 +1263,8 @@ h1, h2, h3, h4, h5, h6 {
 .dw-soon summary { cursor: pointer; font-size: 0.7rem; }
 .dw-soon-item { margin: 6px 0 0; font-size: 0.68rem; line-height: 1.4; }
 .dw-canvas-actions { display: inline-flex; gap: 6px; align-items: center; }
-.dw-new { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }
+.dw-new { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.dw-new .field { min-width: 200px; }
 .dw-new .input { min-width: 170px; }
 .dw-new-from .input { min-width: 210px; }
 .dw-spec-error {
