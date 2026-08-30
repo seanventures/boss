@@ -27,11 +27,13 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
 from sqlalchemy.exc import ProgrammingError
+
+from boss_engine.services.activity_log import SOURCES  # noqa: E402
 
 ITEM_KEYS = {
     "id",
@@ -46,7 +48,6 @@ ITEM_KEYS = {
     "created_at",
     "data",
 }
-SOURCES = {"event", "process_step", "job", "deadletter", "receipt"}
 STATUSES = {"ok", "failed", "waiting", "stuck", "info"}
 OPTIONAL_TABLES = (
     "jobs",
@@ -264,12 +265,22 @@ class FakeActivityConn:
                 rows, key=lambda row: row.get(params["sort"]) or "", reverse=reverse
             )
 
+        # The service counts rows to report an honest `total` now that the source queries are
+        # bounded; the double has to answer that shape or every total reads as zero.
+        if re.search(r"count\s*\(\s*\*\s*\)", sql, re.IGNORECASE):
+            return _Result([{"n": len(rows)}])
+
         limit = params.get("limit")
+        # `cap` is the per-source bound the service pushes into SQL. Honouring it here is what
+        # makes "the page is exact" and "the scan was truncated" testable at all.
+        cap = params.get("cap")
         offset = int(params.get("offset") or 0)
         if limit is not None:
             rows = rows[offset : offset + int(limit)]
         elif offset:
             rows = rows[offset:]
+        if cap is not None:
+            rows = rows[: int(cap)]
         return _Result(rows)
 
 
@@ -506,3 +517,149 @@ def test_does_not_invent_success_and_empty_payload_stays_empty(service):
     assert items[0]["status"] == "info"
     assert items[0]["status"] != "ok"
     assert items[0]["data"] == {}
+
+
+# --------------------------------------------------------------------------- #
+# Bounded source queries
+#
+# Every source query was unbounded: five of them loaded 46,774 rows on the dogfood project to
+# display fifty, decoding 33,646 JSONB event payloads in Python on the way. /v1/activity took
+# 14.3 seconds while /v1/dashboard took 0.6. These pin the bound AND its honesty — a bound that
+# quietly drops rows turns a slow endpoint into a lying one.
+# --------------------------------------------------------------------------- #
+from boss_engine.services.activity_log import (  # noqa: E402
+    FILTERED_SCAN_CAP,
+    SOURCES,
+    ActivityLogService,
+)
+
+
+def _service() -> ActivityLogService:
+    return ActivityLogService()
+
+
+def _many_events(conn: FakeActivityConn, count: int, project: str = "proj_a") -> None:
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(count):
+        conn.add("events", _event(
+            event_id=f"ev_{i:05d}",
+            project_id=project,
+            event_type="job.succeeded",
+            created_at=base + timedelta(seconds=i),
+        ))
+
+
+def _caps_used(conn: FakeActivityConn) -> list[int]:
+    return [p["cap"] for sql, p in conn.statements if "cap" in p]
+
+
+def test_an_unfiltered_page_does_not_load_the_whole_history():
+    """The default console view. Nothing about the answer changes; only how much is read."""
+    conn = FakeActivityConn()
+    _many_events(conn, 500)
+    out = _service().query(conn, "proj_a", limit=50, offset=0)
+
+    assert len(out["items"]) == 50
+    # Each source asked for exactly what the page could contain, and no more.
+    assert _caps_used(conn) == [50] * len(SOURCES)
+
+
+def test_the_bound_covers_the_offset_not_just_the_page():
+    """Asking for rows 200-250 needs the newest 250 per source, not the newest 50 — a cap of
+    `limit` alone would return an empty second page."""
+    conn = FakeActivityConn()
+    _many_events(conn, 500)
+    out = _service().query(conn, "proj_a", limit=50, offset=200)
+    assert _caps_used(conn) == [250] * len(SOURCES)
+    assert len(out["items"]) == 50
+
+
+def test_the_unfiltered_page_is_identical_to_the_unbounded_one():
+    """The bound is only sound if it changes no answer. A source cannot contribute a row to the
+    newest fifty of the union unless it is in its own newest fifty."""
+    conn = FakeActivityConn()
+    base = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    for i in range(120):
+        conn.add("events", _event(event_id=f"ev_{i:03d}", project_id="proj_a",
+                                  event_type="job.succeeded",
+                                  created_at=base + timedelta(seconds=i)))
+    bounded = _service().query(conn, "proj_a", limit=25)
+    # The newest 25 by id, since ids ascend with created_at here. Naming the exact rows is the
+    # point: "25 rows, sorted" would also pass if the bound picked the WRONG 25.
+    assert [i["id"] for i in bounded["items"]] == [f"ev_{i:03d}" for i in range(119, 94, -1)]
+
+
+def test_total_is_counted_not_taken_from_the_page():
+    """`total` used to be len(items), which was only true because everything was loaded. With
+    the sources bounded, returning that would report 50 for a project with 33,646 events —
+    the same defect as the console's "Verified today: 100", which was its own page size."""
+    conn = FakeActivityConn()
+    _many_events(conn, 300)
+    out = _service().query(conn, "proj_a", limit=50)
+    assert out["total"] == 300
+    assert out["total_is_exact"] is True
+    assert len(out["items"]) == 50
+
+
+def test_a_filtered_search_reaches_past_the_page():
+    """A filter runs in Python over loaded rows, so bounding to `limit` would hide every match
+    that is not in the newest fifty — reporting "no failures" for a project that has them."""
+    conn = FakeActivityConn()
+    base = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    conn.add("events", _event(event_id="ev_old_fail", project_id="proj_a",
+                              event_type="job.failed", created_at=base))
+    for i in range(1, 200):
+        conn.add("events", _event(event_id=f"ev_{i:03d}", project_id="proj_a",
+                                  event_type="job.succeeded",
+                                  created_at=base + timedelta(seconds=i)))
+    out = _service().query(conn, "proj_a", status="failed", limit=50)
+    assert [i["id"] for i in out["items"]] == ["ev_old_fail"]
+    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * len(SOURCES)
+
+
+def test_a_truncated_search_says_so_rather_than_implying_completeness():
+    """The cap is real and cannot be wished away, so it is declared. A search that silently
+    stopped would be worse than a slow one: it answers confidently and wrongly."""
+    conn = FakeActivityConn()
+    _many_events(conn, FILTERED_SCAN_CAP + 10)
+    out = _service().query(conn, "proj_a", q="job", limit=50)
+    assert out["total_is_exact"] is False
+    assert "truncated_note" in out
+    assert str(FILTERED_SCAN_CAP) in out["truncated_note"]
+
+
+def test_a_filtered_search_within_the_cap_is_still_exact():
+    """Declaring truncation on every filtered search would train the operator to ignore it."""
+    conn = FakeActivityConn()
+    _many_events(conn, 100)
+    out = _service().query(conn, "proj_a", q="job", limit=50)
+    assert out["total_is_exact"] is True
+    assert "truncated_note" not in out
+
+
+def test_sorting_by_status_does_not_use_the_recency_bound():
+    """Newest-N is only a valid bound for a newest-first sort. Ordering by status has no
+    relationship to recency, so the exact bound would silently pick the wrong rows."""
+    conn = FakeActivityConn()
+    _many_events(conn, 300)
+    _service().query(conn, "proj_a", sort="status", limit=50)
+    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * len(SOURCES)
+
+
+def test_ascending_order_does_not_use_the_recency_bound():
+    """Oldest-first wants the OTHER end of the table; newest-N would return the wrong page."""
+    conn = FakeActivityConn()
+    _many_events(conn, 300)
+    _service().query(conn, "proj_a", order="asc", limit=50)
+    assert _caps_used(conn) == [FILTERED_SCAN_CAP] * len(SOURCES)
+
+
+def test_every_source_is_bounded():
+    """One unbounded source is enough to keep the endpoint slow — jobs was missed on the first
+    pass because its query had an extra WHERE clause and did not match the others."""
+    conn = FakeActivityConn()
+    _many_events(conn, 10)
+    _service().query(conn, "proj_a", limit=5)
+    bounded = [sql for sql, p in conn.statements if "cap" in p]
+    for table in ("events", "agent_process_steps", "jobs", "deadletters", "receipts"):
+        assert any(f"FROM {table}" in sql for sql in bounded), f"{table} is unbounded"

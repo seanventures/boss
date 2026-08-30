@@ -1135,7 +1135,7 @@ class MetatronCaptain:
         moves = proposed_moves_from_findings(findings, auto=False)
         scope = self._scope(connection, project_id)
         minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-        receipt, _ = self.receipts.create_or_reuse(
+        receipt, _ = self.receipts.record_completed(
             connection, scope["org_id"], scope["workspace_id"], project_id,
             f"metatron:watch:{project_id}:{minute}",
             "metatron.watch",
@@ -1242,7 +1242,7 @@ class MetatronCaptain:
             pass
         scope = self._scope(connection, project_id)
         minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-        receipt, _ = self.receipts.create_or_reuse(
+        receipt, _ = self.receipts.record_completed(
             connection, scope["org_id"], scope["workspace_id"], project_id,
             f"metatron:overwatch:{project_id}:{minute}",
             "metatron.overwatch",
@@ -1494,7 +1494,7 @@ class MetatronCaptain:
             )
             if result.get("status") == "applied":
                 minute = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-                receipt, _ = self.receipts.create_or_reuse(
+                receipt, _ = self.receipts.record_completed(
                     connection, scope["org_id"], scope["workspace_id"], project_id,
                     f"metatron:command:{kind}:{project_id}:{minute}",
                     f"metatron.command.{kind}",

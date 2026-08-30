@@ -47,7 +47,11 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# Marketing comparison matrix (boss.sean.network #opensource / #cloud / #enterprise).
+#: The vendor site the paid tiers link to. A constant so a fork points somewhere of its own
+#: rather than advertising ours, and so no hostname is hardcoded through the file.
+MARKETING_SITE = "https://boss.example"
+
+# Marketing comparison matrix (#opensource / #cloud / #enterprise).
 # status: shipped | partial | planned | community_only | cloud_only | enterprise_only
 EDITION_COMPARISON: list[dict[str, Any]] = [
     {
@@ -385,7 +389,7 @@ class CloudProductService:
             "edition_id": edition["edition_id"],
             "linked": bool(edition.get("account_connect_org")),
             "rows": list(EDITION_COMPARISON),
-            "marketing_url": "https://boss.sean.network/#cloud",
+            "marketing_url": f"{MARKETING_SITE}/#cloud",
             "principle": (
                 "Community is a real product (not a trial). Cloud is the managed control "
                 "plane. Enterprise adds identity, fleets, and design-partner wedges."
@@ -1644,7 +1648,7 @@ class CloudProductService:
         verification_uri = (
             f"{ac_base}/device"
             if ac_base
-            else "https://boss.sean.network/#early"
+            else f"{MARKETING_SITE}/#early"
         )
         expires_at = _utcnow() + timedelta(minutes=15)
         receipt, _ = self.receipts.create_or_reuse(

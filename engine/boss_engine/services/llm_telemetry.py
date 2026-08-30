@@ -53,15 +53,39 @@ def get_llm_context() -> dict:
 # Which AGENT a pipeline stage belongs to — derived at write time so per-agent spend
 # ($/qa vs $/implementer vs $/reviewer) is a plain GROUP BY, no joins (BOSS-280 P1).
 STAGE_ROLES = {
-    "standards": "architect", "spec": "architect", "plan": "architect",
-    "review_plan": "architect", "design": "architect",
+    "standards": "chief_architect", "spec": "chief_architect", "plan": "chief_architect",
+    "review_plan": "chief_architect", "design": "chief_architect",
     "write_tests": "qa",
     "implement": "software_engineer", "repair": "software_engineer",
-    "review_code": "reviewer", "consistency_check": "reviewer",
+    "review_code": "adversarial_reviewer", "consistency_check": "adversarial_reviewer",
     "security_check": "security_reviewer",
     "check_tests": "qa", "run_all_tests": "qa",
     "guest": "software_engineer", "solo": "software_engineer",
 }
+
+#: Role names this map used to write, and the registered role each one actually meant.
+#:
+#: BOSS attributed work to "architect" and "reviewer" while its own registry held
+#: "chief_architect" and "adversarial_reviewer". Nothing joined them, so that spend could never
+#: be matched to an agent and the org chart showed two agents doing significant work with no
+#: trust score, no autonomy level and no violation tracking -- while the registered agents that
+#: WERE those same reviewers sat idle beside them.
+#:
+#: The map above is corrected, so new rows are attributed to the registered names. Historical
+#: rows keep what they were written with, and are folded in here rather than by rewriting
+#: months of cost history -- a bulk UPDATE over the ledger to fix a display problem is a much
+#: worse trade than a six-line lookup.
+ROLE_ALIASES = {
+    "architect": "chief_architect",
+    "reviewer": "adversarial_reviewer",
+}
+
+
+def canonical_role(role: Optional[str]) -> Optional[str]:
+    """The registered role a recorded role name refers to."""
+    if not role:
+        return None
+    return ROLE_ALIASES.get(role.strip().lower(), role.strip().lower())
 
 
 def role_for_stage(stage: Optional[str]) -> Optional[str]:
@@ -128,6 +152,47 @@ def record_llm_call(
             )
     except Exception as exc:  # noqa: BLE001 — telemetry must never break the pipeline
         log.warning("llm_call telemetry write failed (non-fatal): %s", exc)
+
+
+def record_agent_turns(
+    turns: list,
+    *,
+    engine_name: str,
+    model: Optional[str] = None,
+    stage: Optional[str] = None,
+    prompt: Optional[str] = None,
+) -> int:
+    """Persist a captured agent<->model conversation against the ambient run context.
+
+    Sits beside `record_llm_call` deliberately: the two describe the same invocation at
+    different resolutions — one row for the ledger, one row per turn for the operator — and
+    resolving project/run/stage/role in one place is what keeps them agreeing with each other.
+
+    Never raises. A transcript that cannot be written must not fail the build it describes.
+    """
+    try:
+        from ..db import begin
+        from .agent_turns import capture_enabled, record_turns
+
+        if not capture_enabled():
+            return 0
+        ctx = _llm_ctx.get()
+        resolved_stage = stage or ctx.get("stage")
+        with begin(ctx.get("db_engine")) as c:
+            return record_turns(
+                c,
+                turns,
+                project_id=ctx.get("project_id"),
+                code_task_run_id=ctx.get("run_id"),
+                stage=resolved_stage,
+                role_key=role_for_stage(resolved_stage),
+                engine=engine_name,
+                model=model,
+                prompt=prompt,
+            )
+    except Exception as exc:  # noqa: BLE001 — see above
+        log.warning("agent turn capture failed (non-fatal): %s", exc)
+        return 0
 
 
 # ── Operator read APIs (query / rollup over llm_calls) ─────────────────────────

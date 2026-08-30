@@ -3,12 +3,33 @@
 import { useSearchParams } from "next/navigation";
 
 import { consoleHref } from "./console-href";
-import { appIdentity } from "./app-identity";
+import { appIdentity, groupIdentity } from "./app-identity";
+
+/**
+ * Did this event come from something the operator meant to operate?
+ *
+ * The app card is a `role="button"` wrapping the whole tile, and the tile contains real
+ * controls: a host dropdown, a name field, "Set target", "Run preview". A click on any of them
+ * bubbled to the card and navigated into the detail page instead — pressing "Set target" left
+ * the page rather than setting the target.
+ *
+ * The keyboard case was worse and silent: the card also answers Enter AND SPACE, so typing a
+ * space into the app-name field navigated away mid-word.
+ *
+ * Testing the ORIGIN rather than stopping propagation on each control means a control added to
+ * this card later is covered without anyone remembering to opt it out.
+ */
+export function fromInteractiveControl(event: React.SyntheticEvent): boolean {
+  const target = event.target as HTMLElement | null;
+  const hit = target?.closest?.("button, a, input, select, textarea, label, option");
+  return !!hit && hit !== event.currentTarget;
+}
 import { groupRunsIntoApps } from "./app-grouping";
 
 import { useActionState, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CodeTaskRun, LlmCallRow, PreviewRec, QaBenchmarkApp, QaBenchmarkReport } from "@boss/api-client";
+import { forgetRunDeployment, loadRunDeployment } from "../lib/run-deployments";
 import { operatorPreviewOpenHref } from "../lib/code-tasks";
 import { structuredCodeTaskTests } from "../lib/code-tasks";
 
@@ -26,15 +47,14 @@ import {
   overrideCodeTaskAction,
   followUpCodeTaskAction,
   conveneMeetingAction,
-  runDeploymentsAction,
 } from "./actions";
 import { LiveDeployment } from "./deploy-ui";
 import { Markdown } from "./markdown";
 import { ClientRelativeTime } from "./client-relative-time";
 import { JourneySpine } from "./journey-spine-ui";
 import {
-  ArrowSquareOut, ArrowsClockwise, ChatCircleDots, DotsThree, PencilSimple,
-  PlayCircle, RocketLaunch, Sparkle,
+  ArrowSquareOut, ArrowsClockwise, ChatCircleDots, DotsThree, GitPullRequest,
+  ListMagnifyingGlass, PencilSimple, PlayCircle, RocketLaunch, Sparkle, TerminalWindow,
 } from "@phosphor-icons/react";
 
 import { SubmitButton } from "./submit-button";
@@ -91,27 +111,59 @@ const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 function PreviewLogs({ previewId }: { previewId: string }) {
   const [open, setOpen] = useState(false);
   const [log, setLog] = useState("");
+  // WAITING AND BROKEN ARE NOT THE SAME STATE.
+  //
+  // This panel had one: "Waiting for preview output…", shown whenever `log` was empty. So a
+  // stream that failed on connect looked identical to one that was about to deliver, and it
+  // said "waiting" forever. `onerror` closed the connection without a word, which is how a
+  // control that could never work looked like one still trying.
+  const [state, setState] = useState<"connecting" | "streaming" | "ended" | "failed">("connecting");
   useEffect(() => {
     if (!open) return;
+    setState("connecting");
+    // THROUGH THE SERVER, not straight at the API.
+    //
+    // This pointed an EventSource at ${PREVIEW_API} directly. The browser cannot reach the API
+    // in this deployment — every other call on the page is server-side — and the API requires a
+    // Bearer key, which EventSource cannot send. Both problems disappear behind a same-origin
+    // route handler that holds the key.
     const source = new EventSource(
-      `${PREVIEW_API}/v1/previews/${encodeURIComponent(previewId)}/logs`,
+      `/api/preview-logs?preview_id=${encodeURIComponent(previewId)}`,
     );
+    source.addEventListener("open", () => setState("streaming"));
     source.addEventListener("log", (event) => {
+      setState("streaming");
       try { setLog((current) => (current + JSON.parse((event as MessageEvent).data)).slice(-12000)); }
       catch { setLog((current) => (current + (event as MessageEvent).data).slice(-12000)); }
     });
-    source.addEventListener("end", () => source.close());
-    source.onerror = () => source.close();
+    source.addEventListener("end", () => { setState("ended"); source.close(); });
+    source.onerror = () => {
+      // EventSource reconnects on a transient drop, and reports the same event for a permanent
+      // failure. CLOSED means it has given up; anything else may still recover, and calling
+      // that "failed" would flap the panel on every hiccup.
+      if (source.readyState === EventSource.CLOSED) setState("failed");
+      else setState((s) => (s === "streaming" ? "streaming" : "connecting"));
+    };
     return () => source.close();
   }, [open, previewId]);
+
+  const placeholder =
+    state === "failed"
+      ? "Lost the log stream for this preview. It may have expired, or the preview service is"
+        + " unreachable — reopen this panel to try again."
+      : state === "ended"
+        ? "The preview finished writing its startup output, and it produced none."
+        : "Waiting for preview output…";
   return (
     <span>
       <button type="button" className="cap-btn" onClick={() => setOpen((value) => !value)}>
+        <TerminalWindow size={15} weight="bold" aria-hidden />
         {open ? "Hide startup logs" : "Startup logs"}
       </button>
       {open ? (
-        <pre style={{ width: "min(720px, 86vw)", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", marginTop: 8 }}>
-          {log || "Waiting for preview output…"}
+        <pre data-testid="preview-log" data-state={state}
+             style={{ width: "min(720px, 86vw)", maxHeight: 220, overflow: "auto", whiteSpace: "pre-wrap", marginTop: 8 }}>
+          {log || placeholder}
         </pre>
       ) : null}
     </span>
@@ -129,7 +181,10 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
       {!hasLive ? (
         <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
           <input type="hidden" name="run_id" value={runId} />
-          <SubmitButton className="cap-btn" disabled={pending}>{pending ? "Starting preview…" : "▶ Run preview"}</SubmitButton>
+          <SubmitButton className="cap-btn" disabled={pending}>
+            <PlayCircle size={15} weight="fill" aria-hidden />
+            {pending ? "Starting preview…" : "Run preview"}
+          </SubmitButton>
         </form>
       ) : null}
       {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
@@ -139,7 +194,8 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
         <span key={p.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
           {href ? (
             <a className="cap-btn primary" href={href.startsWith("http") ? href : `${PREVIEW_API}${href}`} target="_blank" rel="noreferrer">
-              {p.status === "verified" ? "View verified preview ↗" : "Open preview ↗"}
+              <ArrowSquareOut size={15} weight="bold" aria-hidden />
+              {p.status === "verified" ? "View verified preview" : "Open preview"}
             </a>
           ) : (
             <span className="detail" data-preview-view="missing-url">
@@ -148,7 +204,8 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
                 : `preview ${p.status} — no operator URL`}
             </span>
           )}
-          <span className="cap-badge tone-blue">
+          <span className="cap-badge tone-blue ct-live-pill" data-live={p.status === "running"}>
+            {p.status === "running" ? <i className="ct-live-dot" aria-hidden /> : null}
             preview: {p.status}
             {p.substrate === "preview_rootfs" ? " · retained rootfs" : p.substrate === "preview_docker" ? " · docker" : " · host process"}
           </span>
@@ -161,13 +218,17 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
         <form action={action} style={{ display: "inline-flex" }}>
           <input type="hidden" name="run_id" value={runId} />
           <SubmitButton className="cap-btn" style={{ opacity: 0.7, fontSize: 12 }} disabled={pending}>
-            {pending ? "Rebuilding…" : "↻ Rebuild preview"}
+            <ArrowsClockwise size={14} weight="bold" aria-hidden
+                             className={pending ? "spin" : undefined} />
+            {pending ? "Rebuilding…" : "Rebuild preview"}
           </SubmitButton>
         </form>
       ) : null}
       {/* Freshly-started link (shows instantly, before the record is re-fetched) */}
       {state?.url && livePreviews.length === 0 ? (
-        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">Open preview ↗</a>
+        <a className="cap-btn primary" href={state.url} target="_blank" rel="noreferrer">
+          <ArrowSquareOut size={15} weight="bold" aria-hidden /> Open preview
+        </a>
       ) : null}
       {/* Library/CLI build: no live URL — show the test-run result (passed) instead of an error. */}
       {state?.note ? (
@@ -943,16 +1004,33 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   // render and the card would flash "not bound" at every app on load.
   const [loaded, setLoaded] = useState(false);
 
+  // A BATCHED ROUTE HANDLER, NOT A PER-CARD SERVER ACTION.
+  //
+  // This was `runDeploymentsAction(run.id, ...)`, called from every card's mount effect. A
+  // Server Action re-renders the whole route to reply, so a list of forty apps cost forty
+  // renders of a page that takes tens of seconds to render. Measured on the live Factory area
+  // with no interaction at all: 82 invocations of this one action, 64.5s of action time, and
+  // the page was not quiet for 74 seconds.
+  //
+  // Same reasoning as loadHostsOnce above; this is the per-card path that was missed, because
+  // one extra call per card looks cheap right up until there are forty cards.
   const load = useCallback(async () => {
-    const r = await runDeploymentsAction(run.id, appIdentity(run).name);
-    if (r.ok) {
-      const d = (r.data as any) ?? {};
-      setDeploys((d.deployments ?? []) as any[]);
-      setLinked(d.linked_host ?? null);
-      setTargetId(d.linked_target_id ?? null);
-      setLoaded(true);
-    }
+    const d = await loadRunDeployment(run.id, appIdentity(run).name);
+    // `error` means nobody answered, which is NOT the same as "this app has no deployments".
+    // Treating them alike is what once showed a deployed app as never deployed, so a failed
+    // lookup leaves the previous state and `loaded` false rather than asserting absence.
+    if (d.error) return;
+    setDeploys((d.deployments ?? []) as any[]);
+    setLinked(d.linked_host ?? null);
+    setTargetId(d.linked_target_id ?? null);
+    setLoaded(true);
   }, [run]);
+
+  // Polling must see the world as it is now, not the batch window's 2.5s-old answer.
+  const reload = useCallback(async () => {
+    forgetRunDeployment(run.id);
+    await load();
+  }, [run.id, load]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -964,9 +1042,9 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
   useEffect(() => { if (latest) setStarting(false); }, [latest]);
   useEffect(() => {
     if (!live) return;
-    const t = window.setInterval(() => { void load(); }, 4000);
+    const t = window.setInterval(() => { void reload(); }, 4000);
     return () => window.clearInterval(t);
-  }, [live, load]);
+  }, [live, reload]);
 
   // No deployment yet. That is either "no destination" (offer to link one) or "linked but
   // never shipped" (offer the first deploy). Rendering nothing here is what left an already
@@ -1013,7 +1091,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                       setNote(r.ok ? null : (r.error ?? "deploy failed"));
                       if (r.ok) setStarting(true);
                       setRetrying(false);
-                      await load();
+                      await reload();
                     }}>
               <RocketLaunch size={15} weight="fill" aria-hidden />{" "}
               {retrying || starting ? "Deploying…" : "Deploy now"}
@@ -1034,7 +1112,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                       const r = await retireTarget(targetId);
                       setNote(r.ok ? "target retired — pick a new one below" : (r.error ?? "could not retire"));
                       setRetrying(false);
-                      await load();
+                      await reload();
                     }}>
               Unbind target
             </button>
@@ -1083,7 +1161,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                     const r = await appDeployOp({ op: "retry", actor, deployment_run_id: latest.id });
                     setNote(r.ok ? "retry started" : (r.error ?? "retry failed"));
                     setRetrying(false);
-                    await load();
+                    await reload();
                   }}>
             <ArrowsClockwise size={15} weight="bold" aria-hidden />{" "}
             {retrying ? "Retrying…" : "Retry"}
@@ -1106,7 +1184,7 @@ function DeploymentLine({ run, projectId, actor, deployable }: {
                     setNote(r.ok ? "target retired — set a new one to deploy again"
                                  : (r.error ?? "could not retire"));
                     setRetrying(false);
-                    await load();
+                    await reload();
                   }}>
             Unbind target
           </button>
@@ -1694,6 +1772,175 @@ function fmtDuration(ms: number): string {
 
 // Per-stage model-call detail (the internal "why is this slow"): model, turns, latency,
 // retries, cost, errors per governed stage. Auto-refreshes while the task is live.
+//: Which stages belong to which pipeline phase.
+//
+// This is the join the first version of this table got wrong. It deduped by comparing a phase
+// name to a stage name -- but those are the two different vocabularies that made the old
+// screens look duplicated in the first place, so nothing matched and every piece of work was
+// listed TWICE: once as "Engineer implementing 16m 42s" and once as "solo 16m 42s", with the
+// total counting both.
+const PHASE_STAGES: Record<string, string[]> = {
+  provisioning: [],
+  queued: [],
+  design: ["standards", "spec", "plan", "review_plan", "design"],
+  write_tests: ["write_tests"],
+  implement: ["implement", "solo", "repair", "guest"],
+  run_tests: ["check_tests", "run_all_tests"],
+  review_panel: ["review_code", "security_check", "consistency_check"],
+  check_tests: ["check_tests"],
+};
+
+//: Which agent owns a stage. Mirrors llm_telemetry.STAGE_ROLES on the engine side.
+//
+// Used as a FALLBACK when the API does not send a role — older deployments do not, and an
+// "Agent" column full of dashes is worse than no column. The row prefers whatever the API
+// says; this fills the gap rather than overriding it.
+const STAGE_AGENT: Record<string, string> = {
+  standards: "chief_architect", spec: "chief_architect", plan: "chief_architect",
+  review_plan: "chief_architect", design: "chief_architect",
+  write_tests: "qa", check_tests: "qa", run_all_tests: "qa",
+  implement: "software_engineer", repair: "software_engineer",
+  solo: "software_engineer", guest: "software_engineer",
+  review_code: "adversarial_reviewer", consistency_check: "adversarial_reviewer",
+  security_check: "security_reviewer",
+};
+
+/** How an agent key reads to a person. The API sends the key; nobody wants to read one. */
+const AGENT_ACRONYMS: Record<string, string> = {
+  qa: "QA", cto: "CTO", coo: "COO", cao: "CAO", ux: "UX", vp: "VP", pm: "PM", sre: "SRE",
+};
+
+function agentLabel(role: string | null | undefined): string {
+  if (!role) return "—";
+  // Title Case, except the words that are acronyms. "Qa" and "Cto" read as typos.
+  return role
+    .split("_")
+    .map((w) => AGENT_ACRONYMS[w.toLowerCase()] ?? (w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+/**
+ * What ran, who ran it, and what it cost — in ONE table.
+ *
+ * This replaces two blocks that listed the same steps in different vocabularies: "Step timing"
+ * named phases (Engineer implementing, Running tests) and "agent activity" named stages (solo,
+ * review_code). Same work, two names, stacked one above the other, so answering "what took 16
+ * minutes and who was doing it" meant joining them by eye.
+ *
+ * Phases with no model call still appear — cloning a repo takes time and no agent — because a
+ * timing table that silently drops the slow non-model steps mis-attributes the wall clock.
+ */
+function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs, totalMs }: {
+  runId: string;
+  live: boolean;
+  phaseTimings: { ms: number; phase: string }[];
+  currentPhase: string | null;
+  currentPhaseMs: number | null;
+  totalMs: number;
+}) {
+  const [calls, setCalls] = useState<LlmCallRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const data = await getCodeTaskActivityAction(runId);
+      if (!cancelled) { setCalls(data); setLoaded(true); }
+    };
+    void load();
+    const id = live ? setInterval(load, 4000) : undefined;
+    return () => { cancelled = true; if (id) clearInterval(id); };
+  }, [runId, live]);
+
+  // Phases carry the WALL CLOCK; calls carry who did it and what it cost. Nesting the calls
+  // under their phase is what makes this one table instead of two lists of the same work.
+  const used = new Set<number>();
+  const groups = phaseTimings.map((t) => {
+    const stages = PHASE_STAGES[t.phase] ?? [t.phase];
+    const mine = calls
+      .map((c, i) => ({ c, i }))
+      .filter(({ c, i }) => !used.has(i) && stages.includes(c.stage));
+    mine.forEach(({ i }) => used.add(i));
+    return { phase: t.phase, ms: t.ms, calls: mine.map((x) => x.c) };
+  });
+  // Calls whose stage no phase claimed still belong on the screen — dropping them would hide
+  // spend, and hidden spend is the worst thing this table could do.
+  const orphans = calls.filter((_, i) => !used.has(i));
+  const spend = calls.reduce((n, c) => n + c.cost_usd_micros, 0) / 1e6;
+  const longest = Math.max(1, ...phaseTimings.map((t) => t.ms));
+
+  const CallRow = ({ c }: { c: LlmCallRow }) => (
+    <div className={`ct-call-row${c.ok ? "" : " err"}`} data-testid={`ct-call-${c.stage}`}>
+      <span className="ct-call-stage">{c.stage}</span>
+      <span className="ct-call-agent">{agentLabel(c.role ?? STAGE_AGENT[c.stage])}</span>
+      <span className="ct-call-model">{c.model || c.engine}</span>
+      <span className="ct-call-num">{c.turns ? `${c.turns} turns` : ""}</span>
+      <span className="ct-call-num">{c.cost_usd_micros ? `$${(c.cost_usd_micros / 1e6).toFixed(3)}` : ""}</span>
+      {!c.ok ? <span className="ct-call-err">✗ {(c.error ?? "error").slice(0, 70)}</span> : null}
+    </div>
+  );
+
+  return (
+    <div className="ct-block ct-steps" data-testid="ct-steps">
+      <div className="ct-steps-head">
+        <span className="ct-block-title">Steps — who ran what</span>
+        <span className="ct-steps-total">
+          <b>{fmtDuration(totalMs)}</b>{live ? " so far" : ""}
+          {spend > 0 ? <> · <b>${spend.toFixed(2)}</b></> : null}
+        </span>
+      </div>
+
+      <div className="ct-phases">
+        {groups.map((g, i) => (
+          <div className="ct-phase" key={i} data-testid={`ct-phase-${g.phase}`}>
+            <div className="ct-phase-head">
+              <span className="ct-phase-name">{PHASE_LABEL[g.phase] ?? g.phase}</span>
+              {/* Duration as a bar as well as a number: it is the only way to see at a glance
+                  that one step took half the run. */}
+              <span className="ct-phase-bar" aria-hidden>
+                <span style={{ width: `${Math.max(2, Math.round((g.ms / longest) * 100))}%` }} />
+              </span>
+              <span className="ct-phase-ms">{fmtDuration(g.ms)}</span>
+            </div>
+            {g.calls.length > 0 ? (
+              <div className="ct-phase-calls">{g.calls.map((c, j) => <CallRow c={c} key={j} />)}</div>
+            ) : loaded ? (
+              // Said once, quietly. A row of dashes across four columns reads as missing data.
+              <div className="ct-phase-nocall">no model call — BOSS's own machinery</div>
+            ) : null}
+          </div>
+        ))}
+
+        {live && currentPhase && currentPhaseMs != null ? (
+          <div className="ct-phase ct-phase-live" data-testid="ct-step-running">
+            <div className="ct-phase-head">
+              <span className="ct-phase-name">● {currentPhase}</span>
+              <span className="ct-phase-bar" aria-hidden><span style={{ width: "100%" }} /></span>
+              <span className="ct-phase-ms">{fmtDuration(currentPhaseMs)}</span>
+            </div>
+          </div>
+        ) : null}
+
+        {orphans.length > 0 ? (
+          <div className="ct-phase" data-testid="ct-phase-other">
+            <div className="ct-phase-head">
+              <span className="ct-phase-name">Other calls</span>
+              <span className="ct-phase-bar" aria-hidden />
+              <span className="ct-phase-ms" />
+            </div>
+            <div className="ct-phase-calls">{orphans.map((c, j) => <CallRow c={c} key={j} />)}</div>
+          </div>
+        ) : null}
+      </div>
+
+      {loaded && calls.length === 0 ? (
+        <p className="detail" style={{ marginTop: 8 }}>
+          No model calls recorded for this run yet.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
   const [open, setOpen] = useState(live);
   const [calls, setCalls] = useState<LlmCallRow[]>([]);
@@ -1832,31 +2079,14 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
         </div>
       ) : null}
 
-      {(phaseTimings.length > 0 || currentPhaseMs != null) ? (
-        <div className="ct-block" style={{ margin: "8px 0" }}>
-          <div className="ct-block-title">Step timing</div>
-          <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
-            {phaseTimings.map((t, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                <span style={{ color: "var(--ink)" }}>✓ {PHASE_LABEL[t.phase] ?? t.phase}</span>
-                <span className="detail">{fmtDuration(t.ms)}</span>
-              </div>
-            ))}
-            {live && currentPhaseMs != null ? (
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }}>● {PHASE_LABEL[run.phase] ?? run.phase} (running)</span>
-                <span style={{ color: "#58a6ff", fontWeight: 600 }}>{fmtDuration(currentPhaseMs)}</span>
-              </div>
-            ) : null}
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderTop: "1px solid var(--border)", paddingTop: 4, marginTop: 2 }}>
-              <span style={{ color: "var(--muted)" }}>Total{live ? " so far" : ""}</span>
-              <span className="detail">{fmtDuration(totalMs)}</span>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <CodeTaskActivity runId={run.id} live={live} />
+      {/* ONE TABLE.
+          "Step timing" and "agent activity" listed the same steps twice, in two vocabularies —
+          phase names above, stage names below — so the reader had to join them by eye to answer
+          "what took 16 minutes, and who was doing it". They are one thing: a step, the agent
+          that owns it, the model it used, and what it cost. */}
+      <CodeTaskSteps runId={run.id} live={live} phaseTimings={phaseTimings}
+                     currentPhase={live ? (PHASE_LABEL[run.phase] ?? run.phase) : null}
+                     currentPhaseMs={currentPhaseMs} totalMs={totalMs} />
 
       {run.error ? (
         <div className="ct-error">
@@ -2120,8 +2350,29 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
   // The request's query string, so the FIRST render already carries the org.
   const search = useSearchParams()?.toString();
   const [selected, setSelected] = useState<string | null>(null);
+  // OPENED FROM THE HEADER STRIP.
+  //
+  // Selection is component state, so a project chosen in the strip had nowhere to land — the
+  // strip could switch to Factory and then pointed at the whole list. `?run=` is the handoff,
+  // read on mount and on every client-side navigation, which is how the rest of this console
+  // moves (pushState + a popstate event, never a real navigation: this tree takes seconds to
+  // paint).
+  useEffect(() => {
+    const read = () => {
+      const run = new URLSearchParams(window.location.search).get("run");
+      // Only ever SETS. Clearing on an absent param would fight the back button and snap the
+      // operator out of a run they opened by clicking a card.
+      if (run) setSelected(run);
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
   const [showNew, setShowNew] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // The run list inside an app docks away when the detail is what you are reading. There is no
+  // app-level selection state: clicking an app opens its newest built run, and the page you
+  // land on owns which run is showing.
+  const [listDocked, setListDocked] = useState(false);
   // Which app card has its spec panel open, and in which mode. KEYED BY RUN ID: the cards are
   // a .map(), so a single boolean here would open the panel on every app at once.
   const [specPanel, setSpecPanel] = useState<Record<string, "feature" | "rebuild" | undefined>>({});
@@ -2146,57 +2397,93 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
    * whether a preview is serving, so the deployable one is stated here rather than left for the
    * agent to go and infer.
    */
-  const deployableFacts = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]): string[] => {
-    const group = (lineage?.length ? lineage : [m]).filter(Boolean);
-    const done = (r: CodeTaskRun) => ["completed", "succeeded", "passed"].includes(String(r.status ?? ""));
-    // Newest first: the card list is already ordered, but do not depend on it.
-    const shipped = group.filter(done).sort((a, b) =>
-      String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
-    const live = group.map((r) => livePreviewFor(r.id)).find(Boolean) ?? null;
-    const facts: string[] = [];
-    if (group.length > 1) facts.push(`runs_in_this_app: ${group.length} (this app is a lineage, not one run)`);
-    if (shipped.length) {
-      facts.push(
-        `latest_successful_run: ${shipped[0].id} (status ${shipped[0].status})`,
-        "DEPLOY THIS ONE. Do not judge deployability from the run named above if it failed or " +
-        "was cancelled — a later or earlier run in the same app may have succeeded.",
-      );
-    } else {
-      facts.push("latest_successful_run: none in this app");
+
+  /**
+   * What to ask BOSS about THIS app, derived from what BOSS recorded about it.
+   *
+   * The dock offered four fixed prompts — "What changed today?", "Which runs failed and why?"
+   * — which are the same four whatever you are looking at, so they never referred to the app
+   * in front of you. Everything needed to do better is already on the run: the checks that did
+   * not run, the findings graded below the blocking threshold and deferred, whether the tests
+   * survived a mutation, the acceptance criteria, the files touched.
+   *
+   * Each suggestion names a real gap in THIS build. Nothing here is invented: a suggestion
+   * only appears when the fact behind it is recorded.
+   */
+  const suggestionsFor = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]): string[] => {
+    const st = (m.state ?? {}) as Record<string, unknown>;
+    const fc = (m.finalize_ctx ?? {}) as Record<string, unknown>;
+    const app = appIdentity(m).name;
+    const out: string[] = [];
+
+    // Findings a reviewer raised and the pipeline shipped anyway — literally the bugs it knows
+    // it left behind.
+    const deferred = fc.deferred_findings ?? st.deferred_findings;
+    if (Array.isArray(deferred) && deferred.length) {
+      out.push(`Fix the ${deferred.length} deferred review finding${deferred.length === 1 ? "" : "s"} on ${app}`);
     }
-    if (live) facts.push(`live_preview: ${live} (a preview is serving, so a build exists)`);
-    return facts;
-  }, [previews]);
+
+    // Checks that never ran. At risk tier 0 no reviewer looks at the code at all.
+    const advisory = fc.advisory_failing_gates;
+    const notRun = [
+      st.adversarial_verdict === "not_run" ? "adversarial review" : null,
+      st.security_verdict === "not_run" ? "security review" : null,
+      st.consistency_verdict === "not_run" ? "consistency check" : null,
+    ].filter(Boolean) as string[];
+    if (notRun.length) {
+      out.push(`No ${notRun.join(", ")} ran on this build — what would they most likely find?`);
+    } else if (Array.isArray(advisory) && advisory.length) {
+      out.push(`${advisory.length} checks failed but shipped as advisory — which should block next time?`);
+    }
+
+    // The tests passed and did not notice a deliberately broken build.
+    if (st.mutation_caught === false) {
+      const n = Array.isArray(st.impl_files) ? (st.impl_files as unknown[]).length : 0;
+      out.push(`The tests missed an injected bug${n ? ` across ${n} changed files` : ""} — where are they weakest?`);
+    }
+
+    // The contract it was accepted against.
+    const criteria = (m.spec?.acceptance_criteria ?? []) as string[];
+    if (criteria.length) {
+      out.push(`Which of the ${criteria.length} acceptance criteria are not actually covered by a test?`);
+    }
+
+    // A failure worth explaining, from anywhere in the lineage.
+    const broken = (lineage ?? [m]).find((r) => r.error);
+    if (broken?.error) {
+      out.push(`Why did ${attemptKind(broken)} fail — ${String(broken.error).slice(0, 60)}?`);
+    }
+
+    // And the forward-looking one, grounded in what this app actually is.
+    out.push(`Given the brief and review notes for ${app}, what should we build next, and why?`);
+    return out.slice(0, 5);
+  }, []);
+
+  /**
+   * What this app IS, from what the pipeline wrote down: the brief it was built from, the
+   * contract it was accepted against, what the implementer said it did, and what the reviewers
+   * found. Bounded, because this rides on every message.
+   */
 
   const askBossAbout = useCallback((m: CodeTaskRun, lineage?: CodeTaskRun[]) => {
-    const rootRunId = (m.finalize_ctx as Record<string, unknown> | undefined)?.root_run_id;
-    const pr = (m as unknown as { pull_request_url?: string }).pull_request_url;
-    const facts = [
-      `[app context] You are talking about ONE app in BOSS.`,
-      `run_id: ${m.id}`,
-      `app: ${appIdentity(m).name}`,
-      `repo: ${m.spec?.owner ?? "?"}/${m.spec?.repo ?? "?"}`,
-      `branch: ${rootRunId ? `boss/code/${rootRunId}` : `boss/code/${m.id}`}`,
-      `status: ${m.status ?? "?"}${m.phase ? ` (${m.phase})` : ""}`,
-      pr ? `pull_request: ${pr}` : "pull_request: none",
-      ...deployableFacts(m, lineage),
-      // This line used to end "...with run_id X when you need more", which reads as an
-      // instruction to STAY on that run. It is why "no, use the latest working one" changed
-      // nothing: the block outranked the operator. The run is now a starting point, and the
-      // operator's correction is explicitly above it.
-      `Start from run_id ${m.id} (inspect_app, diagnose_preview, diagnose_deployment), but it is`
-      + ` a STARTING POINT, not a restriction — the other runs above are part of the same app.`,
-      `If the operator points you somewhere else ("use the last successful one"), DO THAT. Their`
-      + ` correction outranks this block. Never repeat a conclusion they have just rejected.`,
-    ].join("\n");
+    // NO FACTS BLOCK.
+    //
+    // This used to build ~20 lines of run context and stash it in sessionStorage so the chat
+    // could prepend it to whatever the operator typed. They could see it — their question
+    // buried under a wall of text they did not write — and it still failed the questions it
+    // existed to answer, because a summary is not a PRD and the agent had no tool to fetch
+    // the real one. The run id now travels as `external_ref` alone; the server resolves it
+    // into the system prompt and the agent calls read_spec for the actual document.
+    void lineage;
     try {
-      window.sessionStorage.setItem(`boss.agent.facts.${m.id}`, facts);
-    } catch { /* private mode: the dock still works, with less context */ }
+      window.sessionStorage.setItem(
+        `boss.agent.suggests.${m.id}`, JSON.stringify(suggestionsFor(m, lineage)));
+    } catch { /* private mode: the dock still works, with generic prompts */ }
     const url = new URL(window.location.href);
     url.searchParams.set("agent", m.id);
     window.history.pushState({}, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
-  }, []);
+  }, [suggestionsFor]);
 
   // The gateway URL for a run's live preview, or null. Built from the preview ID, never from
   // app_previews.url — that column holds the sandbox-internal address (127.0.0.1:PORT), which
@@ -2221,7 +2508,21 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
     Record<string, { run_id?: string; error?: string; kind?: "meeting" | "code" | "existing" }>
   >({});
   const [tasks, setTasks] = useState<CodeTaskRun[]>(codeTasks);
-  useEffect(() => { setTasks(codeTasks); }, [codeTasks]);
+  // A REFRESH MAY NEVER EMPTY A LIST THAT HAD CONTENT.
+  //
+  // This list has now vanished on the operator three separate ways: a fetch limit filled by
+  // housekeeping, a poll that asked without the internal-run filter, and a server prop
+  // arriving empty on re-render. Each had its own cause and each produced the same symptom —
+  // tasks appear, then disappear a few seconds later — because in every case something
+  // replaced a full list with an empty one.
+  //
+  // Fixing them one at a time has not worked, so the rule is enforced here instead: an empty
+  // result never overwrites a non-empty list. Silence is not absence. If a project genuinely
+  // has no tasks, the first render says so and nothing overwrites anything.
+  const keepIfEmpty = useCallback((next: CodeTaskRun[]) => {
+    setTasks((prev) => (next.length === 0 && prev.length > 0 ? prev : next));
+  }, []);
+  useEffect(() => { keepIfEmpty(codeTasks); }, [codeTasks, keepIfEmpty]);
   const noteLaunch = useCallback(async (sourceId: string, newId?: string, error?: string,
                                         kind?: "meeting" | "code" | "existing") => {
     setLaunched((m) => ({ ...m, [sourceId]: { run_id: newId, error, kind } }));
@@ -2238,8 +2539,11 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
   const reload = useCallback(async () => {
     const fresh = await listCodeTasksAction(projectId);
-    if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) setTasks(fresh.code_tasks);
-  }, [projectId]);
+    // A failed or empty refresh leaves what is on screen alone. The poll runs while a task is
+    // live — exactly when someone is watching — so a blank frame here is the most visible
+    // possible failure.
+    if (fresh && !fresh.error && Array.isArray(fresh.code_tasks)) keepIfEmpty(fresh.code_tasks);
+  }, [projectId, keepIfEmpty]);
   // The callback is created before `reload` exists, so it reaches it through a ref rather
   // than forcing the two into one declaration order that reads backwards.
   const reloadRef = useRef<null | (() => Promise<void>)>(null);
@@ -2263,10 +2567,131 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
   const active = selected ? tasks.find((c) => c.id === selected) : null;
   if (active) {
+    // INSIDE AN APP: its runs on the left, the selected run's detail on the right.
+    //
+    // This is where the master-detail belongs. An earlier attempt put it on the Factory page,
+    // which added a navigation layer IN FRONT of the app list instead of behind it — the list
+    // is a list, and the split is what you find after clicking into one.
+    //
+    // Siblings are the other runs on the same app, so opening attempt 3 and then attempt 1 is
+    // two clicks in one place rather than two round trips back to the list.
+    const siblings = groupRunsIntoApps(tasks.filter((c) => !isInternalRun(c)))
+      .find((m) => m.some((r) => r.id === active.id)) ?? [active];
     return (
       <>
         {previewListError}
-        <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+        <div className="ct-split" data-docked={listDocked}>
+          <aside className="ct-split-list">
+            <div className="ct-split-listbar">
+              {/* Docked, the label goes and only the toggle remains: at 44px wide "← All apps"
+                  wrapped onto three lines and collided with the toggle beside it. */}
+              {!listDocked ? (
+                <button type="button" className="cap-btn" onClick={() => setSelected(null)}
+                        data-testid="ct-detail-back">← All apps</button>
+              ) : null}
+              <button type="button" className="cap-btn ct-dock-btn"
+                      onClick={() => setListDocked((d) => !d)}
+                      aria-expanded={!listDocked}
+                      data-testid="ct-dock-toggle"
+                      title={listDocked ? "Show the run list" : "Dock the run list"}>
+                {listDocked ? "»" : "«"}
+              </button>
+            </div>
+            <div className="ct-split-items" data-testid="ct-run-list">
+              <span className="detail" style={{ padding: "0 2px" }}>
+                {siblings.length === 1 ? "1 run" : `${siblings.length} runs, newest first`}
+              </span>
+              {siblings.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className="mr-meeting-card ct-app-item ct-run-item"
+                  data-selected={m.id === active.id}
+                  data-testid={`ct-run-item-${m.id}`}
+                  onClick={() => setSelected(m.id)}
+                >
+                  <span className="mr-meeting-card-head">
+                    <span className={`cap-badge tone-${statusTone(m.status)}`}>{m.status}</span>
+                    <span className="mr-meeting-date">{attemptKind(m)}</span>
+                  </span>
+                  {/* WHAT THIS RUN WAS, not just that it existed. A column of identical status
+                      chips tells you nothing about which attempt to open. */}
+                  <span className="ct-run-item-title">
+                    {(m.title || "Untitled run").replace(/^\[\d+\/\d+\]\s*/, "").slice(0, 70)}
+                  </span>
+                  <span className="detail ct-run-item-meta">
+                    {m.pull_request_number ? `PR #${m.pull_request_number}` : "no PR"}
+                    {(() => {
+                      const micros = Number((m.usage as Record<string, unknown> | undefined)?.cost_usd_micros ?? 0);
+                      return micros ? ` · ${fmtUsd(micros / 1e6)}` : "";
+                    })()}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </aside>
+          <section className="ct-split-detail">
+            {/* THE ACTIONS, TOGETHER AND AT THE TOP.
+                Preview, the PR and Ask BOSS are what an operator opens this page to do, and
+                they were scattered down it — preview below the run list, the PR link inside a
+                meta line, Ask BOSS only on the card back in the list. */}
+            <div className="ct-detail-actionbar" data-testid="ct-detail-actionbar">
+              <div className="ct-detail-heading">
+                <span className="eyebrow">{appIdentity(active).kind || "App"}</span>
+                <h3>{appIdentity(active).name}</h3>
+              </div>
+              <div className="ct-detail-actions">
+                {active.pull_request_url ? (
+                  <a className="cap-btn" href={active.pull_request_url} target="_blank"
+                     rel="noreferrer" data-testid="ct-detail-pr">
+                    <GitPullRequest size={15} weight="bold" aria-hidden />
+                    PR #{active.pull_request_number}
+                  </a>
+                ) : (
+                  <span className="detail">no PR yet</span>
+                )}
+                {active.pull_request_url ? (
+                  // The LIVE ones only. Passing the raw list rendered every expired preview
+                  // this run ever had as a chip, and a run with fifteen of them pushed the
+                  // action bar off the right of the screen. `livePreviews` is the filtered,
+                  // capped list the detail view has always computed for exactly this reason —
+                  // I passed the unfiltered one.
+                  <PreviewControls
+                    runId={active.id}
+                    livePreviews={previews
+                      .filter((p) => p.run_id === active.id
+                        && (p.status === "running" || p.status === "verified"))
+                      .slice(0, 2)}
+                  />
+                ) : null}
+                {/* WHAT HAPPENED DURING THOSE 40 MINUTES.
+                    A build runs for forty to ninety minutes and its longest phase used to be a
+                    single row — "solo, 45 turns". This opens the log already scoped to THIS
+                    run, so the question "what is it doing" is one click from the run rather
+                    than a filter to reconstruct by hand. */}
+                <button type="button" className="cap-btn"
+                        onClick={() => {
+                          const url = new URL(window.location.href);
+                          url.searchParams.set("area", "activity");
+                          url.searchParams.set("run", active.id);
+                          window.history.pushState({}, "", url.toString());
+                          window.dispatchEvent(new PopStateEvent("popstate"));
+                        }}
+                        data-testid="ct-detail-logs">
+                  <ListMagnifyingGlass size={15} weight="bold" aria-hidden />
+                  Activity log
+                </button>
+                <button type="button" className="cap-btn primary"
+                        onClick={() => askBossAbout(active, siblings)}
+                        data-testid="ct-detail-ask">
+                  <ChatCircleDots size={15} weight="fill" aria-hidden />
+                  Ask BOSS
+                </button>
+              </div>
+            </div>
+            <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+          </section>
+        </div>
       </>
     );
   }
@@ -2318,6 +2743,19 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
 
       {tasks.length === 0 ? (
         <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
+      ) : tasks.filter((c) => !isInternalRun(c)).length === 0 ? (
+        // EVERYTHING IN THE WINDOW WAS HOUSEKEEPING.
+        //
+        // The grid rendered empty under a heading reading "200 code tasks" and said nothing,
+        // so the operator's reasonable conclusion was that their apps had been deleted. They
+        // had not — 200 of the 200 newest runs were "Captain: QUALITY IMPROVE PASS", and every
+        // app they had built was older than the window. An empty grid beside a non-zero count
+        // is a contradiction the screen has to explain rather than leave to be discovered.
+        <p className="detail" data-testid="ct-all-internal">
+          All {tasks.length} runs in this window are BOSS&apos;s own maintenance passes
+          (&quot;Captain: …&quot;), so there is nothing here to show. Your apps still exist —
+          they are older than this window.
+        </p>
       ) : (
         // THE grid. Meetings lay their cards out three-across at minmax(320px, 1fr); mine
         // stacked one per row, which is why the same CSS class still read as a full-width row
@@ -2491,7 +2929,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
               appGroups.map((members) => [members[0].id, members]));
             const fcOf = fc;
             void fcOf;
-            return order.map((key, gi) => {
+
+            const items = order.map((key, gi) => {
               const members = groups.get(key)!;
               // Singletons used to render as a bare run card, so an app looked like one thing
               // until it had a second attempt and then became another. One shape for every app.
@@ -2531,7 +2970,8 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 ? `${benchGroup.name} — QA benchmark`
                 : (members.find((m) => m.title)?.title || "Decomposed build")
                     .replace(/^\[\d+\/\d+\]\s*/, "");
-              const open = expandedGroups.has(key);
+              // Nothing on this page is "open" any more — clicking an app navigates into it.
+              const open = false;
               return (
                 // The GROUPED card, on the same Meeting styling as the single one.
                 //
@@ -2540,16 +2980,25 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                 // reasonably concluded the work had not been done. The identical mistake as
                 // the fetch limit, the housekeeping filter and the preview URL earlier: fix
                 // one path, miss its twin.
-                <div key={key} className="mr-meeting-card" style={{ cursor: "default" }}>
-                  <div
-                    className="mr-meeting-card-head"
-                    role="button"
-                    onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
-                    style={{ cursor: "pointer" }}
-                  >
+                <div key={key} className="mr-meeting-card ct-app-item" data-selected={open}
+                     role="button" tabIndex={0}
+                     onClick={(e) => {
+                       if (fromInteractiveControl(e)) return;
+                       setSelected(pickBuiltRun(members)?.id ?? members[0].id);
+                     }}
+                     onKeyDown={(e) => {
+                       // A space typed into the app-name field is a space, not "open this app".
+                       if (fromInteractiveControl(e)) return;
+                       if (e.key === "Enter" || e.key === " ") {
+                         e.preventDefault();
+                         setSelected(pickBuiltRun(members)?.id ?? members[0].id);
+                       }
+                     }}
+                     style={{ cursor: "pointer" }}>
+                  <div className="mr-meeting-card-head">
                     {/* The kind of thing this is, in the badge the benchmark cards use. */}
-                    {appIdentity(members[0]).kind ? (
-                      <span className="cap-badge tone-blue">{appIdentity(members[0]).kind}</span>
+                    {groupIdentity(members).kind ? (
+                      <span className="cap-badge tone-blue">{groupIdentity(members).kind}</span>
                     ) : null}
                     <span className={`cap-badge tone-${statusTone(groupStatus)}`}>
                       {anyShipped ? "shipped" : anyRunning ? "building" : groupStatus}
@@ -2562,14 +3011,12 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                       {anyShipped && anyBroken ? " · last one failed" : ""}
                     </span>
                   </div>
-                  <span className="mr-meeting-title" role="button"
-                        onClick={() => setExpandedGroups((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
-                        style={{ cursor: "pointer" }}>
-                    {open ? "▾" : "▸"} {benchGroup?.name ? name : appIdentity(members[0]).name}
+                  <span className="mr-meeting-title">
+                    {benchGroup?.name ? name : groupIdentity(members).name}
                   </span>
-                  {appIdentity(members[0]).blurb ? (
+                  {groupIdentity(members).blurb ? (
                     <p className="detail" style={{ margin: "2px 0 0" }}>
-                      {appIdentity(members[0]).blurb}
+                      {groupIdentity(members).blurb}
                     </p>
                   ) : null}
                   {/* The spine describes the app, so it tracks the run that built it. On
@@ -2621,21 +3068,21 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                           id: "ask",
                           label: "Ask BOSS",
                           hint: "reads the run, repo and preview",
-                          icon: <ChatCircleDots size={15} weight="fill" />,
+                          icon: <ChatCircleDots size={15} weight="fill" aria-hidden />,
                           onSelect: () => askBossAbout(members[0], members),
                         },
                         {
                           id: "feature",
                           label: "Add a feature",
                           hint: "specs it first, then builds onto this app",
-                          icon: <Sparkle size={15} weight="fill" />,
+                          icon: <Sparkle size={15} weight="fill" aria-hidden />,
                           onSelect: () => setSpecPanel((m) => ({ ...m, [members[0].id]: "feature" })),
                         },
                         {
                           id: "rebuild",
                           label: "Rebuild with a fresh spec",
                           hint: "replaces this app — writes a new PRD",
-                          icon: <Sparkle size={15} weight="fill" />,
+                          icon: <Sparkle size={15} weight="fill" aria-hidden />,
                           onSelect: () => setSpecPanel((m) => ({ ...m, [members[0].id]: "rebuild" })),
                         },
                       ]}
@@ -2685,21 +3132,15 @@ export function CodeTasksHome({ projectId, codeTasks, meetings = [], apiReachabl
                     {prRun?.pull_request_url ? <span className="ct-card-pr">PR #{prRun.pull_request_number}</span>
                       : <span className="detail">one approval when the build finishes</span>}
                   </div>
-                  {open ? (
-                    <div style={{ display: "grid", gap: 8, marginTop: 6, paddingLeft: 10, borderLeft: "2px solid var(--border)" }}>
-                      {/* Named by KIND. "•/5" told you an attempt existed and nothing about
-                          what it was; "follow-up" and "retry 1" tell the story of the app. */}
-                      <span className="detail">
-                        {members.length === 1
-                          ? "The run that built it"
-                          : `${members.length} runs on this app, newest first`}
-                      </span>
-                      {members.map((m) => renderCard(m, attemptKind(m)))}
-                    </div>
-                  ) : null}
                 </div>
               );
             });
+
+            // The Factory page is a LIST of apps. Clicking one opens it; the runs inside an app
+            // are the task page's business, not this page's. An earlier version put the
+            // master-detail here, which put a second navigation layer in front of the list
+            // instead of behind it.
+            return items;
           })()}
         </div>
       )}

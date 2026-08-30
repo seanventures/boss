@@ -91,14 +91,64 @@ def load_code_task_run(connection, run_id: str) -> Optional[dict]:
     return _row_to_run(r) if r else None
 
 
-def list_code_task_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
+#: Title prefixes BOSS gives its OWN maintenance runs. Kept beside the query, because the
+#: console filters on the same list and the two drifting apart is the bug this exists to
+#: prevent.
+#:
+#: Deployment-specific prefixes come from the environment rather than being written here. One
+#: operator's platform runs "<platform> profile check" against itself, and hardcoding that name
+#: in the engine would couple the OSS package to a single deployment -- which the port rules
+#: forbid, and rightly: the next operator's housekeeping is called something else.
+_DEFAULT_INTERNAL_PREFIXES = ("captain:", "quality improve pass")
+
+
+def _internal_run_prefixes() -> tuple[str, ...]:
+    import os
+
+    extra = tuple(
+        p.strip().lower()
+        for p in (os.environ.get("BOSS_INTERNAL_RUN_PREFIXES") or "").split(",")
+        if p.strip()
+    )
+    return _DEFAULT_INTERNAL_PREFIXES + extra
+
+
+INTERNAL_RUN_PREFIXES = _internal_run_prefixes()
+
+
+def list_code_task_runs(connection, project_id: str, limit: int = 50,
+                        *, exclude_internal: bool = False) -> list[dict]:
+    """Newest runs for a project, optionally without BOSS's own housekeeping.
+
+    WHY THE FILTER BELONGS HERE AND NOT IN THE CONSOLE
+    --------------------------------------------------
+    The console fetches N newest and then drops internal runs, so a burst of housekeeping does
+    not just add noise -- it consumes the entire window. This has now happened twice. The limit
+    was raised 50 -> 200 in August for exactly this reason, and today 200 of the 200 newest runs
+    were "Captain: QUALITY IMPROVE PASS", so the Factory rendered an empty grid under a heading
+    that said "200 code tasks". Every app the operator had built was still there, just older
+    than the window.
+
+    Raising the limit again does not fix it; it only moves it, and this response is already
+    1.41 MB at 200. Filtering before the LIMIT means the window holds real work by construction.
+    """
     if hasattr(connection, "list_runs"):
         return connection.list_runs(project_id, limit)
+    where = "project_id = :p"
+    params: dict = {"p": project_id, "lim": int(limit)}
+    if exclude_internal:
+        # Matched case-insensitively at the START of the title, the same shape the console has
+        # always used, so the two agree about what "internal" means.
+        clauses = []
+        for i, prefix in enumerate(_internal_run_prefixes()):
+            clauses.append(f"lower(coalesce(title, '')) NOT LIKE :pre{i}")
+            params[f"pre{i}"] = f"{prefix}%"
+        where += " AND " + " AND ".join(clauses)
     rows = connection.execute(
         sql("SELECT id, project_id, task_id, status, phase, title, spec, state, usage, "
-             "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
-             "FROM code_task_runs WHERE project_id = :p ORDER BY created_at DESC LIMIT :lim"),
-        {"p": project_id, "lim": int(limit)},
+            "finalize_ctx, reservation_id, pull_request_url, pull_request_number, decision_id, error "
+            f"FROM code_task_runs WHERE {where} ORDER BY created_at DESC LIMIT :lim"),
+        params,
     ).mappings().all()
     return [_row_to_run(r) for r in rows]
 
@@ -199,24 +249,53 @@ def active_same_app(connection, project_id: str, repo: str, title: str) -> Optio
     Compares the app NAME, so "Shorty — self-hosted URL shortener" and
     "Shorty — self-hosted URL shortener · retry 2" are recognised as one app.
     """
-    if not hasattr(connection, "execute"):
-        return None
     from .naming import project_name
 
     wanted, _blurb, _label = project_name(title)
     if not wanted or wanted == "Untitled app":
         return None
-    rows = connection.execute(
-        sql("SELECT id, title FROM code_task_runs "
-            "WHERE project_id = :p AND status IN ('running', 'queued') "
-            "  AND spec->>'repo' = :r "
-            "ORDER BY created_at ASC LIMIT 40"),
-        {"p": project_id, "r": repo}).mappings().all()
+
+    rows: list = []
+    if hasattr(connection, "execute"):
+        try:
+            rows = connection.execute(
+                sql("SELECT id, title FROM code_task_runs "
+                    "WHERE project_id = :p AND status IN ('running', 'queued') "
+                    "  AND spec->>'repo' = :r "
+                    "ORDER BY created_at ASC LIMIT 40"),
+                {"p": project_id, "r": repo}).mappings().all()
+        except RuntimeError:
+            # See active_duplicate: a store can define execute() and still be unable to run
+            # SQL. Ask the port rather than letting the guard take down the retry it guards.
+            rows = _in_flight_via_port(project_id, repo=repo)
+    else:
+        rows = _in_flight_via_port(project_id, repo=repo)
+
     for row in rows:
         other, _b, _l = project_name(str(row["title"] or ""))
         if other.casefold() == wanted.casefold():
             return row["id"]
     return None
+
+
+def _in_flight_via_port(project_id: str, *, repo: Optional[str] = None) -> list[dict]:
+    """In-flight runs for a project, from a store that cannot run SQL.
+
+    Returns [] when the store cannot answer. An unanswerable duplicate check must not block
+    legitimate work: a second run is a lesser harm than no runs at all.
+    """
+    try:
+        runs = _engine_ports().persistence.list_runs(project_id, limit=200)
+    except Exception:
+        return []
+    out = [
+        r for r in runs
+        if str(r.get("status")) in ("running", "queued")
+        and (repo is None or (r.get("spec") or {}).get("repo") == repo)
+    ]
+    # Oldest first, matching the SQL: the run to keep is the one already underway.
+    out.sort(key=lambda r: str(r.get("created_at") or ""))
+    return out
 
 
 def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[str]:
@@ -228,14 +307,39 @@ def active_duplicate(connection, project_id: str, fingerprint: str) -> Optional[
     first was not already producing, and each one is a full budgeted pipeline.
     """
     if not hasattr(connection, "execute"):
-        return None
-    row = connection.execute(
-        sql("SELECT id FROM code_task_runs "
-            "WHERE project_id = :p AND status IN ('running', 'queued') "
-            "  AND spec->>'work_fingerprint' = :fp "
-            "ORDER BY created_at ASC LIMIT 1"),
-        {"p": project_id, "fp": fingerprint}).first()
+        return _active_duplicate_via_port(project_id, fingerprint)
+    try:
+        row = connection.execute(
+            sql("SELECT id FROM code_task_runs "
+                "WHERE project_id = :p AND status IN ('running', 'queued') "
+                "  AND spec->>'work_fingerprint' = :fp "
+                "ORDER BY created_at ASC LIMIT 1"),
+            {"p": project_id, "fp": fingerprint}).first()
+    except RuntimeError:
+        # HAVING `execute` IS NOT THE SAME AS BEING ABLE TO RUN SQL.
+        #
+        # The OSS in-memory adapter defines execute() and raises from it, so the hasattr guard
+        # above let this through and every retry died with "raw SQL is unavailable" — the
+        # duplicate CHECK took down the thing it was protecting.
+        #
+        # Falling back to the port keeps the protection working there rather than switching it
+        # off, which matters: without it the OSS path would happily start the same pipeline
+        # twice, and each one is a full budget.
+        return _active_duplicate_via_port(project_id, fingerprint)
     return row[0] if row else None
+
+
+def _active_duplicate_via_port(project_id: str, fingerprint: str) -> Optional[str]:
+    """The same question, asked of a store that cannot run SQL.
+
+    Returns None when the store cannot answer at all — an unanswerable duplicate check must not
+    block legitimate work, and a second run is a lesser harm than no runs.
+    """
+    matching = [
+        r for r in _in_flight_via_port(project_id)
+        if (r.get("spec") or {}).get("work_fingerprint") == fingerprint
+    ]
+    return str(matching[0].get("id")) if matching else None
 
 
 # Simulated fixture: create→persist→read without a model, reservation, job, or PR.

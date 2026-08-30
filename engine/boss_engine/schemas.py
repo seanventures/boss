@@ -3412,7 +3412,28 @@ class RoleSummary(BaseModel):
     scope_violation_count: int = 0
     last_reviewed_at: Optional[str] = None
     last_violation_at: Optional[str] = None
+    #: role_key of this role's manager, or None for a root. BOSS has never required a hierarchy
+    #: to exist, so absence is the normal case rather than a gap.
+    reports_to: Optional[str] = None
     created_at: str
+
+
+class RegisterRoleRequest(BaseModel):
+    """Put an agent on the books.
+
+    Everything except the key is optional: the common case is a console button pressed against
+    an agent BOSS is already watching do work, where the only fact to hand is its key.
+    """
+
+    project_id: str
+    role_key: str
+    display_name: Optional[str] = None
+    autonomy_level: int = 0
+    #: role_key of the manager, or None for a root. NOT validated against existing roles: the
+    #: org is discovered from observed handoffs, so a manager is often registered after the
+    #: role reporting to them.
+    reports_to: Optional[str] = None
+    spec: Optional[dict[str, Any]] = None
 
 
 class RoleDetail(RoleSummary):

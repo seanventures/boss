@@ -1194,6 +1194,9 @@ export type LlmCallRow = {
   stage: string;
   engine: string;
   model: string;
+  /** Which agent owns this stage. Persisted per call and resolved to the role the registry
+   *  actually holds, so a call written under a retired name still names a real agent. */
+  role: string | null;
   total_tokens: number;
   cost_usd_micros: number;
   latency_ms: number;
@@ -5924,9 +5927,12 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "POST", "/v1/meetings/prd", { body: payload },
       );
     },
-    getCodeTasks(projectId: string, limit = 50) {
+    getCodeTasks(projectId: string, limit = 50, excludeInternal = false) {
       return request<CodeTasksResponse>("GET", "/v1/code-tasks", {
-        query: { project_id: projectId, limit },
+        // excludeInternal drops BOSS's own maintenance runs BEFORE the limit, so a burst of
+        // housekeeping cannot consume the whole window and hide every app an operator built.
+        query: { project_id: projectId, limit,
+                 ...(excludeInternal ? { exclude_internal: true } : {}) },
       });
     },
     getQaBenchmarkApps(projectId?: string) {

@@ -179,7 +179,7 @@ class PlaneWorkTrackerAdapter:
             is_default_option=True,
             connection_fields=(
                 ConnectionField("api_base_url", "API / web base URL", placeholder="https://plane.example.com"),
-                ConnectionField("workspace_slug", "Workspace slug", placeholder="goldeneye"),
+                ConnectionField("workspace_slug", "Workspace slug", placeholder="your-workspace"),
                 ConnectionField("project_id", "Project ID (UUID)", placeholder="cc97d5cc-…"),
                 ConnectionField("api_token", "API key", secret=True, help="X-API-Key value"),
             ),

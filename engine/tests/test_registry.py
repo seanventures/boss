@@ -10,6 +10,12 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # The spec an app was built from — PRD, criteria, review notes. BOSS could read
+    # its own source, its logs and its hosts, and could not read the one document
+    # that says what an app was FOR.
+    "read_spec",
+    "redeploy", "preflight_deployment_target",
+
     "cancel_code_task",
     # The first deployment. BOSS could create hosts and targets and could redeploy, and had
     # nothing that performs a deployment which never happened — so "deploy it" had no
@@ -79,10 +85,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 52, (
+    assert len(reg.names()) == 53, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 32
+    assert len(read) == 33
     assert len(write) == 20
     # the capabilities the user explicitly asked the agent to cover
     for name in (
@@ -99,6 +105,8 @@ def test_default_registry_shape():
         # touch it is not operating anything.
         "find_starved_work", "cancel_job", "set_job_priority", "close_orphaned_runs",
         "consistency_report",
+        # The spec: what an app was supposed to do, and what it actually got.
+        "read_spec",
     ):
         assert name in reg.names()
 

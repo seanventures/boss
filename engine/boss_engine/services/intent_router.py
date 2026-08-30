@@ -452,7 +452,7 @@ class IntentRouter:
             # must not swallow every message: a user has to be able to ask things).
             if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
                     latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
-                return self._answer(connection, project_id, messages)
+                return self._answer(connection, project_id, messages, external_ref=external_ref)
             # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
             # thread whose plan was already handled another way — the user just steers with a message.
             row = connection.execute(
@@ -519,7 +519,7 @@ class IntentRouter:
         # from the tool-calling agent. The agent is the same one that answers every question in
         # this console today; if a model is configured at all, it is available.
         if self.settings.openai_api_key or self.settings.azure_openai_key:
-            return self._answer(connection, project_id, messages)
+            return self._answer(connection, project_id, messages, external_ref=external_ref)
 
         # No model available — fall back to keywords rather than doing nothing.
         name, arguments = self._deterministic_intent(latest)
@@ -527,7 +527,7 @@ class IntentRouter:
             # DISCUSS BY DEFAULT: an unclassified message is a question / discussion, NOT a build
             # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
             # every greeting, question, or test string). Work starts only on an explicit intent.
-            return self._answer(connection, project_id, messages)
+            return self._answer(connection, project_id, messages, external_ref=external_ref)
 
         capability_id = {
             "create_code_task": "code_task",
@@ -557,7 +557,42 @@ class IntentRouter:
         except ValueError as error:
             return RouterTurn(reply=f"I couldn’t start that work: {error}")
 
-    def _answer(self, connection, project_id: str, messages: list) -> RouterTurn:
+    def _scope_note(self, connection, project_id: str, external_ref: Optional[str]) -> str:
+        """One paragraph naming the app under discussion, or nothing.
+
+        Nothing is the right answer for a general thread: inventing a subject makes every
+        unrelated question about the last app that happened to be open.
+        """
+        if not external_ref:
+            return ""
+        try:
+            row = connection.execute(
+                text("SELECT id, title, status, pull_request_url, task_id "
+                     "FROM code_task_runs WHERE (id = :r OR task_id = :r) AND project_id = :p "
+                     "ORDER BY created_at DESC LIMIT 1"),
+                {"r": external_ref, "p": project_id},
+            ).mappings().first()
+        except Exception:
+            return ""
+        if row is None:
+            return ""
+        pr = row["pull_request_url"] or "none opened"
+        return (
+            "THIS CONVERSATION IS ABOUT ONE APP.\n"
+            f"App: {row['title']}\nRun id: {row['id']}\nStatus: {row['status']}\nPR: {pr}\n"
+            "Questions like \"what should we build next\", \"what did we miss\", \"which "
+            "criteria are untested\" or \"read the PRD\" refer to THIS app unless they name "
+            "another one. Call read_spec with this run id FIRST — it returns the PRD, the "
+            "acceptance criteria, what was implemented and what the reviewer said, in one "
+            "call. Do not answer scope questions about this app without reading it, and do "
+            "not report a PRD or diff as unavailable until read_spec has said so.\n"
+            "This run is a STARTING POINT, not a restriction. The app has other runs, and if "
+            "the operator points you at a different one (\"use the latest working one\"), do "
+            "that — their correction outranks this block."
+        )
+
+    def _answer(self, connection, project_id: str, messages: list,
+                *, external_ref: Optional[str] = None) -> RouterTurn:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
         explicit build intent (handled in route_turn) actuates work."""
@@ -730,6 +765,17 @@ class IntentRouter:
             "and that you'll start once they confirm (e.g. 'build it' / 'go') — do NOT claim "
             "you already started anything, and do NOT invent facts."
         )
+        # WHICH APP THIS CONVERSATION IS ABOUT — in the SYSTEM prompt, not in their message.
+        #
+        # The thread carries the run id in `external_ref` and it stopped at thread lookup: the
+        # model never saw it. So the console compensated by prepending a block of run facts to
+        # whatever the operator typed, which (a) they could see in their own chat bubble, and
+        # (b) still did not help, because the facts were a summary and the model wanted the
+        # PRD. Scope belongs here, where it is invisible and durable, and the model can go and
+        # READ the spec itself.
+        scope = self._scope_note(connection, project_id, external_ref)
+        if scope:
+            system = system + "\n\n" + scope
         # last 12 user/assistant turns as history; newest user message drives the turn
         convo = [
             {"role": m["role"], "content": m["content"]}

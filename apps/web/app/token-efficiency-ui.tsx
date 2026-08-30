@@ -293,9 +293,18 @@ export function TokenRecommendationsCard({
         <p className="detail">No material findings — spend below thresholds or already efficient.</p>
       ) : (
         <div style={{ display: "grid", gap: 10, marginTop: 6 }}>
-          {feed.recommendations.map((rec) => (
+          {/* THE INDEX IS PART OF THE KEY ON PURPOSE.
+              `source`+`kind` is not unique: per-stage rules emit one recommendation per stage
+              under the same kind, so a project with two stages over their token cap produced
+              two children keyed `token_efficiency-stage_over_token_cap`. React does not merely
+              warn about that — it may drop or duplicate rows, so a real finding could silently
+              vanish from this card. `stage` tells the common case apart; the index guarantees
+              uniqueness for any rule that duplicates in a way we have not seen yet. Safe here
+              because this list is rendered from a server array and is never reordered, edited
+              or filtered in the browser. */}
+          {feed.recommendations.map((rec, i) => (
             <div
-              key={`${rec.source}-${rec.kind}`}
+              key={`${rec.source}-${rec.kind}-${rec.stage ?? ""}-${i}`}
               style={{
                 borderLeft: `3px solid ${SEV_COLOR[rec.severity] ?? SEV_COLOR.low}`,
                 paddingLeft: 10,

@@ -76,13 +76,41 @@ function railBtn(active: boolean) {
  * A display transform must never be able to erase its input. If stripping leaves nothing, the
  * original is shown instead.
  */
+/**
+ * Remove the model's context block from a message before a human reads it.
+ *
+ * The block is prepended at send time as `${facts}\n\n${typed}`, so the boundary is the LAST
+ * blank line, not the first. Splitting on the first one left everything after it on screen the
+ * moment any fact contained a blank line of its own — which is how a one-line question came to
+ * be displayed under twenty lines of run_id, branch, "DEPLOY THIS ONE" and instructions
+ * addressed to the model.
+ *
+ * The last-blank-line rule is only applied when what precedes it still looks like the block
+ * (it carries `run_id:`), so a person writing a message with paragraphs in it keeps all of it.
+ */
+/** Marks where the model's context ends and the person's message begins. */
+export const APP_FACTS_END = "[/app context]";
+
 export function stripAppFacts(content: string): string {
   const text = content ?? "";
-  if (!text.startsWith("[app context]")) return text;
+  if (!text.trimStart().startsWith("[app context]")) return text;
+
+  // Exact, for anything sent since the terminator existed. Multi-paragraph questions survive
+  // because the boundary is a marker rather than a guess about blank lines.
+  const marked = text.indexOf(APP_FACTS_END);
+  if (marked !== -1) {
+    return text.slice(marked + APP_FACTS_END.length).trimStart() || text;
+  }
+
+  // LEGACY messages, already in the transcript without a terminator. FIRST blank line, not
+  // last: a last-blank-line rule strips more of the block, but on a message the operator wrote
+  // in several paragraphs it deletes everything except the final one. There is a test called
+  // "chat never loses your message" guarding exactly that, and it is the right guarantee —
+  // showing some stale context above an old question is a far smaller harm than silently
+  // discarding what someone typed. New messages carry the terminator and are exact.
   const split = text.indexOf("\n\n");
   if (split === -1) return text;
-  const stripped = text.slice(split + 2).trimStart();
-  return stripped || text;
+  return text.slice(split + 2).trimStart() || text;
 }
 
 /** An action BOSS is offering. `tool` + `args` are executed verbatim on click. */
@@ -94,10 +122,9 @@ type ProposedAction = {
   why?: string;
 };
 
-export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
+export function AgentChat({ projectId, actor, initialTaskId }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** What BOSS already knows about the app this conversation is about. */
-  appFacts?: string;
 }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -110,6 +137,29 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
   /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
   const [ranAction, setRanAction] = useState<string | null>(null);
+  /**
+   * Prompts about THIS app, handed over by the screen that opened the dock.
+   *
+   * Grounded in recorded facts rather than generated, so a suggestion cannot describe a gap
+   * that does not exist. When the dock is opened with no run in context there is nothing to
+   * ground them in, and the general set is the honest answer.
+   */
+  const [suggestions, setSuggestions] = useState<string[]>([
+    "What changed today?",
+    "Which runs failed and why?",
+    "What is this run waiting on?",
+  ]);
+  useEffect(() => {
+    if (!initialTaskId) return;
+    try {
+      const raw = window.sessionStorage.getItem(`boss.agent.suggests.${initialTaskId}`);
+      const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+      if (Array.isArray(parsed) && parsed.length && parsed.every((x) => typeof x === "string")) {
+        setSuggestions(parsed as string[]);
+      }
+    } catch { /* private mode: the general prompts still work */ }
+  }, [initialTaskId]);
+
   const [loadingThread, setLoadingThread] = useState(false);
   const [busy, startTransition] = useTransition();
   // HOW LONG, AND WHAT IF IT NEVER ANSWERS.
@@ -216,11 +266,19 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
     // and reasonably concluded their message had been lost.
     const typed = String(fd.get("message") ?? "").trim();
     if (!typed) return;
-    if (appFacts) {
-      fd.set("message", `${appFacts}\n\n${typed}`);
-    } else {
-      fd.set("message", typed);
-    }
+    // THE MESSAGE IS WHAT THEY TYPED. NOTHING ELSE.
+    //
+    // This used to prepend a block of run facts to every question, because the agent had no
+    // idea which app a thread was about. Two things were wrong with it. The operator could
+    // SEE it — their own words buried under a wall of context they never wrote, which no
+    // amount of stripping on render reliably hid, because the server echoes the stored
+    // message back. And it did not even work: the facts were a summary, so asked to read the
+    // PRD or the diff the agent answered that they were "not present in the searchable data"
+    // while the PRD sat in the database.
+    //
+    // Scope now travels in `external_ref` (below) and the server puts it in the SYSTEM prompt,
+    // where it is invisible; the agent calls read_spec to fetch the real PRD itself.
+    fd.set("message", typed);
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
     startTransition(async () => {
@@ -243,7 +301,14 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           `⚠ No answer after ${AGENT_STALL_SECONDS}s. The turn may still be running on the ` +
           "server — nothing was cancelled. Reopen this thread in a moment to see whether it " +
           "landed, or send the message again." }]);
-        refreshThreads();
+        // NOT refreshThreads() HERE.
+        //
+        // It fires a server action, and server actions serialise: this one queues behind the
+        // turn that has not answered. React keeps the transition pending until everything
+        // started inside it settles, so the composer stayed disabled until the original turn
+        // finished — 131 seconds against a 120 second bound, and the whole point of the bound
+        // is to give control back. Deferred outside the transition instead.
+        window.setTimeout(() => refreshThreads(), 0);
         return;
       }
       if (r.ok && r.data) {
@@ -389,7 +454,8 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
             <p className="detail">Loading conversation…</p>
           ) : messages.length === 0 ? (
             <div className="agent-chat-empty">
-              <p>Try “What changed today?”, “Which runs failed and why?”, or “Deploy Shorty to staging.”</p>
+              <div className="agent-empty-mark" aria-hidden>◆</div>
+              <p className="agent-empty-lead">Ask BOSS about this work.</p>
             </div>
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>
@@ -483,31 +549,73 @@ export function AgentChat({ projectId, actor, initialTaskId, appFacts }: {
           </div>
         ) : null}
 
+        {/* ABOUT THIS APP, AND STILL THERE ON TURN TWO.
+            These lived inside the empty state, so they existed only until you said anything —
+            which is backwards: on the first turn you do not yet know what to ask, and by the
+            third you have read an answer and want the obvious follow-up. A conversation is
+            exactly when a suggestion is worth most.
+
+            They are derived from what BOSS RECORDED about this run — findings it deferred,
+            checks that never ran, tests that missed an injected bug, acceptance criteria with
+            no test — so each one names a real gap in this build rather than a generic prompt
+            that reads the same whatever you are looking at. */}
+        {suggestions.length > 0 ? (
+          <div className="agent-suggests agent-suggests-bar" data-testid="agent-suggests">
+            {suggestions.map((q) => (
+              <button type="button" className="agent-suggest" key={q}
+                      title={q}
+                      disabled={busy}
+                      data-testid={`agent-suggest-${q.slice(0, 12)}`}
+                      onClick={() => { setInput(q); }}>
+                {q}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {/* A TEXTAREA, not a single-line input. The useful questions here are the long ones —
             "why did this run take 152 minutes and what went wrong" plus the context that makes
             it answerable — and a one-line field that scrolls sideways hides what you typed at
             exactly the moment you want to re-read it. Enter still sends, so the common short
             message is unchanged; Shift+Enter starts a new line. */}
-        <form onSubmit={(e) => { e.preventDefault(); send(); }}
-              style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "flex-end" }}>
-          <textarea className="input agent-input" value={input} disabled={busy}
+        {/* ONE SURFACE. The field and its controls were a bare input with a Send button beside
+            it, which reads as a form on a page rather than a place to talk. */}
+        <form className="agent-composer" onSubmit={(e) => { e.preventDefault(); send(); }}>
+          {/* NOT disabled while BOSS is working. A turn here can run for two minutes, and
+              locking the field means you cannot draft the follow-up, correct a typo, or even
+              select what you wrote to copy it. Only SEND is held. */}
+          <textarea className="agent-input" value={input}
             aria-label="Message BOSS"
-            placeholder="Message BOSS…"
-            rows={1}
+            placeholder="Ask BOSS…"
+            // Three lines, not one. The useful questions here are the long ones — "why did
+            // this run take 152 minutes and what went wrong", plus the context that makes it
+            // answerable — and a field one line tall says "type something short".
+            rows={3}
             onChange={(e) => {
               setInput(e.target.value);
               // Grow with the content up to a cap, then scroll. Reset first so deleting a
               // line shrinks it back — without that it only ever gets taller.
               const el = e.currentTarget;
               el.style.height = "auto";
-              el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+              // Never below the resting three lines, never above a screenful.
+              el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 220)}px`;
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
             }}
-            style={{ flex: 1, resize: "none", overflowY: "auto", minHeight: 34, maxHeight: 160,
-                     lineHeight: 1.4, fontFamily: "inherit" }} />
-          <button type="submit" className="button" disabled={busy || !input.trim()}>{busy ? "…" : "Send"}</button>
+            style={{ resize: "none", overflowY: "auto", minHeight: 64, maxHeight: 220,
+                     lineHeight: 1.55, fontFamily: "inherit" }} />
+          <div className="agent-composer-bar">
+            <span className="agent-composer-hint">
+              {busy ? "BOSS is working…" : "Enter to send · Shift+Enter for a new line"}
+            </span>
+            {/* Circular, and disabled until there is something to send — a live-looking button
+                that does nothing is worse than one that says it is not ready. */}
+            <button type="submit" className="agent-send" disabled={busy || !input.trim()}
+                    aria-label="Send message" data-testid="agent-send">
+              {busy ? <span className="agent-send-spin" aria-hidden /> : "↑"}
+            </button>
+          </div>
         </form>
       </section>
     </div>

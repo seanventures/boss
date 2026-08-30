@@ -252,7 +252,11 @@ describe("BOSS mission-control design system", () => {
   });
 
   it("implements the operational design-system views", () => {
-    expect(page).toContain('className="cc-composer"');
+    // The Command Center composer (`cc-composer`) was replaced by the Ask BOSS hero, which
+    // merged asking and assigning an outcome into one entry point at the top of the page.
+    expect(page).toContain("<AskBossHero");
+    const hero = readFileSync(resolve(__dirname, "../app/ask-boss-hero.tsx"), "utf8");
+    expect(hero).toContain('className="askboss"');
     expect(operations).toContain('className="mission-task-board"');
     expect(operations).toContain('className="ar-table"');
     const inbox = readFileSync(resolve(__dirname, "../app/decision-inbox-ui.tsx"), "utf8");

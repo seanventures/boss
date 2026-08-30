@@ -488,6 +488,7 @@ from .schemas import (
     RoleReviewRequest,
     RoleTrustEvidenceRequest,
     RoleTrustEvidenceResponse,
+    RegisterRoleRequest,
     RoleDetail,
     RoleListResponse,
     RoleScopeCheckRequest,
@@ -2183,6 +2184,7 @@ def role_summary_from_service(payload) -> RoleSummary:
         scope_violation_count=payload.get("scope_violation_count", 0),
         last_reviewed_at=payload.get("last_reviewed_at"),
         last_violation_at=payload.get("last_violation_at"),
+        reports_to=payload.get("reports_to"),
         created_at=payload["created_at"],
     )
 
@@ -2207,6 +2209,7 @@ def role_detail_from_service(payload) -> RoleDetail:
         scope_violation_count=payload.get("scope_violation_count", 0),
         last_reviewed_at=payload.get("last_reviewed_at"),
         last_violation_at=payload.get("last_violation_at"),
+        reports_to=payload.get("reports_to"),
         created_at=payload["created_at"],
         spec=payload["spec"] or {},
     )
@@ -7193,13 +7196,15 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
 @app.get("/v1/code-tasks/{run_id}/activity")
 def code_task_activity_endpoint(run_id: str):
     """Per-stage model-call activity for a code task — the internal detail behind
-    each phase (model, latency, turns, retries, cost, ok/error). Written per call,
+    each phase (agent, model, latency, turns, retries, cost, ok/error). Written per call,
     so it's live: use it to see WHY a phase (e.g. write_tests) is slow."""
+    from boss_engine.services.llm_telemetry import canonical_role, role_for_stage
+
     with begin(engine) as connection:
         rows = connection.execute(
             text(
                 """
-                SELECT stage, engine, model, total_tokens, cost_usd_micros,
+                SELECT stage, engine, model, role, total_tokens, cost_usd_micros,
                        latency_ms, retries, turns, ok, error, created_at
                 FROM llm_calls
                 WHERE code_task_run_id = :rid
@@ -7213,6 +7218,10 @@ def code_task_activity_endpoint(run_id: str):
             "stage": r["stage"],
             "engine": r["engine"],
             "model": r["model"],
+            # WHICH AGENT ran this step. Persisted on the row, and passed through
+            # canonical_role so calls written under a name the registry no longer uses
+            # ("architect", "reviewer") resolve to the agent that is actually on the books.
+            "role": canonical_role(r["role"]) or role_for_stage(r["stage"]),
             "total_tokens": int(r["total_tokens"] or 0),
             "cost_usd_micros": int(r["cost_usd_micros"] or 0),
             "latency_ms": int(r["latency_ms"] or 0),
@@ -9649,8 +9658,15 @@ def set_code_task_origin_endpoint(run_id: str, payload: dict):
 
 
 @app.get("/v1/code-tasks")
-def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
-    """List code-task runs for a project (newest first) for the Code Tasks view."""
+def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50,
+                             exclude_internal: bool = False):
+    """List code-task runs for a project (newest first) for the Code Tasks view.
+
+    `exclude_internal` drops BOSS's own maintenance runs BEFORE the limit is applied. The
+    console filters them out anyway, but filtering after the limit lets a burst of housekeeping
+    consume the whole window -- which is exactly how the Factory came to render an empty grid
+    under a heading reading "200 code tasks".
+    """
     project_id = resolve_list_project_id(project_id)
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
@@ -9659,7 +9675,8 @@ def list_code_tasks_endpoint(project_id: Optional[str] = None, limit: int = 50):
         return {
             "project_id": project_id,
             "code_tasks": [summarise_run_for_list(r)
-                           for r in list_code_task_runs(c, project_id, limit)],
+                           for r in list_code_task_runs(c, project_id, limit,
+                                                        exclude_internal=exclude_internal)],
         }
 
 
@@ -11685,6 +11702,230 @@ def create_deployment_endpoint(payload: dict = Body(...)) -> dict:
     return result
 
 
+@app.get("/v1/console/v2/overview")
+def console_v2_overview_endpoint(project_id: str, limit: int = 40) -> dict:
+    """Everything the v2 shell and Projects screen render — in ONE call.
+
+    The v1 console issues 82 requests per render and shows nothing until the slowest answers;
+    measured TTFB was 24s, of which 13.2s was a single feed only one area displayed. v2 screens
+    get purpose-built endpoints instead, so the page is bounded by one query set rather than by
+    its unluckiest dependency. Budget: TTFB <= 2s, enforced by test.
+    """
+    from boss_engine.services.console_v2 import company_overview
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return company_overview(connection, project_id, limit=max(1, min(int(limit), 100)))
+
+
+@app.get("/v1/console/v2/workspace")
+def console_v2_workspace_endpoint(project_id: str, app_id: str) -> dict:
+    """One app's whole workspace in ONE call: its lineage, where it stands, what it cost.
+
+    The v1 equivalent of this screen was assembled from the full 82-feed page render, so
+    opening a single app cost the same as opening everything.
+
+    Returns found=False rather than 404 for an unknown app: the screen distinguishes "no such
+    app" from "an app with no runs", and both are ordinary answers rather than errors.
+    """
+    from boss_engine.services.console_v2 import project_workspace
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return project_workspace(connection, project_id, app_id)
+
+
+@app.get("/v1/console/v2/decisions")
+def console_v2_decisions_endpoint(project_id: str, limit: int = 60) -> dict:
+    """Every gate waiting on a human, soonest-to-expire first.
+
+    A decision carries a deadline and a default action, so an unanswered gate does not wait --
+    it resolves itself, and the work either proceeds unreviewed or is dropped. The queue says
+    what will happen and when, per row, because "waits for you" and "approves in two hours" are
+    opposite facts that render identically as a pending row.
+    """
+    from boss_engine.services.console_v2 import decision_queue
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return decision_queue(connection, project_id, limit=max(1, min(int(limit), 200)))
+
+
+@app.get("/v1/console/v2/panels")
+def console_v2_panels_endpoint(project_id: str, limit: int = 20) -> dict:
+    """The panels debating something, and what they concluded.
+
+    Not streamed, and the payload says so. BOSS's panels are real and produce real minutes but
+    they are not watched live -- animating a debate nobody is watching would be the most
+    convincing lie in the console.
+    """
+    from boss_engine.services.console_v2 import panel_sessions
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return panel_sessions(connection, project_id, limit=max(1, min(int(limit), 100)))
+
+
+@app.get("/v1/console/v2/receipts")
+def console_v2_receipts_endpoint(project_id: str, limit: int = 60, hours: int = 24) -> dict:
+    """What BOSS actually did in the window, with the evidence attached.
+
+    Window totals are aggregates over the whole window, computed separately from the page. A
+    tile on the old console read "Verified today: 100", which was its own page size -- it would
+    have said 100 for a project with a million receipts and for a project with exactly a
+    hundred. Here a number is either true or absent.
+    """
+    from boss_engine.services.console_v2 import receipt_feed
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return receipt_feed(
+            connection, project_id,
+            limit=max(1, min(int(limit), 200)),
+            hours=max(1, min(int(hours), 24 * 30)),
+        )
+
+
+@app.get("/v1/console/v2/workforce")
+def console_v2_workforce_endpoint(project_id: str, hours: int = 24) -> dict:
+    """Every agent, what it is doing, and what it has cost.
+
+    One call for three screens -- Workforce, Hive and Org Chart -- so their counts cannot drift
+    apart the way v1's did. "Agents active 0/21" came from counting roles that owned a task
+    when only 23 of 187 tasks had an owner at all, so the number described the data model.
+    """
+    from boss_engine.services.console_v2_workforce import workforce
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return workforce(connection, project_id, hours=max(1, min(int(hours), 24 * 30)))
+
+
+@app.get("/v1/console/v2/org")
+def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
+    """Who hands work to whom, counted.
+
+    BOSS has no declared reporting line, so this is derived from observed handoffs rather than
+    invented. The payload says so, and the screen repeats it: a derived shape presented as a
+    declared structure would be a picture of an organisation that does not exist.
+    """
+    from boss_engine.services.console_v2_workforce import org_chart
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
+
+
+@app.get("/v1/console/v2/workflows")
+def console_v2_workflows_endpoint(project_id: str) -> dict:
+    """The processes this company runs, and the stages inside them."""
+    from boss_engine.services.console_v2_platform import workflows
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return workflows(connection, project_id)
+
+
+@app.get("/v1/console/v2/infra")
+def console_v2_infra_endpoint(project_id: str) -> dict:
+    """Hosts, deployment targets, model spend and integrations.
+
+    Fleet load is absent rather than invented: BOSS records host verification, not utilisation,
+    and a fabricated percentage is indistinguishable from a real one.
+    """
+    from boss_engine.services.console_v2_platform import infra
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return infra(connection, project_id)
+
+
+@app.get("/v1/console/v2/settings")
+def console_v2_settings_endpoint(project_id: str) -> dict:
+    """What is configured -- and what this deployment simply does not have, with reasons.
+
+    A settings screen that renders an empty SSO form implies SSO is configurable here and
+    merely unconfigured. That is a different and false claim.
+    """
+    from boss_engine.services.console_v2_platform import settings
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return settings(connection, project_id)
+
+
+@app.get("/v1/console/v2/autonomy")
+def console_v2_autonomy_get(project_id: str) -> dict:
+    """The project's gate-autonomy policy. A project with no row is Supervised."""
+    from boss_engine.services.autonomy import describe, load_policy
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return describe(load_policy(connection, project_id))
+
+
+@app.post("/v1/console/v2/autonomy")
+def console_v2_autonomy_set(payload: dict = Body(...)) -> dict:
+    """Change the mode. Requires an actor, always.
+
+    An autonomy change with no owner is the one kind this system must never accept: it is the
+    act that makes every later act unattributable.
+    """
+    from boss_engine.services.autonomy import describe, set_policy
+
+    project_id = str(payload.get("project_id") or "").strip()
+    actor = str(payload.get("actor") or "").strip()
+    mode = str(payload.get("mode") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not actor:
+        raise HTTPException(status_code=400, detail="actor is required for an autonomy change")
+
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    try:
+        with begin(engine) as connection:
+            policy = set_policy(
+                connection, project_id,
+                mode=mode, actor=actor,
+                threshold_usd=payload.get("threshold_usd"),
+                max_risk_tier=payload.get("max_risk_tier"),
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return describe(policy)
+
+
+@app.post("/v1/console/v2/autonomy/apply")
+def console_v2_autonomy_apply(payload: dict = Body(...)) -> dict:
+    """Run the policy over the pending gates, and report the refusals as well as the approvals.
+
+    A run that reports only what it approved is unreviewable: the operator cannot tell whether
+    the policy is working, too tight, or silently doing nothing because every gate is missing a
+    cost.
+    """
+    from boss_engine.services.autonomy import apply_policy
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        return apply_policy(connection, project_id, limit=int(payload.get("limit") or 25))
+
+
 @app.get("/v1/metrics/delivery")
 def delivery_metrics_endpoint(project_id: str, days: int = 7) -> dict:
     """What this project actually shipped, in real counts.
@@ -11822,6 +12063,30 @@ def list_roles(project_id: str) -> RoleListResponse:
             project_id=project_id,
             items=[role_summary_from_service(role) for role in roles],
         )
+
+
+@app.post("/v1/roles", response_model=RoleDetail, status_code=201)
+def register_role_endpoint(body: RegisterRoleRequest) -> RoleDetail:
+    """Register an agent role, or update one already registered.
+
+    BOSS had eight role endpoints and every one of them read. Roles arrived only by installing a
+    spec pack, so an agent that began working outside one could never be registered -- and an
+    unregistered role has no trust score, no autonomy level and no violation tracking. The
+    console reported exactly that on five agents running most of the PRD pipeline, with no way
+    to act on it.
+    """
+    if not database_is_reachable(engine):
+        raise HTTPException(status_code=503, detail="Postgres is not reachable.")
+    with begin(engine) as connection:
+        try:
+            role = specpack.register_role(
+                connection, body.project_id, body.role_key,
+                display_name=body.display_name, autonomy_level=body.autonomy_level,
+                reports_to=body.reports_to, spec=body.spec,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return role_detail_from_service(role)
 
 
 @app.get("/v1/roles/{role_key}", response_model=RoleDetail)

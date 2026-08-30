@@ -1,0 +1,217 @@
+# Console v1 -> v2 parity map.
+#
+# WHAT THIS IS FOR
+# ----------------
+# v2 folds 31 areas into 9. That is the point of the redesign, and it is also the risk: a fold
+# is indistinguishable from a deletion unless someone wrote down where everything went. This
+# file is that record, and it is executable -- `console_test verify --area-map` reads it to tell
+# MOVED (expected) apart from MISSING (a feature was lost).
+#
+# The test agent matches controls by BEHAVIOUR -- the requests they issue -- not by label or
+# position, because v2 renames almost everything. This map only affects how a finding is
+# DESCRIBED. It can never turn a missing feature into a passing one.
+#
+# HOW TO READ AN ENTRY
+#   <v1 area>:
+#     to:    the v2 screen that must carry it (null = deliberately dropped)
+#     what:  what an operator does there, in their words
+#     risk:  what would be quietly lost if this fold went wrong
+#
+# Every `to: null` carries a why_dropped, because "we decided" and "we forgot" look identical
+# in a diff six months later.
+
+version: 1
+generated_for: feat/console-v2
+
+# --------------------------------------------------------------------------- #
+# THE CORE FIVE -- named explicitly as must-not-regress
+# --------------------------------------------------------------------------- #
+discovery:
+  to: missions
+  what: research a signal, read the cited dossier, promote a candidate to an outcome
+  risk: >
+    the evidence tiers. A discovery that reads "pursue" without its citations is an opinion
+    with a badge on it, and the three-tier gate exists to stop exactly that.
+
+meetings:
+  to: panels
+  what: watch the agent panel debate a directive, read the minutes, approve the PRD
+  risk: >
+    the PRD approval gate. It is the one human decision between an idea and a code task
+    running; if it does not survive the fold, work starts without anyone agreeing to it.
+
+code_tasks:
+  to: missions
+  what: every app, its runs, its PR, its deployment target, its cost
+  risk: >
+    the per-app controls -- set target, unbind, deploy, retry. Unbind was absent from v1 for
+    weeks precisely because nobody notices a control that never existed. That is the shape of
+    bug this map exists to prevent.
+
+delivery:
+  to: boss
+  what: pipeline verdict, staging, health gate, production, rollout; hosts and targets
+  risk: >
+    the host inventory. Deploying needs a verified host and a bound target, and if those are
+    unreachable the Deploy button becomes a promise the pipeline cannot honour.
+
+monitoring:
+  to: infra
+  what: what is running, what is failing, and what it costs
+  risk: >
+    the difference between "nothing is wrong" and "we could not check". They render the same
+    when a feed is empty and they mean opposite things.
+
+# --------------------------------------------------------------------------- #
+# THE REST
+# --------------------------------------------------------------------------- #
+overview:
+  to: missions
+  what: the landing view -- what is happening now
+  risk: the Ask BOSS entry point, which is how most sessions start
+
+dashboard:
+  to: missions
+  what: headline counts
+  risk: a metric that reports its own page size as a fact about the world
+
+decisions:
+  to: panels
+  what: pending approvals and gates
+  risk: a gate that silently kills work instead of waiting for an answer
+
+activity:
+  to: timeline
+  what: searchable log across events, steps, jobs, deadletters and receipts
+  risk: honest truncation -- a capped search must say so rather than imply completeness
+
+ops:
+  to: infra
+  what: audit export and operational counts
+
+budget:
+  to: infra
+  what: spend against cap
+  risk: a total that is actually the sum of one page of runs
+
+workforce:
+  to: factory
+  what: >
+    every agent ranked by the work it actually produced -- volume, spend and quality, from
+    llm_calls and agent_process_steps
+  risk: >
+    ranking by success rate alone. It is ~100% for everyone, so 28 agents drew 28 identical
+    bars and the screen said nothing. Bar LENGTH is volume; colour is quality.
+
+org_chart:
+  to: org
+  what: who reports to whom, and which seats are unfilled
+
+org:
+  to: org
+  what: agent roles and ownership
+  risk: counting the wrong thing -- "agents active 0/21" counted roles that owned tasks
+
+agent:
+  to: factory
+  what: an agent's workspace and history
+
+work:
+  to: factory
+  what: the work queue
+
+processes:
+  to: factory
+  what: process manager
+
+studio:
+  to: factory
+  what: agent studio
+
+portfolio:
+  to: missions
+  what: apps as a portfolio
+  risk: lineage grouping -- one app must not split into several rows
+
+pipeline:
+  to: boss
+  what: CI/CD pipeline state
+  risk: the evidence behind a verdict
+
+sandboxes:
+  to: infra
+  what: preview sandboxes
+  risk: fail-closed reporting -- a blocked surface must say so, not pass silently
+
+infra:
+  to: infra
+  what: hosts and machines
+  risk: never inventing a host that does not exist
+
+reliability:
+  to: infra
+  what: reliability signals
+
+ai-sre:
+  to: infra
+  what: autonomous oncall
+
+assurance:
+  to: panels
+  what: quality gates
+  risk: a waived gate must stay visible after it is waived
+
+shepherd:
+  to: boss
+  what: what can and cannot be deployed, and why
+  risk: the refusal reasons -- "not deployable" without a reason sends people to the API
+
+reports:
+  to: timeline
+  what: generated reports
+
+comms:
+  to: timeline
+  what: notifications sent out
+
+capabilities:
+  to: settings
+  what: skills, packs and MCP servers
+
+foundations:
+  to: settings
+  what: platform configuration
+
+enterprise:
+  to: settings
+  what: SSO and identity
+  risk: never labelling a required area Enterprise
+
+components:
+  to: null
+  what: design-system component gallery
+  why_dropped: a lab surface, not something an operator has a job on
+
+metatron:
+  to: null
+  what: superseded by Ask BOSS, which merged asking and assigning into one composer
+  why_dropped: >
+    the operator asked for the rename by name; keeping both would leave two ways to do one
+    thing, and the older one is the worse one.
+
+# --------------------------------------------------------------------------- #
+# NOT AN AREA, BUT MUST SURVIVE
+# --------------------------------------------------------------------------- #
+cross_cutting:
+  - id: ask-boss
+    what: one composer that both answers a question and starts work from a directive
+    where: every screen
+  - id: console-toggle
+    what: switch between v1 and v2 without losing the org or the session
+    where: both shells
+  - id: org-scope
+    what: every screen stays inside the org named in the URL
+    where: all
+    risk: >
+      falling back to the org picker on a transient API blip threw the operator out of their
+      session. The reconnect state must keep the URL intact.

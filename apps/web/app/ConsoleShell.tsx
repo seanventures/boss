@@ -1,7 +1,9 @@
 "use client";
 
 import { isInConsoleLink } from "./console-href";
+import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
+import { ProjectStrip } from "./project-strip";
 
 import React, {
   useCallback,
@@ -29,6 +31,7 @@ import {
   House,
   List,
   MagnifyingGlass,
+  CaretRight,
   Heartbeat,
   Siren,
   PaintBrush,
@@ -58,6 +61,8 @@ import {
 import { EditionChip } from "./edition-ui";
 
 type AreaId =
+  | "workforce"
+  | "org_chart"
   | "agent"
   | "metatron"
   | "dashboard"
@@ -97,6 +102,21 @@ type AreaDef = {
   sub: string;
   group: "Run" | "Govern" | "Platform";
   icon: Icon;
+  /** The section this area sits INSIDE.
+   *
+   *  Observability is not one screen, it is a place you go with a question: is it up, and what
+   *  happened. Those are two screens — the dashboards and the log — and listing them as
+   *  unrelated siblings made the log look like a separate product rather than the thing you
+   *  open when a dashboard says something is wrong. */
+  parent?: NavSectionId;
+};
+
+type NavSectionId = "observability";
+
+/** Sections that hold areas. A section is not itself an area: it has no screen, and clicking it
+ *  opens or closes the group rather than navigating somewhere that does not exist. */
+const NAV_SECTIONS: Record<NavSectionId, { label: string; icon: Icon; group: AreaDef["group"] }> = {
+  observability: { label: "Observability", icon: Heartbeat, group: "Run" },
 };
 
 const ICONS = {
@@ -159,13 +179,16 @@ const AREAS: AreaDef[] = [
   { id: "code_tasks", label: "Code Tasks", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
   { id: "delivery", label: "CI/CD", sub: "Pipelines, code task to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
-  { id: "monitoring", label: "Observability", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring },
+  { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring, parent: "observability" },
+  { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity, parent: "observability" },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "metatron", label: "Metatron", sub: "Always-on captain: chat, goals, validated overwatch", group: "Run", icon: ICONS.metatron },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
-  { id: "activity", label: "Activity log", sub: "Searchable events, steps, failures, stuck work", group: "Run", icon: ICONS.activity },
+
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
+  { id: "workforce", label: "Workforce", sub: "Every agent, what it has produced, and how well", group: "Run", icon: ICONS.org },
+  { id: "org_chart", label: "Org Chart", sub: "Who actually passes work to whom — observed, not declared", group: "Run", icon: ICONS.processes },
   { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
@@ -202,12 +225,38 @@ function budgetTone(state?: string): "green" | "amber" | "red" {
   return "green";
 }
 
+/** A control-plane URL, shortened to the part that tells them apart. */
+function planeLabel(url: string): string {
+  try {
+    const host = new URL(url).host;
+    return isLocalPlane(url) ? `local · ${host}` : host;
+  } catch {
+    return url;
+  }
+}
+
+/** Local means "this laptop's database", which is the case worth calling out: it looks like
+ *  production and contains almost none of it. */
+function isLocalPlane(url: string): boolean {
+  return /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|$|\/)/i.test(url);
+}
+
 export type ConsoleShellProps = {
   status: {
     apiReachable: boolean;
     budgetState: string;
     deadletters: number;
     pendingDecisions: number;
+    /** WHICH control plane this console is reading.
+     *
+     *  Two consoles with identical chrome and completely different worlds is how an operator
+     *  concludes their data has been lost: a dev server pointed at a laptop database showed one
+     *  project beside a tab showing forty, and nothing on either screen said why. For a customer
+     *  with staging and production open in two tabs it is worse than confusing.
+     *
+     *  Comes from the SERVER, because every fetch on this page is server-side — the browser's
+     *  build-time NEXT_PUBLIC value can disagree with what is actually being called. */
+    controlPlane?: string;
   };
   scope: { project: string; actor: string; projectId?: string; actorId?: string };
   org?: { id: string; name: string };
@@ -237,6 +286,19 @@ export default function ConsoleShell({
   const deepLinkArea = (AREAS.some((a) => a.id === initialArea) ? initialArea : undefined) as AreaId | undefined;
   const [active, setActive] = useState<AreaId>(deepLinkArea ?? "overview");
   const [navOpen, setNavOpen] = useState(false);
+  // Open by default. A section that starts closed hides the areas inside it from anyone who
+  // does not already know they are there, which for a newly-added area is indistinguishable
+  // from not having shipped it.
+  const [openSections, setOpenSections] = useState<Set<NavSectionId>>(
+    () => new Set<NavSectionId>(["observability"]),
+  );
+  const toggleSection = (id: NavSectionId) =>
+    setOpenSections((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [live, setLive] = useState(true);
@@ -396,14 +458,11 @@ export default function ConsoleShell({
   // threads by external_ref, so each app gets its own thread and its own history; asking about
   // BugBox cannot surface ApproveIt's answers.
   const [dockedRun, setDockedRun] = useState<string | null>(null);
-  const [dockFacts, setDockFacts] = useState<string | undefined>(undefined);
   useEffect(() => {
     const read = () => {
-      const id = new URLSearchParams(window.location.search).get("agent");
-      setDockedRun(id);
-      try {
-        setDockFacts(id ? window.sessionStorage.getItem(`boss.agent.facts.${id}`) ?? undefined : undefined);
-      } catch { setDockFacts(undefined); }
+      // The run id is the whole handoff now. It goes to the server as `external_ref`, which
+      // resolves it into the system prompt — the console no longer ships a context blob.
+      setDockedRun(new URLSearchParams(window.location.search).get("agent"));
     };
     read();
     window.addEventListener("popstate", read);
@@ -538,7 +597,67 @@ export default function ConsoleShell({
           {GROUP_ORDER.map((group) => (
             <div key={group}>
               <div className="bx-nav-label">{group}</div>
+              {/* A SECTION RENDERS WHERE ITS FIRST AREA WOULD HAVE.
+                  Not at the top of the group and not in a list of its own: the order operators
+                  learned stays put, and the two areas simply move one level in underneath a
+                  heading. Anything without a parent renders exactly as before. */}
               {navAreas.filter((a) => a.group === group).map((a) => {
+                if (a.parent) {
+                  const section = NAV_SECTIONS[a.parent];
+                  const siblings = navAreas.filter((x) => x.parent === a.parent);
+                  // Only the FIRST child draws the section; the rest are drawn by it.
+                  if (siblings[0]?.id !== a.id) return null;
+                  const open = openSections.has(a.parent);
+                  const holdsActive = siblings.some((x) => x.id === active);
+                  const SectionIcon = section.icon;
+                  return (
+                    <div key={`section-${a.parent}`} className="bx-nav-section"
+                         data-open={open || undefined}
+                         data-testid={`nav-section-${a.parent}`}>
+                      <button
+                        type="button"
+                        className="bx-nav-item bx-nav-parent"
+                        aria-expanded={open}
+                        // A section has no screen, so it must not claim to be the current page
+                        // even when one of its children is.
+                        data-holds-active={holdsActive || undefined}
+                        onClick={() => toggleSection(a.parent!)}
+                      >
+                        <SectionIcon size={17} weight={holdsActive ? "fill" : "regular"} aria-hidden />
+                        <span>{section.label}</span>
+                        <CaretRight className="bx-nav-caret" size={12} weight="bold" aria-hidden />
+                      </button>
+                      {/* COLLAPSED STILL SHOWS WHERE YOU ARE.
+                          Hiding the current page inside a closed section is the "where am I"
+                          bug: the nav stops answering the one question it exists for. So a
+                          closed section keeps the active child and drops the rest — the
+                          control still works, and you never lose your place. */}
+                      {open || holdsActive ? (
+                        <div className="bx-nav-children" data-collapsed={!open || undefined}>
+                          {(open ? siblings : siblings.filter((x) => x.id === active)).map((child) => {
+                            const ChildIcon = child.icon;
+                            const childBadge = badgeFor(child.id);
+                            return (
+                              <button
+                                key={child.id}
+                                type="button"
+                                className={`bx-nav-item bx-nav-child${child.id === active ? " active" : ""}`}
+                                aria-current={child.id === active ? "page" : undefined}
+                                data-area-nav={child.id}
+                                onClick={() => go(child.id)}
+                              >
+                                <ChildIcon size={15}
+                                            weight={child.id === active ? "fill" : "regular"} aria-hidden />
+                                <span>{labelFor(child)}</span>
+                                {childBadge ? <span className="bx-nav-badge">{childBadge}</span> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                }
                 const badge = badgeFor(a.id);
                 const Icon = a.icon;
                 const paidBadge = shouldShowPaidNavBadge(a.id, resolvedEdition);
@@ -599,6 +718,13 @@ export default function ConsoleShell({
             <span className={`dot ${status.apiReachable ? "green" : "red"}`} />
             <span>{status.apiReachable ? "Control plane online" : "Control plane offline"}</span>
           </div>
+          {status.controlPlane ? (
+            <div className="bx-control-host" title={status.controlPlane}
+                 data-local={isLocalPlane(status.controlPlane) || undefined}
+                 data-testid="control-plane-host">
+              {planeLabel(status.controlPlane)}
+            </div>
+          ) : null}
         </div>
       </aside>
 
@@ -621,6 +747,11 @@ export default function ConsoleShell({
           </div>
 
           <div className="bx-topbar-spacer" />
+
+          {/* Reachable from BOTH consoles, deliberately. A one-way door into v2 would strand
+              anyone who tried it before v2 was finished; v1 stays the working console and keeps
+              taking fixes until the parity checklist says otherwise. */}
+          <ConsoleToggle current="v1" orgId={org?.id} />
 
           {org ? (
             <button type="button" className="bx-org-chip" onClick={switchOrg} title="Switch organization">
@@ -659,6 +790,13 @@ export default function ConsoleShell({
           </span>
         </header>
 
+        {/* EVERY PROJECT, WITHOUT LEAVING THE AREA YOU ARE IN.
+            v1 made you open Factory and scroll 74 cards to learn what was running. This is v2's
+            strip, in v1's header: status, stage and progress per project, filterable, and one
+            click into the project itself. It fetches on its own through a route handler, so a
+            slow or missing overview delays this strip and nothing else on the page. */}
+        <ProjectStrip projectId={scope.projectId ?? scope.project} />
+
         {/* The console gets out of the panel's way rather than hiding behind it. The dock is
             fixed-position, so without this inset the right-hand column of cards sat underneath
             it, unreachable. */}
@@ -690,7 +828,7 @@ export default function ConsoleShell({
             <div className="bx-dock-body">
               <AgentChat projectId={scope.projectId ?? scope.project}
                          actor={scope.actorId ?? scope.actor}
-                         initialTaskId={dockedRun} appFacts={dockFacts} />
+                         initialTaskId={dockedRun} />
             </div>
           </aside>
         ) : null}

@@ -3,6 +3,7 @@
 import React, { useActionState } from "react";
 import type { PreviewRec } from "@boss/api-client";
 
+import { forgetPreviewGate, loadPreviewGate } from "../lib/preview-gates";
 import type { PreviewFeed } from "../lib/code-tasks";
 import {
   PREVIEW_FIXTURE_BADGE,
@@ -16,7 +17,7 @@ import {
   previewOpenLabel,
   previewOperatorHref,
 } from "../lib/previews";
-import { approvePreviewAction, createPreviewFixtureAction, previewGateAction } from "./actions";
+import { approvePreviewAction, createPreviewFixtureAction } from "./actions";
 import { SubmitButton } from "./submit-button";
 
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -41,11 +42,21 @@ function ApprovePreview({ preview }: { preview: PreviewRec }) {
   const [gate, setGate] = React.useState<any>(null);
   const [state, action] = useActionState(approvePreviewAction, null);
 
+  // A BATCHED ROUTE HANDLER, NOT A PER-ROW SERVER ACTION.
+  //
+  // A Server Action re-renders the whole route to reply, so nine preview rows cost nine
+  // renders of a page that takes tens of seconds to render. The gate still has to be read
+  // before the button appears — the row says what approving will do — so it is batched rather
+  // than dropped. Same fix as the app cards; see lib/batch-fetch.ts.
   React.useEffect(() => {
     let live = true;
     if (!preview.id) return;
-    previewGateAction(preview.id).then((r) => {
-      if (live && r.ok) setGate(r.data);
+    // After an approval the cached gate describes the world before it.
+    if (state?.ok) forgetPreviewGate(preview.id);
+    loadPreviewGate(preview.id).then((g) => {
+      // `error` means the lookup failed, which is NOT "this row has no gate". Leaving `gate`
+      // null renders nothing, which is the honest state: we have not found out yet.
+      if (live && !g.error) setGate(g);
     });
     return () => {
       live = false;

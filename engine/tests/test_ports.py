@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import re
 import subprocess
 import sys
@@ -253,21 +254,71 @@ def test_pipeline_hot_paths_have_no_direct_database_imports_or_text_calls():
         assert "sf.budget" not in source
 
 
-def test_engine_shipped_files_do_not_contain_internal_hostnames():
-    forbidden = ("goldeneye", "sean.network")
+#: A named integration may say its own name, the way an AWS adapter says "AWS". Anything else
+#: mentioning the operator's platform is a leak of where BOSS happens to run.
+_MAY_NAME_THE_PLATFORM = {
+    "services/goldeneye_paas.py",      # the adapter itself; the name IS the integration
+    "services/api_catalog.py",         # catalogues that integration's API surface
+    "services/agent_kms.py",           # speaks that integration's ops-agent secret protocol
+    "services/console_v2.py",          # matches BOSS's own run titles, which contain the word
+}
+
+
+def _engine_sources():
     package_root = ROOT / "engine" / "boss_engine"
     for path in package_root.rglob("*"):
+        rel = path.relative_to(package_root)
         if (
             not path.is_file()
             or "__pycache__" in path.parts
-            or any(part.startswith(".") for part in path.relative_to(package_root).parts)
+            or any(part.startswith(".") for part in rel.parts)
         ):
             continue
         try:
-            source = path.read_text(encoding="utf-8").lower()
+            yield rel.as_posix(), path.read_text(encoding="utf-8").lower()
         except UnicodeDecodeError:
             continue
-        assert not any(value in source for value in forbidden), path
+
+
+def test_engine_shipped_files_do_not_contain_internal_hostnames():
+    """A private hostname must never ship. No exceptions, ever.
+
+    This is the half of the old rule that was unambiguous: `sean.network` is one operator's
+    infrastructure, and an OSS package that names it tells everyone where our boxes are and
+    breaks for anyone else.
+    """
+    for rel, source in _engine_sources():
+        for host in ("sean.network", "tail95d980", "local.sean"):
+            assert host not in source, f"{rel} ships the hostname {host!r}"
+
+
+def test_only_the_platform_integration_names_the_platform():
+    """The other half, which was NOT unambiguous and had this test permanently red.
+
+    The old rule forbade the string "goldeneye" anywhere in the engine — including in
+    goldeneye_paas.py, a module whose entire purpose is integrating with it and which says the
+    word 68 times. That is not a leak; it is the module's identity, exactly as an AWS adapter
+    says "AWS".
+
+    So the rule is split. Hostnames are forbidden outright, above. The platform's NAME is
+    allowed only where naming it is the point, and the allowlist is small and explicit so a new
+    mention has to be argued for rather than absorbed.
+    """
+    offenders = sorted(
+        rel for rel, source in _engine_sources()
+        if "goldeneye" in source and rel not in _MAY_NAME_THE_PLATFORM
+    )
+    assert not offenders, (
+        "these name the operator's platform without being an integration with it: "
+        f"{offenders}"
+    )
+
+
+def test_the_platform_allowlist_has_no_dead_entries():
+    """An allowlist that outlives its reason silently widens the rule."""
+    present = {rel for rel, source in _engine_sources() if "goldeneye" in source}
+    stale = sorted(_MAY_NAME_THE_PLATFORM - present)
+    assert not stale, f"allowlisted but no longer mention it: {stale}"
 
 
 def test_default_classes_are_the_documented_oss_implementations():
@@ -277,3 +328,71 @@ def test_default_classes_are_the_documented_oss_implementations():
     assert isinstance(ports.persistence, InMemoryPersistence)
     assert isinstance(ports.events, LoggingEventSink)
     assert isinstance(ports.decisions, InMemoryDecisionSink)
+
+
+def test_duplicate_detection_survives_a_store_that_cannot_run_sql(restore_ports):
+    """The duplicate CHECK must not take down the work it protects.
+
+    The OSS in-memory adapter defines execute() and raises from it, so a `hasattr` guard let
+    the call through and every retry died with "raw SQL is unavailable". Both guards now fall
+    back to the persistence port, which keeps the protection working there rather than
+    switching it off — without it the OSS path would start the same pipeline twice, and each
+    one is a full budget.
+    """
+    from boss_engine.services.code_task_service import active_duplicate, active_same_app
+
+    ports = EnginePorts.oss_defaults(_settings())
+    configure_engine_ports(ports)
+    ports.persistence.save_run("run-live", {
+        "id": "run-live",
+        "project_id": "project",
+        "status": "running",
+        "title": "Shorty — self-hosted URL shortener",
+        "spec": {"work_fingerprint": "fp-1", "repo": "repo"},
+        "created_at": "2026-01-01T00:00:00Z",
+    })
+
+    class _NoSql:
+        def execute(self, *_a, **_k):
+            raise RuntimeError("raw SQL is unavailable in the OSS in-memory persistence adapter")
+
+    # By fingerprint, and by app name — both paths, both stores.
+    for connection in (_NoSql(), None):
+        assert active_duplicate(connection, "project", "fp-1") == "run-live"
+        assert active_duplicate(connection, "project", "fp-other") is None
+        assert active_same_app(connection, "project", "repo",
+                               "Shorty — self-hosted URL shortener · retry 2") == "run-live"
+        assert active_same_app(connection, "project", "other-repo",
+                               "Shorty — self-hosted URL shortener") is None
+
+
+def test_a_finished_run_is_not_a_duplicate(restore_ports):
+    """Running the same task again after it finished is legitimate — that is what the Launch
+    button on a finished card is for. Only IN-FLIGHT work blocks."""
+    from boss_engine.services.code_task_service import active_duplicate
+
+    ports = EnginePorts.oss_defaults(_settings())
+    configure_engine_ports(ports)
+    ports.persistence.save_run("run-done", {
+        "id": "run-done",
+        "project_id": "project",
+        "status": "completed",
+        "title": "Shorty",
+        "spec": {"work_fingerprint": "fp-1", "repo": "repo"},
+        "created_at": "2026-01-01T00:00:00Z",
+    })
+    assert active_duplicate(None, "project", "fp-1") is None
+
+
+def test_an_unanswerable_duplicate_check_does_not_block_work(restore_ports):
+    """When the store cannot answer at all, a second run is a lesser harm than no runs."""
+    from boss_engine.services import code_task_service
+
+    class _Broken:
+        def list_runs(self, *_a, **_k):
+            raise RuntimeError("store is down")
+
+    ports = dataclasses.replace(EnginePorts.oss_defaults(_settings()), persistence=_Broken())
+    configure_engine_ports(ports)
+    assert code_task_service.active_duplicate(None, "project", "fp-1") is None
+    assert code_task_service.active_same_app(None, "project", "repo", "Shorty") is None

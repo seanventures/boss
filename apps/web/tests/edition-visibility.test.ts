@@ -269,7 +269,14 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(html).toContain('data-area-nav="budget"');
     // Cut from Community on 2026-08-18 — see the reasons recorded in lib/edition.ts.
     expect(html).not.toContain('data-area-nav="work"');
-    expect(html).not.toContain('data-area-nav="activity"');
+    // "activity" was cut with it and came BACK on 2026-08-30, deliberately.
+    //
+    // What it was then: a thin feed of events, worth less than the nav row it cost. What it is
+    // now: the only place a build's 40-90 minutes are legible — which agent said what, which
+    // tool it ran, what came back — with levels, indexed search and a month of retention. A
+    // self-hosted operator has no access to our infrastructure, so this is the only way they
+    // can debug their own builds, and that is not something to charge for.
+    expect(html).toContain('data-area-nav="activity"');
     expect(html).not.toContain('data-area-nav="reliability"');
     expect(html).not.toContain('data-area-nav="reports"');
     const enterpriseNav = html.match(
@@ -309,9 +316,14 @@ describe("ConsoleShell edition-aware nav", () => {
     expect(page).toContain("IdentityProvidersCatalogView");
     expect(page).not.toMatch(/Account Connect is (included|available) in Community/i);
     expect(page).not.toMatch(/Community includes (hosted )?Account Connect/i);
+    // The help card no longer talks about editions at all: it was rewritten from
+    // design-partner setup into "what you can do here". It cannot mis-sell a paid surface to
+    // a Community reader if it never names one, which is a stronger guarantee than the old
+    // "mentions both Community and Cloud" and does not rot when the copy changes again.
     expect(help).not.toMatch(/Account Connect/i);
-    expect(help).toMatch(/Community/);
-    expect(help).toMatch(/Cloud/);
+    expect(help).not.toMatch(/hosted marketplace/i);
+    expect(help).not.toMatch(/enterprise clusters/i);
+    expect(help).not.toMatch(/included in (Cloud|Enterprise)/i);
     expect(skills).toMatch(/Hosted marketplace stays\s+hidden on Community/);
     expect(isCommunitySurfaceVisible("community", "sso_identity")).toBe(true);
     expect(isPaidSurfaceVisible("community", "account_connect")).toBe(false);

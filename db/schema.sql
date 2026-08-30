@@ -98,6 +98,11 @@ ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_reviewed_at TIMESTAMPTZ;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS last_violation_at TIMESTAMPTZ;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS source_module_id TEXT;
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS source_module_version TEXT;
+-- Who this role reports to, as a role_key in the same project. Nullable: a root has nobody
+-- above it, and BOSS has never required a hierarchy to exist. Held as a key rather than a
+-- foreign key to roles(id) so a manager can be registered after their report without the
+-- insert order mattering -- the org is discovered, not designed up front.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS reports_to TEXT;
 
 CREATE TABLE IF NOT EXISTS pack_installs (
   id TEXT PRIMARY KEY,
@@ -3569,6 +3574,72 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_run ON llm_calls (code_task_run_id);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_model ON llm_calls (model, stage, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_project ON llm_calls (project_id, created_at DESC);
 
+-- One row per TURN of the conversation between an agent and its model.
+--
+-- `llm_calls` above records one row per INVOCATION: "solo, claude-sonnet-5, 45 turns,
+-- 516183 ms". That is the right ledger for spend, and it is useless for the question an
+-- operator actually asks during a 40-90 minute build — "what is it doing right now?".  Forty-
+-- five turns of reasoning, file edits and test runs collapsed into a single number, so the
+-- longest phase of every project was the least observable thing in the system.
+--
+-- Captured from the CLI's streaming output, so a turn is written as it happens rather than
+-- reconstructed afterwards. Content is REDACTED and TRUNCATED on the way in (prompts carry the
+-- customer's source code) and the whole table is retention-bound -- see activity_retention.
+CREATE TABLE IF NOT EXISTS agent_turns (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    code_task_run_id TEXT,
+    stage TEXT,                                -- implement | review_code | check_tests | ...
+    role_key TEXT,                             -- the AGENT: software_engineer, adversarial_reviewer, ...
+    engine TEXT,
+    model TEXT,
+    turn_index INTEGER NOT NULL DEFAULT 0,     -- ordinal within the invocation
+    -- What KIND of turn. The four are genuinely different things to read: what the agent was
+    -- told, what it said back, what it decided to run, and what came back from running it.
+    direction TEXT NOT NULL,                   -- prompt | completion | tool_call | tool_result
+    tool_name TEXT,
+    content TEXT,                              -- redacted + truncated
+    content_bytes INTEGER NOT NULL DEFAULT 0,  -- size BEFORE truncation, so a clipped turn says so
+    truncated BOOLEAN NOT NULL DEFAULT false,
+    tokens INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    level TEXT NOT NULL DEFAULT 'verbose',     -- verbose | info | warn | error
+    ok BOOLEAN NOT NULL DEFAULT true,
+    error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- The reader's two questions: "this run, in order" and "this project, newest first".
+CREATE INDEX IF NOT EXISTS idx_agent_turns_run
+    ON agent_turns (code_task_run_id, turn_index, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_project
+    ON agent_turns (project_id, created_at DESC);
+-- Filter before searching: level and agent are the two facets that cut the set down most.
+CREATE INDEX IF NOT EXISTS idx_agent_turns_level
+    ON agent_turns (project_id, level, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_role
+    ON agent_turns (project_id, role_key, created_at DESC);
+-- FULL-TEXT, not ILIKE. Searching a month of turns with a scan is how a log viewer becomes
+-- unusable at exactly the moment it matters. to_tsvector + GIN keeps it an index lookup.
+-- `translate` splits dotted and underscored identifiers into words BEFORE indexing.
+-- Without it "shepherd.proposed" is a single token, so a search for "shepherd" matches
+-- nothing and the log reports no results for an event it is holding. The query in
+-- activity_log.py applies the identical expression, or the index cannot be used.
+CREATE INDEX IF NOT EXISTS idx_agent_turns_fts
+    ON agent_turns USING GIN (
+        to_tsvector('english', translate(coalesce(content, ''), '._-', '   ')));
+
+-- Search indexes for the log sources that already existed. `events` carried ONE index --
+-- (project_id, created_at) -- so every text search was a sequential scan of the project's
+-- whole history, filtered in Python afterwards.
+CREATE INDEX IF NOT EXISTS idx_events_fts
+    ON events USING GIN (to_tsvector('english', translate(
+        coalesce(event_type, '') || ' ' || coalesce(actor, '') || ' ' ||
+        coalesce(entity_type, '') || ' ' || coalesce(entity_id, ''), '._-', '   ')));
+CREATE INDEX IF NOT EXISTS idx_events_entity
+    ON events (project_id, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_type
+    ON events (project_id, event_type, created_at DESC);
+
 -- Reusable mapped workflow runtime (WFL-001 / Plane BOSS-134..143).  Definitions
 -- are stable identities; published versions are immutable content-addressed
 -- graphs.  Mappings deterministically select a version for a class of work and
@@ -5558,4 +5629,32 @@ CREATE TABLE IF NOT EXISTS secret_material (
   ciphertext BYTEA NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The activity log unions five sources newest-first per project. `events` had the index for
+-- that; the others did not, so bounding their queries would still have meant a sequential scan
+-- and a sort. Same shape as idx_events_project_created, for the same reader.
+CREATE INDEX IF NOT EXISTS idx_receipts_project_created
+  ON receipts(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_process_steps_project_created
+  ON agent_process_steps(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deadletters_project_created
+  ON deadletters(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_project_created
+  ON jobs(project_id, created_at DESC);
+
+
+-- Project-level gate autonomy: whether small, reversible, well-understood gates may approve
+-- themselves. Distinct from `autonomy_changes`, which is per-ROLE capability.
+--
+-- Supervised is the default and is never implied: a project with no row here is supervised,
+-- and Full auto has to be turned on, by someone, on purpose. The row records who and when,
+-- because reducing human oversight is itself an act with an owner.
+CREATE TABLE IF NOT EXISTS console_autonomy (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  mode TEXT NOT NULL DEFAULT 'supervised',
+  threshold_usd DOUBLE PRECISION NOT NULL DEFAULT 500,
+  max_risk_tier INTEGER NOT NULL DEFAULT 1,
+  set_by TEXT,
+  set_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

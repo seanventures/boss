@@ -8,7 +8,7 @@ among the most parallel workloads there are: esbuild and rollup deliberately use
 
 Linux CFS shares CPU roughly equally per runnable thread at equal priority, so the API's handful
 of threads end up competing with dozens of build processes. The API does not need more CPU — it
-cannot get SCHEDULED. Measured on goldeneye: `/v1/code-tasks?limit=5` answers in **0.37s** on a
+cannot get SCHEDULED. Measured in production: `/v1/code-tasks?limit=5` answers in **0.37s** on a
 quiet box and took **47s** while a code task was running, after which `/health` could no longer
 be scheduled inside its probe timeout, Docker marked the container unhealthy, and Traefik
 dropped the route. That is the plain-text 404 behind "Reconnecting to the control plane".

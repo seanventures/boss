@@ -130,7 +130,12 @@ export async function fetchCodeTasksFeed(
     // 50 were "Captain: QUALITY IMPROVE PASS", so an operator's real work — sudoku, n-queens,
     // the calculator, every app they had actually built — never reached the page at all. The
     // list looked nearly empty while 103 real runs sat behind the limit.
-    const res = await client.getCodeTasks(resolved, codeTaskLimitFor(area));
+    // Internal runs are dropped SERVER-SIDE. Filtering them after the limit is what let 200 of
+    // the 200 newest runs be "Captain: QUALITY IMPROVE PASS" and the Factory render an empty
+    // grid under a heading reading "200 code tasks" -- the second time housekeeping has eaten
+    // the whole window. Raising the limit again only moves it, and this response is already
+    // 1.41 MB at 200.
+    const res = await client.getCodeTasks(resolved, codeTaskLimitFor(area), true);
     return { projectId: resolved, apiReachable: true, items: res.code_tasks ?? [] };
   } catch (error) {
     if (error instanceof BossApiError) {

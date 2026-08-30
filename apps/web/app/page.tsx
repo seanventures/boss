@@ -164,6 +164,8 @@ import { fetchMeetingRooms } from "../lib/meeting-rooms";
 import { MeetingsHome } from "./meeting-room-ui";
 import { fetchCodeTasksFeed, fetchPreviews, fetchQaBenchmarkApps, structuredCodeTaskTests } from "../lib/code-tasks";
 import { CodeTasksHome } from "./code-tasks-ui";
+import { OrgChartArea, WorkforceArea } from "./workforce-ui";
+import { fetchOrgChart, fetchWorkforce } from "../lib/v2/workforce";
 import { ShepherdConsole } from "./shepherd-ui";
 import { DeliveryPipeline } from "./delivery-ui";
 import { MonitoringArea } from "./monitoring-ui";
@@ -217,7 +219,7 @@ import {
 import { fetchSkillFeed } from "../lib/skills";
 import { fetchStatus } from "../lib/status";
 import { fetchTaskFeed } from "../lib/tasks";
-import { PROJECT_ID } from "../lib/client";
+import { API_URL, PROJECT_ID } from "../lib/client";
 import { SubmitButton } from "./submit-button";
 import { fetchIdentityProvidersFeed } from "../lib/identity-providers";
 import { IdentityProvidersCatalogView } from "./identity-providers-ui";
@@ -596,6 +598,22 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   const budgetActive = shouldLoadBudgetArea(requestedArea);
   const infraActive = shouldLoadInfraArea(requestedArea);
   const assuranceActive = shouldLoadAssuranceArea(requestedArea);
+  // ALWAYS FETCHED, deliberately.
+  //
+  // The sidebar switches area with history.pushState and NO server round-trip, so whichever
+  // area the server happened to render for decides what data exists for the whole session.
+  // Any conditional here means: land on Org Chart, click Workforce, and the panel says "Open
+  // Workforce to load it" until you hard-reload. I tried gating on the requested area and then
+  // on isAreaActive, and both left that hole open from a different starting point.
+  //
+  // These are two bounded single calls (~0.8s each, measured) running inside the same
+  // Promise.all as the other ~30 feeds, so the cost is a rounding error against the render
+  // they join. Correctness beats an optimisation nobody can see.
+  const [workforceData, orgChartData] = await Promise.all([
+    fetchWorkforce(activeProjectId),
+    fetchOrgChart(activeProjectId),
+  ]);
+
   const [budgetArea, infraArea, assuranceArea] = await Promise.all([
     loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive }),
     loadInfraAreaData({ projectId: activeProjectId, active: infraActive }),
@@ -878,6 +896,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         budgetState: status.budgetState,
         deadletters: deadletterCount,
         pendingDecisions: status.pendingDecisions,
+        // Read here, on the server, because this is the URL the page's fetches actually use.
+        controlPlane: API_URL,
       }}
       scope={{
         project: activeProject?.name ?? activeProjectId,
@@ -6881,6 +6901,26 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="workforce" aria-label="Workforce">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Workforce</span>
+              <h3>Every agent, what it has produced, and how well.</h3>
+            </div>
+          </div>
+          <WorkforceArea workforce={workforceData} />
+        </section>
+
+        <section className="panel-stack" data-area="org_chart" aria-label="Org Chart">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Org Chart</span>
+              <h3>Who actually passes work to whom.</h3>
+            </div>
+          </div>
+          <OrgChartArea chart={orgChartData} />
+        </section>
+
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">
           <AgentProcesses projectId={activeProjectId} actor={activeActorId} />
           <ProcessManager projectId={activeProjectId} actor={activeActorId} />
@@ -7113,6 +7153,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
 
         <section className="panel-stack" data-area="activity" aria-label="Activity log">
           <FactoryFlowBoard projectId={activeProjectId} actor={activeActorId} />
+          {/* The viewer reads `?run=` itself. It cannot be passed from here: this is a server
+              component, and the Factory links across with pushState — a client-side navigation
+              that never re-runs it. Threading it through props would have worked on a reload
+              and silently done nothing on the click that matters. */}
           <ActivityLog projectId={activeProjectId} actor={activeActorId} />
         </section>
 

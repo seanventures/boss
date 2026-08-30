@@ -7,27 +7,46 @@ import { describe, expect, it } from "vitest";
 
 import { OnboardingHelpCard } from "../app/onboarding-help-card";
 
-describe("design-partner onboarding help card", () => {
+describe("console capabilities help card", () => {
   const html = renderToStaticMarkup(<OnboardingHelpCard />);
 
-  it("renders an honest Command Center help card", () => {
-    expect(html).toContain('data-testid="design-partner-onboarding-card"');
-    expect(html).toContain("Design-partner setup");
-    expect(html).toContain("docs/operations/DESIGN_PARTNER_ONBOARDING.md");
-    expect(html).toContain("make onboard");
-    expect(html).toContain("make smoke");
-    expect(html).toContain("make qa-live");
+  /**
+   * This card used to be design-partner SETUP — `make onboard`, `make seed`, Plane keys — and
+   * these tests asserted that copy. It was setup instructions on a page you only reach after
+   * setup has already succeeded, so it was replaced with the question a first-time operator
+   * actually has: what can I do here, and what is not here yet.
+   *
+   * The tests moved with it. What they protect is unchanged: the card must tell a newcomer how
+   * to start, and it must not promise anything BOSS cannot do.
+   */
+  it("tells a first-time operator the three ways in", () => {
+    expect(html).toContain('data-testid="console-capabilities-card"');
+    // Every entry point, named, with where its output lands — a way in that does not say where
+    // the work appears leaves the operator watching the wrong area.
+    expect(html).toMatch(/<b>Ask<\/b>/);
+    expect(html).toMatch(/<b>Research<\/b>/);
+    expect(html).toMatch(/<b>Build<\/b>/);
+    expect(html).toMatch(/Discovery/);
+    expect(html).toMatch(/Meetings/);
+    expect(html).toMatch(/Factory/);
   });
 
-  it("distinguishes Community from Cloud and does not overclaim", () => {
-    expect(html).toMatch(/Community/i);
-    expect(html).toMatch(/Cloud/i);
-    expect(html).toMatch(/private/i);
+  it("states what is missing instead of implying completeness", () => {
+    expect(html).toMatch(/not here yet/i);
+    // The three real gaps. Each was a live surprise for an operator before it was written down.
+    expect(html).toMatch(/host and a target/i);      // deploys need infrastructure first
+    expect(html).toMatch(/<b>not tracked<\/b>/);      // merge state is not known
+    expect(html).toContain("<b>not guaranteed</b>"); // previews and sandboxes can fail closed
+  });
+
+  it("does not overclaim", () => {
     expect(html).not.toMatch(/sandboxes? (and previews )?always work/i);
-    expect(html).toContain("not</strong> guaranteed");
     expect(html).not.toMatch(/public open-source (release|flip) is (complete|done)/i);
-    expect(html).toContain("Do not invent");
-    expect(html).toContain("Plane");
+    // Naming a paid-only surface here would sell a Community reader something they do not have.
+    // The card avoids the problem by describing capability, not edition.
+    for (const paid of [/Account Connect/i, /hosted marketplace/i, /enterprise clusters/i]) {
+      expect(html).not.toMatch(paid);
+    }
   });
 
   it("is mounted on overview only — not sold as Cloud or Account Connect", () => {

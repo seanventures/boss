@@ -73,7 +73,7 @@ export async function fetchPipelineData(projectId = PROJECT_ID): Promise<Pipelin
     let recentRuns: PipelineRunCost[] = [];
     try {
       const rr = await fetch(
-        `${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(resolved)}&limit=25`,
+        `${API_URL}/v1/code-tasks?project_id=${encodeURIComponent(resolved)}&limit=25&exclude_internal=true`,
         { cache: "no-store", headers: authHeaders() },
       );
       if (rr.ok) {
