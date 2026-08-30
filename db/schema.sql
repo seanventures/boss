@@ -3040,6 +3040,23 @@ CREATE INDEX IF NOT EXISTS idx_agent_process_steps_run
 -- every time the step is validated and every time it runs. A self-declared risk tier would be
 -- the documented way around the approval floor: name your step "harmless", bind it to a tool
 -- that deletes production, and the gate never fires.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  transport TEXT NOT NULL DEFAULT 'http',
+  risk_tier INTEGER NOT NULL DEFAULT 1,
+  data_boundary TEXT NOT NULL DEFAULT 'internal',
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  description TEXT,
+  publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tool_risk_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
+
 CREATE TABLE IF NOT EXISTS workflow_custom_steps (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -3068,23 +3085,6 @@ CREATE TABLE IF NOT EXISTS workflow_custom_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_custom_steps_project
   ON workflow_custom_steps(project_id, enabled, label);
-
-CREATE TABLE IF NOT EXISTS mcp_servers (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  transport TEXT NOT NULL DEFAULT 'http',
-  risk_tier INTEGER NOT NULL DEFAULT 1,
-  data_boundary TEXT NOT NULL DEFAULT 'internal',
-  enabled BOOLEAN NOT NULL DEFAULT true,
-  description TEXT,
-  publisher JSONB NOT NULL DEFAULT '{}'::jsonb,
-  provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
-  tool_risk_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_mcp_servers_project ON mcp_servers(project_id, enabled);
 
 CREATE TABLE IF NOT EXISTS project_skills (
   id TEXT PRIMARY KEY,
