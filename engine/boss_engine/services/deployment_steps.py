@@ -57,9 +57,15 @@ def _tail(text: str) -> str:
 class StepRecorder:
     """Appends step progress to a deployment run, one small write at a time."""
 
-    def __init__(self, engine, deployment_run_id: str):
+    def __init__(self, engine, deployment_run_id: str, *,
+                 table: str = "deployment_runs", set_duration: bool = True):
+        # PARAMETERISED RATHER THAN COPIED. Previews needed the same "what is done, what is
+        # pending" ledger a deploy already has, and a second implementation of it would drift
+        # from this one the first time either was touched. Only the destination differs.
         self._engine = engine
         self._run_id = deployment_run_id
+        self._table = table
+        self._set_duration = set_duration
         self._started = time.monotonic()
         self._steps: list[dict[str, Any]] = []
 
@@ -68,16 +74,20 @@ class StepRecorder:
         from ..db import begin
 
         try:
+            payload = json.dumps(self._steps, default=str)
             with begin(self._engine) as c:
-                if duration_ms is None:
-                    c.execute(sql("UPDATE deployment_runs SET steps = CAST(:s AS JSONB), "
-                                  "updated_at = now() WHERE id = :i"),
-                              {"s": json.dumps(self._steps, default=str), "i": self._run_id})
+                # `app_previews` has neither `updated_at` nor `duration_ms`; deployment_runs has
+                # both. The step ledger is the only thing in common, so that is all this writes
+                # when the extra columns are not there.
+                extra = ", updated_at = now()" if self._table == "deployment_runs" else ""
+                if duration_ms is None or not self._set_duration:
+                    c.execute(sql(f"UPDATE {self._table} SET steps = CAST(:s AS JSONB){extra} "
+                                  "WHERE id = :i"),
+                              {"s": payload, "i": self._run_id})
                 else:
-                    c.execute(sql("UPDATE deployment_runs SET steps = CAST(:s AS JSONB), "
-                                  "duration_ms = :d, updated_at = now() WHERE id = :i"),
-                              {"s": json.dumps(self._steps, default=str),
-                               "d": duration_ms, "i": self._run_id})
+                    c.execute(sql(f"UPDATE {self._table} SET steps = CAST(:s AS JSONB), "
+                                  f"duration_ms = :d{extra} WHERE id = :i"),
+                              {"s": payload, "d": duration_ms, "i": self._run_id})
         except Exception:  # noqa: BLE001
             # Progress reporting must never break the thing it reports on. A deployment that
             # fails because its progress bar could not be written would be absurd.

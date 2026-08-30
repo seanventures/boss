@@ -1842,6 +1842,149 @@ def stop_preview(engine, preview_id: str, settings: Optional[Settings] = None) -
     return {"id": preview_id, "status": "stopped"}
 
 
+def _attempt_chain(mode: str):
+    """Which substrates to try, in order. `auto` prefers isolation and falls back."""
+    if mode == "process":
+        return [start_preview]
+    if mode == "docker":
+        return [start_container_preview]
+    if mode == "rootfs":
+        return [start_rootfs_preview]
+    return [start_rootfs_preview, start_container_preview, start_preview]
+
+
+#: What each substrate is called when it is being tried, so the ledger reads as English.
+_SUBSTRATE_LABELS = {
+    "start_rootfs_preview": "Reuse the build's retained rootfs",
+    "start_container_preview": "Build and run a container",
+    "start_preview": "Run as a managed host process",
+}
+
+
+def run_preview_attempts(engine, settings: Settings, run_id: str, *,
+                         ttl_minutes: int = 60, mode: str = "auto",
+                         steps=None) -> dict:
+    """Try each substrate until one serves. Raises the domain errors unchanged.
+
+    `steps` is an optional StepRecorder. `auto` tries three substrates in order, and when it
+    ended in "preview could not start" there was no way to tell whether that meant one thing
+    was tried and failed or three were — so each attempt records itself, with the reason it
+    was passed over.
+    """
+    last: Optional[dict] = None
+    for fn in _attempt_chain(mode):
+        name = getattr(fn, "__name__", "attempt")
+        label = _SUBSTRATE_LABELS.get(name, name)
+        if steps is None:
+            try:
+                res = fn(engine, settings, run_id, ttl_minutes=ttl_minutes)
+            except RuntimeError as exc:
+                last = {"status": "failed", "error": str(exc)}
+                continue
+            if res.get("status") == "running":
+                return res
+            last = res
+            continue
+        with steps.step(name, label=label) as st:
+            try:
+                res = fn(engine, settings, run_id, ttl_minutes=ttl_minutes)
+            except RuntimeError as exc:
+                st.failed(str(exc)[:400])
+                last = {"status": "failed", "error": str(exc)}
+                continue
+            if res.get("status") == "running":
+                st.log(f"serving at {res.get('url') or 'a local URL'}")
+                return res
+            # Not a crash — this substrate simply could not serve, and the NEXT one may. That
+            # is a skip with a reason, not a failure.
+            st.skip((res.get("error") or res.get("failure_kind") or "did not serve")[:400])
+            last = res
+    return last or {"status": "failed", "error": "preview could not start"}
+
+
+def start_preview_async(engine, settings: Settings, run_id: str, *,
+                        ttl_minutes: int = 60, mode: str = "auto",
+                        actor: str = "operator") -> dict:
+    """Begin a preview and RETURN, leaving the build to finish in the background.
+
+    Starting a preview clones, installs dependencies, builds and launches — minutes of work,
+    and it was done inside the request. The console gives up after 120s, so the operator was
+    shown "the control plane did not answer within 120s" under a heading reading "Preview /
+    tests failed", while the build was still running and would often go on to succeed. Worse,
+    until the attempt finished there was NO ROW AT ALL: nothing in the previews list, nothing
+    in the Activity Log, nothing to poll. The operator was blind by construction.
+
+    So a row exists from the first moment, in the `starting` state the schema already
+    documented and nothing used. The console polls previews already; now there is something to
+    poll. Exactly one row per attempt: whatever the substrate creates is folded back onto this
+    id and its own row removed, so the id handed out here is the id that ends up terminal.
+    """
+    with begin(engine) as c:
+        run = c.execute(text(
+            "SELECT project_id, pull_request_url FROM code_task_runs WHERE id=:r"),
+            {"r": run_id}).mappings().first()
+    if not run:
+        raise ValueError(f"code task run not found: {run_id}")
+
+    preview_id = make_id("prev")
+    project_id = run["project_id"]
+    with begin(engine) as c:
+        c.execute(text(
+            "INSERT INTO app_previews (id,project_id,run_id,status,mode) "
+            "VALUES (:id,:p,:r,'starting',:m)"),
+            {"id": preview_id, "p": project_id, "r": run_id,
+             "m": mode if mode in ("process", "docker", "rootfs") else "process"})
+        emit_event(c, project_id, "app_preview.starting", actor, "app_preview", preview_id,
+                   {"run_id": run_id, "mode": mode, "ttl_minutes": ttl_minutes})
+
+    def _finish() -> None:
+        from .deployment_steps import StepRecorder
+
+        steps = StepRecorder(engine, preview_id, table="app_previews", set_duration=False)
+        try:
+            res = run_preview_attempts(engine, settings, run_id,
+                                       ttl_minutes=ttl_minutes, mode=mode, steps=steps)
+            child = res.get("id")
+            with begin(engine) as c:
+                if child and child != preview_id:
+                    # Fold the substrate's row onto the id already handed out, then drop it, so
+                    # a caller polling that id sees the outcome instead of a row stuck at
+                    # 'starting' beside a second row it never heard about.
+                    c.execute(text(
+                        "UPDATE app_previews AS t SET status=s.status, url=s.url, port=s.port, "
+                        "pid=s.pid, command=s.command, repo=s.repo, branch=s.branch, "
+                        "mode=s.mode, substrate=s.substrate, build_substrate=s.build_substrate, "
+                        "container_id=s.container_id, sandbox_task_id=s.sandbox_task_id, "
+                        "error=s.error, failure_kind=s.failure_kind, log_path=s.log_path, "
+                        "expires_at=s.expires_at "
+                        "FROM app_previews AS s WHERE t.id=:tid AND s.id=:sid"),
+                        {"tid": preview_id, "sid": child})
+                    c.execute(text("DELETE FROM app_previews WHERE id=:sid"), {"sid": child})
+                else:
+                    c.execute(text(
+                        "UPDATE app_previews SET status=:st, error=:e WHERE id=:id"),
+                        {"st": res.get("status") or "failed",
+                         "e": (res.get("error") or "")[:500] or None, "id": preview_id})
+        except Exception as exc:  # noqa: BLE001 — the thread must never die silently
+            kind = "ambiguous_app" if isinstance(exc, AmbiguousAppError) else (
+                "not_ready" if isinstance(exc, PreviewNotReady) else "start_crashed")
+            try:
+                with begin(engine) as c:
+                    c.execute(text(
+                        "UPDATE app_previews SET status='failed', error=:e, failure_kind=:k "
+                        "WHERE id=:id"),
+                        {"e": str(exc)[:500], "k": kind, "id": preview_id})
+                    emit_event(c, project_id, "app_preview.failed", actor, "app_preview",
+                               preview_id, {"run_id": run_id, "failure_kind": kind,
+                                            "error": str(exc)[:500]})
+            except Exception:  # noqa: BLE001
+                logger.exception("preview %s failed and could not be recorded", preview_id)
+
+    threading.Thread(target=_finish, name=f"preview-{preview_id}", daemon=True).start()
+    return {"id": preview_id, "status": "starting", "run_id": run_id,
+            "message": "Preview is building. It appears in the previews list as it progresses."}
+
+
 def list_previews(
     engine, project_id: str, limit: int = 50, settings: Optional[Settings] = None
 ) -> list[dict]:
@@ -1874,7 +2017,7 @@ def list_previews(
 
         rows = c.execute(text(
             "SELECT id,run_id,repo,branch,url,port,mode,substrate,build_substrate,sandbox_task_id,"
-            "status,error,failure_kind,expires_at,created_at "
+            "status,error,failure_kind,expires_at,created_at,steps "
             "FROM app_previews WHERE project_id=:p ORDER BY created_at DESC LIMIT :l"),
             {"p": project_id, "l": int(limit)}).mappings().all()
     # Publicize at the boundary: DB keeps loopback for the proxy; callers get open_url.

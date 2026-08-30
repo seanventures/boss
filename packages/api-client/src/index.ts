@@ -1220,7 +1220,15 @@ export type CodeTaskActivityResponse = { run_id: string; calls: LlmCallRow[] };
 export type PreviewRec = {
   id: string;
   run_id?: string | null;
-  status: string; // running | stopped | failed | expired
+  status: string; // starting | running | stopped | failed | expired
+  /** What the preview has done and what is still pending — the same ledger a deployment
+   *  records. A preview clones, installs, builds and launches; without this it is a spinner
+   *  with no detail, and a failure cannot say how far it got. */
+  steps?: {
+    step: string; label?: string; status: string;
+    started_at?: string | null; ended_at?: string | null;
+    duration_ms?: number | null; log?: string;
+  }[] | null;
   /** Operator-reachable gateway URL. Relative `/v1/previews/{id}/web/` or
    * `{BOSS_PREVIEW_PUBLIC_BASE}/v1/previews/{id}/web/` when that origin is set.
    * Never loopback. */

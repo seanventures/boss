@@ -69,8 +69,16 @@ describe("the live pill", () => {
     expect(SRC).toContain('className="ct-live-dot"');
   });
 
-  it("only appears while the preview is actually running", () => {
-    expect(SRC).toContain('{p.status === "running" ? <i className="ct-live-dot" aria-hidden /> : null}');
+  it("only appears while the preview is actually live", () => {
+    // `starting` counts: a preview now exists from the moment the button is pressed and is
+    // genuinely doing something, so a still dot beside "building…" would understate it. What
+    // must NOT get a dot is stopped, failed, expired, or verified-but-not-running.
+    const dot = SRC.slice(SRC.indexOf("ct-live-pill"), SRC.indexOf("preview: {p.status"));
+    expect(dot).toContain('p.status === "running" || p.status === "starting"');
+    expect(dot).toContain('className="ct-live-dot"');
+    for (const dead of ["stopped", "failed", "expired"]) {
+      expect(dot).not.toContain(`"${dead}"`);
+    }
   });
 
   it("still reads as live with motion turned off", () => {

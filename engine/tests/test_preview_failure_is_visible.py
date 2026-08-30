@@ -20,7 +20,9 @@ def test_both_failure_paths_emit_an_event():
     src = inspect.getsource(preview_service)
     # Host process and docker each have their own `_fail`; a fix to one is not a fix.
     assert src.count("def _fail(") == 2
-    assert src.count('"app_preview.failed"') == 2
+    # One per _fail, plus the async starter's own crash handler — a thread that dies must also
+    # leave a trace, and that is a third place a failure can be born.
+    assert src.count('"app_preview.failed"') >= 3
 
 
 def test_the_event_carries_what_the_operator_needs_to_act():

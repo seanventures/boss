@@ -3542,6 +3542,10 @@ ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS substrate TEXT NOT NULL DEFAUL
 ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS build_substrate TEXT;
 ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS sandbox_task_id TEXT;
 ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS failure_kind TEXT;
+-- What the preview has DONE and what is still pending, in the same shape a deployment records.
+-- Starting a preview clones, installs, builds and launches; without a ledger it is a spinner
+-- with no detail, and when it fails there is nothing to say how far it got.
+ALTER TABLE app_previews ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_app_previews_project ON app_previews (project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_app_previews_run ON app_previews (run_id);
 

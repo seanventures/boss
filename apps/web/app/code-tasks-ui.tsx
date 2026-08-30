@@ -218,7 +218,12 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
         const href = operatorPreviewOpenHref(p);
         return (
         <span key={p.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          {href ? (
+          {p.status === "starting" ? (
+            // Nothing to open yet. A link that 404s is worse than no link.
+            <span className="cap-btn" aria-disabled data-testid="preview-building">
+              <ArrowsClockwise size={15} weight="bold" aria-hidden /> Building preview…
+            </span>
+          ) : href ? (
             <a className="cap-btn primary" href={href.startsWith("http") ? href : `${PREVIEW_API}${href}`} target="_blank" rel="noreferrer">
               <ArrowSquareOut size={15} weight="bold" aria-hidden />
               {p.status === "verified" ? "View verified preview" : "Open preview"}
@@ -230,9 +235,34 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
                 : `preview ${p.status} — no operator URL`}
             </span>
           )}
-          <span className="cap-badge tone-blue ct-live-pill" data-live={p.status === "running"}>
-            {p.status === "running" ? <i className="ct-live-dot" aria-hidden /> : null}
-            preview: {p.status}
+          {/* STARTING IS A STATE, NOT AN ABSENCE.
+              A preview now exists from the moment the button is pressed, and its ledger says
+              which substrate is being tried and how far it got — the same "what is done, what
+              is pending" a deploy shows. Without this the operator watches a spinner and, when
+              it fails, cannot tell whether one substrate was tried or three. */}
+          {p.status === "starting" && (p.steps?.length ?? 0) > 0 ? (
+            <details className="detail ct-preview-steps" data-testid="preview-steps">
+              <summary style={{ cursor: "pointer" }}>
+                {p.steps!.filter((x) => x.status === "ok").length}/{p.steps!.length} steps
+              </summary>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 16 }}>
+                {p.steps!.map((x, i) => (
+                  <li key={i}>
+                    {x.status === "ok" ? "✓" : x.status === "failed" ? "✗"
+                      : x.status === "skipped" ? "–" : "…"}{" "}
+                    {x.label || x.step}
+                    {x.duration_ms ? ` · ${Math.round(x.duration_ms / 1000)}s` : ""}
+                    {x.log ? <span className="detail"> — {x.log.slice(0, 120)}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
+          <span className="cap-badge tone-blue ct-live-pill"
+                data-live={p.status === "running" || p.status === "starting"}>
+            {p.status === "running" || p.status === "starting"
+              ? <i className="ct-live-dot" aria-hidden /> : null}
+            preview: {p.status === "starting" ? "building…" : p.status}
             {p.substrate === "preview_rootfs" ? " · retained rootfs" : p.substrate === "preview_docker" ? " · docker" : " · host process"}
           </span>
           {p.status === "running" ? <PreviewLogs previewId={p.id} /> : null}
@@ -263,12 +293,28 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
           <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.note}</pre>
         </details>
       ) : null}
-      {state?.error ? (
-        <details open className="detail" style={{ color: "#f85149", width: "100%" }}>
-          <summary style={{ cursor: "pointer" }}>⚠ Preview / tests failed</summary>
-          <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.error}</pre>
-        </details>
-      ) : null}
+      {state?.error ? (() => {
+        // A CLIENT TIMEOUT IS NOT A VERDICT.
+        //
+        // Starting a preview runs npm install, a build and a launch SYNCHRONOUSLY, and that
+        // regularly outlasts the client's 120s deadline. The reply says so in its own words —
+        // "It may still be working" — and it was being rendered under "⚠ Preview / tests
+        // failed", which states the opposite. The operator is told the preview failed while
+        // the preview is still building, and a minute later it is running.
+        const stillWorking = /did not answer within/i.test(state.error);
+        return (
+          <details open className="detail"
+                   style={{ color: stillWorking ? "#d29922" : "#f85149", width: "100%" }}
+                   data-testid={stillWorking ? "preview-still-working" : "preview-failed"}>
+            <summary style={{ cursor: "pointer" }}>
+              {stillWorking
+                ? "⏳ Still building — this took longer than the console waits"
+                : "⚠ Preview / tests failed"}
+            </summary>
+            <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, marginTop: 6, maxHeight: 320, overflow: "auto" }}>{state.error}</pre>
+          </details>
+        );
+      })() : null}
     </span>
   );
 }
@@ -2026,7 +2072,8 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
   // Operator View: running first, then verified-test with an open_url.
   // verified-test without a URL is still shown so we can be honest (no invented View).
   const livePreviews = previews
-    .filter((p) => p.run_id === run.id && (p.status === "running" || p.status === "verified"))
+    .filter((p) => p.run_id === run.id
+      && (p.status === "running" || p.status === "verified" || p.status === "starting"))
     .sort((a, b) => {
       if (a.status === "running" && b.status !== "running") return -1;
       if (b.status === "running" && a.status !== "running") return 1;
@@ -2715,7 +2762,8 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                     // appeared. The newest wins; `list_previews` returns newest first.
                     livePreviews={previews
                       .filter((p) => p.run_id === active.id
-                        && (p.status === "running" || p.status === "verified"))
+                        && (p.status === "running" || p.status === "verified"
+                            || p.status === "starting"))
                       .slice(0, 1)}
                   />
                 ) : null}

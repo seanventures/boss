@@ -270,3 +270,32 @@ it("does not drag a paragraph into the button bar with it", () => {
     expect(css).toContain(".ct-detail-actions > * { min-width: 0; max-width: 100%; }");
   });
 });
+
+describe("a preview that is still building says so", () => {
+  const CT = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "app/code-tasks-ui.tsx"), "utf8");
+
+  it("shows the starting preview instead of hiding it", () => {
+    // Until the attempt finished there was no row at all — nothing in the list, nothing to
+    // poll. Now there is one from the first moment, so the filter has to admit it.
+    expect(CT).toContain('p.status === "starting"');
+  });
+
+  it("does not offer a link to something that is not serving yet", () => {
+    // A link that 404s is worse than no link.
+    expect(CT).toContain('data-testid="preview-building"');
+    expect(CT).toContain("Building preview…");
+  });
+
+  it("shows what is done and what is pending, like a deploy does", () => {
+    expect(CT).toContain('data-testid="preview-steps"');
+    expect(CT).toContain('{p.steps!.filter((x) => x.status === "ok").length}/{p.steps!.length} steps');
+  });
+
+  it("distinguishes done, failed, skipped and running in the ledger", () => {
+    // A skipped substrate is a fact worth showing — `auto` tries three, and "could not start"
+    // could not say whether one was tried or all of them.
+    expect(CT).toContain('x.status === "ok" ? "✓" : x.status === "failed" ? "✗"');
+    expect(CT).toContain('x.status === "skipped" ? "–" : "…"');
+  });
+});

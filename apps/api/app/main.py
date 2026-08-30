@@ -9267,58 +9267,33 @@ def start_preview_endpoint(run_id: str, payload: Optional[dict] = None):
         )
     mode = str(p.get("mode", "auto")).lower()
     ttl = int(p.get("ttl_minutes", 60))
-    from .services.preview_service import (
-        AmbiguousAppError, PreviewNotReady, start_preview, start_container_preview,
-        start_rootfs_preview, stop_preview,
-    )
+    from .services.preview_service import start_preview_async, stop_preview
     # Replace (don't accumulate): stop any prior running preview for this run so there's one live
     # preview per task — a fresh "Run preview" regenerates it.
     with begin(engine) as _c:
         prior = [r[0] for r in _c.execute(
-            text("SELECT id FROM app_previews WHERE run_id=:r AND status='running'"),
+            text("SELECT id FROM app_previews WHERE run_id=:r AND status IN ('running','starting')"),
             {"r": run_id}).fetchall()]
     for _pid in prior:
         try:
             stop_preview(engine, _pid, settings)
         except Exception:  # noqa: BLE001 — best-effort cleanup
             pass
-    # auto: containerize first (isolated), fall back to a host process (handles loopback-binding
-    # apps / no-docker). Explicit mode forces one path.
-    if mode == "process":
-        attempts = [start_preview]
-    elif mode == "docker":
-        attempts = [start_container_preview]
-    elif mode == "rootfs":
-        attempts = [start_rootfs_preview]
-    else:
-        attempts = [start_rootfs_preview, start_container_preview, start_preview]
-    last: Optional[dict] = None
-    for fn in attempts:
-        try:
-            res = fn(engine, settings, run_id, ttl_minutes=ttl)
-        except AmbiguousAppError as exc:
-            # Refusing on purpose. Trying the next substrate would guess the same way, so stop
-            # and tell the operator WHICH apps were found and how to disambiguate.
-            raise HTTPException(status_code=409, detail={
-                "error": "preview_ambiguous_app",
-                "message": str(exc),
-                "candidates": exc.candidates,
-                "next_action": ("Retry the task so it records the files it built, or add a "
-                                "boss.preview.command file naming the entrypoint."),
-            })
-        except PreviewNotReady as exc:
-            # No PR yet. Trying the other substrates cannot change that, so stop immediately
-            # rather than reporting a generic "preview could not start" after three attempts.
-            raise HTTPException(status_code=409, detail=exc.as_detail())
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
-        except RuntimeError as exc:
-            last = {"status": "failed", "error": str(exc)}
-            continue
-        if res.get("status") == "running":
-            return res
-        last = res
-    return last or {"status": "failed", "error": "preview could not start"}
+
+    # ASYNC, BECAUSE THE WORK OUTLASTS THE REQUEST.
+    #
+    # Starting a preview clones, installs dependencies, builds and launches. That was done
+    # inside this handler, and the console gives up after 120 seconds — so an operator was told
+    # "the control plane did not answer within 120s" under a heading reading "Preview / tests
+    # failed", while the build was still running and would often go on to succeed. Until the
+    # attempt finished there was also no row at all: nothing in the previews list, nothing in
+    # the Activity Log, nothing to poll. This returns a `starting` row immediately and lets the
+    # console watch it the way it already watches everything else.
+    try:
+        return start_preview_async(
+            engine, settings, run_id, ttl_minutes=ttl, mode=mode, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/v1/previews")
