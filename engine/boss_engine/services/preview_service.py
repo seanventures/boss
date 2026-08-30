@@ -979,6 +979,19 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
                  "b": branch, "sub": ExecutionSubstrate.PREVIEW_HOST.value,
                  "build": build_substrate, "e": msg[:500], "fk": failure_kind,
                  "lg": log_path})
+            # A FAILURE NOBODY IS TOLD ABOUT.
+            #
+            # `app_preview.started` was emitted on success and nothing at all on failure, so a
+            # preview that died wrote its reason into a row and stopped there. The Activity Log
+            # is a projection of events — it cannot show what was never emitted — so an
+            # operator sent to the log to find out why their preview failed found agent turns
+            # and no preview at all, and reasonably concluded the log was useless.
+            emit_event(
+                c, project_id, "app_preview.failed", "operator", "app_preview", preview_id,
+                {"run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch,
+                 "failure_kind": failure_kind, "suggested_action": suggested_action,
+                 "error": msg[:500], "log_path": log_path},
+            )
         return {"id": preview_id, "status": "failed", "error": msg,
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
@@ -1198,6 +1211,14 @@ def start_container_preview(engine, settings: Settings, run_id: str, *, ttl_minu
                 {"id": preview_id, "p": project_id, "r": run_id, "repo": f"{owner}/{repo}",
                  "b": branch, "sub": ExecutionSubstrate.PREVIEW_DOCKER.value,
                  "build": build_substrate, "e": msg[:500], "fk": failure_kind})
+            # Same reason as the host path: a failure that emits nothing cannot appear in a log
+            # that is a projection of events.
+            emit_event(
+                c, project_id, "app_preview.failed", "operator", "app_preview", preview_id,
+                {"run_id": run_id, "repo": f"{owner}/{repo}", "branch": branch, "mode": "docker",
+                 "failure_kind": failure_kind, "suggested_action": suggested_action,
+                 "error": msg[:500]},
+            )
         return {"id": preview_id, "status": "failed", "error": msg, "mode": "docker",
                 "failure_kind": failure_kind, "suggested_action": suggested_action}
 
