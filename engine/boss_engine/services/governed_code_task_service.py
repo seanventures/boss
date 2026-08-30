@@ -19,7 +19,9 @@ is the guidance, the model impersonates the role. See docs/product/GOVERNED_CODI
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
 
 import hashlib
 import json
@@ -47,6 +49,8 @@ from .core import create_blocking_decision, emit_event, make_id, record_policy_e
 from .github_app_adapter import GitHubAppAdapter
 from .iac_verify import IacVerifyResult, detect_iac_files, is_iac_task, run_iac_verify_lane
 from .llm_telemetry import clear_llm_context, record_llm_call, set_llm_context
+
+logger = logging.getLogger(__name__)
 from .pipeline_profile_service import resolve_for_run
 from .factory_quality_loop import (
     bind_test_outcomes,
@@ -1568,12 +1572,29 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         # res.error too — that feeds the AIMD backoff (halve concurrency + wait) on the next call.
         limiter = get_rate_limiter(settings)
         provider = provider_of(eng_name)
-        with limiter.slot(provider):
+        # WAITING FOR THE LANE IS NOT THE SAME AS DOING THE WORK.
+        #
+        # Both used to land in the phase's wall time as one undifferentiated number, so a stage
+        # that queued four minutes for a slot and then ran for one was indistinguishable from a
+        # stage that worked for five. Measured across 70 runs, 71% of wall time was not model
+        # latency — and no record said which part of it was queueing. These two numbers are how
+        # that question gets answered from data instead of by inference.
+        _stage_started = time.monotonic()
+        with limiter.slot(provider) as _slot:
+            _work_started = time.monotonic()
             res = mv.run_code_task(guest_spec, tenant_id=project_id)
+            _work_ms = int((time.monotonic() - _work_started) * 1000)
             if is_rate_limit_error(getattr(res, "error", None) or getattr(res, "summary", "")):
                 limiter.report_rate_limited(provider)
             else:
                 limiter.report_ok(provider)
+        _record_stage_timing(
+            stage_name, step,
+            waited_ms=int(getattr(_slot, "waited_seconds", 0.0) * 1000),
+            work_ms=_work_ms,
+            total_ms=int((time.monotonic() - _stage_started) * 1000),
+            provider=provider, engine_name=eng_name,
+        )
         if mv.last_sandbox_task_id:
             guest_vm_ids.append(mv.last_sandbox_task_id)
             with _transaction(engine) as c:
@@ -1610,6 +1631,41 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     "SELECT lease_owner FROM jobs WHERE id=:j"), {"j": job_id}).scalar()
         except Exception:  # noqa: BLE001
             return _lease_owner_at_start["v"]  # unknown -> assume unchanged, never false-abort
+
+    def _record_stage_timing(stage_name: str, step: str, *, waited_ms: int, work_ms: int,
+                             total_ms: int, provider: str, engine_name: str) -> None:
+        """Append one stage's wait/work split to the run, and log it.
+
+        `phase_timings` says a phase took five minutes. It cannot say whether those were spent
+        queueing for a model lane, booting a VM, or generating code — and the three have
+        completely different fixes. This is the missing half: per stage, how long the lane made
+        it wait before any work started.
+
+        Never fails a run. A diagnostic that can break a build is worse than no diagnostic.
+        """
+        try:
+            entry = {
+                "stage": stage_name, "step": step,
+                "waited_ms": int(waited_ms), "work_ms": int(work_ms),
+                "total_ms": int(total_ms),
+                "provider": provider, "engine": engine_name,
+            }
+            logger.info(
+                "stage timing run=%s stage=%s waited=%.1fs work=%.1fs (%.0f%% of it was queueing)",
+                run_id, stage_name, waited_ms / 1000, work_ms / 1000,
+                (100.0 * waited_ms / total_ms) if total_ms else 0.0,
+            )
+            with _transaction(engine) as c:
+                c.execute(
+                    sql("UPDATE code_task_runs SET finalize_ctx = "
+                        "COALESCE(finalize_ctx, '{}'::jsonb) || jsonb_build_object("
+                        "  'stage_timings', COALESCE(finalize_ctx->'stage_timings', '[]'::jsonb)"
+                        "    || jsonb_build_array(CAST(:entry AS JSONB))), "
+                        "updated_at = now() WHERE id = :id"),
+                    {"entry": json.dumps(entry), "id": run_id},
+                )
+        except Exception:  # noqa: BLE001 — instrumentation never fails a run
+            pass
 
     def _phase(c, name: str) -> None:
         """Set the run's phase under the fence.

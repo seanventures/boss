@@ -34,6 +34,13 @@ _RATE_LIMIT_SIGNS = (
 )
 
 
+@dataclass(frozen=True)
+class SlotHandle:
+    """What acquiring the slot cost. Zero when the lane was free."""
+
+    waited_seconds: float
+
+
 def is_rate_limit_error(err: object) -> bool:
     """True if an exception/message looks like a provider rate/usage limit."""
     s = str(err).lower()
@@ -148,10 +155,19 @@ class ModelRateLimiter:
 
     @contextmanager
     def slot(self, provider: str):
-        """Acquire a call slot for ``provider`` (blocks on concurrency/pacing/backoff)."""
+        """Acquire a call slot for ``provider`` (blocks on concurrency/pacing/backoff).
+
+        Yields a handle carrying HOW LONG the acquire blocked. That number was previously
+        invisible: a stage that waited four minutes for a slot and then ran for one looked
+        identical, in every timing BOSS records, to a stage that ran for five. Which of the
+        two it is decides whether the answer is "the model is slow" or "the lane is full",
+        and those have opposite fixes.
+        """
+        started = self._time()
         self._acquire(provider)
+        handle = SlotHandle(waited_seconds=max(0.0, self._time() - started))
         try:
-            yield
+            yield handle
         finally:
             self._release(provider)
 
@@ -233,7 +249,9 @@ class NullRateLimiter:
 
     @contextmanager
     def slot(self, provider: str):
-        yield
+        # Same shape as the real one, so a caller reading `.waited_seconds` does not have to
+        # know which limiter it got.
+        yield SlotHandle(waited_seconds=0.0)
 
     def report_rate_limited(self, provider: str, retry_after_s: Optional[float] = None) -> None:
         pass
