@@ -1,0 +1,292 @@
+"""A customer's delivery workflow actually runs.
+
+Phase 1's claim is that a capability step gets executed, its output flows into the next step,
+a gate stops for a person, and a failure records a reason someone can act on. This exercises
+that against a real database with a recording tool registry, so the dispatch is real and the
+side effects are not — a test suite that opens genuine pull requests is a test suite nobody
+can run twice.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+
+import pytest
+from sqlalchemy import create_engine, text
+
+from boss_engine.services import workflow_capability_runner as runner
+from boss_engine.services import workflows
+
+TEST_DB = os.environ.get(
+    "BOSS_TEST_DATABASE_URL", "postgresql+psycopg://boss:boss@localhost:5432/boss_test"
+)
+
+
+class RecordingTool:
+    """Stands in for a real tool. Records the call and returns what the real one produces."""
+
+    def __init__(self, name, returns):
+        self.name = name
+        self.kind = "write"
+        self.description = name
+        self.parameters = {}
+        self._returns = returns
+        self.calls: list[dict] = []
+
+    def handler(self, ctx, *, project_id, actor, args):
+        self.calls.append({"project_id": project_id, "actor": actor, "args": dict(args)})
+        return dict(self._returns)
+
+
+class RecordingRegistry:
+    def __init__(self, tools):
+        self._tools = tools
+
+    def specs(self):
+        return list(self._tools)
+
+
+@pytest.fixture(scope="module")
+def eng():
+    engine = create_engine(TEST_DB, future=True)
+    try:
+        with engine.begin() as c:
+            c.execute(text("SELECT 1 FROM workflow_step_runs LIMIT 1"))
+    except Exception as error:                      # pragma: no cover
+        pytest.skip(f"boss_test unavailable: {error}")
+    with engine.begin() as c:
+        for ddl in (
+            "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'system'",
+            "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS is_catalogue BOOLEAN NOT NULL DEFAULT false",
+            "ALTER TABLE workflow_definitions ADD COLUMN IF NOT EXISTS forked_from_version_id TEXT",
+        ):
+            c.exec_driver_sql(ddl)
+    return engine
+
+
+@pytest.fixture()
+def project(eng):
+    pid = f"p_{uuid.uuid4().hex[:10]}"
+    with eng.begin() as c:
+        wid = c.execute(text("SELECT workspace_id FROM projects LIMIT 1")).scalar()
+        if wid is None:
+            pytest.skip("boss_test has no workspace")
+        c.execute(
+            text("INSERT INTO projects (id, workspace_id, name, slug) "
+                 "VALUES (:i, :w, 'capability runner test', :s)"),
+            {"i": pid, "w": wid, "s": pid},
+        )
+    yield pid
+    with eng.begin() as c:
+        c.execute(text("DELETE FROM workflow_step_runs WHERE project_id=:p"), {"p": pid})
+        c.execute(text("DELETE FROM workflow_runs WHERE project_id=:p"), {"p": pid})
+        for table in ("workflow_mappings", "workflow_versions", "workflow_definitions",
+                      "decisions", "events", "receipts"):
+            try:
+                c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
+            except Exception:
+                pass
+        c.execute(text("DELETE FROM projects WHERE id=:p"), {"p": pid})
+
+
+class Ctx:
+    """Minimal engine context: the tools under test only need a transaction."""
+
+    def __init__(self, engine):
+        self._engine = engine
+
+    def begin(self):
+        return self._engine.begin()
+
+
+def _publish(c, project_id, key, steps, entry):
+    definition = workflows.create_definition(
+        c, project_id=project_id, workflow_key=key, name=key, description=None,
+        actor="test", namespace="product",
+    )
+    version = workflows.publish_version(
+        c, project_id=project_id, definition_id=definition["id"],
+        spec={"entry_step": entry, "steps": steps}, actor="test",
+    )
+    return definition, version
+
+
+def _start(c, project_id, version_id):
+    return workflows.start_run(
+        c, project_id=project_id, actor="test", input_data={},
+        dedupe_key=f"dk_{uuid.uuid4().hex[:10]}", workflow_version_id=version_id,
+    )
+
+
+def _steps(c, run_id):
+    rows = c.execute(
+        text("SELECT step_id, status, output, last_error FROM workflow_step_runs "
+             "WHERE workflow_run_id=:r ORDER BY created_at"),
+        {"r": run_id},
+    ).mappings().all()
+    return {r["step_id"]: dict(r) for r in rows}
+
+
+# ── The end-to-end claim ───────────────────────────────────────────────────────
+
+def test_a_capability_step_is_executed_by_dispatching_to_a_real_tool(eng, project, monkeypatch):
+    """The step calls the tool BOSS already has, rather than a second implementation of it."""
+    meeting = RecordingTool("request_meeting", {"meeting_run_id": "mrun_1", "task_id": "tsk_1"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "one_step", [
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "Build a thing"}},
+             "next": []},
+        ], "m")
+        run = _start(c, project, version["id"])
+        result = runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert meeting.calls, "the tool was never called"
+    assert meeting.calls[0]["args"] == {"directive": "Build a thing"}
+    assert steps["m"]["status"] == "succeeded"
+    assert steps["m"]["output"]["meeting_run_id"] == "mrun_1"
+    assert result["performed"][0]["outcome"] == "succeeded"
+
+
+def test_one_steps_output_becomes_the_next_steps_input(eng, project, monkeypatch):
+    """"Deploy the thing you just built" is the most ordinary sentence in delivery, and without
+    this a workflow could only ever pass literals."""
+    build = RecordingTool("create_code_task", {"code_task_run_id": "crun_42"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_9"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build, preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "two_step", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build",
+                         "inputs": {"title": "X", "instructions": "do it"}},
+             "next": ["p"]},
+            {"id": "p", "kind": "capability",
+             "binding": {"capability": "preview",
+                         "inputs": {"run_id": {"from_step": "b", "field": "code_task_run_id"}}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)     # build
+        workflows.advance_run(c, project, run["id"])
+        runner.tick(c, Ctx(eng), project_id=project)     # preview
+        steps = _steps(c, run["id"])
+
+    assert preview.calls, "the second step never ran"
+    assert preview.calls[0]["args"] == {"run_id": "crun_42"}, "the reference did not resolve"
+    assert steps["b"]["status"] == "succeeded"
+    assert steps["p"]["status"] == "succeeded"
+
+
+def test_a_reference_to_something_never_produced_fails_with_the_reason(eng, project, monkeypatch):
+    """Not "step failed". The operator has to be able to see WHICH field was missing."""
+    build = RecordingTool("create_code_task", {"something_else": "x"})
+    preview = RecordingTool("start_preview", {"preview_id": "p"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build, preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "bad_ref", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "d"}},
+             "next": ["p"]},
+            {"id": "p", "kind": "capability",
+             "binding": {"capability": "preview",
+                         "inputs": {"run_id": {"from_step": "b", "field": "code_task_run_id"}}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        workflows.advance_run(c, project, run["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not preview.calls, "the tool ran with an unresolved input"
+    assert "code_task_run_id" in (steps["p"]["last_error"] or "")
+
+
+def test_a_gate_waits_for_a_person_instead_of_being_executed(eng, project, monkeypatch):
+    """A gate is not work. It raises a decision and stays waiting — the runtime's own
+    mechanism — and is never dispatched to a tool."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "gated", [
+            {"id": "g", "kind": "capability",
+             "binding": {"capability": "spec_review", "inputs": {}},
+             "next": []},
+        ], "g")
+        run = _start(c, project, version["id"])
+        result = runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        decisions = c.execute(
+            text("SELECT count(*) FROM decisions WHERE project_id=:p"), {"p": project}
+        ).scalar()
+
+    assert steps["g"]["status"] == "waiting"
+    assert decisions == 1, "no decision was raised for the gate"
+    assert result["performed"][0]["outcome"] == "gate_opened"
+
+
+def test_a_tool_that_fails_records_a_reason_and_stays_retryable(eng, project, monkeypatch):
+    failing = RecordingTool("request_meeting", {"ok": False, "error": "the panel is full"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([failing]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "failing", [
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "d"}}, "next": []},
+        ], "m")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert "the panel is full" in (steps["m"]["last_error"] or "")
+    assert steps["m"]["status"] in {"ready", "failed"}      # retryable, not deadlettered
+
+
+def test_a_missing_tool_says_so_rather_than_failing_obscurely(eng, project, monkeypatch):
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+    with eng.begin() as c:
+        _, version = _publish(c, project, "no_tool", [
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "d"}}, "next": []},
+        ], "m")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+    assert "does not have the 'request_meeting' tool" in (steps["m"]["last_error"] or "")
+
+
+# ── The line the runner must not cross ─────────────────────────────────────────
+
+def test_the_runner_never_touches_a_system_workflow(eng, project, monkeypatch):
+    """BOSS's own definitions are claimed by the machinery that has always claimed them.
+
+    A runner that reached across the namespace could execute the governed coding pipeline a
+    second time, concurrently with the real one.
+    """
+    tool = RecordingTool("request_meeting", {"meeting_run_id": "m"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([tool]))
+
+    with eng.begin() as c:
+        definition = workflows.create_definition(
+            c, project_id=project, workflow_key="internal_thing", name="internal",
+            description=None, actor="test", namespace="system",
+        )
+        version = workflows.publish_version(
+            c, project_id=project, definition_id=definition["id"],
+            spec={"entry_step": "m", "steps": [
+                {"id": "m", "kind": "capability",
+                 "binding": {"capability": "meeting", "inputs": {"directive": "d"}},
+                 "next": []},
+            ]}, actor="test",
+        )
+        _start(c, project, version["id"])
+        result = runner.tick(c, Ctx(eng), project_id=project)
+
+    assert result["count"] == 0, "the runner reached into a system workflow"
+    assert not tool.calls

@@ -1,0 +1,369 @@
+"""The delivery workflows BOSS ships.
+
+Twelve, chosen to cover how software actually gets delivered rather than to fill a grid. A
+customer picks one, applies it to a project or to a single feature, and the work walks the
+steps. To change one they fork it — these stay pristine, which is what keeps "reset to the
+standard" meaningful and keeps their diff against it visible.
+
+Every step here is validated by the same code that validates a customer's own workflow. If a
+capability's inputs change and a catalogue entry stops making sense, the seeding fails loudly
+at startup rather than shipping twelve workflows that cannot run.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+
+from . import workflows
+from .workflow_capabilities import estimate_minutes, project_requirements
+
+#: Which class of work a catalogue workflow is FOR. A customer applying "Fast Fix" to every
+#: new project would be a mistake worth preventing at the point of choosing.
+WORK_CLASSES = ("project.new", "feature.major", "feature.minor", "bugfix", "any")
+
+
+def _step(
+    step_id: str,
+    capability: str,
+    inputs: Optional[dict[str, Any]] = None,
+    *,
+    nxt: Optional[list[str]] = None,
+    approval: Optional[str] = None,
+    approver_role: Optional[str] = None,
+) -> dict[str, Any]:
+    step: dict[str, Any] = {
+        "id": step_id,
+        "kind": "capability",
+        "binding": {"capability": capability, "inputs": inputs or {}},
+        "next": nxt or [],
+    }
+    if approval or approver_role:
+        step["approval"] = {}
+        if approval:
+            step["approval"]["mode"] = approval
+        if approver_role:
+            step["approval"]["approver_role"] = approver_role
+    return step
+
+
+#: `{"from_input": "directive"}` — read what the run was started with. A catalogue workflow
+#: cannot hard-code the thing being built; "Standard Product Delivery" has to work for any
+#: directive anyone gives it.
+def _in(field: str) -> dict[str, str]:
+    return {"from_input": field}
+
+
+def _from(step_id: str, field: str) -> dict[str, str]:
+    return {"from_step": step_id, "field": field}
+
+
+def _chain(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Wire a straight sequence. Every catalogue workflow is a sequence with gates in it, and
+    hand-writing `next` twelve times is twelve chances to mis-wire one."""
+    for current, following in zip(steps, steps[1:]):
+        current["next"] = [following["id"]]
+    steps[-1]["next"] = []
+    return steps
+
+
+#: The catalogue. `key` is stable and is what a mapping points at.
+CATALOGUE: list[dict[str, Any]] = [
+    {
+        "key": "standard_product_delivery",
+        "name": "Standard Product Delivery",
+        "description": "Idea to shipped, watched software. The full path, with gates where "
+                       "money and production are involved.",
+        "work_class": "project.new",
+        "steps": _chain([
+            _step("research", "research", {"seed": _in("directive")}),
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("review", "review"),
+            _step("test", "test"),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+            _step("notify", "notify", {"message": _in("title")}),
+        ]),
+    },
+    {
+        "key": "minor_feature",
+        "name": "Minor Feature",
+        "description": "A small addition to something that already exists. Skips research; "
+                       "still reviewed, still gated at the door to production.",
+        "work_class": "feature.minor",
+        "steps": _chain([
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("review", "review"),
+            _step("test", "test"),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("notify", "notify", {"message": _in("title")}),
+        ]),
+    },
+    {
+        "key": "major_feature",
+        "name": "Major Feature",
+        "description": "A feature large enough to deserve a spec of its own and a person "
+                       "signing off on it before anyone builds anything.",
+        "work_class": "feature.major",
+        "steps": _chain([
+            _step("research", "research", {"seed": _in("directive")}),
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("review", "review"),
+            _step("test", "test"),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            _step("ux_review", "ux_review", approver_role="design_lead"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+        ]),
+    },
+    {
+        "key": "fast_fix",
+        "name": "Fast Fix / Hotfix",
+        "description": "Something is broken now. No research, no panel — build, prove it, "
+                       "have someone say yes, ship.",
+        "work_class": "bugfix",
+        "steps": _chain([
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("test", "test"),
+            _step("review", "review"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("notify", "notify", {"message": _in("title")}),
+        ]),
+    },
+    {
+        "key": "research_led_discovery",
+        "name": "Research-Led Discovery",
+        "description": "Find out whether it is worth building at all. Ends in a decision and a "
+                       "document, not in code.",
+        "work_class": "any",
+        "steps": _chain([
+            _step("research", "research", {"seed": _in("directive"), "deep": True}),
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("document", "document", {"title": _in("title")}),
+        ]),
+    },
+    {
+        "key": "backend_service_setup",
+        "name": "Backend Service Setup",
+        "description": "Stand up a new service: scaffold, endpoints, tests, deploy, watch.",
+        "work_class": "project.new",
+        "steps": _chain([
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="tech_lead"),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("test", "test"),
+            _step("review", "review"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+            _step("document", "document", {"title": _in("title")}),
+        ]),
+    },
+    {
+        "key": "ux_certification",
+        "name": "Frontend / UX Certification",
+        "description": "For work whose whole point is how it looks and feels. A person uses "
+                       "the preview and signs off before it ships.",
+        "work_class": "feature.major",
+        "steps": _chain([
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("review", "review"),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            _step("ux_review", "ux_review", approver_role="design_lead"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+        ]),
+    },
+    {
+        "key": "security_hardening",
+        "name": "Security Hardening",
+        "description": "Threat-led work with a security sign-off that cannot be automated away.",
+        "work_class": "any",
+        "steps": _chain([
+            _step("research", "research", {"seed": _in("directive")}),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("review", "review", {"seats": ["security"]}),
+            _step("test", "test"),
+            _step("security_review", "security_review", approver_role="security_lead"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+        ]),
+    },
+    {
+        "key": "data_migration",
+        "name": "Data / Migration Change",
+        "description": "Changes to data are the ones you cannot take back. Reviewed by someone "
+                       "who owns the data, with the rollback proven before it ships.",
+        "work_class": "any",
+        "steps": _chain([
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="data_owner"),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("test", "test"),
+            _step("review", "review"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="data_owner"),
+            _step("monitor", "monitor"),
+            _step("document", "document", {"title": _in("title")}),
+        ]),
+    },
+    {
+        "key": "compliance_release",
+        "name": "Compliance-Ready Release",
+        "description": "Everything the standard path does, plus the evidence and the signature "
+                       "an auditor will ask for.",
+        "work_class": "any",
+        "steps": _chain([
+            _step("research", "research", {"seed": _in("directive")}),
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="product_owner"),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("review", "review"),
+            _step("test", "test"),
+            _step("security_review", "security_review", approver_role="security_lead"),
+            _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+            _step("document", "document", {"title": _in("title")}),
+        ]),
+    },
+    {
+        "key": "third_party_integration",
+        "name": "Third-Party Integration",
+        "description": "Bringing someone else's system in. Research first, because the "
+                       "surprises are always in their API and not in your code.",
+        "work_class": "any",
+        "steps": _chain([
+            _step("research", "research", {"seed": _in("directive")}),
+            _step("meeting", "meeting", {"directive": _in("directive")}),
+            _step("spec_review", "spec_review", approver_role="tech_lead"),
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
+            _step("test", "test"),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  approver_role="release_manager"),
+            _step("monitor", "monitor"),
+        ]),
+    },
+    {
+        "key": "deprecation_sunset",
+        "name": "Deprecation / Sunset",
+        "description": "Taking something away. The grace period is a step, so nobody removes "
+                       "a thing the day after announcing it.",
+        "work_class": "any",
+        "steps": [
+            _step("meeting", "meeting", {"directive": _in("directive")}, nxt=["announce"]),
+            _step("announce", "notify", {"message": _in("title")}, nxt=["grace"]),
+            # The one control step in the catalogue: a real grace period, not a promise of one.
+            {"id": "grace", "kind": "timer", "wait_seconds": 604800, "binding": {},
+             "next": ["build"]},
+            _step("build", "build", {"title": _in("title"), "instructions": _in("directive")},
+                  nxt=["deploy"]),
+            _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
+                  nxt=["document"], approver_role="release_manager"),
+            _step("document", "document", {"title": _in("title")}),
+        ],
+    },
+]
+
+
+def catalogue_summary() -> list[dict[str, Any]]:
+    """What a customer sees when choosing. Includes what the workflow will need from their
+    project, so "you have not connected a repository" is said at the point of choosing."""
+    out = []
+    for entry in CATALOGUE:
+        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"]}
+        # VALIDATE FIRST, then read the gates off the result.
+        #
+        # Effective approval is computed during validation — a deploy step written without an
+        # approval block still comes out manual, because the risk floor says so. Counting gates
+        # from the raw catalogue entry reported "Minor Feature: 0 gates" for a workflow that
+        # stops at the door to production, which is the opposite of the truth and exactly the
+        # number a customer would choose on.
+        effective = workflows.validate_workflow_spec(
+            {"entry_step": spec["entry_step"],
+             "steps": [dict(step) for step in entry["steps"]]}
+        )
+        gates = [
+            s["id"] for s in effective["steps"]
+            if (s.get("approval") or {}).get("mode") == "manual"
+        ]
+        out.append({
+            "key": entry["key"],
+            "name": entry["name"],
+            "description": entry["description"],
+            "work_class": entry["work_class"],
+            "step_count": len(entry["steps"]),
+            "steps": [
+                {"id": s["id"],
+                 "capability": (s.get("binding") or {}).get("capability") or s["kind"]}
+                for s in entry["steps"]
+            ],
+            "gates": gates,
+            "requires_project": sorted(project_requirements(spec)),
+            "estimated_minutes": estimate_minutes(spec),
+        })
+    return out
+
+
+def seed(connection: Connection, project_id: str, actor: str = "boss") -> dict[str, Any]:
+    """Install the catalogue into a project. Idempotent.
+
+    Re-running publishes a new version ONLY when the spec actually changed — the runtime keys
+    versions by content hash, so an unchanged catalogue re-seeds to the same version rather
+    than accumulating identical ones on every boot.
+    """
+    installed: list[dict[str, Any]] = []
+    for entry in CATALOGUE:
+        existing = connection.execute(
+            text(
+                "SELECT id FROM workflow_definitions "
+                "WHERE project_id=:p AND workflow_key=:k"
+            ),
+            {"p": project_id, "k": entry["key"]},
+        ).mappings().first()
+
+        if existing:
+            definition_id = existing["id"]
+        else:
+            definition = workflows.create_definition(
+                connection,
+                project_id=project_id,
+                workflow_key=entry["key"],
+                name=entry["name"],
+                description=entry["description"],
+                actor=actor,
+                namespace=workflows.PRODUCT_NAMESPACE,
+                is_catalogue=True,
+            )
+            definition_id = definition["id"]
+
+        spec = {"entry_step": entry["steps"][0]["id"], "steps": entry["steps"]}
+        try:
+            version = workflows.publish_version(
+                connection, project_id=project_id, definition_id=definition_id,
+                spec=spec, actor=actor,
+            )
+            installed.append({"key": entry["key"], "version_id": version["id"],
+                              "version": version["version"]})
+        except workflows.WorkflowConflictError:
+            # Same content hash: already published. Nothing to do, and not an error.
+            installed.append({"key": entry["key"], "version_id": None, "version": None})
+    return {"project_id": project_id, "installed": installed, "count": len(installed)}

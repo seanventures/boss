@@ -44,6 +44,10 @@ QA_BENCHMARK_SWEEP_INTERVAL_SECONDS = 60
 #: Hourly. Retention is a slow-moving fact — nothing ages out between two minutes — and the
 #: delete is batched, so running it often would be pure lock churn on a table the console reads.
 ACTIVITY_RETENTION_INTERVAL_SECONDS = 3600
+#: Delivery workflows advance on the worker loop. Frequent enough that a customer watching a
+#: workflow sees it move, cheap enough to run every idle pass: the endpoint returns immediately
+#: when nothing is ready.
+DELIVERY_WORKFLOW_INTERVAL_SECONDS = 20
 # The shepherd watches in-flight work. Often enough that a duplicate is killed before it
 # costs anything real, rare enough that it is never the busiest thing on the box.
 SHEPHERD_WATCH_INTERVAL_SECONDS = 120
@@ -57,6 +61,7 @@ _last_shepherd_watch_monotonic = 0.0
 _last_shepherd_autopilot_monotonic = 0.0
 _last_qa_benchmark_sweep_monotonic = 0.0
 _last_activity_retention_monotonic = 0.0
+_last_delivery_workflow_monotonic = 0.0
 _last_metatron_watch_monotonic = 0.0
 _last_focused_agent_monotonic = 0.0
 _last_agent_process_monotonic = 0.0
@@ -289,6 +294,33 @@ def _sweep_qa_benchmark_evaluations(client: ControlPlaneClient) -> None:
         LOGGER.debug("qa_benchmark_sweep_failed", exc_info=True)
 
 
+def _advance_delivery_workflows(client: ControlPlaneClient, settings) -> None:
+    """Move customer delivery workflows forward.
+
+    The runtime schedules and leases steps but has never executed one itself — an outside
+    caller has always claimed and completed them. For customer workflows this is that caller.
+
+    Swallowed like every other sweep: a workflow that cannot advance must not take the worker
+    down with it, and the endpoint already isolates one failing run from the rest.
+    """
+    global _last_delivery_workflow_monotonic
+    now = time.monotonic()
+    if now - _last_delivery_workflow_monotonic < DELIVERY_WORKFLOW_INTERVAL_SECONDS:
+        return
+    # Same resolution as every other per-project tick in this file, so one worker
+    # configuration drives them all consistently.
+    project_id = (
+        getattr(settings, "default_project_id", None)
+        or getattr(settings, "project_id", None)
+        or "boss-dogfood"
+    )
+    try:
+        client.run_delivery_capabilities(str(project_id))
+        _last_delivery_workflow_monotonic = now
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("delivery_workflow_tick_failed", exc_info=True)
+
+
 def _prune_activity_log(client: ControlPlaneClient) -> None:
     """Age out captured transcripts past the retention window.
 
@@ -372,6 +404,7 @@ def main() -> None:
                 _run_shepherd_autopilot(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
                 _prune_activity_log(client)
+                _advance_delivery_workflows(client, settings)
                 # Interruptible sleep: an idle worker that is asked to stop should not hold the
                 # deploy open for a full poll interval doing nothing.
                 for _ in range(max(1, int(settings.poll_interval_seconds))):

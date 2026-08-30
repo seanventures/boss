@@ -19605,6 +19605,158 @@ def raise_workflow_error(error: workflow_runtime.WorkflowError) -> None:
     raise HTTPException(status_code=status_code, detail=str(error)) from error
 
 
+# ── Customer delivery workflows ───────────────────────────────────────────────
+#
+# Everything under /v1/delivery-workflows is namespace-scoped to 'product'. The endpoints
+# below cannot see, edit, version or run BOSS's own thirty-three definitions — that is the
+# whole point of the separation, and `require_namespace` is what enforces it rather than
+# convention.
+
+
+@app.get("/v1/delivery-workflows/capabilities")
+def list_delivery_capabilities() -> dict:
+    """What a step can be. Feeds the builder palette and documents the risk floor."""
+    from boss_engine.services.workflow_capabilities import (
+        MANUAL_APPROVAL_RISK_FLOOR,
+        palette,
+    )
+
+    return {
+        "capabilities": palette(),
+        "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
+        "note": (
+            "A capability at or above the risk floor always requires a person, whatever a "
+            "workflow asks for."
+        ),
+    }
+
+
+@app.get("/v1/delivery-workflows/catalogue")
+def list_delivery_catalogue() -> dict:
+    """The workflows BOSS ships, with what each will need from a project.
+
+    Returned from the catalogue module rather than the database so it can be browsed before
+    anything has been installed — choosing a workflow should not require having one.
+    """
+    from boss_engine.services.workflow_catalogue import WORK_CLASSES, catalogue_summary
+
+    return {"items": catalogue_summary(), "work_classes": list(WORK_CLASSES)}
+
+
+@app.post("/v1/delivery-workflows/catalogue/install")
+def install_delivery_catalogue(payload: dict) -> dict:
+    """Install the catalogue into a project. Idempotent — safe to call on every boot."""
+    from boss_engine.services.workflow_catalogue import seed
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        return seed(connection, project_id, actor=str(payload.get("actor") or "boss"))
+
+
+@app.post("/v1/delivery-workflows/apply")
+def apply_delivery_workflow(payload: dict) -> dict:
+    """Point a class of work at a workflow.
+
+    "New projects here use Standard Product Delivery." Uses the runtime's existing mapping
+    resolution — selector, scope and priority — so an org default and a project override
+    behave the way they already do everywhere else.
+    """
+    from boss_engine.services.workflow_catalogue import WORK_CLASSES
+
+    project_id = str(payload.get("project_id") or "").strip()
+    workflow_key = str(payload.get("workflow_key") or "").strip()
+    work_class = str(payload.get("work_class") or "").strip()
+    actor = str(payload.get("actor") or "operator").strip()
+    if not project_id or not workflow_key or not work_class:
+        raise HTTPException(
+            status_code=400,
+            detail="project_id, workflow_key and work_class are required",
+        )
+    if work_class not in WORK_CLASSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"work_class must be one of: {', '.join(WORK_CLASSES)}",
+        )
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                "SELECT id, active_version_id FROM workflow_definitions "
+                "WHERE project_id=:p AND workflow_key=:k "
+                "AND COALESCE(namespace,'system')='product'"
+            ),
+            {"p": project_id, "k": workflow_key},
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no delivery workflow '{workflow_key}' in this project",
+            )
+        version_id = row["active_version_id"]
+        if not version_id:
+            latest = connection.execute(
+                text(
+                    "SELECT id FROM workflow_versions WHERE workflow_definition_id=:d "
+                    "AND status='published' ORDER BY version DESC LIMIT 1"
+                ),
+                {"d": row["id"]},
+            ).scalar()
+            version_id = latest
+        if not version_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{workflow_key}' has no published version to apply",
+            )
+        mapping = workflow_runtime.create_mapping(
+            connection,
+            project_id=project_id,
+            workflow_version_id=version_id,
+            selector_kind="work_class",
+            selector_value=work_class,
+            scope_type="project",
+            scope_id=project_id,
+            priority=int(payload.get("priority") or 100),
+            actor=actor,
+        )
+        return {"applied": mapping, "workflow_key": workflow_key, "work_class": work_class}
+
+
+@app.get("/v1/delivery-workflows")
+def list_delivery_workflows(project_id: str, include_retired: bool = False) -> dict:
+    with begin(engine) as connection:
+        return {
+            "project_id": project_id,
+            "items": workflow_runtime.list_definitions(
+                connection, project_id,
+                include_retired=include_retired,
+                namespace=workflow_runtime.PRODUCT_NAMESPACE,
+            ),
+        }
+
+
+@app.post("/v1/delivery-workflows/run-capabilities")
+def run_delivery_capabilities(payload: dict) -> dict:
+    """Advance every product workflow that has work ready.
+
+    Called by the worker on its loop. Exposed as an endpoint rather than run inside the worker
+    process for the same reason every other sweep is: one place owns the logic, and it can be
+    driven by hand while something is being diagnosed.
+    """
+    from boss_engine.context import EngineContext
+    from boss_engine.services import workflow_capability_runner
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    ctx = EngineContext.create()
+    with begin(engine) as connection:
+        return workflow_capability_runner.tick(
+            connection, ctx, project_id=project_id,
+            worker_id=str(payload.get("worker_id") or "capability-runner"),
+        )
+
+
 @app.get("/v1/workflows", response_model=WorkflowDefinitionListResponse)
 def list_workflow_definitions(
     project_id: str, include_retired: bool = False

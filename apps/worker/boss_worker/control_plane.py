@@ -280,6 +280,20 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def run_delivery_capabilities(self, project_id: str) -> dict[str, Any]:
+        """Advance customer delivery workflows that have work ready.
+
+        Product workflows only. BOSS's own definitions are driven by the machinery that has
+        always driven them — a runner reaching across the namespace could execute the governed
+        coding pipeline twice.
+        """
+        response = self._client.post(
+            "/v1/delivery-workflows/run-capabilities",
+            json={"project_id": project_id, "worker_id": "boss-worker"},
+        )
+        response.raise_for_status()
+        return response.json()
+
     def prune_activity_log(self) -> dict[str, Any]:
         """Age captured transcripts out of the activity log past the retention window.
 

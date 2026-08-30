@@ -3652,6 +3652,23 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
   description TEXT,
   status TEXT NOT NULL DEFAULT 'active'
     CHECK (status IN ('draft', 'active', 'retired')),
+  -- WHOSE WORKFLOW THIS IS.
+  --
+  -- 'system' is BOSS's own machinery -- the governed coding pipeline, meeting consensus,
+  -- adversarial verification and thirty others. 'product' is a customer's delivery workflow.
+  -- They share this runtime because leasing, retries, evidence, approval and compensation are
+  -- the hard parts and are already correct here; they must never share an editing surface,
+  -- because a customer-facing builder pointed at this table could otherwise rewrite the
+  -- pipeline that governs every build in the system.
+  --
+  -- Defaults to 'system' so every existing row keeps its meaning without a data migration, and
+  -- a customer workflow has to say what it is.
+  namespace TEXT NOT NULL DEFAULT 'system'
+    CHECK (namespace IN ('system', 'product')),
+  -- Catalogue workflows BOSS ships are read-only: a customer forks one to change it, which is
+  -- what keeps "reset to the standard" possible and the diff against it visible.
+  is_catalogue BOOLEAN NOT NULL DEFAULT false,
+  forked_from_version_id TEXT,
   active_version_id TEXT,
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -3660,6 +3677,10 @@ CREATE TABLE IF NOT EXISTS workflow_definitions (
 );
 CREATE INDEX IF NOT EXISTS idx_workflow_definitions_project
   ON workflow_definitions(project_id, status, updated_at DESC);
+-- The customer-facing list is always namespace-scoped, so it gets its own index rather than
+-- filtering the system rows out of the one above.
+CREATE INDEX IF NOT EXISTS idx_workflow_definitions_namespace
+  ON workflow_definitions(project_id, namespace, status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS workflow_versions (
   id TEXT PRIMARY KEY,

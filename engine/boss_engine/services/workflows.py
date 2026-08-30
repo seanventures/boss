@@ -18,10 +18,23 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Connection
 
 from .core import create_blocking_decision, emit_event, json_hash, make_id, now_utc
+from .workflow_capabilities import (
+    approval_mode_for as effective_approval_mode,
+    estimate_minutes as capability_minutes,
+    project_requirements as capability_project_requirements,
+    validate_step as capability_problems,
+)
 
 
 WORKFLOW_KINDS = {
     "task",
+    # A PRODUCT CAPABILITY: research, meeting, build, deploy, monitor.
+    #
+    # Added, never substituted. A step could already call a skill, an integration or an agent
+    # group, and none of those said "build it" — so the five things a delivery workflow is made
+    # of were exactly the five things a step could not be. Every existing kind behaves as it
+    # always did; see services/workflow_capabilities.py for what a capability declares.
+    "capability",
     "skill",
     "integration",
     "agent_group",
@@ -42,6 +55,11 @@ CONTROL_KINDS = {
     "timer",
     "subworkflow",
 }
+#: Whose workflow a definition is. See the column comment in db/schema.sql.
+NAMESPACES = {"system", "product"}
+SYSTEM_NAMESPACE = "system"
+PRODUCT_NAMESPACE = "product"
+
 TERMINAL_RUN_STATES = {
     "completed",
     "failed",
@@ -80,6 +98,15 @@ class WorkflowMappingAmbiguousError(WorkflowError):
 
 class WorkflowLeaseError(WorkflowError):
     pass
+
+
+class WorkflowNamespaceError(WorkflowError):
+    """A caller reached across the system/product line.
+
+    Raised rather than returning "not found" because the two failures need different answers: a
+    missing workflow is a typo, and this is a customer surface touching BOSS's own machinery,
+    which somebody needs to see in the logs.
+    """
 
 
 class WorkflowBindingBlockedError(WorkflowError):
@@ -179,6 +206,19 @@ def validate_workflow_spec(spec: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(binding, dict):
             raise WorkflowValidationError(f"step '{step_id}' binding must be an object.")
         step["binding"] = binding
+        if kind == "capability":
+            # Every problem at once. A builder that surfaces one error at a time makes a
+            # customer fix a workflow five times to publish it once.
+            problems = capability_problems(step)
+            if problems:
+                raise WorkflowValidationError(" ".join(problems))
+            # Store the EFFECTIVE approval mode, not the requested one: a plan that reads
+            # "auto" beside a step that will stop and wait is a plan nobody can trust.
+            approval = dict(step.get("approval") or {})
+            approval["mode"] = effective_approval_mode(
+                str(binding["capability"]), approval.get("mode")
+            )
+            step["approval"] = approval
         if kind == "skill" and not binding.get("skill_id"):
             raise WorkflowValidationError(f"skill step '{step_id}' requires binding.skill_id.")
         if kind == "integration" and not binding.get("integration_connection_id"):
@@ -302,6 +342,9 @@ def _serialize_definition(row: Any) -> dict[str, Any]:
         "name": row["name"],
         "description": row.get("description"),
         "status": row["status"],
+        "namespace": row.get("namespace") or SYSTEM_NAMESPACE,
+        "is_catalogue": bool(row.get("is_catalogue")),
+        "forked_from_version_id": row.get("forked_from_version_id"),
         "active_version_id": row.get("active_version_id"),
         "created_by": row["created_by"],
         "created_at": _iso(row["created_at"]),
@@ -341,6 +384,52 @@ def _serialize_mapping(row: Any) -> dict[str, Any]:
     }
 
 
+def require_namespace(
+    connection: Connection,
+    project_id: str,
+    definition_id: str,
+    expected: str,
+) -> dict[str, Any]:
+    """Fetch a definition and refuse it if it belongs to the other tier.
+
+    THE WHOLE POINT OF PHASE 0. Customer workflows and BOSS's own share this runtime because
+    leasing, retries, evidence and approval are hard and already correct here. They must never
+    share an editing surface: `governed_coding_pipeline` governs every build in the system, and
+    a customer-facing builder that could reach it is one mis-scoped query away from rewriting
+    the thing that reviews its own code.
+
+    Called by every product-facing entry point. A guard that some callers remember is not a
+    guard, so the test suite asserts the set of entry points that call it.
+    """
+    row = connection.execute(
+        text("SELECT * FROM workflow_definitions WHERE id=:id AND project_id=:project_id"),
+        {"id": definition_id, "project_id": project_id},
+    ).mappings().first()
+    if row is None:
+        raise WorkflowNotFoundError(f"workflow definition '{definition_id}' was not found.")
+    actual = row.get("namespace") or SYSTEM_NAMESPACE
+    if actual != expected:
+        raise WorkflowNamespaceError(
+            f"workflow '{row['workflow_key']}' is a {actual} workflow and cannot be used "
+            f"from the {expected} surface."
+        )
+    return dict(row)
+
+
+def require_editable(definition: dict[str, Any]) -> None:
+    """Refuse to edit a catalogue workflow in place.
+
+    The twelve BOSS ships are read-only on purpose: forking is what keeps "reset to the
+    standard" meaningful and keeps the customer's diff against it visible. Editing in place
+    would quietly make every fleet's "Standard Product Delivery" a different thing.
+    """
+    if definition.get("is_catalogue"):
+        raise WorkflowNamespaceError(
+            f"'{definition['workflow_key']}' is a standard workflow BOSS ships and cannot be "
+            "edited in place. Fork it to make your own version."
+        )
+
+
 def create_definition(
     connection: Connection,
     *,
@@ -349,15 +438,24 @@ def create_definition(
     name: str,
     description: Optional[str],
     actor: str,
+    namespace: str = SYSTEM_NAMESPACE,
+    is_catalogue: bool = False,
+    forked_from_version_id: Optional[str] = None,
 ) -> dict[str, Any]:
+    if namespace not in NAMESPACES:
+        raise WorkflowValidationError(
+            f"namespace must be one of: {', '.join(sorted(NAMESPACES))}."
+        )
     definition_id = make_id("wfd")
     try:
         row = connection.execute(
             text(
                 """
                 INSERT INTO workflow_definitions (
-                    id, project_id, workflow_key, name, description, status, created_by
-                ) VALUES (:id, :project_id, :workflow_key, :name, :description, 'active', :actor)
+                    id, project_id, workflow_key, name, description, status, created_by,
+                    namespace, is_catalogue, forked_from_version_id
+                ) VALUES (:id, :project_id, :workflow_key, :name, :description, 'active', :actor,
+                          :namespace, :is_catalogue, :forked_from)
                 RETURNING *
                 """
             ),
@@ -368,6 +466,9 @@ def create_definition(
                 "name": _clean_text(name, "name"),
                 "description": description,
                 "actor": _clean_text(actor, "actor"),
+                "namespace": namespace,
+                "is_catalogue": bool(is_catalogue),
+                "forked_from": forked_from_version_id,
             },
         ).mappings().one()
     except Exception as error:
@@ -389,9 +490,21 @@ def create_definition(
 
 
 def list_definitions(
-    connection: Connection, project_id: str, *, include_retired: bool = False
+    connection: Connection,
+    project_id: str,
+    *,
+    include_retired: bool = False,
+    namespace: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     clause = "" if include_retired else "AND d.status <> 'retired'"
+    if namespace is not None:
+        if namespace not in NAMESPACES:
+            raise WorkflowValidationError(
+                f"namespace must be one of: {', '.join(sorted(NAMESPACES))}."
+            )
+        # COALESCE, because rows written before the column existed carry NULL until the default
+        # is applied — and a system workflow invisible to the system list is worse than noise.
+        clause += " AND COALESCE(d.namespace, 'system') = :namespace"
     rows = connection.execute(
         text(
             f"""
@@ -403,7 +516,7 @@ def list_definitions(
             ORDER BY d.updated_at DESC, d.workflow_key
             """
         ),
-        {"project_id": project_id},
+        {"project_id": project_id, **({"namespace": namespace} if namespace else {})},
     ).mappings().all()
     items = []
     for row in rows:
