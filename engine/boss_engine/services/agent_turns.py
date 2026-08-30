@@ -120,55 +120,66 @@ def classify(direction: str, *, tool_name: str = "", content: str = "", ok: bool
     return "verbose"
 
 
-def parse_stream(stdout: str) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
-    """Split the CLI's stream-json output into (final result, turns).
+class StreamParser:
+    """The CLI's stream-json output, consumed ONE LINE AT A TIME.
 
-    Returns ``(None, [])`` for anything that is not a stream, so the caller keeps its existing
-    single-object parsing path untouched. This function never raises on malformed input: a log
-    line we cannot read is a log line we drop, not a failed build.
+    The CLI emits a JSON object per turn as the turn happens. The original reader collected the
+    whole of stdout with `communicate()` and parsed it after the process exited — asking for a
+    stream and then discarding the only property that makes it one. A 9-minute implement was
+    therefore a black box for 9 minutes and a complete transcript at the end, which is exactly
+    backwards: the transcript is most useful while you are still waiting for it.
+
+    Feeding lines as they arrive changes nothing about what is parsed. `parse_stream` below is
+    the same function it always was, now expressed as "feed every line, then read the result",
+    so the batch and live paths cannot drift apart.
     """
-    turns: list[dict[str, Any]] = []
-    result: Optional[dict[str, Any]] = None
-    index = 0
-    cap = max_turns_stored()
-    # A tool_result block names only the id of the call it answers, so on its own a result row
-    # reads "something returned this". Remembering the id->name pairing from the tool_use that
-    # preceded it is the difference between "Bash failed" and an anonymous error.
-    tool_names: dict[str, str] = {}
 
-    for line in (stdout or "").splitlines():
-        line = line.strip()
+    def __init__(self, cap: Optional[int] = None):
+        self.result: Optional[dict[str, Any]] = None
+        self.turns: list[dict[str, Any]] = []
+        self._index = 0
+        self._cap = max_turns_stored() if cap is None else cap
+        # A tool_result block names only the id of the call it answers, so on its own a result
+        # row reads "something returned this". Remembering the id->name pairing from the
+        # tool_use that preceded it is the difference between "Bash failed" and an anonymous
+        # error. It must therefore survive ACROSS lines, which is why it lives on the instance.
+        self._tool_names: dict[str, str] = {}
+
+    def feed(self, line: str) -> list[dict[str, Any]]:
+        """Consume one line; return the turns it produced (usually zero or one).
+
+        Never raises. A log line we cannot read is a log line we drop, not a failed build.
+        """
+        produced: list[dict[str, Any]] = []
+        line = (line or "").strip()
         if not line or not line.startswith("{"):
-            continue
+            return produced
         try:
             event = json.loads(line)
         except Exception:
-            continue
+            return produced
         if not isinstance(event, dict):
-            continue
+            return produced
 
         kind = str(event.get("type") or "")
         if kind == "result":
             # The terminal event carries exactly what --output-format json would have returned.
-            result = event
-            continue
-        if len(turns) >= cap:
-            continue
+            self.result = event
+            return produced
 
         message = event.get("message")
         if kind == "user" and isinstance(message, Mapping):
             for block in _blocks(message):
                 if block.get("type") == "tool_result":
-                    body = block.get("content")
-                    is_error = bool(block.get("is_error"))
-                    turns.append({
+                    produced.append({
                         "direction": "tool_result",
-                        "tool_name": tool_names.get(str(block.get("tool_use_id") or ""), ""),
-                        "content": body,
-                        "ok": not is_error,
-                        "turn_index": index,
+                        "tool_name": self._tool_names.get(
+                            str(block.get("tool_use_id") or ""), ""),
+                        "content": block.get("content"),
+                        "ok": not bool(block.get("is_error")),
+                        "turn_index": self._index,
                     })
-                    index += 1
+                    self._index += 1
         elif kind == "assistant" and isinstance(message, Mapping):
             model = str(message.get("model") or "")
             usage = message.get("usage") if isinstance(message.get("usage"), Mapping) else {}
@@ -176,27 +187,45 @@ def parse_stream(stdout: str) -> tuple[Optional[dict[str, Any]], list[dict[str, 
             for block in _blocks(message):
                 btype = block.get("type")
                 if btype == "text" and str(block.get("text") or "").strip():
-                    turns.append({
+                    produced.append({
                         "direction": "completion",
                         "content": block.get("text"),
                         "model": model,
                         "tokens": tokens,
-                        "turn_index": index,
+                        "turn_index": self._index,
                     })
-                    index += 1
+                    self._index += 1
                 elif btype == "tool_use":
                     if block.get("id"):
-                        tool_names[str(block["id"])] = str(block.get("name") or "")
-                    turns.append({
+                        self._tool_names[str(block["id"])] = str(block.get("name") or "")
+                    produced.append({
                         "direction": "tool_call",
                         "tool_name": str(block.get("name") or ""),
                         "content": block.get("input"),
                         "model": model,
-                        "turn_index": index,
+                        "turn_index": self._index,
                     })
-                    index += 1
+                    self._index += 1
 
-    return result, turns
+        # The cap bounds what is STORED. Turns past it are still handed to a live consumer —
+        # dropping them would make a long build go quiet exactly when it is most worth
+        # watching — they simply stop accumulating here.
+        room = max(0, self._cap - len(self.turns))
+        self.turns.extend(produced[:room])
+        return produced
+
+
+def parse_stream(stdout: str) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
+    """Split the CLI's stream-json output into (final result, turns).
+
+    Returns ``(None, [])`` for anything that is not a stream, so the caller keeps its existing
+    single-object parsing path untouched. This function never raises on malformed input: a log
+    line we cannot read is a log line we drop, not a failed build.
+    """
+    parser = StreamParser()
+    for line in (stdout or "").splitlines():
+        parser.feed(line)
+    return parser.result, parser.turns
 
 
 def _blocks(message: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:

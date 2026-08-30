@@ -26,11 +26,62 @@ from typing import Optional, Protocol
 
 from ..config import Settings
 from ..schemas import FileChange
-from .agent_turns import capture_enabled, parse_stream
+from .agent_turns import StreamParser, capture_enabled, parse_stream
 from .llm_telemetry import record_agent_turns, record_llm_call
 
 
 _log = logging.getLogger(__name__)
+
+
+def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
+    """Read a child's stdout/stderr as they arrive, returning the full text of each.
+
+    Same contract as ``communicate(timeout=...)`` — including raising ``TimeoutExpired`` — with
+    one addition: every stdout line is handed to ``on_line`` the moment it is read.
+
+    BOTH pipes are drained concurrently. Reading one to completion while the other fills is the
+    classic subprocess deadlock: the child blocks writing to a full stderr buffer, we block
+    reading a stdout that will never advance, and the build hangs until its timeout with no way
+    to tell that from slow work. That is the failure mode this whole change exists to remove,
+    so it must not be reintroduced by the fix.
+    """
+    out_lines: list[str] = []
+    err_chunks: list[str] = []
+
+    def _pump(stream, sink, live: bool) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                sink.append(line)
+                if live and on_line is not None:
+                    try:
+                        on_line(line)
+                    except Exception:  # noqa: BLE001 — a consumer must never kill the build
+                        pass
+        except Exception:  # noqa: BLE001 — a broken pipe ends this reader, nothing more
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    threads = [
+        threading.Thread(target=_pump, args=(child.stdout, out_lines, True),
+                         name="claude-stdout", daemon=True),
+        threading.Thread(target=_pump, args=(child.stderr, err_chunks, False),
+                         name="claude-stderr", daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise
+    # The process has exited; its writers are closed, so the readers finish promptly. Bounded
+    # anyway — a wedged reader must not become a new way for a build to hang forever.
+    for t in threads:
+        t.join(timeout=30)
+    return "".join(out_lines), "".join(err_chunks)
 
 
 def _parse_cli_output(stdout: str) -> Optional[dict]:
@@ -505,6 +556,38 @@ class ClaudeCodeAgent:
             # batching rule is applied uniformly here rather than in each prompt builder.
             return argv + ["--", prompt + _PARALLEL_TOOLS_RULE]
         last_error = ""
+
+        def _live_sink(live_model: str):
+            """Persist turns AS THEY ARRIVE, so a running stage can be watched.
+
+            Returns (on_line, parser). One parser per attempt: a retry re-runs the CLI from
+            scratch, and carrying tool-id state across that would attribute one attempt's tool
+            results to another attempt's calls.
+
+            Everything here is best-effort. Live tracing is a diagnostic, and a diagnostic that
+            can fail a build is worse than no diagnostic — the final `record_agent_turns` on
+            the complete stdout remains the source of truth either way.
+            """
+            parser = StreamParser()
+            # Turn -1, written before the first line arrives: "what was it asked" is the first
+            # question anyone has, and it should not wait for the answer.
+            try:
+                record_agent_turns([], engine_name=self.engine, model=live_model,
+                                   prompt=prompt)
+            except Exception:  # noqa: BLE001
+                pass
+
+            def _on_line(line: str) -> None:
+                produced = parser.feed(line)
+                if not produced:
+                    return
+                try:
+                    record_agent_turns(produced, engine_name=self.engine, model=live_model)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            return _on_line, parser
+
         for attempt in range(3):
             # CAPTURE MUST NEVER COST A BUILD.
             #
@@ -514,6 +597,12 @@ class ClaudeCodeAgent:
             # transcript — not a build that fails with one. `capturing` is cleared below on the
             # first such failure and these flags rebuild without it.
             cmd = base_cmd(capturing)
+            # Live tracing only makes sense while we are asking for the stream format. Without
+            # `capturing` there are no per-turn events to read.
+            on_line, live_parser = (
+                _live_sink(model or getattr(self.settings, "claude_cli_model", "") or "")
+                if capturing and capture_enabled() else (None, None)
+            )
             try:
                 # Popen rather than run(), so the pid is known and can be registered. A
                 # reaper that scans `ps` cannot tell which seat a claude process occupies;
@@ -531,7 +620,16 @@ class ClaudeCodeAgent:
                 )
                 register_seat(child.pid, seat)
                 try:
-                    out, err = child.communicate(timeout=timeout)
+                    # READ THE STREAM AS A STREAM.
+                    #
+                    # `communicate()` blocks until the process exits and hands back the whole
+                    # buffer, so a 27-minute implement was a black box for 27 minutes and a
+                    # complete transcript afterwards. We were asking the CLI for
+                    # `--output-format stream-json` — one JSON object per turn, emitted AS the
+                    # turn happens — and then discarding the only property that makes it a
+                    # stream. "What is it doing right now" had no answer for the operator, and
+                    # none for BOSS either.
+                    out, err = _drain(child, timeout=timeout, on_line=on_line)
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.communicate()
@@ -547,6 +645,12 @@ class ClaudeCodeAgent:
                 raise RuntimeError(f"claude code agent timed out after {timeout}s") from exc
             if proc.returncode == 0:
                 parsed = _parse_cli_output(proc.stdout)
+                if parsed is not None and live_parser is not None and live_parser.turns:
+                    # ALREADY PERSISTED, TURN BY TURN, WHILE THE STAGE RAN. Handing the same
+                    # turns back would write every row twice. The flag tells the caller the
+                    # transcript (including the prompt row) is already on disk.
+                    parsed["_turns"] = []
+                    parsed["_turns_live"] = True
                 if parsed is None:
                     if capturing:
                         # Succeeded, but produced output this cannot read. That is a capture
@@ -661,8 +765,12 @@ class ClaudeCodeAgent:
                         latency_ms=int((time.monotonic() - started) * 1000), turns=turns)
         # The same invocation at the other resolution: one ledger row above, one row per turn
         # here. Popped off the dict so nothing downstream ever sees the transcript.
-        record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
-                           model=model or usage.get("model"), prompt=prompt)
+        # `_turns_live` means the transcript was already written turn by turn while the stage
+        # ran, prompt row included. Writing it again here would duplicate every row.
+        if not data.pop("_turns_live", False):
+            record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
+                               model=model or usage.get("model"), prompt=prompt)
+        data.pop("_turns", None)
         return {
             "summary": _as_text(data.get("result")).strip() or "(no summary returned)",
             "usage": usage,
@@ -688,8 +796,11 @@ class ClaudeCodeAgent:
         record_llm_call(engine_name=self.engine, usage=usage, cost_usd_micros=cost_micros,
                         latency_ms=int((time.monotonic() - started) * 1000),
                         turns=int(data.get("num_turns") or 0), stage="research")
-        record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
-                           model=model or usage.get("model"), stage="research", prompt=prompt)
+        if not data.pop("_turns_live", False):
+            record_agent_turns(data.pop("_turns", []), engine_name=self.engine,
+                               model=model or usage.get("model"), stage="research",
+                               prompt=prompt)
+        data.pop("_turns", None)
         return {
             "summary": _as_text(data.get("result")).strip() or "",
             "usage": usage,
