@@ -11,6 +11,7 @@ is a good way to take down the thing it observes. So the rules matter as much as
 
 import inspect
 import logging
+import time
 
 from boss_engine.services import log_capture
 from boss_engine.services.activity_log import SOURCES, _LOADERS_BY_SOURCE
@@ -157,3 +158,53 @@ def test_the_warning_says_what_it_might_be_and_when_boss_will_act():
     src = inspect.getsource(report_quiet)
     assert "installing" in src and "running tests" in src and "stuck" in src
     assert "intervenes_at_minutes" in src
+
+
+def test_install_raises_the_level_on_the_loggers_it_wants():
+    """A handler on the root logger is NOT enough, and the failure is silent.
+
+    `logger.info(...)` is discarded by the LOGGER before any handler is consulted when that
+    logger's effective level is higher — and the default is WARNING. So the allowlisted INFO
+    lines, which are the entire point of this, were never created: `app_logs` stayed empty and
+    looked like a broken handler rather than a filtered one.
+    """
+    src = inspect.getsource(log_capture.install)
+    assert "for name in _INFO_ALLOWLIST:" in src
+    assert "setLevel(logging.INFO)" in src
+
+
+def test_it_actually_captures_what_it_claims_to(monkeypatch):
+    """The end-to-end check the level bug slipped past: allowlisted INFO kept, other INFO
+    dropped, WARNING kept whatever its logger."""
+    import boss_engine.db as db
+
+    written: list[dict] = []
+
+    class _Conn:
+        def execute(self, _stmt, params=None):
+            written.append(params or {})
+
+    class _Ctx:
+        def __enter__(self): return _Conn()
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(db, "begin", lambda _engine: _Ctx())
+    monkeypatch.setattr(log_capture, "_handler", None)
+
+    handler = log_capture.install(object(), service="test")
+    assert handler is not None
+    try:
+        logging.getLogger("boss_engine.services.sandbox").info("sandbox cmd 4200ms npm install")
+        logging.getLogger("boss_engine.services.nowhere").info("chatter")
+        logging.getLogger("anything.at.all").warning("a real warning")
+        deadline = time.time() + 6
+        while len(written) < 2 and time.time() < deadline:
+            time.sleep(0.2)
+    finally:
+        logging.getLogger().removeHandler(handler)
+        handler.close()
+
+    messages = [str(w.get("m")) for w in written]
+    assert any("npm install" in m for m in messages), "the allowlisted INFO line was not captured"
+    assert any("a real warning" in m for m in messages)
+    assert not any("chatter" in m for m in messages), "un-allowlisted INFO leaked in"

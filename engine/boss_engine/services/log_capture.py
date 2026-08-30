@@ -171,6 +171,21 @@ def install(engine, *, service: str) -> Optional[ActivityLogHandler]:
             handler = ActivityLogHandler(engine, service)
             handler.setFormatter(logging.Formatter("%(message)s"))
             logging.getLogger().addHandler(handler)
+            # A HANDLER ON THE ROOT LOGGER IS NOT ENOUGH.
+            #
+            # `logger.info(...)` is discarded by the LOGGER before any handler is consulted, if
+            # that logger's effective level is higher — and the default is WARNING. So the
+            # allowlisted INFO lines, which are the entire point of this, were never created:
+            # the table stayed empty and looked like a broken handler rather than a filtered
+            # one. Raising the level on exactly those loggers, and nothing else, is what makes
+            # them exist. Handler-level filtering still decides what is KEPT.
+            for name in _INFO_ALLOWLIST:
+                logging.getLogger(name).setLevel(logging.INFO)
+            # Root stays wherever the service put it, except that it must not sit above INFO or
+            # it would gate propagation for anything that relies on inheritance.
+            root = logging.getLogger()
+            if root.level > logging.INFO:
+                root.setLevel(logging.INFO)
             _handler = handler
             return handler
         except Exception:  # noqa: BLE001
