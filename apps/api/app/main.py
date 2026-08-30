@@ -19853,15 +19853,18 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
     something to reset TO.
     """
     with begin(engine) as connection:
+        # LEFT JOIN, deliberately. A workflow created from scratch has no published version
+        # until it is first saved, and an inner join turned that into a 404 — so the builder
+        # would refuse to open the very thing the "New workflow" button had just made.
         row = connection.execute(
             text(
                 "SELECT d.id, d.name, d.is_catalogue, d.forked_from_version_id, "
                 "       v.id AS version_id, v.version, v.spec "
                 "FROM workflow_definitions d "
-                "JOIN workflow_versions v ON v.workflow_definition_id = d.id "
+                "LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id "
                 "WHERE d.project_id=:p AND d.workflow_key=:k "
                 "AND COALESCE(d.namespace,'system')='product' "
-                "ORDER BY v.version DESC LIMIT 1"
+                "ORDER BY v.version DESC NULLS LAST LIMIT 1"
             ),
             {"p": project_id, "k": workflow_key},
         ).mappings().first()
@@ -19890,11 +19893,59 @@ def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
             "name": row["name"],
             "is_catalogue": row["is_catalogue"],
             "version": row["version"],
-            "spec": row["spec"],
+            # An empty step list rather than null: the builder renders "no steps yet", which is
+            # the truth about a brand-new workflow, instead of failing to load.
+            "spec": row["spec"] if isinstance(row["spec"], dict) else {"steps": []},
             # What it was forked from, so the builder can offer "reset to the standard" and
             # show what has drifted from it.
             "forked_from": origin,
         }
+
+
+def _free_workflow_key(connection, project_id: str, name: str) -> str:
+    """A key derived from the name, so a customer never has to invent an identifier.
+
+    Shared by create and import. Two callers deriving keys their own way is how one of them
+    ends up 409ing on a collision the other would have avoided — which is exactly what the
+    first version of forking did.
+    """
+    base = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_") or "workflow"
+    taken = {
+        row[0] for row in connection.execute(
+            text("SELECT workflow_key FROM workflow_definitions WHERE project_id=:p"),
+            {"p": project_id},
+        )
+    }
+    key = base
+    for suffix in range(2, 500):
+        if key not in taken:
+            return key
+        key = f"{base}_{suffix}"
+    return f"{base}_{uuid4().hex[:6]}"
+
+
+@app.post("/v1/delivery-workflows/create")
+def create_delivery_workflow(payload: dict) -> dict:
+    """A new workflow, from scratch.
+
+    Creates the definition only. There is no version until the first save, because a workflow
+    with no steps is not a thing the runtime can validate — `entry_step` is required — and
+    publishing an empty one just to have a row would put an unrunnable version in the ledger.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    actor = str(payload.get("actor") or "operator").strip()
+    if not project_id or not name:
+        raise HTTPException(status_code=400, detail="project_id and name are required")
+
+    with begin(engine) as connection:
+        key = _free_workflow_key(connection, project_id, name)
+        definition = workflow_runtime.create_definition(
+            connection, project_id=project_id, workflow_key=key, name=name,
+            description=str(payload.get("description") or "") or None, actor=actor,
+            namespace=workflow_runtime.PRODUCT_NAMESPACE, is_catalogue=False,
+        )
+    return {"definition": definition}
 
 
 @app.post("/v1/delivery-workflows/fork")
@@ -19909,9 +19960,9 @@ def fork_delivery_workflow(payload: dict) -> dict:
     new_key = str(payload.get("new_key") or "").strip()
     new_name = str(payload.get("new_name") or "").strip()
     actor = str(payload.get("actor") or "operator").strip()
-    if not project_id or not source_key or not new_key:
+    if not project_id or not source_key:
         raise HTTPException(
-            status_code=400, detail="project_id, workflow_key and new_key are required"
+            status_code=400, detail="project_id and workflow_key are required"
         )
 
     with begin(engine) as connection:
@@ -19930,9 +19981,14 @@ def fork_delivery_workflow(payload: dict) -> dict:
             raise HTTPException(
                 status_code=404, detail=f"no delivery workflow '{source_key}' to fork"
             )
+        # Derived when the caller did not name one, so "import this and call it X" cannot
+        # collide with something already in the project.
+        resolved_key = new_key or _free_workflow_key(
+            connection, project_id, new_name or f"{source['name']} copy"
+        )
         try:
             definition = workflow_runtime.create_definition(
-                connection, project_id=project_id, workflow_key=new_key,
+                connection, project_id=project_id, workflow_key=resolved_key,
                 name=new_name or f"{source['name']} (copy)",
                 description=source["description"], actor=actor,
                 namespace=workflow_runtime.PRODUCT_NAMESPACE,

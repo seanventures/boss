@@ -209,7 +209,9 @@ describe("the builder opens with what is already there", () => {
 
   it("distinguishes 'still reading' from 'genuinely empty'", () => {
     expect(UI).toContain('data-testid="dw-canvas-loading"');
-    expect(UI).toContain("This workflow has no steps yet");
+    // Reworded when "New workflow" arrived: an empty canvas now belongs to something the
+    // customer just created, so it says what to do rather than describing a state.
+    expect(UI).toContain("No steps yet — add them from the left");
   });
 
   it("keeps configuration it does not understand", () => {
@@ -309,5 +311,56 @@ describe("the catalogue card is scannable across twelve of them", () => {
   it("turns motion off when the reader asked for that", () => {
     const reduced = CSS.slice(CSS.indexOf(".dw-card, .dw-tab { transition: none; }"));
     expect(reduced.slice(0, 160)).toContain(".dw-card:hover { transform: none; }");
+  });
+});
+
+describe("build your own actually lets you build one", () => {
+  it("offers a New workflow control", () => {
+    // The tab was called "Build your own" and the only way in was to fork something, so a
+    // screen that promised authorship offered only editing.
+    expect(UI).toContain('data-testid="dw-new"');
+    expect(UI).toContain("+ New workflow");
+  });
+
+  it("can start from an existing workflow, including a standard", () => {
+    // "Work on top of it" is the common case, so the list is every workflow in the project
+    // rather than only the customer's own.
+    expect(UI).toContain('data-testid="dw-new-from"');
+    expect(UI).toContain('Nothing — an empty workflow');
+    expect(UI).toContain('{i.is_catalogue ? " (standard)" : ""}');
+  });
+
+  it("imports by forking, rather than by a second copy path", () => {
+    // Forking already copies the steps AND records where they came from, which is what makes
+    // "reset to the standard" work on the result. A separate import would be a worse fork.
+    expect(UI).toContain("if (importFrom) onImport(importFrom, name);");
+    expect(UI).toContain('act(`Import ${name}`, "fork"');
+  });
+
+  it("says which of the two it is about to do", () => {
+    expect(UI).toContain('{importFrom ? "Import" : "Create"}');
+  });
+
+  it("selects what was just created", () => {
+    // Creating something and leaving the operator to find it in a dropdown is the failure
+    // "fork to edit" already had.
+    const create = UI.slice(UI.indexOf("onCreate={async (name)"));
+    expect(create.slice(0, 400)).toContain("setBuilderTarget(created.id)");
+  });
+
+  it("does not make a customer invent an identifier", () => {
+    // The key is derived server-side, in ONE place, for create and import both — two callers
+    // deriving keys their own way is how one 409s on a collision the other avoided.
+    const api = codeOnly("../../apps/api/app/main.py");
+    expect(api).toContain("def _free_workflow_key");
+    expect(api).toContain("resolved_key = new_key or _free_workflow_key(");
+  });
+
+  it("opens a workflow that has no version yet", () => {
+    // A workflow created from scratch has no published version until its first save, and an
+    // inner join turned that into a 404 — the builder would refuse to open the very thing the
+    // New workflow button had just made.
+    const api = codeOnly("../../apps/api/app/main.py");
+    expect(api).toContain("LEFT JOIN workflow_versions v ON v.workflow_definition_id = d.id");
   });
 });

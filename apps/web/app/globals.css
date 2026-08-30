@@ -1161,6 +1161,9 @@ h1, h2, h3, h4, h5, h6 {
 .dw-soon summary { cursor: pointer; font-size: 0.7rem; }
 .dw-soon-item { margin: 6px 0 0; font-size: 0.68rem; line-height: 1.4; }
 .dw-canvas-actions { display: inline-flex; gap: 6px; align-items: center; }
+.dw-new { display: flex; align-items: end; gap: 6px; flex-wrap: wrap; }
+.dw-new .input { min-width: 170px; }
+.dw-new-from .input { min-width: 210px; }
 .dw-spec-error {
   margin: 8px 0 0; padding: 7px 10px; border-radius: 7px; font-size: 0.74rem;
   color: var(--amber, #d29922); border: 1px solid rgba(210,153,34,.35);

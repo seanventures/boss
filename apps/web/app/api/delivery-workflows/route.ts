@@ -74,6 +74,7 @@ export async function GET(req: Request) {
 const ACTIONS: Record<string, string> = {
   install: "/v1/delivery-workflows/catalogue/install",
   apply: "/v1/delivery-workflows/apply",
+  create: "/v1/delivery-workflows/create",
   fork: "/v1/delivery-workflows/fork",
   save: "/v1/delivery-workflows/save",
   start: "/v1/delivery-workflows/start",

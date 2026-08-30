@@ -306,6 +306,24 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           installed={installed} projectId={projectId}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
+          onCreate={async (name) => {
+            const result = await act(`Create ${name}`, "create", { name });
+            // Select what was just made. Creating something and leaving the operator to find it
+            // in a dropdown is the same failure "fork to edit" had.
+            if (result.ok) {
+              const created = (result.data as { definition?: { id: string } })?.definition;
+              if (created?.id) setBuilderTarget(created.id);
+            }
+          }}
+          onImport={async (sourceKey, name) => {
+            const result = await act(`Import ${name}`, "fork", {
+              workflow_key: sourceKey, new_name: name,
+            });
+            if (result.ok) {
+              const created = (result.data as { definition?: { id: string } })?.definition;
+              if (created?.id) setBuilderTarget(created.id);
+            }
+          }}
         />
       )}
     </div>
@@ -526,7 +544,7 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
 /* ── Builder ─────────────────────────────────────────────────────────────────── */
 
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
-                      target, setTarget, onSave }: {
+                      target, setTarget, onSave, onCreate, onImport }: {
   capabilities: Capability[];
   blocks: Block[];
   riskFloor: number;
@@ -536,6 +554,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   target: string;
   setTarget: (id: string) => void;
   onSave: (definitionId: string, spec: Record<string, unknown>) => void;
+  onCreate: (name: string) => void;
+  onImport: (sourceKey: string, name: string) => void;
 }) {
   // Only a customer's OWN workflows can be edited. Offering a catalogue one here and refusing
   // on save would be a control that lies about what it does.
@@ -546,6 +566,9 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   const [loaded, setLoaded] = useState<WorkflowSpec | null>(null);
   const [loadingSpec, setLoadingSpec] = useState(false);
   const [specError, setSpecError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [importFrom, setImportFrom] = useState("");
 
   useEffect(() => {
     if (!target && editable.length) setTarget(editable[0].id);
@@ -747,12 +770,67 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
             <span>Editing</span>
             <select className="input" value={target} onChange={(e) => setTarget(e.target.value)}
                     data-testid="dw-target">
-              {editable.length === 0 ? <option value="">Fork a workflow first</option> : null}
+              {/* The tab is called "Build your own", and until now the only way in was to fork
+                  something — so a screen that promised authorship offered only editing. */}
+              {editable.length === 0
+                ? <option value="">Nothing of your own yet</option>
+                : null}
               {editable.map((i) => (
                 <option key={i.id} value={i.id}>{i.name}</option>
               ))}
             </select>
           </label>
+
+          {creating ? (
+            <form className="dw-new" onSubmit={(e) => {
+              e.preventDefault();
+              const name = newName.trim();
+              if (!name) return;
+              // IMPORT IS A FORK WITH A NAME YOU CHOSE.
+              //
+              // Starting from an existing workflow and starting from nothing differ only in
+              // where the steps come from, and forking already copies steps AND records what
+              // they came from — which is what makes "reset to the standard" work on the
+              // result. A separate import path would have been a second, worse fork.
+              if (importFrom) onImport(importFrom, name);
+              else onCreate(name);
+              setNewName("");
+              setImportFrom("");
+              setCreating(false);
+            }}>
+              <input className="input" autoFocus value={newName} placeholder="Name it"
+                     onChange={(e) => setNewName(e.target.value)}
+                     onKeyDown={(e) => { if (e.key === "Escape") setCreating(false); }}
+                     aria-label="Name for the new workflow" data-testid="dw-new-name" />
+              <label className="field dw-new-from">
+                <span>Start from</span>
+                <select className="input" value={importFrom} data-testid="dw-new-from"
+                        onChange={(e) => setImportFrom(e.target.value)}>
+                  <option value="">Nothing — an empty workflow</option>
+                  {/* Every workflow in the project, not only the customer's own: importing a
+                      standard is the common case, and it is what "work on top of it" means. */}
+                  {installed.map((i) => (
+                    <option key={i.id} value={i.workflow_key}>
+                      {i.name}{i.is_catalogue ? " (standard)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" className="cap-btn" disabled={!!busy || !newName.trim()}
+                      data-testid="dw-new-confirm">
+                {importFrom ? "Import" : "Create"}
+              </button>
+              <button type="button" className="cap-btn"
+                      onClick={() => { setCreating(false); setNewName(""); setImportFrom(""); }}>
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button type="button" className="cap-btn" disabled={!!busy}
+                    onClick={() => setCreating(true)} data-testid="dw-new">
+              + New workflow
+            </button>
+          )}
           <span className="dw-canvas-actions">
             {/* RESET TO THE STANDARD. Only offered when there is something to reset TO — a
                 fork records what it came from, and a workflow written from scratch has no
@@ -785,8 +863,8 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
         ) : draft.length === 0 ? (
           <p className="detail dw-canvas-empty">
             {target
-              ? "This workflow has no steps yet. Add some from the left."
-              : "Fork a workflow first, then edit it here."}
+              ? "No steps yet — add them from the left, in the order they should run."
+              : "Start a new workflow, or fork one of the standards to change it."}
           </p>
         ) : (
           <ol className="dw-draft">
