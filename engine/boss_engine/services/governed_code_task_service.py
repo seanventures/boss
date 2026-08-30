@@ -1740,6 +1740,44 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     END""",
             {"ph": name}, where=f"phase->{name}")
 
+    def _close_phase(c) -> None:
+        """Bank the CURRENT phase's duration, without starting another one.
+
+        A phase is only ever timed by the phase that FOLLOWS it, so the last one is never
+        recorded: the run ends through `_fenced_status(..., "phase='done'")`, which is raw SQL
+        that bypasses `_phase`. `opening_pr` — pushing the branch, opening the PR, evaluating
+        gates — therefore contributed nothing to `phase_timings` on every run ever.
+
+        Measured on crun_3659274905154: phases summed to 13.6m against 16.3m of wall clock, and
+        the missing 2.7m sat between `code_task.gate_advisory` and `code_task.pr_opened` with no
+        phase, no turns and no log line. 17% of the run, invisible — indistinguishable, from the
+        console, from the stalls this whole investigation was about.
+
+        Deliberately does NOT write `phase`. When another execution has already finished this
+        run, overwriting its verdict is exactly what the terminal-write guard exists to prevent;
+        appending a timing entry is safe either way.
+        """
+        from .run_fencing import guarded_update
+        try:
+            guarded_update(
+                c, run_id, _fence,
+                """finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+                     || CASE
+                          WHEN finalize_ctx ? 'phase_started_at' AND phase IS NOT NULL THEN
+                            jsonb_build_object(
+                              'phase_timings',
+                              COALESCE(finalize_ctx->'phase_timings', '[]'::jsonb)
+                              || jsonb_build_array(jsonb_build_object(
+                                   'phase', phase,
+                                   'ms', GREATEST(0, EXTRACT(EPOCH FROM (
+                                          now() - (finalize_ctx->>'phase_started_at')::timestamptz
+                                        )) * 1000)::bigint)))
+                          ELSE '{}'::jsonb
+                        END""",
+                {}, where="phase->close")
+        except Exception:  # noqa: BLE001 — a timing entry must never cost a finished run its PR
+            pass
+
     def _fenced_status(status: str, extra_set: str = "", params: Optional[dict] = None) -> bool:
         """Set the run's status under BOTH the fence and the state machine.
 
@@ -3722,6 +3760,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"),
                     run_id=run_id,
                 )
+                _close_phase(c)  # same reason as the PR path: the last phase is otherwise lost
                 if not _fenced_status("completed", "phase='done'"):
                     emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
                                "code_task_run", run_id, {"attempted": "completed_no_pr"})
@@ -3838,6 +3877,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
         with _transaction(engine) as c:
+            # Bank `opening_pr` before the terminal write erases the clock it was measured by.
+            _close_phase(c)
             _ok = _fenced_status(
                 "completed",
                 "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",
