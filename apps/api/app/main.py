@@ -9561,8 +9561,10 @@ def without_internal_bulk(run: dict) -> dict:
 #:   2000 -> 2.24 MB   1000 -> 1.79 MB   500 -> 1.47 MB   200 -> 1.19 MB
 #: Below 500 the curve flattens (the remainder is many short fields, not a few long ones)
 #: while the risk of clipping something an operator wants to read goes up. A list row shows
-#: titles and status lines; 500 characters is already generous for both.
-LIST_STRING_BUDGET = 500
+#: titles and status lines; 240 characters is already generous for both. Lowered from 500 when
+#: the list's ceiling was raised to cover every task: the per-string bound never limited how
+#: MANY strings a row carries, and a design plan with forty fields was still ~20 KB after it.
+LIST_STRING_BUDGET = 240
 
 
 def trim_for_list(value: Any, _depth: int = 0) -> Any:

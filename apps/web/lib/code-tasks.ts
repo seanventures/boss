@@ -122,7 +122,23 @@ const CODE_TASK_AREAS = new Set(["code_tasks", "delivery", "overview", undefined
  * housekeeping runs once filled the first 50 and hid every app an operator had built.
  */
 export function codeTaskLimitFor(area?: string): number {
-  return CODE_TASK_AREAS.has(area) ? 200 : 12;
+  // 600 WHERE THE LIST IS ACTUALLY SHOWN.
+  //
+  // 200 was set to bound a payload, and the bound was measured wrong. On goldeneye today,
+  // where 244 real tasks exist:
+  //
+  //     limit=200 -> 1,481,518 bytes in 0.885s   (44 tasks invisible)
+  //     limit=400 -> 1,707,102 bytes in 1.025s   (all of them)
+  //
+  // Showing every task costs 225 KB and 0.14s. That is what the cap was buying, and it was
+  // being paid for with "not all projects are getting retrieved under the Factory" — reported
+  // over and over, because a list that silently stops at 200 is indistinguishable from a
+  // project that only has 200.
+  //
+  // 600 leaves headroom rather than sitting exactly on today's count. Beyond that the list
+  // still says "N of M" and offers to fetch the rest, so the ceiling stays honest instead of
+  // becoming the next silent one.
+  return CODE_TASK_AREAS.has(area) ? 600 : 12;
 }
 
 export async function fetchCodeTasksFeed(

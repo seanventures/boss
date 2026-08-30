@@ -16,13 +16,13 @@ import { codeTaskLimitFor } from "../lib/code-tasks";
 describe("codeTaskLimitFor", () => {
   it("keeps the full list where the list is actually rendered", () => {
     for (const area of ["code_tasks", "delivery", "overview"]) {
-      expect(codeTaskLimitFor(area)).toBe(200);
+      expect(codeTaskLimitFor(area)).toBe(600);
     }
   });
 
   it("keeps it for the default area, which renders the overview", () => {
-    expect(codeTaskLimitFor(undefined)).toBe(200);
-    expect(codeTaskLimitFor("")).toBe(200);
+    expect(codeTaskLimitFor(undefined)).toBe(600);
+    expect(codeTaskLimitFor("")).toBe(600);
   });
 
   it("fetches a handful everywhere else", () => {
@@ -35,10 +35,21 @@ describe("codeTaskLimitFor", () => {
     expect(codeTaskLimitFor("meetings") / codeTaskLimitFor("code_tasks")).toBeLessThan(0.1);
   });
 
-  it("200 is preserved on-area on purpose", () => {
-    // BOSS's own housekeeping runs once filled the first 50 and hid every app the operator
-    // had built. Lowering it everywhere would reintroduce that.
-    expect(codeTaskLimitFor("code_tasks")).toBe(200);
+  it("covers every task on-area, because 200 did not", () => {
+    // The cap above was set to bound a payload, and the bound was measured wrong. On goldeneye,
+    // with 244 real tasks:
+    //     limit=200 -> 1,481,518 bytes in 0.885s   (44 invisible)
+    //     limit=400 -> 1,707,102 bytes in 1.025s   (all of them)
+    // Showing everything costs 225 KB and 0.14s. That is what the cap bought, and it was paid
+    // for with "not all projects are getting retrieved under the Factory", reported repeatedly
+    // — because a list that silently stops at 200 looks exactly like a project that has 200.
+    expect(codeTaskLimitFor("code_tasks")).toBeGreaterThanOrEqual(500);
+  });
+
+  it("still cuts the payload hard off-area", () => {
+    // The 111-second page load was caused by fetching this feed on EVERY area and rendering it
+    // across ~30 sections, not by the on-area count. That fix stays exactly as it was.
+    expect(codeTaskLimitFor("meetings")).toBeLessThanOrEqual(12);
   });
 });
 
