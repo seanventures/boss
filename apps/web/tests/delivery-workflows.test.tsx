@@ -521,7 +521,43 @@ describe("importing does not need a name typed first", () => {
     // is disabled reads as broken — which is how it was reported. Copying something has an
     // obvious name available.
     expect(UI).toContain("const name = newName.trim() || defaultImportName;");
-    expect(UI).toContain("`${source.name} (copy)`");
+    expect(UI).toContain("`${base} (copy)`");
+  });
+
+  it("does not let copies of copies compound", () => {
+    // Copying a copy produced "Minor Feature (copy) (copy)", and the one after that would have
+    // been worse.
+    expect(UI).toContain("replace(/\\s*\\(copy(?:\\s+\\d+)?\\)\\s*$/i, \"\")");
+  });
+
+  it("does not let two workflows end up with the same name", () => {
+    // The KEY was made unique but the NAME was not, so the picker listed two entries reading
+    // "Minor Feature (yours) (copy)" and neither said which was which.
+    expect(UI).toContain("const taken = new Set(installed.map((i) => i.name));");
+    expect(UI).toContain("`${base} (copy ${n})`");
+  });
+});
+
+describe("creating something says so, where the person is looking", () => {
+  it("confirms on the canvas that changed", () => {
+    // Import created the workflow, copied its steps and selected it — then showed a toolbar
+    // identical to the one before the click, so it read as "went back to editing". That is how
+    // a working feature got reported as broken.
+    expect(UI).toContain('data-testid="dw-made"');
+    expect(UI).toContain("You are editing it now");
+  });
+
+  it("names what it copied from, and how much came across", () => {
+    expect(UI).toContain("step${draft.length === 1 ? \"\" : \"s\"} copied");
+  });
+
+  it("only shows it for the workflow actually on screen", () => {
+    // Switching to another workflow must not leave a confirmation about a different one.
+    expect(UI).toContain("justMade && justMade.id === target ?");
+  });
+
+  it("can be dismissed", () => {
+    expect(UI).toContain("onClick={onDismissJustMade}");
   });
 
   it("shows that name before the button is pressed", () => {

@@ -217,6 +217,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [openRun, setOpenRun] = useState<string | null>(null);
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
+  // WHAT WAS JUST MADE, so the builder can SAY it was made.
+  //
+  // Import worked and looked like it had not: the form closed, the toolbar came back looking
+  // exactly as before, and the only confirmation was a sticky line 104px up the page that is
+  // easy to miss entirely. Returning to a toolbar that looks unchanged reads as "cancelled",
+  // which is how a working feature got reported as broken.
+  const [justMade, setJustMade] = useState<{ id: string; name: string; from?: string } | null>(null);
 
   const load = useCallback(async () => {
     const [caps, cat, inst, live, mine] = await Promise.all([
@@ -342,6 +349,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
           installed={installed} projectId={projectId}
           customSteps={customSteps} bindable={bindable}
+          justMade={justMade} onDismissJustMade={() => setJustMade(null)}
           onDefineStep={async (fields) => {
             const result = await act(`Define ${fields.label}`, "define_step", fields);
             if (result.ok) await load();
@@ -372,7 +380,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             // in a dropdown is the same failure "fork to edit" had.
             if (result.ok) {
               const created = (result.data as { definition?: { id: string } })?.definition;
-              if (created?.id) setBuilderTarget(created.id);
+              if (created?.id) {
+                setBuilderTarget(created.id);
+                setJustMade({ id: created.id, name });
+              }
             }
           }}
           onImport={async (sourceKey, name) => {
@@ -381,7 +392,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             });
             if (result.ok) {
               const created = (result.data as { definition?: { id: string } })?.definition;
-              if (created?.id) setBuilderTarget(created.id);
+              if (created?.id) {
+                setBuilderTarget(created.id);
+                setJustMade({
+                  id: created.id, name,
+                  from: installed.find((i) => i.workflow_key === sourceKey)?.name,
+                });
+              }
             }
           }}
         />
@@ -764,6 +781,7 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
 
 function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
                       customSteps, bindable, onDefineStep, onRemoveStep,
+                      justMade, onDismissJustMade,
                       target, setTarget, onSave, onCreate, onImport }: {
   capabilities: Capability[];
   blocks: Block[];
@@ -775,6 +793,10 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   onDefineStep: (fields: Record<string, unknown>) =>
     Promise<{ ok: boolean; error?: string }>;
   onRemoveStep: (stepKey: string) => void;
+  /** The workflow created a moment ago, so the builder can confirm it rather than looking
+   *  identical to the state before the click. */
+  justMade: { id: string; name: string; from?: string } | null;
+  onDismissJustMade: () => void;
   busy: string | null;
   target: string;
   setTarget: (id: string) => void;
@@ -796,11 +818,26 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   const [importFrom, setImportFrom] = useState("");
 
   /** What an import would be called if the operator names nothing. Shown as the placeholder,
-   *  so the name the workflow WILL get is visible before the button is pressed. */
+   *  so the name the workflow WILL get is visible before the button is pressed.
+   *
+   *  Two things it has to avoid, both of which happened:
+   *    - COMPOUNDING. Copying a copy produced "Minor Feature (copy) (copy)", and the one after
+   *      that would have been worse. The existing suffix is stripped before a new one is added.
+   *    - COLLIDING. The workflow KEY was made unique but the NAME was not, so the picker
+   *      listed two entries reading "Minor Feature (yours) (copy)" and neither said which was
+   *      which. Names are now numbered against what the project already has.
+   */
   const defaultImportName = useMemo(() => {
     if (!importFrom) return "";
     const source = installed.find((i) => i.workflow_key === importFrom);
-    return source ? `${source.name} (copy)` : "";
+    if (!source) return "";
+    const base = source.name.replace(/\s*\(copy(?:\s+\d+)?\)\s*$/i, "").trim();
+    const taken = new Set(installed.map((i) => i.name));
+    let candidate = `${base} (copy)`;
+    for (let n = 2; taken.has(candidate) && n < 200; n += 1) {
+      candidate = `${base} (copy ${n})`;
+    }
+    return candidate;
   }, [importFrom, installed]);
   const [defining, setDefining] = useState(false);
 
@@ -1078,6 +1115,24 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
       </aside>
 
       <section className="dw-canvas" aria-label="Your workflow">
+        {/* SAY IT WORKED, WHERE THE PERSON IS LOOKING.
+            Import created the workflow, copied its steps and selected it — and then showed a
+            toolbar identical to the one before the click, so it read as "went back to editing",
+            which is how a working feature got reported as broken. The confirmation belongs on
+            the canvas that changed, not in a sticky line further up the page. */}
+        {justMade && justMade.id === target ? (
+          <p className="dw-made" data-testid="dw-made">
+            <span className="dw-made-tick" aria-hidden>✓</span>
+            <span>
+              Created <strong>{justMade.name}</strong>
+              {justMade.from ? <> from <strong>{justMade.from}</strong></> : null}
+              {draft.length ? ` · ${draft.length} step${draft.length === 1 ? "" : "s"} copied` : ""}
+              . You are editing it now — change what you want, then save.
+            </span>
+            <button type="button" className="dw-made-x" onClick={onDismissJustMade}
+                    aria-label="Dismiss">×</button>
+          </p>
+        ) : null}
         <div className="dw-canvas-head" data-mode={creating ? "creating" : "editing"}>
           {/* ONE QUESTION AT A TIME.
               "Editing: Standard Product Delivery" beside "Start from: Backend Service Setup"

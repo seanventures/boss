@@ -1119,6 +1119,23 @@ h1, h2, h3, h4, h5, h6 {
 .dw-floor { margin: 8px 2px 0; font-size: 0.68rem; line-height: 1.4; }
 
 .dw-canvas { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface-1); }
+/* The confirmation that a workflow was just created, on the canvas that changed. */
+.dw-made {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin: 0 0 10px; padding: 10px 12px; border-radius: 9px; font-size: 0.76rem;
+  line-height: 1.45;
+  border: 1px solid color-mix(in srgb, var(--green, #3fb950) 45%, var(--border));
+  background: color-mix(in srgb, var(--green, #3fb950) 10%, transparent);
+  color: var(--ink-soft);
+}
+.dw-made strong { color: var(--ink); font-weight: 600; }
+.dw-made-tick { color: var(--green, #3fb950); font-weight: 700; line-height: 1.4; }
+.dw-made-x {
+  margin-left: auto; background: none; border: 0; cursor: pointer; font-size: 1rem;
+  line-height: 1; padding: 0 2px; color: var(--faint, var(--muted));
+}
+.dw-made-x:hover { color: var(--ink); }
+
 /* A TOOLBAR, NOT A ROW OF BUTTONS.
    `justify-content: space-between` across a wide canvas left a large dead gap in the middle
    and gave every control the same weight, so the header read as four unrelated things rather
