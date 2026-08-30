@@ -65,7 +65,9 @@ describe("the risk floor is visible before a step is placed", () => {
   });
 
   it("locks the approval control on a step that cannot be automatic", () => {
-    expect(UI).toContain("disabled={capability?.approval_forced_manual}");
+    // A control block has no approval of its own either — only capability steps do.
+    expect(UI).toContain('disabled={step.kind !== "capability"');
+    expect(UI).toContain("|| capability?.approval_forced_manual}");
   });
 
   it("states the rule in words", () => {
@@ -77,11 +79,14 @@ describe("the builder cannot produce something the runtime will refuse", () => {
   it("gives every dropped step a unique id", () => {
     // Adding "build" twice with one id is rejected by the runtime — at save time, with a
     // message about duplicates, after the customer has laid out a whole workflow.
-    expect(UI).toContain("current.filter((s) => s.capability === capability.key).length + 1");
+    // One id generator for both capabilities and control blocks, and it checks what is
+    // already taken rather than counting — counting collides after a delete.
+    expect(UI).toContain("const nextId = (current: Draft[], stem: string)");
+    expect(UI).toContain("while (taken.has(`${stem}_${n}`)) n += 1;");
   });
 
   it("wires each step to the next one", () => {
-    expect(UI).toContain("next: index + 1 < draft.length ? [draft[index + 1].id] : []");
+    expect(UI).toContain("const next = index + 1 < draft.length ? [draft[index + 1].id] : [];");
   });
 
   it("reads required inputs from the run's input instead of inventing values", () => {
@@ -191,5 +196,74 @@ describe("an action's outcome reaches the person who caused it", () => {
   it("keeps the notice on screen while the page scrolls", () => {
     const rule = CSS.slice(CSS.indexOf(".dw-notice {"), CSS.indexOf(".dw-empty"));
     expect(rule).toContain("position: sticky");
+  });
+});
+
+describe("the builder opens with what is already there", () => {
+  it("loads the selected workflow's current steps", () => {
+    // It opened empty, so changing one step of a ten-step workflow meant rebuilding the other
+    // nine from memory — and saving would have replaced the workflow with the partial thing.
+    expect(UI).toContain('view: "spec"');
+    expect(UI).toContain("setDraft(toDraft(body.spec.steps))");
+  });
+
+  it("distinguishes 'still reading' from 'genuinely empty'", () => {
+    expect(UI).toContain('data-testid="dw-canvas-loading"');
+    expect(UI).toContain("This workflow has no steps yet");
+  });
+
+  it("keeps configuration it does not understand", () => {
+    // wait_seconds, workflow_version_id. Dropping them on load would silently reset one step
+    // while the customer edited another.
+    expect(UI).toContain('!["id", "kind", "binding", "approval", "next"].includes(k)');
+  });
+});
+
+describe("resetting to the standard", () => {
+  it("is offered only when there is something to reset to", () => {
+    // A fork records what it came from; a workflow written from scratch has no original, and
+    // the control would be a lie on it.
+    expect(UI).toContain("loaded?.forked_from ? (");
+    expect(UI).toContain('data-testid="dw-reset"');
+  });
+
+  it("restores the original's steps rather than clearing the canvas", () => {
+    expect(UI).toContain("setDraft(toDraft(loaded.forked_from.spec.steps))");
+  });
+});
+
+describe("the flow blocks the runtime always had", () => {
+  it("offers the ones that work in a linear canvas", () => {
+    expect(UI).toContain('data-testid={`dw-block-${b.kind}`}');
+    expect(UI).toContain("blocks.filter((b) => !b.canvas_required)");
+  });
+
+  it("does not offer ones that would produce a spec the runtime rejects", () => {
+    // A palette entry that cannot be saved is a promise the product cannot keep.
+    expect(UI).toContain("blocks.filter((b) => b.canvas_required)");
+    expect(UI).toContain("once the canvas can draw");
+  });
+
+  it("emits a control block in the shape the runtime reads", () => {
+    // wait_seconds and workflow_version_id live at the top level of the step, not in binding.
+    // Asserted WITHOUT the empty-object literals: `codeOnly` collapses `{}` to a space when
+    // it strips leftover JSX-comment braces, so a string containing one never matches.
+    expect(UI).toContain("return { id: step.id, kind: step.kind, binding:");
+    expect(UI).toContain("...(step.config ?? ");
+  });
+});
+
+describe("the canvas reads as a sequence", () => {
+  it("joins each step to the next", () => {
+    // Evenly-spaced identical boxes read as an unordered list, which is the wrong mental
+    // model for a thing whose order is its meaning.
+    const rule = CSS.slice(CSS.indexOf(".dw-draft-step:not(:last-child)::after"));
+    expect(rule.slice(0, 200)).toContain("height: 14px");
+    expect(CSS).toContain(".dw-draft-step:not(:last-child)::before");
+  });
+
+  it("shows where a dragged step will land", () => {
+    expect(UI).toContain('data-drop={dragging !== null && dragging !== index');
+    expect(CSS).toContain('.dw-draft-step[data-drop="true"]');
   });
 });

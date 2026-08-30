@@ -19,14 +19,38 @@ const VIEWS: Record<string, (project: string) => string> = {
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
 };
 
+/** `view=spec&key=…` — the steps a workflow currently has, so the builder opens with them
+ *  rather than making a customer rebuild ten steps to change one. */
+function specPath(project: string, key: string): string {
+  return `/v1/delivery-workflows/${encodeURIComponent(key)}/spec`
+    + `?project_id=${encodeURIComponent(project)}`;
+}
+
 export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const view = params.get("view") ?? "runs";
   const project = params.get("project_id")?.trim() ?? "";
+  if (view === "spec") {
+    const key = params.get("key")?.trim() ?? "";
+    if (!project || !key) {
+      return NextResponse.json({ error: "spec needs project_id and key" }, { status: 400 });
+    }
+    try {
+      const r = await fetch(`${API_URL}${specPath(project, key)}`, {
+        headers: authHeaders({}), cache: "no-store",
+      });
+      if (!r.ok) {
+        return NextResponse.json({ error: `API returned ${r.status}` }, { status: r.status });
+      }
+      return NextResponse.json(await r.json());
+    } catch (e) {
+      return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+    }
+  }
   const build = VIEWS[view];
   if (!build) {
     return NextResponse.json(
-      { error: `unknown view '${view}'. Known: ${Object.keys(VIEWS).join(", ")}` },
+      { error: `unknown view '${view}'. Known: ${Object.keys(VIEWS).join(", ")}, spec` },
       { status: 400 },
     );
   }

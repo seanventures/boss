@@ -82,7 +82,35 @@ type Run = {
   updated_at: string | null;
 };
 
-type Draft = { id: string; capability: string; approval?: string };
+/** A step on the canvas. `kind` is "capability" for the work steps and a control kind
+ *  ("timer", "decision", "subworkflow") for the blocks the runtime has always supported. */
+type Draft = {
+  id: string;
+  kind: string;
+  capability?: string;
+  approval?: string;
+  config?: Record<string, unknown>;
+};
+
+type Block = {
+  kind: string;
+  label: string;
+  summary: string;
+  canvas_required: boolean;
+  defaults?: Record<string, unknown>;
+  configure?: { field: string; label: string; type: string }[];
+};
+
+type WorkflowSpec = {
+  definition_id: string;
+  workflow_key: string;
+  name: string;
+  is_catalogue: boolean;
+  version: number;
+  spec: { entry_step?: string; steps: Record<string, unknown>[] };
+  forked_from: { workflow_key: string; name: string; version: number;
+                 spec: { steps: Record<string, unknown>[] } } | null;
+};
 
 const TABS = ["running", "catalogue", "builder"] as const;
 type Tab = (typeof TABS)[number];
@@ -142,6 +170,7 @@ async function post(action: string, payload: Record<string, unknown>) {
 export function DeliveryWorkflows({ projectId, actor }: { projectId: string; actor: string }) {
   const [tab, setTab] = useState<Tab>("running");
   const [capabilities, setCapabilities] = useState<Capability[]>([]);
+  const [blocks, setBlocks] = useState<Block[]>([]);
   const [riskFloor, setRiskFloor] = useState(2);
   const [catalogue, setCatalogue] = useState<CatalogueEntry[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
@@ -158,7 +187,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
   const load = useCallback(async () => {
     const [caps, cat, inst, live] = await Promise.all([
-      get<{ capabilities: Capability[]; manual_approval_risk_floor: number }>("capabilities", projectId),
+      get<{ capabilities: Capability[]; blocks: Block[]; manual_approval_risk_floor: number }>(
+        "capabilities", projectId),
       get<{ items: CatalogueEntry[] }>("catalogue", projectId),
       get<{ items: Installed[] }>("installed", projectId),
       get<{ runs: Run[] }>("runs", projectId),
@@ -170,6 +200,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       return;
     }
     setCapabilities((caps as { capabilities: Capability[] }).capabilities ?? []);
+    setBlocks((caps as { blocks?: Block[] }).blocks ?? []);
     setRiskFloor((caps as { manual_approval_risk_floor: number }).manual_approval_risk_floor ?? 2);
     setCatalogue((cat as { items: CatalogueEntry[] }).items ?? []);
     setInstalled((inst as { items: Installed[] }).items ?? []);
@@ -271,7 +302,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         />
       ) : (
         <BuilderView
-          capabilities={capabilities} riskFloor={riskFloor} installed={installed}
+          capabilities={capabilities} blocks={blocks} riskFloor={riskFloor}
+          installed={installed} projectId={projectId}
           busy={busy} target={builderTarget} setTarget={setBuilderTarget}
           onSave={(definitionId, spec) => act("Save", "save", { definition_id: definitionId, spec })}
         />
@@ -469,10 +501,13 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
 
 /* ── Builder ─────────────────────────────────────────────────────────────────── */
 
-function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarget, onSave }: {
+function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, busy,
+                      target, setTarget, onSave }: {
   capabilities: Capability[];
+  blocks: Block[];
   riskFloor: number;
   installed: Installed[];
+  projectId: string;
   busy: string | null;
   target: string;
   setTarget: (id: string) => void;
@@ -483,22 +518,116 @@ function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarg
   const editable = useMemo(() => installed.filter((i) => !i.is_catalogue), [installed]);
   const [draft, setDraft] = useState<Draft[]>([]);
   const [dragging, setDragging] = useState<number | null>(null);
+  // What the selected workflow currently IS, and what it was forked from.
+  const [loaded, setLoaded] = useState<WorkflowSpec | null>(null);
+  const [loadingSpec, setLoadingSpec] = useState(false);
+  const [specError, setSpecError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!target && editable.length) setTarget(editable[0].id);
   }, [editable, target, setTarget]);
 
+  /** Turn a stored spec into canvas steps. */
+  const toDraft = useCallback((steps: Record<string, unknown>[]): Draft[] =>
+    steps.map((step) => {
+      const binding = (step.binding ?? {}) as Record<string, unknown>;
+      const approval = (step.approval ?? {}) as Record<string, unknown>;
+      return {
+        id: String(step.id),
+        kind: String(step.kind ?? "capability"),
+        capability: binding.capability ? String(binding.capability) : undefined,
+        approval: approval.mode ? String(approval.mode) : "auto",
+        // Everything that is not id/kind/binding/approval/next is the block's own
+        // configuration — wait_seconds, workflow_version_id — and must survive a round trip
+        // or editing one step would quietly reset another.
+        config: Object.fromEntries(
+          Object.entries(step).filter(([k]) =>
+            !["id", "kind", "binding", "approval", "next"].includes(k)),
+        ),
+      };
+    }), []);
+
+  // OPEN WITH WHAT IS THERE.
+  //
+  // The builder started empty, so changing one step of a ten-step workflow meant rebuilding
+  // the other nine from memory — and saving would have silently replaced the workflow with
+  // whatever partial thing had been assembled.
+  // KEYED ON THE WORKFLOW, NOT ON THE ARRAY.
+  //
+  // `editable` is derived from `installed`, which the eight-second poll replaces with a new
+  // array every time — so depending on it re-ran this effect constantly, and any hiccup in the
+  // refetch cleared the canvas. A customer editing a ten-step workflow could lose it because a
+  // background poll happened to fail. The KEY is what actually identifies what to load.
+  const targetKey = useMemo(
+    () => editable.find((i) => i.id === target)?.workflow_key ?? "",
+    [editable, target],
+  );
+
+  useEffect(() => {
+    if (!targetKey) { setLoaded(null); setDraft([]); return; }
+    let live = true;
+    setLoadingSpec(true);
+    void (async () => {
+      const params = new URLSearchParams({
+        view: "spec", project_id: projectId, key: targetKey,
+      });
+      try {
+        const r = await fetch(`/api/delivery-workflows?${params}`, { cache: "no-store" });
+        const body = (await r.json()) as WorkflowSpec & { error?: string };
+        if (!live) return;
+        if (r.ok && body?.spec?.steps) {
+          setLoaded(body);
+          setDraft(toDraft(body.spec.steps));
+        }
+        // NO `else` THAT CLEARS. A failed refetch is a reason to keep what is on the canvas,
+        // not to throw it away — the steps already there are the customer's work, and an
+        // empty canvas after a network blip is indistinguishable from having deleted it.
+        else {
+          setSpecError(
+            (body as { error?: string })?.error ?? "could not read the current steps",
+          );
+        }
+      } catch (e) {
+        if (live) setSpecError(String((e as Error)?.message ?? e));
+      } finally {
+        if (live) setLoadingSpec(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [targetKey, projectId, toDraft]);
+
+  /** Put it back the way the standard has it. */
+  const reset = useCallback(() => {
+    if (!loaded?.forked_from) return;
+    setDraft(toDraft(loaded.forked_from.spec.steps));
+  }, [loaded, toDraft]);
+
+  /** Unique per drop. Adding "build" twice with one id is rejected by the runtime, at save
+   *  time, after a whole workflow has been laid out. */
+  const nextId = (current: Draft[], stem: string) => {
+    const taken = new Set(current.map((s) => s.id));
+    let n = current.filter((s) => s.id.startsWith(`${stem}_`)).length + 1;
+    while (taken.has(`${stem}_${n}`)) n += 1;
+    return `${stem}_${n}`;
+  };
+
   const add = (capability: Capability) =>
-    setDraft((current) => [
-      ...current,
-      {
-        // Unique per drop, so adding "build" twice does not produce two steps with one id —
-        // which the runtime rejects, at save time, with a message about a duplicate.
-        id: `${capability.key}_${current.filter((s) => s.capability === capability.key).length + 1}`,
-        capability: capability.key,
-        approval: capability.approval_forced_manual ? "manual" : "auto",
-      },
-    ]);
+    setDraft((current) => [...current, {
+      id: nextId(current, capability.key),
+      kind: "capability",
+      capability: capability.key,
+      approval: capability.approval_forced_manual ? "manual" : "auto",
+      config: {},
+    }]);
+
+  /** A control block: wait, an approval gate, or another workflow. */
+  const addBlock = (block: Block) =>
+    setDraft((current) => [...current, {
+      id: nextId(current, block.kind),
+      kind: block.kind,
+      approval: "auto",
+      config: { ...(block.defaults ?? {}) },
+    }]);
 
   const move = (from: number, to: number) =>
     setDraft((current) => {
@@ -512,6 +641,12 @@ function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarg
   const spec = useMemo(() => ({
     entry_step: draft[0]?.id,
     steps: draft.map((step, index) => {
+      const next = index + 1 < draft.length ? [draft[index + 1].id] : [];
+      if (step.kind !== "capability") {
+        // A control block carries its own configuration at the top level, which is where the
+        // runtime looks for `wait_seconds` and `workflow_version_id`.
+        return { id: step.id, kind: step.kind, binding: {}, ...(step.config ?? {}), next };
+      }
       const capability = capabilities.find((c) => c.key === step.capability);
       return {
         id: step.id,
@@ -525,7 +660,7 @@ function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarg
           ),
         },
         approval: { mode: step.approval },
-        next: index + 1 < draft.length ? [draft[index + 1].id] : [],
+        next,
       };
     }),
   }), [draft, capabilities]);
@@ -552,6 +687,34 @@ function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarg
           Anything at risk tier {riskFloor} or above always requires a person. That is not
           configurable.
         </p>
+
+        {/* CONTROL BLOCKS. The runtime has supported these since it was written and the
+            builder never offered them, so a customer could only ever author a straight line.
+            The ones that need somewhere to draw a branch are listed but not placeable — a
+            palette entry that produces a spec the runtime rejects is a promise the product
+            cannot keep. */}
+        <h4 className="dw-palette-heading">Flow</h4>
+        {blocks.filter((b) => !b.canvas_required).map((b) => (
+          <button key={b.kind} type="button" className="dw-palette-item"
+                  onClick={() => addBlock(b)} disabled={!!busy}
+                  data-testid={`dw-block-${b.kind}`} title={b.summary}>
+            <span className="dw-palette-label">{b.label}</span>
+            <span className="detail dw-palette-summary">{b.summary}</span>
+          </button>
+        ))}
+        {blocks.some((b) => b.canvas_required) ? (
+          <details className="dw-soon">
+            <summary className="detail">
+              {blocks.filter((b) => b.canvas_required).length} more, once the canvas can draw
+              branches
+            </summary>
+            {blocks.filter((b) => b.canvas_required).map((b) => (
+              <p key={b.kind} className="detail dw-soon-item">
+                <strong>{b.label}</strong> — {b.summary}
+              </p>
+            ))}
+          </details>
+        ) : null}
       </aside>
 
       <section className="dw-canvas" aria-label="Your workflow">
@@ -566,16 +729,40 @@ function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarg
               ))}
             </select>
           </label>
-          <button type="button" className="cap-btn primary"
-                  disabled={!!busy || !target || draft.length === 0}
-                  onClick={() => onSave(target, spec)} data-testid="dw-save">
-            {busy === "Save" ? "Saving…" : `Save as a new version`}
-          </button>
+          <span className="dw-canvas-actions">
+            {/* RESET TO THE STANDARD. Only offered when there is something to reset TO — a
+                fork records what it came from, and a workflow written from scratch has no
+                original, so the control would be a lie on one of them. */}
+            {loaded?.forked_from ? (
+              <button type="button" className="cap-btn" disabled={!!busy}
+                      onClick={reset} data-testid="dw-reset"
+                      title={`Put the steps back the way ${loaded.forked_from.name} has them`}>
+                Reset to the standard
+              </button>
+            ) : null}
+            <button type="button" className="cap-btn primary"
+                    disabled={!!busy || !target || draft.length === 0}
+                    onClick={() => onSave(target, spec)} data-testid="dw-save">
+              {busy === "Save" ? "Saving…" : `Save as a new version`}
+            </button>
+          </span>
         </div>
 
-        {draft.length === 0 ? (
+        {specError ? (
+          <p className="detail dw-spec-error" data-testid="dw-spec-error">
+            Could not re-read the saved steps — {specError}. What is on the canvas is still
+            yours; saving will publish it.
+          </p>
+        ) : null}
+        {loadingSpec && draft.length === 0 ? (
+          <p className="detail dw-canvas-empty" data-testid="dw-canvas-loading">
+            Reading the current steps…
+          </p>
+        ) : draft.length === 0 ? (
           <p className="detail dw-canvas-empty">
-            Add steps from the left. Drag them to reorder — the order is the order they run in.
+            {target
+              ? "This workflow has no steps yet. Add some from the left."
+              : "Fork a workflow first, then edit it here."}
           </p>
         ) : (
           <ol className="dw-draft">
@@ -583,15 +770,27 @@ function BuilderView({ capabilities, riskFloor, installed, busy, target, setTarg
               const capability = capabilities.find((c) => c.key === step.capability);
               return (
                 <li key={step.id} className="dw-draft-step" draggable
+                    data-dragging={dragging === index || undefined}
+                    data-drop={dragging !== null && dragging !== index ? "true" : undefined}
                     onDragStart={() => setDragging(index)}
+                    onDragEnd={() => setDragging(null)}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={() => { if (dragging !== null) move(dragging, index); setDragging(null); }}
                     data-testid={`dw-draft-${step.id}`}>
                   <span className="dw-draft-grip" aria-hidden>⋮⋮</span>
                   <span className="dw-draft-n">{index + 1}</span>
-                  <span className="dw-draft-label">{capability?.label ?? step.capability}</span>
+                  <span className="dw-draft-label">
+                    {step.kind === "capability"
+                      ? capability?.label ?? step.capability
+                      : blocks.find((b) => b.kind === step.kind)?.label ?? step.kind}
+                  </span>
+                  {/* A control block is visibly a different sort of thing from a work step. */}
+                  {step.kind !== "capability" ? (
+                    <span className="dw-draft-kind">flow</span>
+                  ) : null}
                   <select className="input dw-draft-approval" value={step.approval}
-                          disabled={capability?.approval_forced_manual}
+                          disabled={step.kind !== "capability"
+                                    || capability?.approval_forced_manual}
                           onChange={(e) => setDraft((c) =>
                             c.map((s, i) => (i === index ? { ...s, approval: e.target.value } : s)))}
                           aria-label={`Approval for ${step.id}`}>

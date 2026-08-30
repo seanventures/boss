@@ -999,11 +999,50 @@ h1, h2, h3, h4, h5, h6 {
 .dw-canvas { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface-1); }
 .dw-canvas-head { display: flex; align-items: end; gap: 12px; justify-content: space-between; }
 .dw-canvas-empty { padding: 30px 10px; text-align: center; }
-.dw-draft { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+/* A SEQUENCE, NOT A PILE.
+   The steps run in order and the canvas has to say so. Evenly-spaced identical boxes read as
+   an unordered list, which is exactly the wrong mental model for a thing whose order is its
+   meaning — so each step after the first is joined to the one above it by a connector. */
+.dw-draft { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 0; }
 .dw-draft-step {
-  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  position: relative;
+  display: flex; align-items: center; gap: 8px; padding: 9px 10px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
   cursor: grab;
+  margin-bottom: 14px;
+}
+.dw-draft-step:last-child { margin-bottom: 0; }
+/* The connector, drawn in the gap below each step but the last. */
+.dw-draft-step:not(:last-child)::after {
+  content: ""; position: absolute; left: 26px; top: 100%; width: 1px; height: 14px;
+  background: var(--border);
+}
+/* An arrowhead at the join, so the direction is unmistakable at a glance. */
+.dw-draft-step:not(:last-child)::before {
+  content: ""; position: absolute; left: 23px; top: calc(100% + 9px);
+  border-left: 3.5px solid transparent; border-right: 3.5px solid transparent;
+  border-top: 5px solid var(--border);
+}
+.dw-draft-step[data-dragging="true"] { opacity: .45; }
+/* Where the dragged step would land. Without it a drag is a guess. */
+.dw-draft-step[data-drop="true"] { border-color: var(--accent); }
+.dw-draft-kind {
+  font-family: var(--mono, monospace); font-size: 0.58rem; letter-spacing: .08em;
+  color: var(--faint, var(--muted)); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 5px;
+}
+.dw-palette-heading {
+  margin: 12px 0 2px; font-size: 0.68rem; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint, var(--muted));
+}
+.dw-soon { margin-top: 8px; }
+.dw-soon summary { cursor: pointer; font-size: 0.7rem; }
+.dw-soon-item { margin: 6px 0 0; font-size: 0.68rem; line-height: 1.4; }
+.dw-canvas-actions { display: inline-flex; gap: 6px; align-items: center; }
+.dw-spec-error {
+  margin: 8px 0 0; padding: 7px 10px; border-radius: 7px; font-size: 0.74rem;
+  color: var(--amber, #d29922); border: 1px solid rgba(210,153,34,.35);
+  background: rgba(210,153,34,.06);
 }
 .dw-draft-step:active { cursor: grabbing; }
 .dw-draft-grip { color: var(--faint, var(--muted)); letter-spacing: -2px; }

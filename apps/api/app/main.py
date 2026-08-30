@@ -19619,11 +19619,15 @@ def list_delivery_capabilities() -> dict:
     """What a step can be. Feeds the builder palette and documents the risk floor."""
     from boss_engine.services.workflow_capabilities import (
         MANUAL_APPROVAL_RISK_FLOOR,
+        blocks,
         palette,
     )
 
     return {
         "capabilities": palette(),
+        # Control blocks the runtime has always supported and the builder never offered, so a
+        # customer could only ever author a straight line.
+        "blocks": blocks(),
         "manual_approval_risk_floor": MANUAL_APPROVAL_RISK_FLOOR,
         "note": (
             "A capability at or above the risk floor always requires a person, whatever a "
@@ -19818,6 +19822,59 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "updated_at": run["updated_at"].isoformat() if run["updated_at"] else None,
         })
     return {"project_id": project_id, "runs": out}
+
+
+@app.get("/v1/delivery-workflows/{workflow_key}/spec")
+def get_delivery_workflow_spec(workflow_key: str, project_id: str) -> dict:
+    """The steps a workflow currently has, plus what it was forked from.
+
+    The builder opened empty and made a customer rebuild a ten-step workflow from scratch to
+    change one thing. `forked_from` is returned alongside so "reset to the standard" has
+    something to reset TO.
+    """
+    with begin(engine) as connection:
+        row = connection.execute(
+            text(
+                "SELECT d.id, d.name, d.is_catalogue, d.forked_from_version_id, "
+                "       v.id AS version_id, v.version, v.spec "
+                "FROM workflow_definitions d "
+                "JOIN workflow_versions v ON v.workflow_definition_id = d.id "
+                "WHERE d.project_id=:p AND d.workflow_key=:k "
+                "AND COALESCE(d.namespace,'system')='product' "
+                "ORDER BY v.version DESC LIMIT 1"
+            ),
+            {"p": project_id, "k": workflow_key},
+        ).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"no workflow '{workflow_key}'")
+
+        origin = None
+        if row["forked_from_version_id"]:
+            origin_row = connection.execute(
+                text("SELECT v.spec, v.version, d.workflow_key, d.name "
+                     "FROM workflow_versions v "
+                     "JOIN workflow_definitions d ON d.id = v.workflow_definition_id "
+                     "WHERE v.id = :id"),
+                {"id": row["forked_from_version_id"]},
+            ).mappings().first()
+            if origin_row:
+                origin = {
+                    "workflow_key": origin_row["workflow_key"],
+                    "name": origin_row["name"],
+                    "version": origin_row["version"],
+                    "spec": origin_row["spec"],
+                }
+        return {
+            "definition_id": row["id"],
+            "workflow_key": workflow_key,
+            "name": row["name"],
+            "is_catalogue": row["is_catalogue"],
+            "version": row["version"],
+            "spec": row["spec"],
+            # What it was forked from, so the builder can offer "reset to the standard" and
+            # show what has drifted from it.
+            "forked_from": origin,
+        }
 
 
 @app.post("/v1/delivery-workflows/fork")

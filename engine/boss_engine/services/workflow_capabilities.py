@@ -211,6 +211,61 @@ CAPABILITIES: dict[str, Capability] = {
             typical_minutes=1,
         ),
         _cap(
+            key="smoke_test",
+            label="Smoke test",
+            summary="Prove the deployed thing actually answers before anyone celebrates.",
+            tool="http_probe",
+            risk_tier=0,
+            required_inputs=("url",),
+            optional_inputs=("expect_status",),
+            produces=("reachable", "status_code", "latency_ms"),
+            typical_minutes=1,
+        ),
+        _cap(
+            key="redeploy",
+            label="Ship it again",
+            summary="Re-ship the SAME build after a failed deploy. No rebuild, no model spend.",
+            tool="redeploy",
+            risk_tier=2,
+            required_inputs=("run_id",),
+            optional_inputs=("target_id",),
+            produces=("deployment_id",),
+            requires_project=("deployment_target",),
+            typical_minutes=5,
+            is_async=True,
+        ),
+        _cap(
+            key="retry_build",
+            label="Retry the build",
+            summary="Run the coding task again when it failed for a reason that has passed.",
+            tool="retry_code_task",
+            risk_tier=1,
+            required_inputs=("run_id",),
+            produces=("code_task_run_id",),
+            typical_minutes=45,
+            is_async=True,
+        ),
+        _cap(
+            key="teardown_preview",
+            label="Stop the preview",
+            summary="Release the sandbox once nobody needs to look at it.",
+            tool="stop_preview",
+            risk_tier=1,
+            required_inputs=("preview_id",),
+            produces=("stopped",),
+            typical_minutes=1,
+        ),
+        _cap(
+            key="cost_check",
+            label="Check the spend",
+            summary="What this work has cost so far, before deciding whether to continue.",
+            tool="get_costs",
+            risk_tier=0,
+            optional_inputs=("since",),
+            produces=("spend_usd",),
+            typical_minutes=1,
+        ),
+        _cap(
             key="document",
             label="Document",
             summary="Publish the change record and the evidence behind it.",
@@ -514,3 +569,81 @@ def custom_step_approval(skill: Mapping[str, Any], requested: Optional[str]) -> 
     if mode not in ("auto", "manual"):
         raise ValueError("approval mode must be 'auto' or 'manual'.")
     return mode
+
+
+# ── Control blocks ─────────────────────────────────────────────────────────────
+#
+# The runtime has supported these since WFL-001 and the builder never offered them, so a
+# customer could only ever author a straight line. They are not capabilities — they do no work
+# and call no tool — so they live in their own list rather than being bent into the shape of
+# one.
+#
+# Only the three that mean something in a LINEAR canvas are offered. `condition`, `parallel`,
+# `join` and `bounded_loop` need somewhere to draw a branch, and a palette entry that produces
+# a spec the runtime rejects is worse than no palette entry: it is a promise the product
+# cannot keep. They are listed as `canvas_required` so the builder can say they exist and are
+# not yet placeable, rather than pretending they do not exist.
+
+CONTROL_BLOCKS: list[dict[str, Any]] = [
+    {
+        "kind": "timer",
+        "label": "Wait",
+        "summary": "Pause for a fixed time — a grace period, a bake window, a cooling-off.",
+        "canvas_required": False,
+        "defaults": {"wait_seconds": 3600},
+        "configure": [
+            {"field": "wait_seconds", "label": "Wait for (seconds)", "type": "number"}
+        ],
+    },
+    {
+        "kind": "decision",
+        "label": "Approval gate",
+        "summary": "Stop and wait for a person, anywhere in the flow — not only where a "
+                   "capability already implies one.",
+        "canvas_required": False,
+        "defaults": {},
+        "configure": [
+            {"field": "approver_role", "label": "Who approves", "type": "text"}
+        ],
+    },
+    {
+        "kind": "subworkflow",
+        "label": "Run another workflow",
+        "summary": "Call one of your workflows as a step, so a shared sequence lives in one "
+                   "place instead of being copied into six.",
+        "canvas_required": False,
+        "defaults": {},
+        "configure": [
+            {"field": "workflow_version_id", "label": "Which workflow", "type": "workflow"}
+        ],
+    },
+    {
+        "kind": "condition",
+        "label": "Branch",
+        "summary": "Take a different path depending on what an earlier step produced.",
+        "canvas_required": True,
+    },
+    {
+        "kind": "parallel",
+        "label": "Do at the same time",
+        "summary": "Split into branches that run together — several reviews at once.",
+        "canvas_required": True,
+    },
+    {
+        "kind": "join",
+        "label": "Wait for branches",
+        "summary": "Continue when all (or any) of the parallel branches have finished.",
+        "canvas_required": True,
+    },
+    {
+        "kind": "bounded_loop",
+        "label": "Repeat until",
+        "summary": "Repeat a step until a condition holds, with a hard ceiling on attempts.",
+        "canvas_required": True,
+    },
+]
+
+
+def blocks() -> list[dict[str, Any]]:
+    """Control blocks for the builder palette, placeable ones first."""
+    return sorted(CONTROL_BLOCKS, key=lambda b: (b["canvas_required"], b["label"]))
