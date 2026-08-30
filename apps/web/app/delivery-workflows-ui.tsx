@@ -446,37 +446,61 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
       </div>
       <div className="dw-grid">
         {catalogue.map((entry) => (
-          <article key={entry.key} className="dw-card" data-testid={`dw-card-${entry.key}`}>
-            <header>
+          <article key={entry.key} className="dw-card" data-class={entry.work_class}
+                   data-testid={`dw-card-${entry.key}`}>
+            <header className="dw-card-head">
               <h4>{entry.name}</h4>
-              <span className="dw-class">{entry.work_class}</span>
+              {/* The class of work this is FOR, as a chip rather than grey mono text. It is
+                  what a customer matches against when choosing, so it should be findable at a
+                  glance across twelve cards. */}
+              <span className="dw-class" data-class={entry.work_class}>{entry.work_class}</span>
             </header>
-            <p className="detail">{entry.description}</p>
-            {/* The steps, in order, so the shape is legible before it is chosen. */}
-            <ol className="dw-flow">
-              {entry.steps.map((s) => (
-                <li key={s.id} data-gate={entry.gates.includes(s.id) || undefined}>
-                  {s.capability}
-                </li>
-              ))}
+            <p className="detail dw-card-desc">{entry.description}</p>
+
+            {/* THE STEPS ARE A SEQUENCE, AND A WRAPPED LIST OF CHIPS SAYS THEY ARE A SET.
+                Order is the whole meaning of a workflow, so the card draws it as a rail: each
+                step joined to the next, gates marked, and the shape readable before anyone
+                commits to it. */}
+            <ol className="dw-rail" aria-label="Steps, in order">
+              {entry.steps.map((step, index) => {
+                const gate = entry.gates.includes(step.id);
+                return (
+                  <li key={step.id} className="dw-rail-step" data-gate={gate || undefined}>
+                    <span className="dw-rail-dot" aria-hidden />
+                    <span className="dw-rail-label">{step.capability}</span>
+                    {index < entry.steps.length - 1 ? (
+                      <span className="dw-rail-link" aria-hidden />
+                    ) : null}
+                  </li>
+                );
+              })}
             </ol>
-            <p className="dw-facts">
-              <span>{entry.step_count} steps</span>
-              <span>~{entry.estimated_minutes} min</span>
-              {/* Gates are the number a customer chooses on. */}
-              <span data-emphasis={entry.gates.length > 0 || undefined}>
-                {entry.gates.length} approval{entry.gates.length === 1 ? "" : "s"}
-              </span>
-            </p>
+
+            {/* Three numbers a customer chooses on, each with a label — "10 · ~112 min · 2" is
+                unreadable without them. */}
+            <dl className="dw-stats">
+              <div><dt>Steps</dt><dd>{entry.step_count}</dd></div>
+              <div><dt>Typically</dt><dd>{entry.estimated_minutes}<small>min</small></dd></div>
+              <div data-emphasis={entry.gates.length > 0 || undefined}>
+                <dt>Approvals</dt><dd>{entry.gates.length}</dd>
+              </div>
+            </dl>
+
             {entry.requires_project.length > 0 ? (
-              <p className="detail dw-needs">
-                Needs: {entry.requires_project.join(", ")}
+              <p className="dw-needs">
+                <span className="dw-needs-label">Needs</span>
+                {entry.requires_project.map((need) => (
+                  <span key={need} className="dw-need">{need.replace(/_/g, " ")}</span>
+                ))}
               </p>
-            ) : null}
+            ) : <p className="dw-needs dw-needs-none">Nothing to set up first</p>}
+
             <div className="dw-card-actions">
               {have.has(entry.key) ? (
                 <>
-                  <button type="button" className="cap-btn" disabled={!!busy}
+                  {/* One primary action. Three equal buttons make a customer read all three
+                      every time to find the one they want. */}
+                  <button type="button" className="cap-btn primary" disabled={!!busy}
                           onClick={() => onApply(entry.key, entry.work_class)}
                           data-testid={`dw-apply-${entry.key}`}>
                     Apply to {entry.work_class}

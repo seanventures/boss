@@ -19740,7 +19740,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
                 """
                 SELECT r.id, r.status, r.actor, r.input, r.blocked_reason, r.error,
                        r.created_at, r.updated_at, r.completed_at,
-                       d.workflow_key, d.name AS workflow_name, v.version
+                       d.workflow_key, d.name AS workflow_name, v.version, v.spec
                 FROM workflow_runs r
                 JOIN workflow_definitions d ON d.id = r.workflow_definition_id
                 JOIN workflow_versions v ON v.id = r.workflow_version_id
@@ -19770,6 +19770,20 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             {"ids": ids},
         ).mappings().all()
 
+    # THE ORDER THE STEPS RUN IN, NOT THE ORDER THEY WERE INSERTED.
+    #
+    # Step rows are created as the run advances and as branches are expanded, so `created_at`
+    # put a step that has not started yet above one that finished ten minutes ago — in a view
+    # whose entire subject is sequence. The version's spec is the authority on order, and the
+    # run already carries the exact version it started on.
+    spec_order: dict[str, dict[str, int]] = {}
+    for run in runs:
+        spec = run["spec"] if isinstance(run["spec"], dict) else {}
+        spec_order[run["id"]] = {
+            str(step.get("id")): index
+            for index, step in enumerate(spec.get("steps") or [])
+        }
+
     by_run: dict[str, list] = {r: [] for r in ids}
     for step in steps:
         snapshot = step["binding_snapshot"] or {}
@@ -19793,7 +19807,13 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
 
     out = []
     for run in runs:
-        run_steps = by_run.get(run["id"], [])
+        order = spec_order.get(run["id"], {})
+        run_steps = sorted(
+            by_run.get(run["id"], []),
+            # A step the spec does not mention sorts last rather than first: an unknown step is
+            # unusual, and burying the known sequence under it would be the worse failure.
+            key=lambda step: order.get(step["step_id"], len(order) + 1),
+        )
         done = sum(1 for s in run_steps if s["status"] in ("succeeded", "skipped"))
         current = next(
             (s for s in run_steps if s["status"] in ("waiting", "running", "leased", "ready")),

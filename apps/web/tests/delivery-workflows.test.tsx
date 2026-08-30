@@ -267,3 +267,47 @@ describe("the canvas reads as a sequence", () => {
     expect(CSS).toContain('.dw-draft-step[data-drop="true"]');
   });
 });
+
+describe("the catalogue card is scannable across twelve of them", () => {
+  it("draws the steps as a connected sequence, not a wrapped set of chips", () => {
+    // Order is the whole meaning of a workflow. A wrapped list of chips says the steps are an
+    // unordered set, which is the one thing they are not.
+    expect(UI).toContain('className="dw-rail"');
+    expect(UI).toContain('className="dw-rail-link"');
+    expect(CSS).toContain(".dw-rail-step[data-gate] .dw-rail-dot");
+  });
+
+  it("gives every card the same shape so a grid of them lines up", () => {
+    // Ragged action rows are what made the grid read as unfinished.
+    const rule = CSS.slice(CSS.indexOf(".dw-card {"), CSS.indexOf(".dw-card::before"));
+    expect(rule).toContain("grid-template-rows: auto auto 1fr auto auto auto");
+  });
+
+  it("labels the numbers a customer chooses on", () => {
+    // "10 · ~112 min · 2" is unreadable.
+    expect(UI).toContain("<dt>Approvals</dt>");
+    expect(CSS).toContain(".dw-stats div[data-emphasis] dd");
+  });
+
+  it("colours the class chip to match the card's stripe", () => {
+    // Two readings of the same fact, so one card is never visibly unlabelled beside another.
+    for (const cls of ["project.new", "bugfix", "feature.minor", "feature.major"]) {
+      expect(CSS).toContain(`.dw-class[data-class="${cls}"]`);
+    }
+  });
+
+  it("says when a workflow needs nothing set up first", () => {
+    // A reason to pick that one, and blank space says nothing.
+    expect(UI).toContain("Nothing to set up first");
+  });
+
+  it("has one primary action, not three equal ones", () => {
+    const actions = UI.slice(UI.indexOf('className="dw-card-actions"'));
+    expect(actions.slice(0, 700)).toContain('className="cap-btn primary"');
+  });
+
+  it("turns motion off when the reader asked for that", () => {
+    const reduced = CSS.slice(CSS.indexOf(".dw-card, .dw-tab { transition: none; }"));
+    expect(reduced.slice(0, 160)).toContain(".dw-card:hover { transform: none; }");
+  });
+});
