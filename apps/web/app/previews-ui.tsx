@@ -45,7 +45,9 @@ function resolveHref(href: string): string {
  * preview it was judged from. It used to sit only in a separate "Previews" panel further down
  * the page — a second place to look for an action about the app you already had open.
  */
-export function ApprovePreview({ preview }: { preview: PreviewRec }) {
+export function ApprovePreview(
+  { preview, compact = false }: { preview: PreviewRec; compact?: boolean },
+) {
   const [gate, setGate] = React.useState<any>(null);
   const [state, action] = useActionState(approvePreviewAction, null);
 
@@ -83,6 +85,10 @@ export function ApprovePreview({ preview }: { preview: PreviewRec }) {
   if (!gate.can_approve) {
     // Say WHY rather than rendering a dead button. "You cannot approve" without a reason is
     // the thing that sends people to the API to find out.
+    //
+    // In a button bar the reason goes in the tooltip: these strings run to a full sentence and
+    // an action bar is not a place for a sentence.
+    if (compact) return null;
     return (
       <span className="detail" data-testid="preview-approve-blocked" title={String(gate.blockers?.join("; ") ?? "")}>
         cannot approve: {String(gate.blockers?.[0] ?? "unknown")}
@@ -91,6 +97,32 @@ export function ApprovePreview({ preview }: { preview: PreviewRec }) {
   }
 
   const willDeploy: string[] = gate.will_deploy ?? [];
+  const effect = willDeploy.length
+    ? `merges ${gate.title ? `“${gate.title}”` : "the PR"} → deploys ${willDeploy.join(", ")}`
+    : "merges the PR (no auto-deploy target configured)";
+
+  // COMPACT: A BUTTON, NOT A PARAGRAPH.
+  //
+  // The effect line names every app the merge would deploy. On a full-width panel that reads
+  // fine; in an action bar it is a sentence hundreds of pixels long that shoves everything
+  // after it off the edge of the screen. The information still has to be available BEFORE the
+  // click, so it moves into the tooltip and the button says how many apps in a word.
+  if (compact) {
+    return (
+      <form action={action} style={{ display: "inline-flex" }} title={effect}>
+        <input type="hidden" name="preview_id" value={preview.id} />
+        <SubmitButton className="cap-btn tone-green" data-testid="preview-approve">
+          Approve &amp; ship
+          {willDeploy.length ? (
+            <span className="ct-approve-n" data-testid="preview-approve-count">
+              {willDeploy.length}
+            </span>
+          ) : null}
+        </SubmitButton>
+      </form>
+    );
+  }
+
   return (
     <form action={action} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
       <input type="hidden" name="preview_id" value={preview.id} />

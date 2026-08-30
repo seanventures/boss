@@ -60,13 +60,35 @@ import {
 
 import { SubmitButton } from "./submit-button";
 
-function RetryControls({ runId, failingGates = [] }: { runId: string; failingGates?: string[] }) {
+function RetryControls(
+  { runId, failingGates = [], compact = false }:
+  { runId: string; failingGates?: string[]; compact?: boolean },
+) {
   const [state, action, pending] = useActionState(retryCodeTaskWithStateAction, null);
   // Which stages the retry will SKIP, mirroring _repair_needs_write_tests on the server, so the
   // operator knows this resumes rather than restarting. Kept in sync with _TEST_GATES.
   const TEST_GATES = ["tests_strong_enough", "tests_written_first", "coder_did_not_edit_tests",
                       "written_tests_pass", "existing_tests_intact"];
   const reusesTests = failingGates.length > 0 && !failingGates.some((g) => TEST_GATES.includes(g));
+  const explains = "Resumes on the same branch and reuses the approved plan"
+    + (reusesTests ? " and the existing test suite" : "")
+    + " — it does not rebuild from scratch.";
+
+  // COMPACT: for the action bar at the top, where the sentence beside it would push everything
+  // after it off the edge. What it says still has to be knowable before the click, so it moves
+  // into the tooltip.
+  if (compact) {
+    return (
+      <form action={action} style={{ display: "inline-flex" }} title={explains}>
+        <input type="hidden" name="run_id" value={runId} />
+        <SubmitButton className="cap-btn" disabled={pending}>
+          <ArrowsClockwise size={15} weight="bold" aria-hidden />
+          {pending ? "Retrying…" : "Retry build"}
+        </SubmitButton>
+      </form>
+    );
+  }
+
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       <form action={action} style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
@@ -174,6 +196,9 @@ function PreviewLogs({ previewId }: { previewId: string }) {
 function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePreviews?: PreviewRec[] }) {
   const [state, action, pending] = useActionState(startPreviewAction, null);
   const hasLive = livePreviews.some((p) => p.status === "running" && operatorPreviewOpenHref(p));
+  // Defensive as well as at the call site: a second identical "Open preview" is never useful,
+  // whoever passes the list.
+  const shown = livePreviews.slice(0, 1);
   return (
     <span style={{ display: "inline-flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
       {/* Only offer "Run preview" (a heavy npm-install+build) when NO live preview exists yet.
@@ -189,7 +214,7 @@ function PreviewControls({ runId, livePreviews = [] }: { runId: string; livePrev
         </form>
       ) : null}
       {/* Persistent link(s) from the durable preview record — survive the console's auto-refresh */}
-      {livePreviews.map((p) => {
+      {shown.map((p) => {
         const href = operatorPreviewOpenHref(p);
         return (
         <span key={p.id} style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -2697,10 +2722,14 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                   // I passed the unfiltered one.
                   <PreviewControls
                     runId={active.id}
+                    // ONE, NOT TWO. A run has one app, so two "Open preview" buttons side by
+                    // side ask the operator to choose between things that are the same — and
+                    // when a rebuild leaves the previous process running, that is exactly what
+                    // appeared. The newest wins; `list_previews` returns newest first.
                     livePreviews={previews
                       .filter((p) => p.run_id === active.id
                         && (p.status === "running" || p.status === "verified"))
-                      .slice(0, 2)}
+                      .slice(0, 1)}
                   />
                 ) : null}
                 {/* APPROVE & SHIP, BESIDE THE PR IT MERGES.
@@ -2713,8 +2742,18 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                   const live = previews.find(
                     (p) => p.run_id === active.id
                       && (p.status === "running" || p.status === "verified"));
-                  return live ? <ApprovePreview preview={live} /> : null;
+                  return live ? <ApprovePreview preview={live} compact /> : null;
                 })()}
+                {/* RETRY, AT THE TOP WITH THE REST.
+                    It was only in "Run it / iterate" further down the page — the same fault
+                    the PR link and preview had before they were moved up: the thing you open
+                    this page to do, somewhere you have to scroll to find. */}
+                {active.status === "failed" || active.status === "blocked" ? (
+                  <RetryControls runId={active.id} compact
+                                 failingGates={(active.finalize_ctx?.advisory_failing_gates
+                                   ?? active.finalize_ctx?.failing_gates
+                                   ?? []) as string[]} />
+                ) : null}
                 {/* WHAT HAPPENED DURING THOSE 40 MINUTES.
                     A build runs for forty to ninety minutes and its longest phase used to be a
                     single row — "solo, 45 turns". This opens the log already scoped to THIS

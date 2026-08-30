@@ -6978,6 +6978,26 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .ct-split-detail { min-width: 0; }
 
+/* AN ACTION BAR CANNOT BE ALLOWED TO GROW WITHOUT LIMIT.
+   Moving "Approve & ship" up brought its effect line with it — a sentence naming every app the
+   merge would deploy — and it shoved everything after it off the right of the screen. That was
+   fixed at the source (the bar gets a compact variant, the sentence becomes a tooltip), but a
+   bar whose width depends on the longest string any child happens to render will break again
+   the next time one is added. So the container refuses to be pushed: it may wrap, and nothing
+   inside it may force it wider than the column it sits in. */
+.ct-detail-actionbar, .ct-detail-actions { min-width: 0; max-width: 100%; }
+.ct-detail-actions { flex-wrap: wrap; }
+.ct-detail-actions > * { min-width: 0; max-width: 100%; }
+/* A button's own label still does not break mid-word. */
+.ct-detail-actions .cap-btn { white-space: nowrap; }
+/* The count beside "Approve & ship" — how many apps the merge deploys, in a glyph rather than
+   in a list. */
+.ct-approve-n {
+  margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  font-size: 0.72em; font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, .16);
+}
+
 /* NARROW: ONE COLUMN, LIST ABOVE DETAIL.
    Below the breakpoint there is no room for a master-detail split, so it stops being one. The
    list also stops being sticky — a pane pinned to the top of a single-column page eats the

@@ -196,7 +196,7 @@ describe("Mission Control Previews honesty", () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), "..");
     const ui = readFileSync(join(root, "app/code-tasks-ui.tsx"), "utf8");
     expect(ui).toContain('import { ApprovePreview } from "./previews-ui"');
-    expect(ui).toContain("<ApprovePreview preview={live} />");
+    expect(ui).toContain("<ApprovePreview preview={live} compact />");
     // Beside the PR it merges, not in a second place further down the page.
     const bar = ui.slice(ui.indexOf('data-testid="ct-detail-actionbar"'),
                          ui.indexOf('data-testid="ct-detail-ask"'));
@@ -213,5 +213,46 @@ describe("Mission Control Previews honesty", () => {
     );
     expect(markup).toContain("Preview list unavailable — API returned 503");
     expect(markup).toContain(PREVIEW_REAL_EMPTY_COPY);
+  });
+});
+
+describe("the actions moved without moving their prose", () => {
+it("does not drag a paragraph into the button bar with it", () => {
+    // The effect line names every app the merge would deploy. On a full-width panel that reads
+    // fine; in an action bar it is a sentence hundreds of pixels long that pushed everything
+    // after it off the right of the screen — which is what happened when it was first moved.
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const previews = readFileSync(join(root, "app/previews-ui.tsx"), "utf8");
+    expect(previews).toContain("if (compact) {");
+    // Still knowable BEFORE the click — it moves to the tooltip, it is not dropped.
+    expect(previews).toContain("title={effect}");
+    expect(previews).toContain('data-testid="preview-approve-count"');
+  });
+
+  it("shows one preview per run, not one per process", () => {
+    // A run has one app, so two "Open preview" buttons side by side ask the operator to choose
+    // between things that are the same. A rebuild that leaves the old process running produced
+    // exactly that.
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ui = readFileSync(join(root, "app/code-tasks-ui.tsx"), "utf8");
+    expect(ui).toContain("const shown = livePreviews.slice(0, 1);");
+    expect(ui).toContain(".slice(0, 1)}");
+  });
+
+  it("puts Retry at the top with the other actions", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ui = readFileSync(join(root, "app/code-tasks-ui.tsx"), "utf8");
+    const bar = ui.slice(ui.indexOf('data-testid="ct-detail-actionbar"'),
+                         ui.indexOf('data-testid="ct-detail-ask"'));
+    expect(bar).toContain("<RetryControls runId={active.id} compact");
+  });
+
+  it("stops any child forcing the bar wider than its column", () => {
+    // A bar whose width depends on the longest string a child happens to render will break
+    // again the next time one is added.
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const css = readFileSync(join(root, "app/globals.css"), "utf8");
+    expect(css).toContain(".ct-detail-actionbar, .ct-detail-actions { min-width: 0; max-width: 100%; }");
+    expect(css).toContain(".ct-detail-actions > * { min-width: 0; max-width: 100%; }");
   });
 });
