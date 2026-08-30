@@ -57,6 +57,13 @@ GOAL_KINDS = frozenset({"working_software", "budget", "queue", "quality", "custo
 SCORECARD_QUALITY_DIMS = ("ui", "ux", "capability")
 SCORECARD_QUALITY_FLOOR = 70
 
+#: How far back to look for previews that already failed, and how many failures mean the
+#: restart remedy is not working. Wide enough to span several captain ticks (they run every few
+#: minutes) so the count is meaningful; short enough that a genuinely fixed app is retried again
+#: soon rather than being written off for the rest of the day.
+PREVIEW_FAILURE_WINDOW_MINUTES = 30
+PREVIEW_FAILURE_GIVE_UP = 3
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS metatron_goals (
   id TEXT PRIMARY KEY,
@@ -380,7 +387,21 @@ def findings_from_snapshot(snapshot: dict[str, Any], goals: list[dict[str, Any]]
         int(snapshot.get("running_previews") or 0) == 0
         and int(snapshot.get("completed_verify_green") or 0) > 0
     )
-    if preview_gap:
+    recent_failures = int(snapshot.get("recent_failed_previews") or 0)
+    if preview_gap and recent_failures >= PREVIEW_FAILURE_GIVE_UP:
+        # STOP PROPOSING THE THING THAT KEEPS FAILING. The gap is real, but restarting is
+        # demonstrably not the remedy: the same start has already failed this many times in the
+        # last window. Escalate instead — `auto_safe: False` means a human sees it rather than
+        # the loop quietly burning a build every few minutes forever.
+        findings.append({
+            "id": "preview_failing",
+            "severity": "high",
+            "title": (f"Preview cannot start: {recent_failures} attempts failed in the last "
+                      f"{PREVIEW_FAILURE_WINDOW_MINUTES} minutes — the app does not build"),
+            "action": "investigate_preview_failure",
+            "auto_safe": False,
+        })
+    elif preview_gap:
         findings.append({
             "id": "preview_expired",
             "severity": "medium",
@@ -1047,6 +1068,18 @@ class MetatronCaptain:
             "running_previews": _count(
                 "SELECT count(*) FROM app_previews WHERE project_id=:p AND status='running' "
                 "AND COALESCE(mode,'') <> 'fixture'"
+            ),
+            # HOW OFTEN HAS STARTING ONE JUST FAILED?
+            #
+            # Without this the restart_preview remedy has no memory. A preview that cannot
+            # build fails, `running_previews` returns to 0, and the very next tick sees the
+            # identical gap and starts it again — measured at 49 consecutive failures, one
+            # every ~3 minutes, each a full npm install and vite build leaving a ~250MB workdir
+            # behind. A self-healing action that cannot heal has to stop and escalate.
+            "recent_failed_previews": _count(
+                "SELECT count(*) FROM app_previews WHERE project_id=:p AND status='failed' "
+                "AND COALESCE(mode,'') <> 'fixture' "
+                f"AND created_at > now() - interval '{PREVIEW_FAILURE_WINDOW_MINUTES} minutes'"
             ),
             "in_flight": _count(
                 "SELECT count(*) FROM code_task_runs WHERE project_id=:p "

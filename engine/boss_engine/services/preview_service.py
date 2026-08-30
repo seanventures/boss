@@ -857,6 +857,43 @@ def _candidate_ports(log_path: str, port_hint: int) -> list[int]:
     return ordered
 
 
+#: Lines that carry the REASON a build died, as opposed to the frames underneath it.
+_ERROR_LINE_MARKERS = (
+    "error", "err!", "failed", "cannot find", "could not resolve", "not found",
+    "unexpected", "syntaxerror", "typeerror", "referenceerror", "eaddrinuse",
+    "permission denied", "enoent", "missing",
+)
+
+
+def _why_it_failed(log_path: str, limit: int = 900) -> str:
+    """The part of a build log that says what went wrong.
+
+    The old version kept the LAST 300 characters, which for a Node stack trace is the least
+    informative end of the file — the operator got three frames of
+    `rollup/dist/es/shared/parseAst.js` and no error message. Real example, repeated 49 times,
+    with nothing anywhere naming the cause.
+
+    So: surface the error LINES first, then the tail for context. A diagnostic that reliably
+    omits the diagnosis is worse than no diagnostic, because it looks like one.
+    """
+    try:
+        text = Path(log_path).read_text(errors="ignore")
+    except Exception:  # noqa: BLE001
+        return "log unavailable."
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return "log was empty."
+    culprits = [ln for ln in lines
+                if any(m in ln.lower() for m in _ERROR_LINE_MARKERS)
+                and not ln.lstrip().startswith("at ")]  # stack frames are not the reason
+    parts = []
+    if culprits:
+        # The LAST few matching lines: a build often warns early and dies late.
+        parts.append("error: " + " | ".join(culprits[-3:])[:limit])
+    parts.append("log tail: " + " ".join(lines[-6:])[:limit])
+    return " ".join(parts)
+
+
 def _discover_working_port(log_path: str, port_hint: int, timeout: float = 20.0) -> Optional[int]:
     """Return the port the app actually serves HTTP on — its log-announced port first, then the
     injected PORT — each health-checked, so a neighboring local service is never mistaken for it."""
@@ -1090,12 +1127,8 @@ def start_preview(engine, settings: Settings, run_id: str, *, ttl_minutes: int =
     port = _discover_working_port(log_path, port_hint, timeout=180.0)
     if port is None:
         _kill(proc.pid)
-        tail = ""
-        try:
-            tail = Path(log_path).read_text(errors="ignore")[-300:]
-        except Exception:
-            pass
-        return _fail(f"app did not serve HTTP within timeout. log tail: {tail}")
+        return _fail("app did not serve HTTP within timeout. "
+                     + _why_it_failed(log_path))
 
     url = f"http://127.0.0.1:{port}"
     expires = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
