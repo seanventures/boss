@@ -1409,6 +1409,10 @@ tr[data-expanded] { background: var(--surface-2); }
 .bx-content[data-active="decisions"] .frame > section:is([data-area="decisions"], :has([data-area="decisions"])),
 .bx-content[data-active="work"] .frame > section:is([data-area="work"], :has([data-area="work"])),
 .bx-content[data-active="activity"] .frame > section:is([data-area="activity"], :has([data-area="activity"])),
+/* Adding an area needs THREE things, and this is the one that is easy to forget: the AreaId
+   union, the nav list, and a line here. Without it the section renders into the DOM and CSS
+   hides it, so the page looks empty and nothing in the console says why. */
+.bx-content[data-active="delivery_workflows"] .frame > section:is([data-area="delivery_workflows"], :has([data-area="delivery_workflows"])),
 .bx-content[data-active="portfolio"] .frame > section:is([data-area="portfolio"], :has([data-area="portfolio"])),
 .bx-content[data-active="meetings"] .frame > section:is([data-area="meetings"], :has([data-area="meetings"])),
 .bx-content[data-active="processes"] .frame > section:is([data-area="processes"], :has([data-area="processes"])),
