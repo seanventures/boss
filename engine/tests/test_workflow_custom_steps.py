@@ -586,3 +586,105 @@ def test_the_grant_widens_who_may_call_and_never_what_may_be_done(eng, project, 
     for field in ("risk_tier", "cost", "policy", "data_boundary"):
         assert spec[field] == registered[field], f"{field} was altered by the grant"
     assert spec["permissions"]["required_permissions"] == ["deploy"]
+
+
+# ── Removing a workflow ────────────────────────────────────────────────────────
+
+def test_a_workflow_that_never_ran_is_deleted_outright(eng, project):
+    """A mistake should leave nothing behind."""
+    from boss_engine.services.workflows import delete_definition
+
+    with eng.begin() as c:
+        d = workflows.create_definition(
+            c, project_id=project, workflow_key="gone", name="Gone", description=None,
+            actor="test", namespace="product",
+        )
+        workflows.publish_version(
+            c, project_id=project, definition_id=d["id"], actor="test",
+            spec={"entry_step": "s", "steps": [
+                {"id": "s", "kind": "capability", "next": [], "approval": {"mode": "manual"},
+                 "binding": {"capability": "spec_review"}}]},
+        )
+        result = delete_definition(c, project, d["id"], "test")
+        left = c.execute(text("SELECT count(*) FROM workflow_definitions WHERE id=:i"),
+                         {"i": d["id"]}).scalar()
+
+    assert result["outcome"] == "deleted"
+    assert result["runs"] == 0
+    assert left == 0
+
+
+def test_a_workflow_that_has_run_is_retired_so_its_history_survives(eng, project):
+    """`workflow_versions` cascades from the definition, so deleting one with history would
+    take the specs with it — and a finished run whose spec has vanished cannot be read back."""
+    from boss_engine.services.workflows import delete_definition
+
+    with eng.begin() as c:
+        d = workflows.create_definition(
+            c, project_id=project, workflow_key="ran", name="Ran", description=None,
+            actor="test", namespace="product",
+        )
+        v = workflows.publish_version(
+            c, project_id=project, definition_id=d["id"], actor="test",
+            spec={"entry_step": "s", "steps": [
+                {"id": "s", "kind": "capability", "next": [], "approval": {"mode": "manual"},
+                 "binding": {"capability": "spec_review"}}]},
+        )
+        run = _start(c, project, v["id"])
+        # A FINISHED run. A live one is refused outright — that is the next test.
+        c.execute(text("UPDATE workflow_runs SET status='completed' WHERE id=:r"),
+                  {"r": run["id"]})
+        result = delete_definition(c, project, d["id"], "test")
+
+        status = c.execute(text("SELECT status FROM workflow_definitions WHERE id=:i"),
+                           {"i": d["id"]}).scalar()
+        # The run, and the spec it pins, are both still readable.
+        spec_rows = c.execute(text("SELECT count(*) FROM workflow_versions "
+                                   "WHERE workflow_definition_id=:i"), {"i": d["id"]}).scalar()
+        run_rows = c.execute(text("SELECT count(*) FROM workflow_runs WHERE id=:r"),
+                             {"r": run["id"]}).scalar()
+        # And it is gone from the builder, which lists non-retired definitions.
+        listed = [x["id"] for x in workflows.list_definitions(c, project, namespace="product")]
+
+    assert result["outcome"] == "retired"
+    assert status == "retired"
+    assert spec_rows == 1 and run_rows == 1
+    assert d["id"] not in listed
+
+
+def test_a_standard_workflow_cannot_be_deleted(eng, project):
+    from boss_engine.services.workflows import delete_definition
+
+    with eng.begin() as c:
+        d = workflows.create_definition(
+            c, project_id=project, workflow_key="std", name="Std", description=None,
+            actor="test", namespace="product", is_catalogue=True,
+        )
+        with pytest.raises(Exception) as error:
+            delete_definition(c, project, d["id"], "test")
+    assert "cannot be edited in place" in str(error.value)
+
+
+def test_a_workflow_with_a_live_run_refuses_to_go(eng, project):
+    """Deleting the definition under a live run strands it: the runtime reads the spec to
+    decide what comes next, so it would be a run that cannot finish and cannot say why."""
+    from boss_engine.services.workflows import delete_definition
+
+    with eng.begin() as c:
+        d = workflows.create_definition(
+            c, project_id=project, workflow_key="live", name="Live", description=None,
+            actor="test", namespace="product",
+        )
+        v = workflows.publish_version(
+            c, project_id=project, definition_id=d["id"], actor="test",
+            spec={"entry_step": "s", "steps": [
+                {"id": "s", "kind": "capability", "next": [], "approval": {"mode": "manual"},
+                 "binding": {"capability": "spec_review"}}]},
+        )
+        _start(c, project, v["id"])
+        c.execute(text("UPDATE workflow_runs SET status='running' "
+                       "WHERE workflow_definition_id=:i"), {"i": d["id"]})
+        with pytest.raises(Exception) as error:
+            delete_definition(c, project, d["id"], "test")
+    # The count, because "cannot delete" is not actionable and "it has 1 run still going" is.
+    assert "still going" in str(error.value)
