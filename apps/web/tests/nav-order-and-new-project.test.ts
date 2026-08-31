@@ -202,7 +202,11 @@ describe("watching the outer workflow, step by step", () => {
   });
 
   it("only offers Approve/Deny on a step actually waiting on one", () => {
-    expect(DW).toContain('step.decision_id && step.status === "waiting"');
+    // The condition moved into `needsYou`, which the path view also uses to mark the node —
+    // so the button and the highlight can never disagree about who is being asked.
+    expect(DW).toContain("function needsYou");
+    expect(DW).toContain('Boolean(step.decision_id) && step.status === "waiting"');
+    expect(DW).toContain("{needsYou(step) ? (");
   });
 
   it("drops the panel that showed the coding pipeline's own phase", () => {
@@ -272,5 +276,62 @@ describe("what review and test actually found", () => {
     // from review and test, and the only thing that answers what that step is for.
     expect(DW).toContain("Array.isArray(out.targets)");
     expect(DW).toContain("`watching ${names.join(\", \")}`");
+  });
+});
+
+describe("the workflow drawn as a path", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  const CSS_P = codeOnly("app/globals.css");
+
+  it("draws a rail of steps, not a stack of rows", () => {
+    // A pipeline is a shape. Nine rows of identical text made an operator read nine statuses
+    // and assemble the shape in their head.
+    expect(DW).toContain("function StepPath");
+    expect(DW).toContain('data-testid="dw-node"');
+    expect(CSS_P).toContain(".dw-rail {");
+  });
+
+  it("animates the segment the work is crossing right now", () => {
+    expect(CSS_P).toContain("@keyframes dw-flow");
+    expect(CSS_P).toContain('.dw-link[data-flow="moving"]');
+    expect(DW).toContain('phase === "now" ? "moving" : "past"');
+  });
+
+  it("highlights the step in flight", () => {
+    expect(CSS_P).toContain("@keyframes dw-pulse");
+    expect(DW).toContain('aria-current={phase === "now" ? "step" : undefined}');
+  });
+
+  it("respects a request for less motion", () => {
+    // Motion here is emphasis, not decoration; anyone who has asked for less must get less.
+    const at = CSS_P.indexOf("@media (prefers-reduced-motion: reduce)");
+    expect(at).toBeGreaterThan(-1);
+    expect(CSS_P.slice(at, at + 260)).toContain("animation: none");
+  });
+
+  it("draws a phase that never happened as dashed, not green", () => {
+    expect(CSS_P).toContain('.dw-node[data-phase="skipped"] .dw-node-btn { border-style: dashed;');
+  });
+
+  it("opens on the step that wants attention", () => {
+    // Landing on "research succeeded" while a gate three steps along waits for you is the
+    // wrong answer to "what is happening".
+    expect(DW).toContain("steps.find(needsYou) ?? steps.find((s) => phaseOf(s) === \"now\")");
+  });
+
+  it("names a step by what it IS, from the engine's registry", () => {
+    // `spec_review` is a step id; "Approve the spec" is what it does.
+    expect(DW).toContain("capability?.label ?? step.capability ?? step.step_id");
+  });
+
+  it("shows the whole story of one step in one place", () => {
+    // Duration, why it failed, what it produced, and the doors to debug it — the list the
+    // operator asked for.
+    expect(DW).toContain("function StepDetail");
+    for (const marker of ['data-testid="dw-step-took"', 'data-testid="dw-step-error"',
+                          'data-testid="dw-step-links"', 'data-testid="dw-step-out"',
+                          'data-testid="dw-step-decide"']) {
+      expect(DW).toContain(marker);
+    }
   });
 });

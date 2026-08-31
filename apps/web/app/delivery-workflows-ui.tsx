@@ -434,7 +434,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
       {tab === "running" ? (
         <RunsView runs={runs} openRun={openRun} setOpenRun={setOpenRun}
-                  onAdvance={() => act("Advance", "advance", {})} busy={busy} />
+                  onAdvance={() => act("Advance", "advance", {})} busy={busy}
+                  capabilities={capabilities} />
       ) : tab === "catalogue" ? (
         <CatalogueView
           catalogue={catalogue} installed={installed} busy={busy}
@@ -585,12 +586,13 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
   return out;
 }
 
-function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
+function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities }: {
   runs: Run[];
   openRun: string | null;
   setOpenRun: (id: string | null) => void;
   onAdvance: () => void;
   busy: string | null;
+  capabilities: Capability[];
 }) {
   if (runs.length === 0) {
     return (
@@ -646,102 +648,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
               <p className="dw-blocked">{run.blocked_reason}</p>
             ) : null}
             {open ? (
-              <ol className="dw-steps">
-                {run.steps.map((step) => (
-                  <li key={step.step_id} className="dw-step" data-status={step.status}>
-                    {/* A PHASE THAT DID NOT HAPPEN IS NOT A PHASE THAT SUCCEEDED. A project
-                        started directly has no research and no panel; the run records those
-                        steps as not applicable, and showing them as plain successes would claim
-                        work that was never done. */}
-                    <span className="dw-badge"
-                          data-tone={notApplicable(step) ? "muted" : tone(step.status)}
-                          data-testid={notApplicable(step) ? "dw-step-na" : undefined}>
-                      {notApplicable(step) ? "not run" : step.status}
-                    </span>
-                    <span className="dw-step-id">{step.step_id}</span>
-                    <span className="detail">{step.capability ?? step.kind}</span>
-                    {step.approval && (step.approval as { mode?: string }).mode === "manual" ? (
-                      <span className="dw-gate" title="Requires a person">
-                        gate
-                        {(step.approval as { approver_role?: string }).approver_role
-                          ? ` · ${(step.approval as { approver_role?: string }).approver_role}`
-                          : ""}
-                      </span>
-                    ) : null}
-                    {step.due_at ? (
-                      <span className="detail dw-due">due {step.due_at.slice(0, 16).replace("T", " ")}</span>
-                    ) : null}
-                    {step.timeout_applied ? (
-                      <span className="dw-timeout">{step.timeout_applied.replace("_", " ")}</span>
-                    ) : null}
-                    {/* HOW LONG IT TOOK. The first question anyone asks of a pipeline, and it
-                        was the one thing the step row never answered — the timestamps were in
-                        the payload all along, unused. */}
-                    {stepDuration(step) ? (
-                      <span className="dw-step-took" data-testid="dw-step-took">
-                        {stepDuration(step)}
-                      </span>
-                    ) : null}
-                    {step.error ? <p className="dw-step-error">{step.error}</p> : null}
-                    {notApplicable(step) ? (
-                      <p className="dw-step-note">{String(step.output?.note ?? "")}</p>
-                    ) : null}
-                    {observedGates(step) ? (
-                      <span className="dw-step-gates" data-testid="dw-step-gates">
-                        {observedGates(step)}
-                      </span>
-                    ) : null}
-                    {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate that can only be answered
-                        in another area makes the operator leave the screen that told them it
-                        was waiting, and find it again in a list of everything else. */}
-                    {step.decision_id && step.status === "waiting" ? (
-                      <span className="dw-step-decide" data-testid="dw-step-decide">
-                        <form action={resolveDecisionAction}>
-                          <input type="hidden" name="decision_id" value={step.decision_id} />
-                          <input type="hidden" name="action" value="approve" />
-                          <button type="submit" className="cap-btn primary dw-decide-btn">
-                            Approve
-                          </button>
-                        </form>
-                        <form action={resolveDecisionAction}>
-                          <input type="hidden" name="decision_id" value={step.decision_id} />
-                          <input type="hidden" name="action" value="decline" />
-                          <button type="submit" className="cap-btn dw-decide-btn">Deny</button>
-                        </form>
-                      </span>
-                    ) : null}
-                    {/* WHERE THE WORK IT PRODUCED LIVES. Debugging a step means reading what it
-                        actually did; these are the doors to it. */}
-                    {stepLinks(step.output || {}).length ? (
-                      <span className="dw-step-links" data-testid="dw-step-links">
-                        {stepLinks(step.output || {}).map((l) => (
-                          l.external ? (
-                            <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
-                               className="dw-step-link">{l.label} ↗</a>
-                          ) : (
-                            <a key={l.label} href={l.href} className="dw-step-link">{l.label}</a>
-                          )
-                        ))}
-                      </span>
-                    ) : null}
-                    {/* What the step PRODUCED. A run view that shows only status makes an
-                        operator open five other screens to find the PR it opened. */}
-                    {Object.keys(step.output || {}).length > 0 ? (
-                      <p className="dw-step-out">
-                        {Object.entries(step.output)
-                          .filter(([k]) => k !== "capability" && k !== "tool" && k !== "inputs")
-                          .slice(0, 4)
-                          // `String(v)` on a nested object renders "[object Object]", which
-                          // is the least useful string in software. Ids and urls are what an
-                          // operator wants from a step's output; a nested object is summarised
-                          // by its keys rather than pretended to be a value.
-                          .map(([k, v]) => `${k}: ${summarise(v)}`)
-                          .join(" · ")}
-                      </p>
-                    ) : null}
-                  </li>
-                ))}
-              </ol>
+              <StepPath run={run} capabilities={capabilities} />
             ) : null}
           </article>
         );
@@ -750,7 +657,179 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
   );
 }
 
+
+/* ── The path the work takes ─────────────────────────────────────────────────── */
+
+/** Where a step sits in the story: done, happening now, still ahead, or never happened. */
+function phaseOf(step: RunStep): "done" | "now" | "ahead" | "skipped" | "failed" {
+  if (notApplicable(step) || step.status === "skipped") return "skipped";
+  if (step.status === "failed" || step.status === "deadlettered" || step.status === "cancelled") {
+    return "failed";
+  }
+  if (step.status === "succeeded") return "done";
+  if (["running", "leased", "ready", "waiting", "queued"].includes(step.status)) return "now";
+  return "ahead";
+}
+
+/** A step needing a person, right now. The one thing on this page that is an instruction. */
+function needsYou(step: RunStep): boolean {
+  return Boolean(step.decision_id) && step.status === "waiting";
+}
+
+/**
+ * THE WORKFLOW AS A PATH, not a list of rows.
+ *
+ * A pipeline is a shape — research, then a panel, then a build, then a preview — and an
+ * operator reads "where has this got to" off that shape in one glance. Rendering it as nine
+ * stacked rows of identical text made them read nine statuses and assemble the shape in their
+ * head, every time.
+ *
+ * The rail carries the state: finished segments are solid, the one in flight animates, what is
+ * ahead is dim, and a phase that never happened is dashed rather than green. Clicking a node
+ * opens everything known about that step below it — duration, error, what it produced, and the
+ * doors to the pages where it can be debugged.
+ */
+function StepPath({ run, capabilities }: { run: Run; capabilities: Capability[] }) {
+  const byKey = new Map(capabilities.map((c) => [c.key, c]));
+  const steps = run.steps;
+  // Open on the step that wants attention, then the one in flight, then the first. Landing on
+  // "research succeeded" when a gate three steps along is waiting for you is the wrong answer
+  // to "what is happening".
+  const initial = steps.find(needsYou) ?? steps.find((s) => phaseOf(s) === "now")
+    ?? steps.find((s) => phaseOf(s) === "failed") ?? steps[0];
+  const [picked, setPicked] = useState<string | null>(initial?.step_id ?? null);
+  const current = steps.find((s) => s.step_id === picked) ?? initial;
+
+  return (
+    <div className="dw-path" data-testid="dw-path">
+      <ol className="dw-rail" aria-label="Workflow steps">
+        {steps.map((step, index) => {
+          const phase = phaseOf(step);
+          const capability = step.capability ? byKey.get(step.capability) : undefined;
+          const previous = index > 0 ? phaseOf(steps[index - 1]) : null;
+          return (
+            <li key={step.step_id} className="dw-node" data-phase={phase}
+                data-picked={step.step_id === picked} data-testid="dw-node">
+              {index > 0 ? (
+                // The connector INTO this step: solid once the work has flowed through it,
+                // animated while it is flowing, dim before.
+                <i className="dw-link" aria-hidden
+                   data-flow={previous === "done" || previous === "skipped"
+                     ? (phase === "now" ? "moving" : "past") : "future"} />
+              ) : null}
+              <button type="button" className="dw-node-btn"
+                      aria-current={phase === "now" ? "step" : undefined}
+                      onClick={() => setPicked(step.step_id)}>
+                <span className="dw-dot" aria-hidden>
+                  {phase === "done" ? "✓" : phase === "failed" ? "!"
+                    : phase === "skipped" ? "–" : index + 1}
+                </span>
+                <span className="dw-node-name">{capability?.label ?? step.capability ?? step.step_id}</span>
+                <span className="dw-node-meta">
+                  {needsYou(step) ? (
+                    <em className="dw-node-you" data-testid="dw-node-you">needs you</em>
+                  ) : phase === "skipped" ? "not run"
+                    : stepDuration(step) || step.status}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {current ? <StepDetail step={current} capability={
+        current.capability ? byKey.get(current.capability) : undefined
+      } /> : null}
+    </div>
+  );
+}
+
+/** Everything known about one step, in the order an operator asks for it. */
+function StepDetail({ step, capability }: { step: RunStep; capability?: Capability }) {
+  const phase = phaseOf(step);
+  const links = stepLinks(step.output || {});
+  const approval = step.approval as { mode?: string; approver_role?: string };
+  const produced = Object.entries(step.output || {})
+    .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
+    .slice(0, 6);
+
+  return (
+    <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
+      <header className="dw-detail-head">
+        <span className="dw-badge" data-tone={phase === "skipped" ? "muted" : tone(step.status)}
+              data-testid={phase === "skipped" ? "dw-step-na" : undefined}>
+          {phase === "skipped" ? "not run" : step.status}
+        </span>
+        <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
+        {stepDuration(step) ? (
+          <span className="dw-step-took" data-testid="dw-step-took">{stepDuration(step)}</span>
+        ) : null}
+        {approval?.mode === "manual" ? (
+          <span className="dw-gate" title="Requires a person">
+            gate{approval.approver_role ? ` · ${approval.approver_role}` : ""}
+          </span>
+        ) : null}
+        {step.due_at ? (
+          <span className="detail dw-due">due {step.due_at.slice(0, 16).replace("T", " ")}</span>
+        ) : null}
+        {step.timeout_applied ? (
+          <span className="dw-timeout">{step.timeout_applied.replace("_", " ")}</span>
+        ) : null}
+      </header>
+
+      {capability?.summary ? <p className="dw-detail-what">{capability.summary}</p> : null}
+      {step.error ? <p className="dw-step-error" data-testid="dw-step-error">{step.error}</p> : null}
+      {step.output?.note ? <p className="dw-step-note">{String(step.output.note)}</p> : null}
+      {observedGates(step) ? (
+        <p className="dw-step-gates" data-testid="dw-step-gates">{observedGates(step)}</p>
+      ) : null}
+
+      {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
+          operator leave the screen that told them it was waiting. */}
+      {needsYou(step) ? (
+        <div className="dw-step-decide" data-testid="dw-step-decide">
+          <form action={resolveDecisionAction}>
+            <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
+            <input type="hidden" name="action" value="approve" />
+            <button type="submit" className="cap-btn primary dw-decide-btn">Approve</button>
+          </form>
+          <form action={resolveDecisionAction}>
+            <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
+            <input type="hidden" name="action" value="decline" />
+            <button type="submit" className="cap-btn dw-decide-btn">Deny</button>
+          </form>
+        </div>
+      ) : null}
+
+      {/* WHERE THE WORK IT PRODUCED LIVES. Debugging a step means reading what it actually did. */}
+      {links.length ? (
+        <div className="dw-step-links" data-testid="dw-step-links">
+          {links.map((l) => (
+            l.external ? (
+              <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
+                 className="dw-step-link">{l.label} ↗</a>
+            ) : (
+              <a key={l.label} href={l.href} className="dw-step-link">{l.label}</a>
+            )
+          ))}
+        </div>
+      ) : null}
+
+      {produced.length ? (
+        <dl className="dw-step-out" data-testid="dw-step-out">
+          {produced.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k.replace(/_/g, " ")}</dt>
+              <dd>{summarise(v)}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </section>
+  );
+}
+
 /* ── Catalogue ───────────────────────────────────────────────────────────────── */
+
 
 function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart, onFork }: {
   catalogue: CatalogueEntry[];
