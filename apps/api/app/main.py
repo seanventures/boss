@@ -6348,6 +6348,47 @@ def start_code_task_endpoint(payload: dict):
         # Preflight rejections (e.g. non-allowlisted test executables) are the CALLER's
         # problem to fix, not a server fault — return the actionable message, not a 500.
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+    # THE OUTER WORKFLOW, so the project has a life you can watch.
+    #
+    # A project's life is research -> panel -> approve the spec -> build -> review -> test ->
+    # preview -> deploy -> monitor. Every one of those is a workflow step with a duration, a
+    # status and something it produced. Nothing started such a run for real work, so the only
+    # thing an operator could watch was the coding pipeline's own internal phases — one step of
+    # the nine, and the one they care least about.
+    #
+    # The BUILD step adopts the code task that was just created rather than starting a second
+    # one: two builds racing over one repository is a far worse outcome than a missing run.
+    workflow_run_id = None
+    if not simulated:
+        try:
+            with begin(engine) as c:
+                started = workflow_runtime.start_project_run(
+                    c,
+                    project_id=project_id,
+                    actor=payload.get("actor") or "operator",
+                    title=payload.get("title") or "Project",
+                    directive=payload.get("instructions") or "",
+                    workflow_version_id=payload.get("workflow_version_id"),
+                    extra_input={
+                        "acceptance_criteria": payload.get("acceptance_criteria"),
+                        "test_commands": payload.get("test_commands"),
+                        "repository": payload.get("repo"),
+                        "adopt_code_task_run_id": run_id,
+                    },
+                )
+                if started:
+                    workflow_run_id = started.get("id")
+                    c.execute(
+                        text("UPDATE code_task_runs SET finalize_ctx = "
+                             "COALESCE(finalize_ctx,'{}'::jsonb) || "
+                             "jsonb_build_object('workflow_run_id', CAST(:w AS text)) "
+                             "WHERE id = :r"),
+                        {"w": workflow_run_id, "r": run_id},
+                    )
+        except Exception as error:  # noqa: BLE001 — a project must start without an outer run
+            LOGGER.warning("could not start the outer workflow run: %s", error)
+
     if simulated:
         return {
             "status": "simulated",

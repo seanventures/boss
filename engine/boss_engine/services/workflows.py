@@ -3556,3 +3556,60 @@ def workflow_by_version(
         "version": row["version"],
         "source": "chosen",
     }
+
+
+#: The work class a new project is. `start_project_run` resolves the project's workflow through
+#: the same mapping the console's "apply" action writes, so what the operator chose in the
+#: console is what a project actually runs.
+PROJECT_WORK_CLASS = "project.new"
+
+
+def start_project_run(
+    connection: Connection,
+    *,
+    project_id: str,
+    actor: str,
+    title: str,
+    directive: str,
+    workflow_version_id: Optional[str] = None,
+    extra_input: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
+    """Start the OUTER workflow for a project, and return the run.
+
+    A project's life is research → panel → approve the spec → build → review → test → preview →
+    deploy → monitor. Every one of those is a workflow step with a duration, a status and
+    something it produced. Until now nothing started such a run for real work: the console
+    created a code task directly, so the only thing anyone could watch was the coding
+    pipeline's own internal phases — which are one step of the nine, and the step the operator
+    cares least about.
+
+    Returns None when the project has no workflow to run, rather than raising. A fleet that has
+    not installed the catalogue must still be able to start work; it simply gets the old direct
+    path and no outer run to watch.
+    """
+    resolved = None
+    if workflow_version_id:
+        resolved = workflow_by_version(connection, project_id, str(workflow_version_id))
+    if resolved is None:
+        resolved = workflow_for_code_task(connection, project_id=project_id, task_id=None)
+    if not resolved or not resolved.get("version_id"):
+        return None
+    run_input = {
+        "title": title,
+        # `directive` is what the catalogue's first steps read: research seeds from it and the
+        # panel debates it. It is the instructions, not the title — a title is a label, and a
+        # panel handed a label has nothing to discuss.
+        "directive": directive,
+        **{k: v for k, v in (extra_input or {}).items() if v not in (None, "", [], {})},
+    }
+    return start_run(
+        connection,
+        project_id=project_id,
+        actor=actor,
+        workflow_version_id=str(resolved["version_id"]),
+        input_data=run_input,
+        # One outer run per project. Starting the same project twice — a double-click, a retry
+        # of the request — must not produce two nine-step pipelines racing each other over one
+        # repository.
+        dedupe_key=f"project:{project_id}:{title[:80]}:{directive[:120]}",
+    )

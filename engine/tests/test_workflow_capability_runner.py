@@ -112,9 +112,9 @@ def _publish(c, project_id, key, steps, entry):
     return definition, version
 
 
-def _start(c, project_id, version_id):
+def _start(c, project_id, version_id, input_data=None):
     return workflows.start_run(
-        c, project_id=project_id, actor="test", input_data={},
+        c, project_id=project_id, actor="test", input_data=input_data or {},
         dedupe_key=f"dk_{uuid.uuid4().hex[:10]}", workflow_version_id=version_id,
     )
 
@@ -542,3 +542,90 @@ def test_the_parked_step_holds_no_lease(eng, project, monkeypatch):
     assert row["status"] == "waiting"
     assert row["lease_owner"] is None
     assert row["lease_expires_at"] is None
+
+
+# ── The outer run adopts the work the console already started ──────────────────
+
+def test_build_adopts_the_code_task_the_project_was_started_with(eng, project, monkeypatch):
+    """The console creates the code task and THEN starts the outer run, because the operator
+    pressed a button that makes a project. If `build` also called create_code_task there would
+    be two builds racing over one repository."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_second"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "adopt", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build",
+                         "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_first"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not build.calls, "a SECOND build was started over the same repository"
+    assert steps["b"]["status"] == "waiting"
+    assert steps["b"]["output"]["await"]["id"] == "crun_first"
+
+
+def test_the_adopted_build_completes_when_that_task_does(eng, project, monkeypatch):
+    build = RecordingTool("create_code_task", {"run_id": "crun_unused"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "adopt2", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_adopted"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_adopted", "completed")
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["b"]["status"] == "succeeded"
+
+
+def test_the_runs_own_input_fills_optional_step_inputs(eng, project, monkeypatch):
+    """A catalogue `build` step binds only title and instructions. A project started from the
+    form also carries acceptance criteria and test commands — real instructions that had
+    nowhere to go, so the build ran without the tests it was meant to pass."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_opt"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "optfill", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        _start(c, project, version["id"],
+               {"test_commands": ["pytest -q"], "acceptance_criteria": ["it works"]})
+        runner.tick(c, Ctx(eng), project_id=project)
+
+    assert build.calls, "the build never ran"
+    args = build.calls[0]["args"]
+    assert args["test_commands"] == ["pytest -q"]
+    assert args["acceptance_criteria"] == ["it works"]
+
+
+def test_an_explicit_binding_is_never_overridden_by_the_run_input(eng, project, monkeypatch):
+    """An explicit binding is a decision by whoever wrote the workflow. Whatever happens to sit
+    in the run input under a matching name must not quietly replace it."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_bind"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "bindwins", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build",
+                         "inputs": {"title": "X", "instructions": "go",
+                                    "test_commands": ["make check"]}},
+             "next": []},
+        ], "b")
+        _start(c, project, version["id"], {"test_commands": ["pytest -q"]})
+        runner.tick(c, Ctx(eng), project_id=project)
+
+    assert build.calls[0]["args"]["test_commands"] == ["make check"]

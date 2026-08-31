@@ -140,6 +140,51 @@ def _invoke_tool(
     return result if isinstance(result, dict) else {"result": result}
 
 
+#: Work a run was started WITH, which the matching step should wait on rather than start again.
+_ADOPTABLE: dict[str, tuple[str, str]] = {
+    "build": ("adopt_code_task_run_id", "code_task"),
+}
+
+
+def _adopted_handle(key: str, context: dict[str, Any]) -> Optional[dict[str, Any]]:
+    spec = _ADOPTABLE.get(key)
+    if not spec:
+        return None
+    field, kind = spec
+    value = (context.get("input") or {}).get(field)
+    if isinstance(value, str) and value.strip():
+        return {"kind": kind, "id": value.strip(), "adopted": True}
+    return None
+
+
+def _fill_optional_from_run_input(
+    capability: Any, inputs: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    """Let the run's own input satisfy optional inputs the step did not bind.
+
+    A catalogue workflow's `build` step binds only title and instructions, because those are the
+    two things every directive has. But a project started from the New project form also carries
+    acceptance criteria, test commands and a repository — real instructions that simply had
+    nowhere to go, so the build ran without the tests it was supposed to pass.
+
+    Only OPTIONAL inputs, and only ones the step did not bind itself: an explicit binding is a
+    decision by whoever wrote the workflow and must not be second-guessed by whatever happens to
+    be in the run input. Required inputs are deliberately excluded — a workflow that forgot one
+    should fail saying so, not quietly pick up something with a matching name.
+    """
+    run_input = context.get("input") or {}
+    if not isinstance(run_input, dict) or not run_input:
+        return inputs
+    filled = dict(inputs)
+    for name in getattr(capability, "optional_inputs", ()) or ():
+        if name in filled:
+            continue
+        value = run_input.get(name)
+        if value not in (None, "", [], {}):
+            filled[name] = value
+    return filled
+
+
 def execute_step(
     connection: Connection,
     ctx: Any,
@@ -185,6 +230,7 @@ def execute_step(
         )
 
     inputs = _resolve_inputs(binding.get("inputs") or {}, context)
+    inputs = _fill_optional_from_run_input(capability, inputs, context)
 
     if capability.tool is None:
         # Capabilities with no tool yet are honest no-ops that say so, rather than silently
@@ -195,6 +241,23 @@ def execute_step(
             "status": "recorded",
             "note": f"'{capability.label}' is recorded from the work it accompanies.",
             "inputs": inputs,
+        }
+
+    # ADOPT, DO NOT DUPLICATE.
+    #
+    # The console creates the code task and THEN starts the outer run, because the operator
+    # pressed a button that makes a project. If `build` also called create_code_task there
+    # would be two builds racing over one repository — a far worse outcome than a missing step.
+    # So the run carries the id of the task it already has, and this step waits on that one.
+    adopted = _adopted_handle(key, context)
+    if adopted:
+        return {
+            "capability": key,
+            "tool": None,
+            "status": "awaiting",
+            "await": adopted,
+            "adopted": True,
+            "note": "waiting on the code task this project was started with",
         }
 
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
