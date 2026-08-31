@@ -266,4 +266,11 @@ describe("what review and test actually found", () => {
     expect(DW).toContain('"dw-step-gates"');
     expect(DW).toContain('out.status !== "observed"');
   });
+
+  it("shows what the monitoring step is watching, not a gate list", () => {
+    // "Set up monitoring" reports deployment targets under health probing — a different shape
+    // from review and test, and the only thing that answers what that step is for.
+    expect(DW).toContain("Array.isArray(out.targets)");
+    expect(DW).toContain("`watching ${names.join(\", \")}`");
+  });
 });

@@ -81,8 +81,11 @@ def project(eng):
     with eng.begin() as c:
         c.execute(text("DELETE FROM workflow_step_runs WHERE project_id=:p"), {"p": pid})
         c.execute(text("DELETE FROM workflow_runs WHERE project_id=:p"), {"p": pid})
+        # deployment_targets has no ON DELETE CASCADE, so a leftover row blocks the project
+        # delete and every later run of this module fails on setup instead of on its subject.
         for table in ("workflow_mappings", "workflow_versions", "workflow_definitions",
-                      "decisions", "events", "receipts"):
+                      "decisions", "events", "receipts",
+                      "deployment_health_samples", "deployment_targets"):
             try:
                 c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
             except Exception:
@@ -801,6 +804,80 @@ def test_no_recorded_gate_says_so_rather_than_inventing_a_verdict(eng, project, 
 
     assert steps["review"]["status"] == "succeeded"
     assert steps["review"]["output"]["status"] == "recorded"
+
+
+def _deployment_target(c, project_id, target_id, *, status="active"):
+    import json as _json
+    c.execute(
+        text("INSERT INTO deployment_targets (id, project_id, app_name, repo, environment, "
+             "target_kind, target_ref, domains, health_checks, status, created_by) "
+             "VALUES (:i,:p,'app','o/r','production','docker','ref',"
+             "CAST(:d AS JSONB),CAST(:h AS JSONB),:s,'test') "
+             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"),
+        {"i": target_id, "p": project_id, "d": _json.dumps(["https://app.test"]),
+         "h": _json.dumps([{"path": "/healthz"}]), "s": status},
+    )
+
+
+def _monitor_workflow(c, project, key):
+    return _publish(c, project, key, [
+        {"id": "monitor", "kind": "capability", "binding": {"capability": "monitor"},
+         "next": []},
+    ], "monitor")
+
+
+def test_monitoring_names_what_is_actually_being_watched(eng, project, monkeypatch):
+    """"Set up monitoring" recorded a sentence and checked nothing. BOSS already probes every
+    active deployment target on a sweep, so the honest step names the targets and says what the
+    probes have found."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _deployment_target(c, project, f"dt_{project}")
+        _, version = _monitor_workflow(c, project, "monwatch")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        c.execute(text("DELETE FROM deployment_targets WHERE project_id=:p"), {"p": project})
+
+    out = steps["monitor"]["output"]
+    assert steps["monitor"]["status"] == "succeeded", steps["monitor"]["last_error"]
+    assert out["status"] == "observed"
+    assert out["targets"][0]["url"] == "https://app.test"
+    # Registered but not yet swept — "we are watching" is not "we looked and it was fine".
+    assert out["targets"][0]["last_probe"] is None
+    assert "none probed yet" in out["note"]
+
+
+def test_monitoring_fails_when_nothing_is_watching(eng, project, monkeypatch):
+    """A step called "Set up monitoring" that succeeds while nothing probes the app is worse
+    than a green review over a red gate: the entire point is that somebody notices when it
+    falls over."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _monitor_workflow(c, project, "monnone")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["monitor"]["status"] != "succeeded"
+    assert "nothing is being watched" in (steps["monitor"]["last_error"] or "")
+
+
+def test_a_target_that_was_retired_is_not_counted_as_watched(eng, project, monkeypatch):
+    """Only `active` targets are swept, so an inactive one is a target nothing probes."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _deployment_target(c, project, f"dt_off_{project}", status="retired")
+        _, version = _monitor_workflow(c, project, "monretired")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        c.execute(text("DELETE FROM deployment_targets WHERE project_id=:p"), {"p": project})
+
+    assert steps["monitor"]["status"] != "succeeded"
 
 
 def test_research_adopts_the_discovery_the_work_came_from(eng, project, monkeypatch):

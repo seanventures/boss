@@ -137,8 +137,20 @@ const LIVE = ["running", "waiting", "queued", "validating", "leased"];
  *  quality gates the governed pipeline actually recorded. Without this, `review` and `test` were
  *  two rows that said only "succeeded" about the checks an operator most wants to read. */
 function observedGates(step: RunStep): string | null {
-  const out = (step.output ?? {}) as { status?: string; gates_passed?: unknown };
+  const out = (step.output ?? {}) as {
+    status?: string; gates_passed?: unknown; targets?: unknown;
+  };
   if (out.status !== "observed") return null;
+  // The monitoring step reports targets rather than gates: which apps are under health probing
+  // and whether a probe has run yet. "2 watched · app (production)" answers the question the
+  // step exists to answer.
+  if (Array.isArray(out.targets)) {
+    const names = out.targets
+      .map((t) => (t as { app_name?: string; environment?: string }))
+      .map((t) => [t.app_name, t.environment].filter(Boolean).join(" · "))
+      .filter(Boolean);
+    return names.length ? `watching ${names.join(", ")}` : null;
+  }
   const gates = Array.isArray(out.gates_passed) ? out.gates_passed.map(String) : [];
   return gates.length ? gates.join(" · ") : null;
 }

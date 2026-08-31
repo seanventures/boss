@@ -248,6 +248,78 @@ _OBSERVED_GATES: dict[str, tuple[str, ...]] = {
 }
 
 
+def _observed_monitoring(
+    connection: Connection, project_id: str, context: dict[str, Any]
+) -> dict[str, Any]:
+    """Whether anything is actually WATCHING what this project shipped.
+
+    "Set up monitoring" was a step that recorded a sentence and checked nothing. BOSS already
+    probes every active deployment target on a sweep and stores each sample, so the honest
+    version of this step is: name the targets being watched, and say what the probes have found
+    so far.
+
+    A step called "Set up monitoring" that succeeds while nothing is being probed is the same
+    lie as a review step that goes green over a failed gate — and a worse one, because the whole
+    point of the step is to guarantee somebody notices when the app falls over.
+    """
+    targets = connection.execute(
+        text(
+            """
+            SELECT id, app_name, environment, domains, health_checks
+            FROM deployment_targets
+            WHERE project_id = :p AND status = 'active'
+            ORDER BY app_name
+            """
+        ),
+        {"p": project_id},
+    ).mappings().all()
+    if not targets:
+        raise CapabilityExecutionError(
+            "nothing is being watched: this project has no active deployment target, so no "
+            "health probe will ever run against it."
+        )
+
+    watched = []
+    for target in targets:
+        latest = connection.execute(
+            text(
+                """
+                SELECT ok, checked_at, status_code, latency_ms, error
+                FROM deployment_health_samples
+                WHERE deployment_target_id = :t
+                ORDER BY checked_at DESC LIMIT 1
+                """
+            ),
+            {"t": target["id"]},
+        ).mappings().first()
+        watched.append({
+            "target_id": target["id"],
+            "app_name": target["app_name"],
+            "environment": target["environment"],
+            "url": (target["domains"] or [None])[0],
+            "checks": len(target["health_checks"] or []),
+            # No sample yet is NOT a failure: the sweep runs on an interval, and a target
+            # registered a minute ago has simply not been probed. Saying "not probed yet" is
+            # the difference between "we are watching" and "we looked and it was fine".
+            "last_probe": latest["checked_at"].isoformat()
+            if latest and latest["checked_at"] else None,
+            "last_ok": bool(latest["ok"]) if latest else None,
+            "last_error": latest["error"] if latest else None,
+        })
+
+    probed = [w for w in watched if w["last_probe"]]
+    return {
+        "capability": "monitor",
+        "tool": None,
+        "status": "observed",
+        "targets": watched,
+        "note": (
+            f"{len(watched)} target(s) under health probing"
+            + (f", {len(probed)} probed so far." if probed else ", none probed yet.")
+        ),
+    }
+
+
 def _build_run_id(context: dict[str, Any]) -> Optional[str]:
     """The code task this workflow run is about.
 
@@ -271,6 +343,8 @@ def _observed_from_the_build(
     Returns None when there is nothing to observe — no such step kind, no build to look at, or
     no gate recorded — so the caller falls back to saying so rather than inventing a verdict.
     """
+    if key == "monitor":
+        return _observed_monitoring(connection, project_id, context)
     gate_names = _OBSERVED_GATES.get(key)
     if not gate_names:
         return None
