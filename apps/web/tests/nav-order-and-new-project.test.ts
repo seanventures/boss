@@ -92,3 +92,27 @@ describe("New project, from anywhere", () => {
     expect(reader).not.toContain("setShowNew(false)");
   });
 });
+
+describe("the top bar does not repeat the nav", () => {
+  const CSS_ALL = codeOnly("app/globals.css");
+  /** Just the one rule — a fixed-length window runs into whatever follows it. */
+  const titleRule = () => {
+    const at = CSS_ALL.indexOf(".bx-topbar-title {");
+    return CSS_ALL.slice(at, CSS_ALL.indexOf("}", at) + 1);
+  };
+
+  it("hides the area title and description from sight", () => {
+    // The left nav already shows the active area, selected and highlighted, at all times.
+    // Repeating it here alongside its description spent two lines of a bar holding eight
+    // other controls, to say what the eye had already been told.
+    expect(titleRule()).toContain("clip-path: inset(50%)");
+  });
+
+  it("keeps it in the accessibility tree", () => {
+    // It is the console's title element and a screen reader still announces which area you
+    // are in. `display: none` would have removed it from that tree entirely — invisible and
+    // unannounced are not the same thing.
+    expect(titleRule()).not.toContain("display: none");
+    expect(SHELL).toContain('id="boss-console-title"');
+  });
+});

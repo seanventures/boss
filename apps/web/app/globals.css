@@ -1692,20 +1692,18 @@ tr[data-expanded] { background: var(--surface-2); }
   .bx-strip-stage { display: none; }
 }
 
+/* THE AREA'S NAME IS ALREADY ON SCREEN — the left nav shows it, selected and highlighted, at
+   all times. Repeating it in the top bar alongside its description spent two lines of a bar
+   that has eight other controls in it, to say something the eye had already been told.
+   Hidden from SIGHT, not from the accessibility tree: it is the console's title element and a
+   screen reader still announces which area you are in when the bar is reached. Clipped rather
+   than `display: none`, which would remove it from that tree entirely. */
 .bx-topbar-title {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 1.02rem;
-  letter-spacing: -0.01em;
-}
-
-.bx-topbar-title small {
-  display: block;
-  font-family: var(--sans);
-  font-weight: 500;
-  font-size: 0.72rem;
-  letter-spacing: 0.02em;
-  color: var(--faint);
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden; white-space: nowrap;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
 }
 
 .bx-topbar-spacer {
