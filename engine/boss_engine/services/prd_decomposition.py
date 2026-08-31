@@ -138,7 +138,7 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
                            task_id: Optional[str], prd_or_directive: str, owner: str, repo: str,
                            base_branch: str = "main", profile: Optional[str] = None,
                            risk_tier: Optional[int] = None, max_tasks: int = 6,
-                           seed_scaffold: bool = True) -> dict:
+                           seed_scaffold: bool = True, origin: Optional[dict] = None) -> dict:
     """Decompose the PRD and START the build as one lineage. For a WEB APP, first SEED a
     deterministic Vite+React+TS+Tailwind scaffold onto a fresh lineage branch (no agent, no
     micro-VM turn limit — the exact thing that kept failing an agent-authored scaffold), then
@@ -168,7 +168,11 @@ def start_decomposed_build(engine, settings: Settings, jobs, *, project_id: str,
     if not tasks:
         return {"tasks": [], "started": False, "reason": "decomposition produced no tasks"}
     first, rest = tasks[0], tasks[1:]
-    fctx = {"decomposition_plan": rest, "decomposition_index": 1, "decomposition_total": len(tasks)}
+    # `origin` carries the panel and the approval this build came from. The outer workflow reads
+    # it to adopt them rather than convening a second panel and asking for the same sign-off
+    # twice — see _ADOPTABLE / _ADOPTABLE_GATES in workflow_capability_runner.
+    fctx = {"decomposition_plan": rest, "decomposition_index": 1, "decomposition_total": len(tasks),
+            **({"origin": origin} if origin else {})}
     task_base = base_branch
     web_tests: list = []
     if root:  # build the first feature ON the seeded scaffold branch (shared lineage)

@@ -143,6 +143,9 @@ def _invoke_tool(
 #: Work a run was started WITH, which the matching step should wait on rather than start again.
 _ADOPTABLE: dict[str, tuple[str, str]] = {
     "build": ("adopt_code_task_run_id", "code_task"),
+    # A project created from a PRD panel already HAD its meeting — that panel is why the
+    # project exists. Convening another one debates a question that was settled.
+    "meeting": ("adopt_meeting_run_id", "meeting"),
 }
 
 
@@ -155,6 +158,50 @@ def _adopted_handle(key: str, context: dict[str, Any]) -> Optional[dict[str, Any
     if isinstance(value, str) and value.strip():
         return {"kind": kind, "id": value.strip(), "adopted": True}
     return None
+
+
+#: A gate the run was started with an ANSWER to, and where the run input carries it.
+#:
+#: The panel path approves the spec BEFORE the project exists: BOSS convenes a panel, drafts a
+#: PRD, a person approves it, and only then is the code task created — which is what starts this
+#: workflow. Opening a `spec_review` gate at that point asks the same person the same question a
+#: second time, about a build already running.
+_ADOPTABLE_GATES: dict[str, str] = {"spec_review": "adopt_decision_id"}
+
+#: An answered decision, in the several shapes "answered" takes. `rejected` is deliberately not
+#: here: a declined spec is not an approved one, and the gate should be asked again.
+_GATE_ANSWERED = frozenset({"approved", "executed", "completed"})
+
+
+def _adopted_gate(
+    connection: Connection, key: str, context: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """The approval this run already has for `key`, or None to ask for one.
+
+    The decision is READ, never trusted from the run input alone — the input carries an id, and
+    an id is not evidence. A run started with the id of a decision that was rejected, expired or
+    never answered gets its gate opened as normal.
+    """
+    field = _ADOPTABLE_GATES.get(key)
+    if not field:
+        return None
+    value = (context.get("input") or {}).get(field)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    row = connection.execute(
+        text("SELECT status, approved_by, approved_at FROM decisions WHERE id = :id"),
+        {"id": value.strip()},
+    ).mappings().first()
+    if row is None or str(row["status"] or "") not in _GATE_ANSWERED:
+        return None
+    approved_at = row["approved_at"]
+    return {
+        "decision_id": value.strip(),
+        "decision_status": str(row["status"]),
+        "approved_by": row["approved_by"],
+        "approved_at": approved_at.isoformat() if hasattr(approved_at, "isoformat")
+                       else approved_at,
+    }
 
 
 def _fill_optional_from_run_input(
@@ -224,7 +271,22 @@ def execute_step(
     capability = get_capability(key)
 
     if capability.is_gate:
-        # Should never arrive here — gates are turned into decisions before they are claimable.
+        # Except when the run already HAS the answer — `_gate_subject` declined to open a gate,
+        # so the step arrived here as ordinary work. Record the approval that was given and move
+        # on; the audit trail names the decision, so "who approved this" is still answerable.
+        adopted_gate = _adopted_gate(connection, key, context)
+        if adopted_gate:
+            return {
+                "capability": key,
+                "tool": None,
+                "status": "adopted",
+                "note": (
+                    f"'{capability.label}' was answered before this run started "
+                    f"({adopted_gate['decision_status']})."
+                ),
+                **adopted_gate,
+            }
+        # Otherwise: gates are turned into decisions before they are claimable.
         raise CapabilityExecutionError(
             f"'{capability.label}' waits for a person and is not executable work."
         )
@@ -390,7 +452,10 @@ def resume_awaited(
     return done
 
 def _gate_subject(
-    connection: Connection, project_id: str, spec_step: dict[str, Any]
+    connection: Connection,
+    project_id: str,
+    spec_step: dict[str, Any],
+    context: Optional[dict[str, Any]] = None,
 ) -> Optional[dict[str, Any]]:
     """What a person has to approve before this step, or None if it just runs.
 
@@ -437,6 +502,10 @@ def _gate_subject(
         return None
     capability = get_capability(key)
     if capability.is_gate:
+        if context is not None and _adopted_gate(connection, key, context):
+            # Already answered. Returning None sends it down the ordinary path, where
+            # execute_step records the approval it was started with.
+            return None
         return {
             "key": key, "label": capability.label, "summary": capability.summary,
             "risk_tier": max(2, capability.risk_tier), "completes_step": True,
@@ -672,7 +741,9 @@ def tick(
             ).mappings().all()
             for row in gates:
                 spec_step = spec_steps.get(row["step_id"]) or {}
-                subject = _gate_subject(connection, project_id, spec_step)
+                subject = _gate_subject(
+                    connection, project_id, spec_step, _run_context(connection, run_id)
+                )
                 if subject is not None:
                     _open_gate(
                         connection, project_id, {**dict(run), "id": run_id},

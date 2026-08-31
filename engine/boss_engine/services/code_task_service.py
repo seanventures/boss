@@ -564,6 +564,25 @@ def start_code_task(
     # is what makes "every run of this workflow" a cheap query — and this does not preclude it.
     #
     # Resolution failing is the NORMAL state until a project maps one, so it is never fatal.
+    # IS THIS A NEW PROJECT, or more work on an existing one?
+    #
+    # Only a first-generation run gets an outer workflow. A follow-up, a retry, a deferred
+    # findings task or one slice of a decomposition is work INSIDE a project that already has
+    # its own run — giving each of them a fresh nine-step pipeline would convene a panel per
+    # retry and ask for an approval per slice.
+    #
+    # `root_run_id` is deliberately NOT in this list, though it names a lineage. A web-app build
+    # mints one for the scaffold branch before any task exists (`root = make_id("crun")` in
+    # prd_decomposition) — so the FIRST task of a brand new app carries a root_run_id, and
+    # treating that as "continuation" would have silently skipped an outer run for the panel
+    # path, which is the main way projects are started.
+    _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark")
+    _is_new_project = (
+        not any(run_finalize.get(k) for k in _continuation)
+        # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
+        and int(run_finalize.get("decomposition_index") or 1) <= 1
+    )
+
     try:
         from .workflows import workflow_by_version, workflow_for_code_task
 
@@ -658,6 +677,52 @@ def start_code_task(
                     payload={"run_id": run_id})
     emit_event(connection, project_id, "code_task.started", "boss", "code_task_run", run_id,
                {"task_id": task_id, "title": title, "repo": f"{owner}/{repo}"})
+
+    # THE OUTER WORKFLOW RUN, started HERE rather than at the API endpoint.
+    #
+    # Not every project is created through POST /v1/code-tasks. Approving a PRD calls
+    # start_web_app_build / start_decomposed_build directly, so a project born the ordinary way
+    # — convene a panel, approve, build — got no outer run at all, and the Workflows page stayed
+    # empty while a project ran. This function is the one door every path goes through.
+    #
+    # Adoption, not repetition: the run carries the ids of the work this project ALREADY has, so
+    # `build` waits on this code task instead of starting a second one, and — when the project
+    # came from a panel — `meeting` waits on that panel instead of convening another.
+    if _is_new_project:
+        try:
+            from .workflows import start_project_run
+
+            origin = run_finalize.get("origin") or {}
+            started = start_project_run(
+                connection,
+                project_id=project_id,
+                actor="boss",
+                title=title,
+                directive=instructions,
+                # THE SAME WORKFLOW THE TASK RECORDS. It was already resolved above — honouring
+                # the picker on the New project form, then any mapping, then the default. Letting
+                # start_project_run resolve it a second time would let the two disagree: the
+                # project page naming one workflow and the run that governs it following another.
+                workflow_version_id=(run_finalize.get("workflow") or {}).get("version_id"),
+                extra_input={
+                    "acceptance_criteria": acceptance_criteria,
+                    "test_commands": test_commands,
+                    "repository": repo,
+                    "adopt_code_task_run_id": run_id,
+                    "adopt_meeting_run_id": origin.get("meeting_run_id"),
+                    "adopt_decision_id": origin.get("decision_id"),
+                },
+            )
+            if started:
+                connection.execute(
+                    sql("UPDATE code_task_runs SET finalize_ctx = "
+                        "COALESCE(finalize_ctx,'{}'::jsonb) || "
+                        "jsonb_build_object('workflow_run_id', CAST(:w AS text)) "
+                        "WHERE id = :r"),
+                    {"w": started.get("id"), "r": run_id},
+                )
+        except Exception as exc:  # noqa: BLE001 — a project must start without an outer run
+            logger.warning("could not start the outer workflow run for %s: %s", run_id, exc)
     return run_id
 
 

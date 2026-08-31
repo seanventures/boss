@@ -1026,7 +1026,8 @@ class DecisionService:
                     start_decomposed_build(
                         engine, settings, jobs,
                         project_id=project_id, task_id=task_id,
-                        prd_or_directive=directive, owner=owner, repo=repo, base_branch="main")
+                        prd_or_directive=directive, owner=owner, repo=repo, base_branch="main",
+                        origin=origin_ctx)
             except Exception:  # noqa: BLE001 — best-effort; failure is visible via run status
                 return
 

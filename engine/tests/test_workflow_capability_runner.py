@@ -588,6 +588,101 @@ def test_the_adopted_build_completes_when_that_task_does(eng, project, monkeypat
     assert steps["b"]["status"] == "succeeded"
 
 
+def _decision(c, project_id, decision_id, status):
+    """A decision row in a given state, as the PRD approval leaves behind."""
+    c.execute(
+        text("INSERT INTO decisions (id, project_id, question, status, approved_by, approved_at) "
+             "VALUES (:i,:p,'approve the PRD',:s,'ceo',now()) "
+             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"),
+        {"i": decision_id, "p": project_id, "s": status},
+    )
+
+
+def test_meeting_adopts_the_panel_the_project_came_from(eng, project, monkeypatch):
+    """A project born from a PRD panel already HAD its meeting — that panel is why the project
+    exists. Convening another one debates a question that was settled, at the cost of a full
+    agent panel, before the build it is meant to precede."""
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_second"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "adoptmeet", [
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "go"}},
+             "next": []},
+        ], "m")
+        run = _start(c, project, version["id"], {"adopt_meeting_run_id": "mrun_first"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not meeting.calls, "a SECOND panel was convened for a settled question"
+    assert steps["m"]["status"] == "waiting"
+    assert steps["m"]["output"]["await"]["id"] == "mrun_first"
+
+
+def test_an_approved_spec_is_not_approved_again(eng, project, monkeypatch):
+    """The panel path approves the spec BEFORE the project exists. Opening a spec_review gate
+    then asks the same person the same question a second time, about a build already running —
+    and until they answer it, the workflow sits waiting on work that has already happened."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _decision(c, project, "dec_approved", "approved")
+        _, version = _publish(c, project, "adoptgate", [
+            {"id": "g", "kind": "capability", "binding": {"capability": "spec_review"},
+             "next": []},
+        ], "g")
+        run = _start(c, project, version["id"], {"adopt_decision_id": "dec_approved"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["g"]["status"] == "succeeded"
+    assert steps["g"]["output"]["decision_id"] == "dec_approved"
+    # Who approved it is still on the record — adopting an approval must not lose the audit
+    # trail that a fresh gate would have written.
+    assert steps["g"]["output"]["approved_by"] == "ceo"
+
+
+def test_a_spec_that_was_NOT_approved_is_still_asked(eng, project, monkeypatch):
+    """An id is not evidence. A run carrying the id of a decision that was rejected, or one
+    still pending, must have its gate opened — otherwise passing any decision id at all would
+    wave a build past its own review."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _decision(c, project, "dec_rejected", "rejected")
+        _, version = _publish(c, project, "adoptgate2", [
+            {"id": "g", "kind": "capability", "binding": {"capability": "spec_review"},
+             "next": []},
+        ], "g")
+        run = _start(c, project, version["id"], {"adopt_decision_id": "dec_rejected"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        opened = c.execute(
+            text("SELECT decision_id FROM workflow_step_runs WHERE workflow_run_id=:r"),
+            {"r": run["id"]},
+        ).scalar()
+
+    assert steps["g"]["status"] == "waiting"
+    assert opened and opened != "dec_rejected", "no fresh approval was asked for"
+
+
+def test_a_gate_with_no_adopted_decision_behaves_exactly_as_before(eng, project, monkeypatch):
+    """The ordinary path — a project started from the form, with no panel behind it."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "plaingate", [
+            {"id": "g", "kind": "capability", "binding": {"capability": "spec_review"},
+             "next": []},
+        ], "g")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["g"]["status"] == "waiting"
+
+
 def test_the_runs_own_input_fills_optional_step_inputs(eng, project, monkeypatch):
     """A catalogue `build` step binds only title and instructions. A project started from the
     form also carries acceptance criteria and test commands — real instructions that had
