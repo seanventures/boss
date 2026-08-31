@@ -75,3 +75,47 @@ def test_it_does_not_claim_to_drive_execution():
     a reader who assumes otherwise will look for step dispatch that does not exist."""
     doc = workflows.workflow_for_code_task.__doc__ or ""
     assert "does NOT change how a run executes" in doc
+
+
+# ── The default, when nobody has chosen ────────────────────────────────────────
+
+def test_an_unmapped_project_falls_back_to_the_standard_workflow():
+    """Every project is unmapped until somebody maps it, so without a fallback the answer to
+    "which workflow governs my project" would be "none" for every project that has ever
+    existed — technically true and useless."""
+    src = inspect.getsource(workflows.workflow_for_code_task)
+    assert src.count("_default_workflow(connection, project_id)") == 2
+
+
+def test_the_default_is_the_catalogue_standard():
+    assert workflows.DEFAULT_WORKFLOW_KEY == "standard_product_delivery"
+
+
+def test_the_default_only_picks_a_published_active_version():
+    """A draft or retired workflow governing a run would be a link to something that cannot be
+    executed or is no longer meant to be."""
+    src = inspect.getsource(workflows._default_workflow)
+    assert "d.status = 'active'" in src
+    assert "v.status = 'published'" in src
+    assert "ORDER BY v.version DESC" in src
+
+
+def test_a_default_is_distinguishable_from_a_choice():
+    """'Deliberately put on this workflow' and 'got the standard one because nothing was
+    chosen' are different facts, and only one of them is a decision. The console shows which."""
+    assert '"source": "default"' in inspect.getsource(workflows._default_workflow)
+    assert '"source": "mapping"' in inspect.getsource(workflows.workflow_for_code_task)
+
+
+def test_the_fallback_does_not_invent_a_mapping():
+    """Writing a mapping row on the customer's behalf would make an inferred fallback
+    indistinguishable from a choice they made, and the next person to read the mappings table
+    could not tell which was which."""
+    src = inspect.getsource(workflows._default_workflow)
+    assert "INSERT" not in src.upper()
+    assert '"mapping_id": None' in src
+
+
+def test_a_project_without_the_catalogue_gets_nothing_rather_than_a_guess():
+    src = inspect.getsource(workflows._default_workflow)
+    assert "if not row:" in src and "return None" in src

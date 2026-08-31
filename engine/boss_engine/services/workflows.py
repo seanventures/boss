@@ -3282,11 +3282,11 @@ def workflow_for_code_task(
     except Exception:  # noqa: BLE001 — a missing link must never stop a task from starting
         return None
     if resolution.get("status") != "selected":
-        return None
+        return _default_workflow(connection, project_id)
     selected = resolution.get("selected") or {}
     version_id = selected.get("workflow_version_id")
     if not version_id:
-        return None
+        return _default_workflow(connection, project_id)
     row = connection.execute(
         text(
             """
@@ -3307,4 +3307,56 @@ def workflow_for_code_task(
         "workflow_key": row["workflow_key"],
         "name": row["name"],
         "version": row["version"],
+        # A mapping somebody made, as opposed to the fallback below. The console says which,
+        # because "this project was deliberately put on this workflow" and "nothing was chosen
+        # so it got the standard one" are different facts and only one of them is a decision.
+        "source": "mapping",
+    }
+
+
+#: The workflow a project gets when nobody has chosen one. `key` is stable across fleets by
+#: design, which is what makes a default safe to hard-code here.
+DEFAULT_WORKFLOW_KEY = "standard_product_delivery"
+
+
+def _default_workflow(
+    connection: Connection, project_id: str
+) -> Optional[dict[str, Any]]:
+    """The standard workflow, when no mapping selects one.
+
+    Every project is unmapped until somebody maps it, so without this the answer to "which
+    workflow governs my project" would be "none" for every project that has ever existed —
+    technically true and useless. A new project is on the standard path unless told otherwise,
+    which is what the catalogue is FOR.
+
+    Marked `source: "default"` and NOT written as a mapping. Inventing a mapping row on the
+    customer's behalf would make an inferred fallback indistinguishable from a choice they
+    made, and the next person to read the mappings table could not tell which was which.
+    """
+    row = connection.execute(
+        text(
+            """
+            SELECT d.id AS definition_id, d.workflow_key, d.name, v.id AS version_id, v.version
+            FROM workflow_definitions d
+            JOIN workflow_versions v ON v.workflow_definition_id = d.id
+            WHERE d.project_id = :project_id
+              AND d.workflow_key = :key
+              AND d.status = 'active'
+              AND v.status = 'published'
+            ORDER BY v.version DESC
+            LIMIT 1
+            """
+        ),
+        {"project_id": project_id, "key": DEFAULT_WORKFLOW_KEY},
+    ).mappings().first()
+    if not row:
+        return None
+    return {
+        "definition_id": row["definition_id"],
+        "version_id": row["version_id"],
+        "mapping_id": None,
+        "workflow_key": row["workflow_key"],
+        "name": row["name"],
+        "version": row["version"],
+        "source": "default",
     }

@@ -7560,3 +7560,18 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    look the same. */
 .ct-workflow { margin-left: auto; white-space: nowrap; }
 .ct-workflow b { font-weight: 600; color: var(--ink-soft); }
+
+/* START A PROJECT FROM ANYWHERE. Solid and accent-coloured because it is the one control in
+   the bar that CREATES something; everything else beside it navigates or toggles. */
+.bx-new-project {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; min-height: 32px; margin-left: 12px;
+  font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+  white-space: nowrap;
+  color: var(--accent-ink, #04202a);
+  background: var(--accent); border: 1px solid var(--accent); border-radius: 9px;
+}
+.bx-new-project:hover { filter: brightness(1.08); }
+.bx-new-project:active { transform: translateY(1px); }
+@media (max-width: 720px) { .bx-new-project { display: none; } }
+.ct-workflow-default { opacity: .7; font-weight: 400; }

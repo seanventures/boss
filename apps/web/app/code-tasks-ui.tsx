@@ -2090,7 +2090,7 @@ function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
  */
 function WorkflowLink({ run }: { run: CodeTaskRun }) {
   const wf = (run.finalize_ctx as Record<string, unknown> | undefined)?.workflow as
-    { name?: string; version?: number; workflow_key?: string } | undefined;
+    { name?: string; version?: number; workflow_key?: string; source?: string } | undefined;
   if (!wf?.name) {
     return (
       <span className="detail ct-workflow" data-testid="ct-workflow-none"
@@ -2101,8 +2101,13 @@ function WorkflowLink({ run }: { run: CodeTaskRun }) {
   }
   return (
     <span className="detail ct-workflow" data-testid="ct-workflow"
-          title={`Resolved from this project's workflow mapping when the run was created`}>
+          title={wf.source === "default"
+            ? "Nobody has mapped a workflow to this project, so it is on the standard one"
+            : "Resolved from this project's workflow mapping when the run was created"}>
       workflow: <b>{wf.name}</b>{typeof wf.version === "number" ? ` v${wf.version}` : ""}
+      {/* "Deliberately put on this workflow" and "got the standard one because nothing was
+          chosen" are different facts, and only one of them is a decision. */}
+      {wf.source === "default" ? <span className="ct-workflow-default"> (default)</span> : null}
     </span>
   );
 }
@@ -2476,6 +2481,18 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     return () => window.removeEventListener("popstate", read);
   }, []);
   const [showNew, setShowNew] = useState(false);
+  // OPENED FROM THE TOP BAR. The shell can start a project from any of the twenty-two screens
+  // by adding `?new=1`; this area owns the form. Same handoff as `?run=` above, and it only
+  // ever SETS for the same reason — clearing on an absent param would slam the form shut on
+  // anyone who navigated within the page while filling it in.
+  useEffect(() => {
+    const read = () => {
+      if (new URLSearchParams(window.location.search).get("new") === "1") setShowNew(true);
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
   // The run list inside an app docks away when the detail is what you are reading. There is no
   // app-level selection state: clicking an app opens its newest built run, and the page you
   // land on owns which run is showing.

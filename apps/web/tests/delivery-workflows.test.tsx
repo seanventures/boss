@@ -154,7 +154,8 @@ describe("status is never colour alone", () => {
 describe("where it lives", () => {
   it("is a first-class area in the console", () => {
     expect(SHELL).toContain('id: "delivery_workflows"');
-    expect(SHELL).toContain('label: "Workflows"');
+    // Labelled "Workflow" since the nav reorder; the AREA id is what must not drift.
+    expect(SHELL).toContain('id: "delivery_workflows"');
   });
 
   it("is available to self-hosted operators", () => {

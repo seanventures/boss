@@ -177,22 +177,27 @@ const ICONS = {
 // ~75% are a single internal audit-export event — not empty, unreadable.
 const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
-  { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
-  { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
+  // THE ORDER IS THE ARGUMENT. The Run group opens with the place work is DONE and the path it
+  // follows — Factory, then the workflow governing it, then who does it and who approves it,
+  // then where it ships and whether it is alive. Discovery and Meetings are ways IN and follow
+  // after; they were first only because they come first chronologically, which is not the same
+  // as being what an operator opens the console to look at.
   { id: "code_tasks", label: "Projects", sub: "Agent edits code in a sandbox — tested, gated PRs", group: "Run", icon: ICONS.code_tasks },
-  { id: "delivery_workflows", label: "Workflows", sub: "How work moves — pick a path, watch it, build your own", group: "Run", icon: ICONS.delivery_workflows },
+  { id: "delivery_workflows", label: "Workflow", sub: "How work moves — pick a path, watch it, build your own", group: "Run", icon: ICONS.delivery_workflows },
+  { id: "workforce", label: "Agents", sub: "Every agent, what it has produced, and how well", group: "Run", icon: ICONS.org },
+  { id: "org_chart", label: "Org Chart", sub: "Who actually passes work to whom — observed, not declared", group: "Run", icon: ICONS.processes },
   { id: "decisions", label: "Approvals", sub: "Explicit approvals before real effects", group: "Run", icon: ICONS.decisions },
-  { id: "delivery", label: "CI/CD", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
+  { id: "delivery", label: "Infra and Models", sub: "Pipelines, project to PR to deployment, and where it stopped", group: "Run", icon: ICONS.delivery },
   { id: "monitoring", label: "Monitoring", sub: "Deploy health, metrics, traces, and dashboards", group: "Run", icon: ICONS.monitoring, parent: "observability" },
   { id: "activity", label: "Activity log", sub: "Every log line — agents, models, tasks, infra", group: "Run", icon: ICONS.activity, parent: "observability" },
+  { id: "discovery", label: "Discovery", sub: "Research a signal — cited dossier & candidate outcomes", group: "Run", icon: ICONS.discovery },
+  { id: "meetings", label: "Meetings", sub: "Cross-functional agent panels — debate to a PRD", group: "Run", icon: ICONS.meetings },
   { id: "agent", label: "BOSS Agent", sub: "One conversation routes into every governed workflow", group: "Run", icon: ICONS.agent },
   { id: "metatron", label: "Metatron", sub: "Always-on captain: chat, goals, validated overwatch", group: "Run", icon: ICONS.metatron },
   { id: "dashboard", label: "Mission Dashboard", sub: "Live cross-phase snapshot — budget, queue, proof, health", group: "Run", icon: ICONS.dashboard },
   { id: "work", label: "Task Board", sub: "Tasks, artifacts, and the activity feed", group: "Run", icon: ICONS.work },
 
   { id: "portfolio", label: "Work Allocation", sub: "Ranked priorities, quotas, leases, tickets, and release planning", group: "Run", icon: ICONS.portfolio },
-  { id: "workforce", label: "Workforce", sub: "Every agent, what it has produced, and how well", group: "Run", icon: ICONS.org },
-  { id: "org_chart", label: "Org Chart", sub: "Who actually passes work to whom — observed, not declared", group: "Run", icon: ICONS.processes },
   { id: "processes", label: "Agent processes", sub: "Role handoffs: PRD review → build → QA/UX → panel certify → captain accept", group: "Run", icon: ICONS.processes },
   { id: "shepherd", label: "Task Shepherd", sub: "How the shepherd is reasoning about stuck work", group: "Run", icon: ICONS.shepherd },
   { id: "reliability", label: "Reliability", sub: "On-call, AI SRE, incidents, and knowledge graph", group: "Run", icon: ICONS.reliability },
@@ -799,6 +804,32 @@ export default function ConsoleShell({
             {activeDef.label}
             <small>{activeDef.sub}</small>
           </div>
+
+          {/* START A PROJECT FROM ANYWHERE.
+              v2 puts this in the top bar and v1 buried it inside the Factory page, so starting
+              work meant first navigating to the place work is listed. The area is where you go
+              to WATCH; this is how you BEGIN, and it should not be reachable only from one of
+              the twenty-two screens.
+              `?new=1` rather than component state: the Factory area owns the form, and the
+              shell must be able to ask for it from outside without either knowing about the
+              other. Same handoff the console already uses for `?run=` and `?agent=`. */}
+          <button
+            type="button"
+            className="bx-new-project"
+            data-testid="topbar-new-project"
+            title="Start a new project — an agent clones the repo, edits code, runs your tests"
+            onClick={() => {
+              go("code_tasks");
+              try {
+                const url = new URL(window.location.href);
+                url.searchParams.set("new", "1");
+                window.history.replaceState(null, "", url.toString());
+                window.dispatchEvent(new PopStateEvent("popstate"));
+              } catch { /* non-browser — the area still opens */ }
+            }}
+          >
+            New project
+          </button>
 
           <div className="bx-topbar-spacer" />
 
