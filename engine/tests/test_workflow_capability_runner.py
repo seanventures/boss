@@ -128,6 +128,17 @@ def _steps(c, run_id):
     return {r["step_id"]: dict(r) for r in rows}
 
 
+
+def _finish_code_task(c, project_id, run_id, status):
+    """Land a code_task_runs row in a terminal state, as the pipeline would."""
+    c.execute(
+        text("INSERT INTO code_task_runs (id, project_id, status, phase, title) "
+             "VALUES (:id,:p,:s,'done','awaited') "
+             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"),
+        {"id": run_id, "p": project_id, "s": status},
+    )
+
+
 # ── The end-to-end claim ───────────────────────────────────────────────────────
 
 def test_a_capability_step_is_executed_by_dispatching_to_a_real_tool(eng, project, monkeypatch):
@@ -147,9 +158,13 @@ def test_a_capability_step_is_executed_by_dispatching_to_a_real_tool(eng, projec
 
     assert meeting.calls, "the tool was never called"
     assert meeting.calls[0]["args"] == {"directive": "Build a thing"}
-    assert steps["m"]["status"] == "succeeded"
+    # STARTED, NOT FINISHED. `request_meeting` returns a run id in milliseconds for a panel that
+    # takes twenty minutes. Completing here let a workflow race past its own work and finish in
+    # seconds, in a shape that looked like success.
+    assert steps["m"]["status"] == "waiting"
     assert steps["m"]["output"]["meeting_run_id"] == "mrun_1"
-    assert result["performed"][0]["outcome"] == "succeeded"
+    assert steps["m"]["output"]["await"] == {"kind": "meeting", "id": "mrun_1"}
+    assert result["performed"][0]["outcome"] == "awaiting"
 
 
 def test_one_steps_output_becomes_the_next_steps_input(eng, project, monkeypatch):
@@ -171,7 +186,11 @@ def test_one_steps_output_becomes_the_next_steps_input(eng, project, monkeypatch
              "next": []},
         ], "b")
         run = _start(c, project, version["id"])
-        runner.tick(c, Ctx(eng), project_id=project)     # build
+        runner.tick(c, Ctx(eng), project_id=project)     # build starts, and parks
+        # The build finishes. Only then may the next step run — which is the whole point of
+        # waiting, and what makes "deploy the thing you just built" mean anything.
+        _finish_code_task(c, project, "crun_42", "completed")
+        runner.tick(c, Ctx(eng), project_id=project)     # build resumes, preview claims
         workflows.advance_run(c, project, run["id"])
         runner.tick(c, Ctx(eng), project_id=project)     # preview
         steps = _steps(c, run["id"])
@@ -405,3 +424,121 @@ def test_an_auto_approval_records_that_policy_made_it(eng, project, monkeypatch)
     assert row["output"]["approved_by"] == "policy"
     assert row["evidence"][0]["kind"] == "auto_approval"
     assert row["evidence"][0]["sla_hours"] == 1
+
+
+# ── Started is not finished ────────────────────────────────────────────────────
+
+def test_a_build_that_is_still_running_does_not_release_the_next_step(eng, project, monkeypatch):
+    """THE DEFECT THIS FIXES. `create_code_task` returns a run id in milliseconds for a build
+    that takes twenty minutes. Completing the step on that return let a workflow race past its
+    own work: build, review and test all 'done' while the build was still cloning, and the run
+    finished in seconds in a shape that looked like success."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_slow"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_1"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build, preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "wait_one", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": ["p"]},
+            {"id": "p", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_slow"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_slow", "running")   # still going
+        runner.tick(c, Ctx(eng), project_id=project)
+        workflows.advance_run(c, project, run["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["b"]["status"] == "waiting", "the build step did not wait"
+    assert not preview.calls, "the next step ran while the build was still going"
+
+
+def test_a_build_that_failed_fails_its_step_rather_than_shipping(eng, project, monkeypatch):
+    """Silently succeeding would let a workflow report a shipped product on top of a build that
+    did not build. The underlying status travels into the message so the reason is not lost."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_bad"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "wait_fail", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_bad", "failed")
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        status = c.execute(
+            text("SELECT status FROM workflow_runs WHERE id=:i"), {"i": run["id"]}).scalar()
+
+    assert steps["b"]["status"] == "failed"
+    assert "failed" in (steps["b"]["last_error"] or "")
+    assert status == "failed", "the run reported success over a failed build"
+
+
+def test_a_capability_with_no_correlation_id_is_not_parked(eng, project, monkeypatch):
+    """A tool that claims to be async but hands back nothing to wait ON cannot be waited on.
+    Parking it would hang the run forever with no way to say why, so it completes as before."""
+    build = RecordingTool("create_code_task", {"ok": True})     # no id of any kind
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "no_id", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["b"]["status"] == "succeeded"
+
+
+def test_a_synchronous_capability_still_completes_immediately(eng, project, monkeypatch):
+    """Only the async ones wait. Making everything wait would stall workflows on steps that
+    genuinely finish when their tool returns."""
+    preview = RecordingTool("start_preview", {"preview_id": "prev_2"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "sync_one", [
+            {"id": "p", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_x"}},
+             "next": []},
+        ], "p")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["p"]["status"] == "succeeded"
+
+
+def test_the_parked_step_holds_no_lease(eng, project, monkeypatch):
+    """A lease held for the twenty minutes of a build would be reclaimed as a crashed worker,
+    and the step re-run — starting a SECOND build."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_lease"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "lease_one", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        row = c.execute(
+            text("SELECT status, lease_owner, lease_expires_at FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r"), {"r": run["id"]}).mappings().first()
+
+    assert row["status"] == "waiting"
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None

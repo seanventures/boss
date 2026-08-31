@@ -2366,6 +2366,152 @@ def heartbeat_step(
     return _serialize_step(row)
 
 
+def force_complete_waiting_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    """Complete a step that was PARKED, not leased.
+
+    `complete_step` requires the caller to hold the lease, which is right for work a worker is
+    executing. A parked step deliberately holds none — nothing is running, it is waiting for a
+    build that may take twenty minutes, and a lease held that long would be reclaimed as a
+    crashed worker. So its completion is a separate door, and it only opens for a step actually
+    in `waiting`.
+    """
+    row = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='succeeded', output=CAST(:output AS JSONB),
+                completed_at=now(), updated_at=now()
+            WHERE id=:id AND project_id=:project_id AND status='waiting'
+            RETURNING *
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id, "output": json.dumps(output)},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Waiting workflow step not found.")
+    connection.execute(
+        text("UPDATE workflow_runs SET status='running', updated_at=now() "
+             "WHERE id=:id AND status='waiting'"),
+        {"id": row["workflow_run_id"]},
+    )
+    # EVERYTHING `complete_step` DOES AFTER THE UPDATE, because a step finishing is more than a
+    # status. The first version wrote the row and stopped, so the next step was never scheduled:
+    # the run went straight to `completed` with the following step marked `skipped`. A build
+    # that finished correctly still lost the deploy that was supposed to follow it.
+    if output:
+        # Into the run context, which is where `{"from_step": ..., "field": ...}` reads from.
+        # Without this "deploy the thing you just built" resolves to nothing.
+        connection.execute(
+            text(
+                """
+                UPDATE workflow_runs
+                SET context=context || CAST(:output AS JSONB), updated_at=now()
+                WHERE id=:run_id
+                """
+            ),
+            {"run_id": row["workflow_run_id"], "output": json.dumps(output)},
+        )
+    _emit_step_event(
+        connection, _run_row(connection, row["workflow_run_id"]),
+        "workflow.step_succeeded", row, {"awaited": True},
+    )
+    _after_success(
+        connection, row["workflow_run_id"], row["step_id"], int(row["iteration"]),
+    )
+    return _serialize_step(row)
+
+
+def force_fail_waiting_step(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    error: str,
+) -> dict[str, Any]:
+    """Fail a parked step because the work it was waiting for failed.
+
+    Not retried: the retry belongs to the thing that failed, not to the act of waiting for it.
+    Re-running this step would start a SECOND build rather than reconsider the first.
+    """
+    row = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='failed', last_error=:error, completed_at=now(), updated_at=now()
+            WHERE id=:id AND project_id=:project_id AND status='waiting'
+            RETURNING *
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id, "error": error[:500]},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Waiting workflow step not found.")
+    connection.execute(
+        text("UPDATE workflow_runs SET status='failed', error=:error, updated_at=now() "
+             "WHERE id=:id"),
+        {"id": row["workflow_run_id"], "error": error[:500]},
+    )
+    return _serialize_step(row)
+
+
+def park_step_awaiting(
+    connection: Connection,
+    *,
+    project_id: str,
+    step_run_id: str,
+    worker_id: str,
+    output: dict[str, Any],
+) -> dict[str, Any]:
+    """Park a step that STARTED long-running work and must not be called done.
+
+    An async capability's tool returns as soon as the work is accepted: create_code_task hands
+    back a run id in milliseconds for a build that takes twenty minutes. Completing the step on
+    that return made the workflow race past `build` into `review` and `test` while the build was
+    still cloning — every run finishing in seconds, with a shape that looked like success.
+
+    So the step goes to `waiting`, holding the id it is waiting on, and the runner completes it
+    when the underlying work reaches a terminal state. The lease is released because nothing is
+    executing: a lease held for twenty minutes would be reclaimed as a crashed worker.
+    """
+    row = connection.execute(
+        text(
+            """
+            SELECT * FROM workflow_step_runs
+            WHERE id=:id AND project_id=:project_id FOR UPDATE
+            """
+        ),
+        {"id": step_run_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        raise WorkflowNotFoundError("Workflow step run not found.")
+    if row["status"] not in {"leased", "running"} or row["lease_owner"] != worker_id:
+        raise WorkflowLeaseError("Workflow step is not leased by this worker.")
+    updated = connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='waiting', output=CAST(:output AS JSONB),
+                lease_owner=NULL, lease_expires_at=NULL,
+                started_at=COALESCE(started_at, now()), updated_at=now()
+            WHERE id=:id
+            RETURNING *
+            """
+        ),
+        {"id": step_run_id, "output": json.dumps(output)},
+    ).mappings().first()
+    connection.execute(
+        text("UPDATE workflow_runs SET status='waiting', updated_at=now() WHERE id=:id"),
+        {"id": row["workflow_run_id"]},
+    )
+    return _serialize_step(updated)
+
+
 def complete_step(
     connection: Connection,
     *,
