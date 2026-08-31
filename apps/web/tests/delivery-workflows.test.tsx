@@ -138,9 +138,21 @@ describe("a run says what it is waiting for", () => {
     expect(UI).toContain("{run.steps_done} of {run.step_count}");
   });
 
-  it("stops polling when nothing is in flight", () => {
-    // An idle console should be idle.
-    expect(UI).toContain("if (!anyLive) return;");
+  it("keeps asking even when nothing is running", () => {
+    // This replaces a test that asserted the opposite — "an idle console should be idle" — which
+    // is what broke it. A console cannot know work has STARTED without asking: a project begun
+    // from the Command Center, the Factory form, or a PRD approval creates its run elsewhere.
+    // Anyone holding this page open when the only run was blocked saw a frozen list and no sign
+    // of the project they had just started.
+    expect(UI).not.toContain("if (!anyLive) return;");
+    expect(UI).toContain("anyLive ? 8000 : 15000");
+  });
+
+  it("opens the run the operator was sent here to see", () => {
+    // Creating a project redirects here with `?wfr=<id>`. Expanding it on arrival is the
+    // difference between "your project is somewhere in this list" and showing them the steps.
+    expect(UI).toContain('get("wfr")');
+    expect(UI).toContain("setOpenRun(wanted)");
   });
 });
 

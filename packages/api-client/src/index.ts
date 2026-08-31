@@ -6051,7 +6051,10 @@ export function createBossApiClient(config: BossApiClientConfig) {
         "GET", `/v1/code-tasks/${encodeURIComponent(runId)}/activity`);
     },
     createCodeTask(payload: CodeTaskCreatePayload) {
-      return request<{ status: string; run_id: string }>("POST", "/v1/code-tasks", { body: payload });
+      // `workflow_run_id` is the OUTER run — research → panel → build → preview → deploy —
+      // which is where the operator is sent to watch what they just started.
+      return request<{ status: string; run_id: string; workflow_run_id?: string | null }>(
+        "POST", "/v1/code-tasks", { body: payload });
     },
     retryCodeTask(runId: string, fixNote?: string, actor = "executive_console") {
       return request<{ status: string; run_id: string; attempt: number }>(

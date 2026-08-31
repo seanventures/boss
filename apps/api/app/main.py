@@ -6387,9 +6387,23 @@ def start_code_task_endpoint(payload: dict):
                 )
         except Exception:  # noqa: BLE001
             swarm = None
+    # THE OUTER RUN, so the console can take the operator straight to it. Written into
+    # finalize_ctx by start_code_task — read back rather than plumbed through a return value,
+    # because every creation path goes through that one function and only some of them are
+    # this endpoint.
+    workflow_run_id = None
+    try:
+        with begin(engine) as c:
+            workflow_run_id = c.execute(
+                text("SELECT finalize_ctx->>'workflow_run_id' FROM code_task_runs WHERE id = :r"),
+                {"r": run_id},
+            ).scalar()
+    except Exception as error:  # noqa: BLE001 — the project started; this is only navigation
+        LOGGER.warning("could not read the workflow run for %s: %s", run_id, error)
     return {
         "status": "queued",
         "run_id": run_id,
+        "workflow_run_id": workflow_run_id,
         "process_run_id": (swarm or {}).get("id") if isinstance(swarm, dict) else None,
     }
 

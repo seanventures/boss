@@ -117,3 +117,33 @@ describe("opening a project", () => {
     expect(new URLSearchParams(search).get("filter")).toBe("live");
   });
 });
+
+/**
+ * Starting a project must LAND you where the work is.
+ *
+ * Creating a project left the operator on the form that started it, with no sign anything had
+ * happened; the run they wanted to watch was in another area they had to know to open. And the
+ * Workflow page only polled while something was already live — so anyone holding it open when
+ * the sole run was blocked saw a frozen list and no sign of the project they had just started.
+ */
+describe("where you land after starting a project", () => {
+  it("goes to the Workflow area", async () => {
+    const { workflowHref } = await import("../app/actions-href");
+    expect(new URLSearchParams(workflowHref("wfr_1").split("?")[1]).get("area"))
+      .toBe("delivery_workflows");
+  });
+
+  it("names the run so the page can open it", async () => {
+    const { workflowHref } = await import("../app/actions-href");
+    expect(new URLSearchParams(workflowHref("wfr_1").split("?")[1]).get("wfr")).toBe("wfr_1");
+  });
+
+  it("still goes there when the run id is not known yet", async () => {
+    // Approving a PRD starts the build on a background thread, so there is no run id to carry.
+    // The page polls, and a run that appears seconds later sorts to the top because it is live.
+    const { workflowHref } = await import("../app/actions-href");
+    const href = workflowHref(null);
+    expect(new URLSearchParams(href.split("?")[1]).get("area")).toBe("delivery_workflows");
+    expect(new URLSearchParams(href.split("?")[1]).get("wfr")).toBeNull();
+  });
+});

@@ -364,13 +364,34 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
   useEffect(() => { void load(); }, [load]);
 
-  // Refresh while something is in flight. Stops when nothing is, so an idle console is idle.
-  const anyLive = runs.some((r) => ["running", "waiting", "queued", "validating"].includes(r.status));
+  // KEEP ASKING, EVEN WHEN NOTHING IS RUNNING.
+  //
+  // This used to stop polling when no run was live — "an idle console is idle". But a console
+  // cannot know that work has STARTED without asking: a project kicked off from the Command
+  // Center, from the Factory form, or by approving a PRD creates its run somewhere else
+  // entirely. Anyone who had this page open when the only run was blocked saw a frozen list
+  // and no sign of the project they had just started, because the page never asked again.
+  //
+  // Fast while something is in flight, slower when idle — idle still means "watch for work
+  // appearing", not "stop looking".
+  const anyLive = runs.some((r) => LIVE.includes(r.status));
   useEffect(() => {
-    if (!anyLive) return;
-    const t = window.setInterval(() => { void load(); }, 8000);
+    const t = window.setInterval(() => { void load(); }, anyLive ? 8000 : 15000);
     return () => window.clearInterval(t);
   }, [anyLive, load]);
+
+  // OPEN THE RUN THE OPERATOR WAS SENT HERE TO SEE. Creating a project redirects here with
+  // `?wfr=<id>`; expanding it on arrival is the difference between "your project is somewhere
+  // in this list" and showing them the steps.
+  useEffect(() => {
+    const read = () => {
+      const wanted = new URLSearchParams(window.location.search).get("wfr");
+      if (wanted) setOpenRun(wanted);
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
 
   const act = useCallback(async (label: string, action: string, payload: Record<string, unknown>) => {
     setBusy(label);
