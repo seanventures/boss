@@ -6326,7 +6326,15 @@ def start_code_task_endpoint(payload: dict):
                     "_fixture" if simulated else settings.target_github_repo
                 ),
                 base_branch=payload.get("base_branch") or "main",
-                finalize_ctx=payload.get("finalize_ctx") or {},
+                # THE WORKFLOW THE OPERATOR PICKED, if they picked one. Carried on
+                # finalize_ctx rather than a new parameter: start_code_task already threads
+                # that dict through to the run row, and the engine pops the id, resolves it
+                # against THIS project, and records the workflow it names.
+                finalize_ctx={
+                    **(payload.get("finalize_ctx") or {}),
+                    **({"workflow_version_id": payload["workflow_version_id"]}
+                       if payload.get("workflow_version_id") else {}),
+                },
                 jobs=jobs,
                 profile=payload.get("profile"),
                 risk_tier=payload.get("risk_tier"),

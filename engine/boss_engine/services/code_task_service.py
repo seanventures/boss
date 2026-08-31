@@ -565,10 +565,20 @@ def start_code_task(
     #
     # Resolution failing is the NORMAL state until a project maps one, so it is never fatal.
     try:
-        from .workflows import workflow_for_code_task
+        from .workflows import workflow_by_version, workflow_for_code_task
 
-        governing = workflow_for_code_task(
-            connection, project_id=project_id, task_id=task_id)
+        # AN EXPLICIT CHOICE WINS. The caller may name a workflow version — the picker on the
+        # New project form does — and the person starting the work saying which path it should
+        # follow outranks any mapping resolved on their behalf. Falls through to resolution if
+        # the id names nothing in this project, rather than silently recording a choice that
+        # was not honoured.
+        governing = None
+        chosen_id = run_finalize.pop("workflow_version_id", None)
+        if chosen_id:
+            governing = workflow_by_version(connection, project_id, str(chosen_id))
+        if not governing:
+            governing = workflow_for_code_task(
+                connection, project_id=project_id, task_id=task_id)
         if governing:
             run_finalize["workflow"] = governing
     except Exception:  # noqa: BLE001 — an unmapped task must still run

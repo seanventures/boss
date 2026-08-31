@@ -1394,6 +1394,10 @@ export type CodeTaskCreatePayload = {
   // `lean` task as whatever-comes-next is not a re-run.
   profile?: string;
   risk_tier?: number;
+  /** The workflow version this project should follow. Picked by the operator; outranks any
+   *  mapping resolved on their behalf. Omit to let the project's mapping (or the standard
+   *  workflow) decide. */
+  workflow_version_id?: string;
 };
 
 export type MeetingSummary = {

@@ -3374,3 +3374,39 @@ def _default_workflow(
         "version": row["version"],
         "source": "default",
     }
+
+
+def workflow_by_version(
+    connection: Connection, project_id: str, version_id: str
+) -> Optional[dict[str, Any]]:
+    """A workflow the operator PICKED, resolved from the version they picked.
+
+    An explicit choice outranks a mapping and outranks the default: the person starting the
+    work said which path it should follow, and nothing inferred later should quietly override
+    that. Recorded as `source: "chosen"` so the console can say so.
+
+    Scoped to the project on purpose — a version id from another project must not be usable by
+    passing it in the payload.
+    """
+    row = connection.execute(
+        text(
+            """
+            SELECT d.id AS definition_id, d.workflow_key, d.name, v.id AS version_id, v.version
+            FROM workflow_versions v
+            JOIN workflow_definitions d ON d.id = v.workflow_definition_id
+            WHERE v.id = :version_id AND d.project_id = :project_id
+            """
+        ),
+        {"version_id": version_id, "project_id": project_id},
+    ).mappings().first()
+    if not row:
+        return None
+    return {
+        "definition_id": row["definition_id"],
+        "version_id": row["version_id"],
+        "mapping_id": None,
+        "workflow_key": row["workflow_key"],
+        "name": row["name"],
+        "version": row["version"],
+        "source": "chosen",
+    }

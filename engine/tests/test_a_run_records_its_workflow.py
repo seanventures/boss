@@ -58,8 +58,8 @@ def test_an_unmapped_project_is_not_an_error():
 def test_resolution_can_never_stop_a_task_from_starting():
     """The link is a fact about the run, not a precondition for it."""
     src = inspect.getsource(code_task_service.start_code_task)
-    block = src[src.index("workflow_for_code_task"):]
-    assert "except Exception" in block[:600]
+    block = src[src.index("from .workflows import"):]
+    assert "except Exception" in block[:1400]
 
 
 def test_the_run_records_the_name_not_just_an_id():
@@ -68,6 +68,30 @@ def test_the_run_records_the_name_not_just_an_id():
     src = inspect.getsource(workflows.workflow_for_code_task)
     for field in ('"definition_id"', '"version_id"', '"mapping_id"', '"name"', '"version"'):
         assert field in src, field
+
+
+def test_an_explicit_choice_outranks_a_resolved_one():
+    """The picker on the New project form names a version. The person starting the work saying
+    which path it should follow outranks any mapping resolved on their behalf."""
+    src = inspect.getsource(code_task_service.start_code_task)
+    block = src[src.index("from .workflows import"):]
+    assert 'run_finalize.pop("workflow_version_id", None)' in block
+    assert block.index("workflow_by_version(") < block.index("workflow_for_code_task(")
+
+
+def test_an_unknown_version_falls_back_rather_than_recording_a_lie():
+    """If the id names nothing in this project, resolution continues — recording a 'chosen'
+    workflow that was never honoured would be worse than recording none."""
+    src = inspect.getsource(code_task_service.start_code_task)
+    block = src[src.index("from .workflows import"):]
+    assert "if not governing:" in block
+
+
+def test_a_version_from_another_project_cannot_be_borrowed():
+    """The id arrives in a request payload. Scoping the lookup to the project is what stops one
+    project naming another's workflow."""
+    src = inspect.getsource(workflows.workflow_by_version)
+    assert "d.project_id = :project_id" in src
 
 
 def test_it_is_stamped_at_creation_not_inferred_later():

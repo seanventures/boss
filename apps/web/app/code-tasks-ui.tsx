@@ -442,11 +442,40 @@ function Flow({ phase, status }: { phase: string; status: string }) {
   );
 }
 
+/**
+ * The workflows this project can be built with.
+ *
+ * Fetched here rather than threaded down as a prop: this form is the only thing that needs
+ * them, and the Factory page is already 9.6 MB of server-rendered HTML — adding a list of 21
+ * definitions to every render of it, for a form most visits never open, would be the wrong
+ * trade.
+ */
+function useProjectWorkflows(projectId: string) {
+  const [items, setItems] = useState<Array<{ id: string; name: string;
+    active_version_id?: string | null; is_catalogue?: boolean }>>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/delivery-workflows?view=installed&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (!res.ok) return;
+        const body = await res.json();
+        if (alive) setItems(body.items ?? []);
+      } catch { /* the form still works; the picker just says nothing to choose */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+  return items;
+}
+
 function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
   projectId: string;
   defaultOwner?: string;
   defaultRepo?: string;
 }) {
+  const workflows = useProjectWorkflows(projectId);
   return (
     <form action={createCodeTaskAction} className="ct-form">
       <input type="hidden" name="project_id" value={projectId} />
@@ -487,6 +516,29 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
         <label className="mr-field-label">
           Base branch
           <input className="mr-select" name="base_branch" defaultValue="main" placeholder="main" />
+        </label>
+      </div>
+      {/* WHICH PATH THIS WORK FOLLOWS.
+          The workflow runtime and the coding pipeline were separate systems: 54 definitions on
+          one screen, a list of runs on another, and nothing anywhere saying they were related.
+          Choosing here is the join, made at the moment the decision is actually being taken.
+          The empty option is not a blank — it is the honest default. Most projects should
+          follow whatever the project already maps, and forcing a choice on someone who has no
+          opinion would make the field an obstacle rather than a control. */}
+      <div className="ct-form-row">
+        <label className="mr-field-label">
+          Workflow
+          <select className="mr-select" name="workflow_version_id"
+                  data-testid="ct-new-workflow" defaultValue="">
+            <option value="">Use this project&apos;s workflow (Standard Product Delivery)</option>
+            {workflows
+              .filter((w) => w.active_version_id)
+              .map((w) => (
+                <option key={w.id} value={w.active_version_id as string}>
+                  {w.name}{w.is_catalogue ? " (standard)" : ""}
+                </option>
+              ))}
+          </select>
         </label>
       </div>
       <div className="ct-form-actions">

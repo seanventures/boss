@@ -3049,6 +3049,9 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
     owner: String(formData.get("owner") ?? "").trim() || undefined,
     repo: String(formData.get("repo") ?? "").trim() || undefined,
     base_branch: String(formData.get("base_branch") ?? "").trim() || undefined,
+    // Empty means "decide for me" — the project's mapping, or the standard workflow.
+    workflow_version_id:
+      String(formData.get("workflow_version_id") ?? "").trim() || undefined,
   });
   revalidatePath("/");
 }
