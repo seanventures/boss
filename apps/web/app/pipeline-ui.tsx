@@ -269,7 +269,7 @@ export function PipelineView({ data }: { data: PipelineData }) {
       <h3 style={{ margin: "26px 0 10px", color: "var(--ink)", fontSize: 15 }}>Recent run costs</h3>
       {data.recentRuns.length === 0 ? (
         <p style={{ color: "var(--muted)", fontSize: 13 }}>
-          No governed runs yet. Start a code task and the per-step costs will appear here for
+          No governed runs yet. Start a project and the per-step costs will appear here for
           tier-by-tier comparison.
         </p>
       ) : (

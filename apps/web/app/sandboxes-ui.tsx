@@ -330,9 +330,9 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
         <span><b style={{ color: "var(--ink)" }}>{host?.capacity ?? "—"}</b> capacity</span>
       </div>
       <p className="detail" style={{ margin: 0 }}>
-        Code tasks run <b>inside single‑tenant Firecracker micro‑VMs</b> here — jailed, cgroup‑capped,
+        Projects run <b>inside single‑tenant Firecracker micro‑VMs</b> here — jailed, cgroup‑capped,
         internet‑only egress, destroyed after each task. VMs are ephemeral &amp; isolated by design (not
-        browsable); the <b>running</b> count rises while a code task executes.
+        browsable); the <b>running</b> count rises while a project executes.
       </p>
     </div>
   );
@@ -348,7 +348,7 @@ export function SandboxesHome({ sandboxes, apiReachable, unavailable, host }: {
         <span className="sbx-home-count">{sandboxes.length} live sandbox{sandboxes.length === 1 ? "" : "es"}</span>
       </div>
       {sandboxes.length === 0 ? (
-        <p className="detail">No live sandboxes. Sandboxes appear here while (and shortly after) a code task runs on the execution plane.</p>
+        <p className="detail">No live sandboxes. Sandboxes appear here while (and shortly after) a project runs on the execution plane.</p>
       ) : (
         <div className="sbx-grid">
           {sandboxes.map((s) => (

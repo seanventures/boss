@@ -445,7 +445,7 @@ export function AgentChat({ projectId, actor, initialTaskId }: {
                   </span>
                 ))}
               </div>
-            ) : <p className="detail" style={{ marginTop: 6 }}>No code tasks yet for this task — ask BOSS to build or improve it.</p>}
+            ) : <p className="detail" style={{ marginTop: 6 }}>No projects yet for this task — ask BOSS to build or improve it.</p>}
           </div>
         )}
 

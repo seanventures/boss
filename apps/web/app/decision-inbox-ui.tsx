@@ -110,11 +110,11 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     action === "execute_agent_tool" &&
     (recommendation.start_code_task === true || recommendation.tool === "publish_document")
   ) {
-    return "Approving publishes the PRD and starts a governed code task for this task.";
+    return "Approving publishes the PRD and starts a governed project for this task.";
   }
   switch (action) {
     case "review_plan_draft": return "Approving queues a PR proposal (code work) for this task.";
-    case "resume_code_task": return "Approving resumes the paused code task.";
+    case "resume_code_task": return "Approving resumes the paused project.";
     case "review_pull_request": return "Approving authorizes the pull-request merge.";
     case "review_deployment": return "Approving authorizes the deployment.";
     case "review_infra_provisioning": return "Approving authorizes infrastructure provisioning.";
@@ -125,7 +125,7 @@ function approvalEffectLabel(recommendation: Record<string, unknown>): string {
     case "github.community.merge_authorization": return "Approving records merge authorization (maintainer still merges).";
     case "self_improvement.begin_canary":
     case "self_improvement.rollout": return "Approving proceeds with the self-improvement rollout.";
-    default: return "Approving records your decision — this type has no automated follow-on (no code task is started).";
+    default: return "Approving records your decision — this type has no automated follow-on (no project is started).";
   }
 }
 

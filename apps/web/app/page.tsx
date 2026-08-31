@@ -1194,7 +1194,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             <span className="ov-actions-label">Quick actions</span>
             <AreaLink className="ov-action" area="discovery" orgId={activeOrgId}>Research an idea</AreaLink>
             <AreaLink className="ov-action primary" area="meetings" orgId={activeOrgId}>Convene a panel</AreaLink>
-            <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a code task</AreaLink>
+            <AreaLink className="ov-action" area="code_tasks" orgId={activeOrgId}>Start a project</AreaLink>
             <AreaLink className="ov-action" area="apps" orgId={activeOrgId}>See your apps</AreaLink>
             <AreaLink className="ov-action" area="decisions" orgId={activeOrgId}>Review approvals</AreaLink>
             <AreaLink className="ov-action" area="reports" orgId={activeOrgId}>View evidence</AreaLink>
@@ -7006,10 +7006,10 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             Meetings, its runs under Code Tasks, its preview under CI/CD and its health under
             Monitoring, so "where is my ApproveIt?" had no answer and was reconstructed by
             hand. This groups the runs into apps and puts each one's life on a single row. */}
-        <section className="panel-stack" data-area="code_tasks" aria-label="Code tasks">
+        <section className="panel-stack" data-area="code_tasks" aria-label="Projects">
           <div className="section-head">
             <div>
-              <span className="eyebrow">Code Tasks</span>
+              <span className="eyebrow">Projects</span>
               <h2>An agent clones the repo, edits code, runs your tests — then opens a gated PR.</h2>
             </div>
           </div>

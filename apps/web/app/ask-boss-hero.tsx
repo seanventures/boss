@@ -502,7 +502,7 @@ export function AskBossHero({
       setReply(
         `**Started.** A PRD panel is convening for this directive.\n\n` +
         (taskId ? `Task \`${taskId}\` — track it under **Meetings**, then Factory once the PRD is approved.\n\n` : "") +
-        `The sequence from here is: panel debates → PRD drafted → you approve → code task runs.`,
+        `The sequence from here is: panel debates → PRD drafted → you approve → project runs.`,
       );
     });
   }, [busy, projectId, actor]);

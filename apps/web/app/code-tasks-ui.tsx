@@ -1731,7 +1731,7 @@ function QaBenchmarkCatalog({ benchmarks, builtBenchmarkIds = new Set<string>(),
     <div className="ct-block" style={{ marginTop: 12 }}>
       <div className="ct-block-title">End-to-end QA benchmarks</div>
       <p className="detail" style={{ marginTop: 4 }}>
-        These are pinned product contracts, not canned demos. Launching one creates a strict governed code task with a durable plan, evidence bundle, and final verification report.
+        These are pinned product contracts, not canned demos. Launching one creates a strict governed project with a durable plan, evidence bundle, and final verification report.
       </p>
       {/* The benchmark catalogue: the THIRD card path, and the last one still rendering as
           full-width rows while everything below it had become tiles. Three render paths for
@@ -2681,7 +2681,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
   useLiveRefresh(anyLive, 4000, reload);
 
   if (!apiReachable) {
-    return <p className="detail">Code tasks unavailable — API unreachable.</p>;
+    return <p className="detail">Projects unavailable — API unreachable.</p>;
   }
 
   const previewListError = previewBlockedReason ? (
@@ -2861,7 +2861,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
       {previewListError}
       <div className="ct-home-bar">
         <span className="ct-home-count">
-          {tasks.length} code task{tasks.length === 1 ? "" : "s"}
+          {tasks.length} project{tasks.length === 1 ? "" : "s"}
           {/* "200 code tasks" beside a project that has 244 is not a count, it is a window
               reported as a total. The operator's next thought is "where did the rest go", and
               nothing on the screen used to answer it. */}
@@ -2893,7 +2893,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
         ) : null}
         <div className="ct-home-actions">
           <button className="cap-btn primary" onClick={() => setShowNew((v) => !v)}>
-            {showNew ? "Close" : "＋ New code task"}
+            {showNew ? "Close" : "＋ New project"}
           </button>
         </div>
       </div>
@@ -2921,7 +2921,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
       />
 
       {tasks.length === 0 ? (
-        <p className="detail">No code tasks yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
+        <p className="detail">No projects yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
       ) : tasks.filter((c) => !isInternalRun(c)).length === 0 ? (
         // EVERYTHING IN THE WINDOW WAS HOUSEKEEPING.
         //

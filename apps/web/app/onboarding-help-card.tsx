@@ -40,7 +40,7 @@ export function OnboardingHelpCard() {
             </li>
             <li>
               <b>Build</b> — a directive. A panel debates it, drafts a PRD, you approve, and the
-              code task runs. Watch it in <b>Meetings</b>, then <b>Factory</b>.
+              project runs. Watch it in <b>Meetings</b>, then <b>Factory</b>.
             </li>
           </ul>
         </div>
