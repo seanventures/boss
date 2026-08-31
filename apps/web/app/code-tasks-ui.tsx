@@ -2487,7 +2487,13 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
   // anyone who navigated within the page while filling it in.
   useEffect(() => {
     const read = () => {
-      if (new URLSearchParams(window.location.search).get("new") === "1") setShowNew(true);
+      if (new URLSearchParams(window.location.search).get("new") === "1") {
+        setShowNew(true);
+        // AND STOP SHOWING A PROJECT. Selection is component state, so clearing the URL param
+        // alone does not put the area back on its list — asking to start something new means
+        // you are no longer reading an existing one.
+        setSelected(null);
+      }
     };
     read();
     window.addEventListener("popstate", read);

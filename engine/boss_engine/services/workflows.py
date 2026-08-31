@@ -3245,10 +3245,22 @@ def seed_specpack_workflows(
     return registered
 
 
-#: The selector a code task resolves its workflow by. A mapping on the exact task id targets
-#: one task; the `'*'` the resolver already understands is the project's DEFAULT workflow,
-#: which is what "link the standard workflow" means in practice.
-CODE_TASK_SELECTOR_KIND = "code_task"
+#: THE SELECTOR THE PRODUCT ALREADY USES.
+#:
+#: `POST /v1/delivery-workflows/apply` — the "use this workflow for this kind of work" action in
+#: the Workflows area — creates mappings with `selector_kind="work_class"`. My first version of
+#: this resolver invented `selector_kind="code_task"` instead, which nothing writes: applying a
+#: workflow in the console would have had no effect on what a project resolved to, and the two
+#: halves of the same feature would have been permanently unable to see each other.
+#:
+#: A code task is the build of a product, so it resolves against the same work classes the
+#: catalogue declares. `'*'` is not used here — the catalogue's own wildcard is `"any"`.
+CODE_TASK_SELECTOR_KIND = "work_class"
+
+#: What a code task counts AS, in work-class terms. `project.new` is what the catalogue gives
+#: Standard Product Delivery, and `any` is the catalogue's own wildcard — tried in order, so a
+#: workflow applied specifically to new projects beats one applied to everything.
+CODE_TASK_WORK_CLASSES = ("project.new", "any")
 
 
 def workflow_for_code_task(
@@ -3272,18 +3284,20 @@ def workflow_for_code_task(
     Returns None rather than raising. A project with no mapping is the normal state today, and
     an unmapped task must still run.
     """
-    try:
-        resolution = resolve_mapping(
-            connection,
-            project_id=project_id,
-            selector_kind=CODE_TASK_SELECTOR_KIND,
-            selector_value=str(task_id or "*"),
-        )
-    except Exception:  # noqa: BLE001 — a missing link must never stop a task from starting
-        return None
-    if resolution.get("status") != "selected":
-        return _default_workflow(connection, project_id)
-    selected = resolution.get("selected") or {}
+    selected: dict[str, Any] = {}
+    for work_class in CODE_TASK_WORK_CLASSES:
+        try:
+            resolution = resolve_mapping(
+                connection,
+                project_id=project_id,
+                selector_kind=CODE_TASK_SELECTOR_KIND,
+                selector_value=work_class,
+            )
+        except Exception:  # noqa: BLE001 — a missing link must never stop a task starting
+            return None
+        if resolution.get("status") == "selected":
+            selected = resolution.get("selected") or {}
+            break
     version_id = selected.get("workflow_version_id")
     if not version_id:
         return _default_workflow(connection, project_id)

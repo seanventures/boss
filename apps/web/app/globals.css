@@ -7561,17 +7561,24 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .ct-workflow { margin-left: auto; white-space: nowrap; }
 .ct-workflow b { font-weight: 600; color: var(--ink-soft); }
 
-/* START A PROJECT FROM ANYWHERE. Solid and accent-coloured because it is the one control in
-   the bar that CREATES something; everything else beside it navigates or toggles. */
+/* START A PROJECT FROM ANYWHERE.
+   Shaped like the chips it sits among — same height, same pill, same border weight — because a
+   solid accent block dropped into a bar of quiet chips reads as an advert, not a control. It
+   earns its emphasis from the accent border and text and from a leading +, which is enough to
+   find it without shouting over the eight things beside it. */
 .bx-new-project {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 14px; min-height: 32px; margin-left: 12px;
-  font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
-  white-space: nowrap;
-  color: var(--accent-ink, #04202a);
-  background: var(--accent); border: 1px solid var(--accent); border-radius: 9px;
+  height: 32px; padding: 0 13px; margin-right: 2px;
+  font: inherit; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+  white-space: nowrap; border-radius: 999px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
-.bx-new-project:hover { filter: brightness(1.08); }
+.bx-new-project:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent);
+}
 .bx-new-project:active { transform: translateY(1px); }
-@media (max-width: 720px) { .bx-new-project { display: none; } }
+@media (max-width: 900px) { .bx-new-project { display: none; } }
 .ct-workflow-default { opacity: .7; font-weight: 400; }

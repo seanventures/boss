@@ -19,9 +19,19 @@ import inspect
 from boss_engine.services import code_task_service, workflows
 
 
-def test_the_selector_kind_is_stable():
-    """Mappings are stored against it; changing the string orphans every mapping ever made."""
-    assert workflows.CODE_TASK_SELECTOR_KIND == "code_task"
+def test_it_resolves_against_the_selector_the_product_actually_writes():
+    """THE MISTAKE THIS CORRECTS. `POST /v1/delivery-workflows/apply` — the "use this workflow
+    for this kind of work" action in the Workflows area — creates mappings with
+    selector_kind="work_class". The first version of this resolver invented "code_task", which
+    nothing writes, so applying a workflow in the console would have had no effect on what a
+    project resolved to and the two halves of one feature could never have met."""
+    assert workflows.CODE_TASK_SELECTOR_KIND == "work_class"
+
+
+def test_a_specific_work_class_beats_the_catalogue_wildcard():
+    """`any` is the catalogue's own wildcard. Tried after `project.new`, so a workflow applied
+    specifically to new projects wins over one applied to everything."""
+    assert workflows.CODE_TASK_WORK_CLASSES == ("project.new", "any")
 
 
 def test_it_reuses_the_existing_mapping_resolver():
@@ -32,12 +42,10 @@ def test_it_reuses_the_existing_mapping_resolver():
     assert "resolve_mapping(" in src
 
 
-def test_the_wildcard_is_what_makes_a_project_default_possible():
-    """`resolve_mapping` matches `selector_value IN (:selector_value, '*')`. Passing the task id
-    lets one task be targeted specifically, while a `'*'` mapping governs the whole project —
-    which is what "link the standard workflow" means."""
+def test_it_tries_each_work_class_in_order():
     src = inspect.getsource(workflows.workflow_for_code_task)
-    assert 'str(task_id or "*")' in src
+    assert "for work_class in CODE_TASK_WORK_CLASSES" in src
+    assert "break" in src
 
 
 def test_an_unmapped_project_is_not_an_error():
@@ -84,7 +92,7 @@ def test_an_unmapped_project_falls_back_to_the_standard_workflow():
     "which workflow governs my project" would be "none" for every project that has ever
     existed — technically true and useless."""
     src = inspect.getsource(workflows.workflow_for_code_task)
-    assert src.count("_default_workflow(connection, project_id)") == 2
+    assert "_default_workflow(connection, project_id)" in src
 
 
 def test_the_default_is_the_catalogue_standard():

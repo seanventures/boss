@@ -800,11 +800,6 @@ export default function ConsoleShell({
             <List size={18} aria-hidden />
           </button>
 
-          <div className="bx-topbar-title" id="boss-console-title">
-            {activeDef.label}
-            <small>{activeDef.sub}</small>
-          </div>
-
           {/* START A PROJECT FROM ANYWHERE.
               v2 puts this in the top bar and v1 buried it inside the Factory page, so starting
               work meant first navigating to the place work is listed. The area is where you go
@@ -823,13 +818,25 @@ export default function ConsoleShell({
               try {
                 const url = new URL(window.location.href);
                 url.searchParams.set("new", "1");
+                // CLEAR WHAT YOU WERE LOOKING AT. `?run=` and `?agent=` name a specific
+                // project, and the Factory area's readers "only ever SET" so as not to fight
+                // the back button — so a stale `?run=` from an earlier click survives this
+                // navigation and re-opens that project's detail page. Pressing "New project"
+                // then landed on somebody else's app instead of an empty form.
+                url.searchParams.delete("run");
+                url.searchParams.delete("agent");
                 window.history.replaceState(null, "", url.toString());
                 window.dispatchEvent(new PopStateEvent("popstate"));
               } catch { /* non-browser — the area still opens */ }
             }}
           >
-            New project
+            <span aria-hidden>+</span> New project
           </button>
+
+          <div className="bx-topbar-title" id="boss-console-title">
+            {activeDef.label}
+            <small>{activeDef.sub}</small>
+          </div>
 
           <div className="bx-topbar-spacer" />
 
