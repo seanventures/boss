@@ -74,22 +74,25 @@ describe("New project, from anywhere", () => {
     const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),
                             SHELL.indexOf('className="bx-topbar-spacer"'));
     expect(btn).toContain('go("code_tasks")');
-    expect(btn).toContain('searchParams.set("new", "1")');
+    expect(btn).toContain("searchForNewProject(window.location.search)");
   });
 
   it("is answered by the area that owns the form", () => {
     // The shell must not reach into the area's state, and the area must not know about the
-    // shell. `?new=1` is the same handoff already used for `?run=` and `?agent=`.
-    expect(CT).toContain('get("new") === "1"');
+    // shell. `?new=1` is the handoff.
+    expect(CT).toContain("readNewProjectIntent(window.location.search)");
     expect(CT).toContain("setShowNew(true)");
   });
 
-  it("only ever opens the form, never closes it", () => {
-    // Clearing on an absent param would slam the form shut on someone part-way through filling
-    // it in, for any navigation that happens to fire a popstate.
-    const reader = CT.slice(CT.indexOf('get("new") === "1"') - 320,
-                            CT.indexOf('get("new") === "1"') + 120);
-    expect(reader).not.toContain("setShowNew(false)");
+  it("CONSUMES the request rather than leaving it in the URL", () => {
+    // This test replaces one that asserted the reader must never close the form — which
+    // encoded the bug. `?new=1` is a one-shot command, and navigation copies the query string,
+    // so leaving it there re-delivered it forever: clicking a project set `?run=` on a URL that
+    // still said `new=1`, popstate fired, and the form reopened over the project you clicked.
+    // The sequence itself is tested in url-intent.test.ts.
+    const reader = CT.slice(CT.indexOf("readNewProjectIntent(window.location.search)"));
+    expect(reader.slice(0, 700)).toContain("history.replaceState");
+    expect(reader.slice(0, 700)).toContain("intent.nextSearch");
   });
 });
 

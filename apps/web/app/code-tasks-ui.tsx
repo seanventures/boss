@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 
+import { readNewProjectIntent } from "./url-intent";
 import { consoleHref } from "./console-href";
 import { appIdentity, groupIdentity } from "./app-identity";
 
@@ -2547,18 +2548,26 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
   }, []);
   const [showNew, setShowNew] = useState(false);
   // OPENED FROM THE TOP BAR. The shell can start a project from any of the twenty-two screens
-  // by adding `?new=1`; this area owns the form. Same handoff as `?run=` above, and it only
-  // ever SETS for the same reason — clearing on an absent param would slam the form shut on
-  // anyone who navigated within the page while filling it in.
+  // by adding `?new=1`; this area owns the form.
+  //
+  // CONSUMED, not read. Unlike `?run=` above — which names a place and is meant to be re-read —
+  // this is a one-shot command, and navigation copies the query string. Leaving it in the URL
+  // re-delivered it on every later navigation: clicking a project in the top strip set `?run=`
+  // on a URL that still said `new=1`, fired popstate, and this handler ran again, opening the
+  // form and clearing the selection. Every project click landed on an empty form.
   useEffect(() => {
     const read = () => {
-      if (new URLSearchParams(window.location.search).get("new") === "1") {
-        setShowNew(true);
-        // AND STOP SHOWING A PROJECT. Selection is component state, so clearing the URL param
-        // alone does not put the area back on its list — asking to start something new means
-        // you are no longer reading an existing one.
-        setSelected(null);
-      }
+      const intent = readNewProjectIntent(window.location.search);
+      if (!intent.open) return;
+      setShowNew(true);
+      // AND STOP SHOWING A PROJECT. Selection is component state, so clearing the URL param
+      // alone does not put the area back on its list — asking to start something new means
+      // you are no longer reading an existing one.
+      setSelected(null);
+      try {
+        window.history.replaceState(null, "",
+          `${window.location.pathname}${intent.nextSearch}${window.location.hash}`);
+      } catch { /* non-browser — the form is open either way */ }
     };
     read();
     window.addEventListener("popstate", read);

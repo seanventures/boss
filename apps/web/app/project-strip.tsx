@@ -5,6 +5,7 @@
 // component in app/ does the same.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { searchForProject } from "./url-intent";
 import { appIdentity } from "./app-identity";
 
 /**
@@ -234,11 +235,12 @@ export function ProjectStrip({ projectId }: { projectId: string }) {
   }, []);
 
   const open = useCallback((p: StripProject) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("area", "code_tasks");
-    if (p.latest_run_id) url.searchParams.set("run", p.latest_run_id);
-    else url.searchParams.delete("run");
-    window.history.pushState({}, "", url.toString());
+    // Asking to SEE a project is not asking to start a new one. This used to copy the whole
+    // query string, so a `?new=1` left over from the top-bar button rode along and the form
+    // reader re-fired on arrival — the project you clicked was replaced by an empty form.
+    const search = searchForProject(window.location.search, p.latest_run_id ?? null);
+    window.history.pushState({}, "",
+      `${window.location.pathname}${search}${window.location.hash}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, []);
 

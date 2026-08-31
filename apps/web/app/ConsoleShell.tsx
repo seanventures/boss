@@ -1,5 +1,6 @@
 "use client";
 
+import { searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
@@ -816,16 +817,14 @@ export default function ConsoleShell({
             onClick={() => {
               go("code_tasks");
               try {
-                const url = new URL(window.location.href);
-                url.searchParams.set("new", "1");
                 // CLEAR WHAT YOU WERE LOOKING AT. `?run=` and `?agent=` name a specific
-                // project, and the Factory area's readers "only ever SET" so as not to fight
-                // the back button — so a stale `?run=` from an earlier click survives this
-                // navigation and re-opens that project's detail page. Pressing "New project"
-                // then landed on somebody else's app instead of an empty form.
-                url.searchParams.delete("run");
-                url.searchParams.delete("agent");
-                window.history.replaceState(null, "", url.toString());
+                // project, and the Factory area's `?run=` reader only ever SETS so as not to
+                // fight the back button — so a stale one survives this navigation and re-opens
+                // that project's detail page. Pressing "New project" then landed on somebody
+                // else's app instead of an empty form.
+                const search = searchForNewProject(window.location.search);
+                window.history.replaceState(null, "",
+                  `${window.location.pathname}${search}${window.location.hash}`);
                 window.dispatchEvent(new PopStateEvent("popstate"));
               } catch { /* non-browser — the area still opens */ }
             }}

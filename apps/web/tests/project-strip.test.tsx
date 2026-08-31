@@ -69,8 +69,15 @@ describe("the filter", () => {
 
 describe("clicking a project opens it", () => {
   it("switches to Factory and names the run", () => {
-    expect(SRC).toContain('url.searchParams.set("area", "code_tasks")');
-    expect(SRC).toContain('url.searchParams.set("run", p.latest_run_id)');
+    expect(SRC).toContain("searchForProject(window.location.search, p.latest_run_id ?? null)");
+  });
+
+  it("does not carry a pending New-project request along with the click", () => {
+    // It used to copy the whole query string, so a `?new=1` left by the top-bar button rode
+    // along and the form reader re-fired on arrival — every project click landed on an empty
+    // new-project dialog instead of the project. searchForProject drops one-shot commands;
+    // the sequence is tested in url-intent.test.ts.
+    expect(SRC).not.toContain("new URL(window.location.href)");
   });
 
   it("navigates client-side, like the rest of this console", () => {
