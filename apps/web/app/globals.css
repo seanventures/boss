@@ -7597,14 +7597,27 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 /* The title row is now: back · name · status · workflow. Wrap gracefully rather than crush. */
 .ct-detail-head { flex-wrap: wrap; row-gap: 6px; }
 
-/* The path every new project follows, set where the work is started. Quiet: it is a setting
-   that persists, not an action being invited. */
-.askboss-wf { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.askboss-wf-label { font-size: 0.72rem; color: var(--faint); white-space: nowrap; }
+/* The path every new project follows, set where the work is started.
+   COMPACT ON PURPOSE. First attempt put a full-width select and the words "Workflow for new
+   projects" on the same row as Ask / Research / Build, and it ate half the composer — a
+   setting you touch once shouting as loudly as the three actions you take every day. It is
+   now a short label and a select sized to its content, and it wraps to its own line before it
+   squeezes the buttons. */
+.askboss-wf {
+  display: inline-flex; align-items: center; gap: 6px;
+  flex: 0 1 auto; min-width: 0; margin-left: 4px;
+}
+.askboss-wf-label {
+  font-size: 0.7rem; color: var(--faint); white-space: nowrap;
+  letter-spacing: .02em;
+}
 .askboss-wf-select {
-  font: inherit; font-size: 0.78rem; color: var(--ink-soft);
+  font: inherit; font-size: 0.75rem; color: var(--ink-soft);
   background: var(--surface-2); border: 1px solid var(--border);
-  border-radius: 8px; padding: 5px 9px; max-width: 320px;
+  border-radius: 8px; padding: 4px 7px;
+  width: auto; max-width: 190px;
+  text-overflow: ellipsis;
 }
 .askboss-wf-select:disabled { opacity: .6; }
-.askboss-wf-note { font-size: 0.72rem; color: var(--faint); }
+.askboss-wf-note { font-size: 0.7rem; color: var(--faint); white-space: nowrap; }
+@media (max-width: 1200px) { .askboss-wf { flex-basis: 100%; margin-left: 0; } }

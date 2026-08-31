@@ -125,7 +125,9 @@ describe("choosing the workflow", () => {
     // code. Threading a per-press choice through a meeting and an approval before it reaches
     // the eventual code task is real plumbing for a choice nobody makes twice.
     expect(HERO).toContain('data-testid="askboss-default-workflow"');
-    expect(HERO).toContain("Workflow for new projects");
+    // The label is short — the full sentence is the tooltip — so assert the tooltip, which is
+    // what actually says the scope of the setting.
+    expect(HERO).toContain("every new project in this project will follow");
   });
 
   it("writes through the mapping action that already exists", () => {

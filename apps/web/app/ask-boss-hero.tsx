@@ -414,7 +414,7 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
       });
       // SAY WHICH WAY IT WENT. A silent select is indistinguishable from one that did nothing,
       // and this control changes what every future project does.
-      setNote(res.ok ? "saved — new projects follow this" : `could not save (${res.status})`);
+      setNote(res.ok ? "saved" : `failed (${res.status})`);
       if (res.ok) setCurrent(key);
     } catch {
       setNote("could not save");
@@ -426,10 +426,13 @@ function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
   if (!items.length) return null;
   return (
     <div className="askboss-wf" data-testid="askboss-default-workflow">
-      <label className="askboss-wf-label" htmlFor="askboss-wf-select">Workflow for new projects</label>
+      {/* Short. The full sentence lives in the tooltip — a label that is longer than the
+          control it names is a label competing with the thing it describes. */}
+      <label className="askboss-wf-label" htmlFor="askboss-wf-select"
+             title="The workflow every new project in this project will follow">Workflow</label>
       <select id="askboss-wf-select" className="askboss-wf-select" value={current}
               disabled={saving} onChange={(e) => void apply(e.target.value)}>
-        <option value="">Standard Product Delivery (default)</option>
+        <option value="">Standard (default)</option>
         {items.map((w) => (
           <option key={w.id} value={w.workflow_key}>
             {w.name}{w.is_catalogue ? " (standard)" : ""}
