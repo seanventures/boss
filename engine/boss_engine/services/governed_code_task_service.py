@@ -3877,7 +3877,22 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     emit_event(c, project_id, "code_task.pr_retry_failed", "boss",
                                "code_task_run", run_id,
                                {"attempt": _pr_attempt, "error": f"{type(exc).__name__}: {exc}"[:200]})
-        if status not in ("created", "succeeded"):
+        # AN ALREADY-OPEN PULL REQUEST IS A SUCCESS, NOT A FAILURE.
+        #
+        # The retry loop above breaks on "reused" — it knows a deduped effect means the work is
+        # done — and then this check rejected the very status the loop accepted. Two conditions
+        # about the same thing, two lines apart, disagreeing.
+        #
+        # The cost: a run interrupted AFTER its PR was opened could never complete. On the
+        # re-delivery the proposal hits its dedupe key, returns "reused", and the run is blocked
+        # with `PR not created after 3 attempts: reused` and a null pull_request_url — while the
+        # pull request sits open on GitHub. Measured on crun_1da493dc, whose PR was created at
+        # 23:50:46 and whose run ended blocked an hour later.
+        #
+        # Guarded on actually HAVING a url: a reuse of some earlier effect that produced no pull
+        # request is not a shipped change, and must still block.
+        _reused_pr = status == "reused" and bool(proposal.get("pull_request_url"))
+        if status not in ("created", "succeeded") and not _reused_pr:
             rescued = _rescue_pr(f"the pull-request step failed 3 times ({status})")
             with _transaction(engine) as c:
                 c.execute(sql("UPDATE code_task_runs SET status='blocked', phase='done', "
