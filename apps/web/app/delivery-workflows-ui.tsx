@@ -133,6 +133,16 @@ function runSubject(run: Run): string | null {
 
 const LIVE = ["running", "waiting", "queued", "validating", "leased"];
 
+/** What a step observed from the build, rather than started itself: the review seats and the
+ *  quality gates the governed pipeline actually recorded. Without this, `review` and `test` were
+ *  two rows that said only "succeeded" about the checks an operator most wants to read. */
+function observedGates(step: RunStep): string | null {
+  const out = (step.output ?? {}) as { status?: string; gates_passed?: unknown };
+  if (out.status !== "observed") return null;
+  const gates = Array.isArray(out.gates_passed) ? out.gates_passed.map(String) : [];
+  return gates.length ? gates.join(" · ") : null;
+}
+
 /** A step the runtime completed by recording that its phase never happened. */
 function notApplicable(step: RunStep): boolean {
   return (step.output as { status?: string } | undefined)?.status === "not_applicable";
@@ -642,6 +652,11 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
                     {step.error ? <p className="dw-step-error">{step.error}</p> : null}
                     {notApplicable(step) ? (
                       <p className="dw-step-note">{String(step.output?.note ?? "")}</p>
+                    ) : null}
+                    {observedGates(step) ? (
+                      <span className="dw-step-gates" data-testid="dw-step-gates">
+                        {observedGates(step)}
+                      </span>
                     ) : null}
                     {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate that can only be answered
                         in another area makes the operator leave the screen that told them it

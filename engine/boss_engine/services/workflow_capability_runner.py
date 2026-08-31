@@ -239,6 +239,96 @@ def _fill_optional_from_run_input(
     return filled
 
 
+#: Which of the build's quality gates each observing step speaks for. A step that reported
+#: "succeeded" while the gate it stands for had failed would be the same lie as a `research`
+#: step that succeeded in 0 seconds.
+_OBSERVED_GATES: dict[str, tuple[str, ...]] = {
+    "review": ("code_review_passed", "security_clean", "consistent"),
+    "test": ("tests_strong_enough", "nothing_broke"),
+}
+
+
+def _build_run_id(context: dict[str, Any]) -> Optional[str]:
+    """The code task this workflow run is about.
+
+    Read from whichever step produced it rather than from a step named "build": a customer can
+    rename their steps, and the canonical field is the contract, not the id.
+    """
+    for produced in (context.get("steps") or {}).values():
+        if isinstance(produced, dict):
+            value = produced.get("code_task_run_id")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    value = (context.get("input") or {}).get("adopt_code_task_run_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _observed_from_the_build(
+    connection: Connection, key: str, project_id: str, context: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """What the governed pipeline already found, reported as this step's own result.
+
+    Returns None when there is nothing to observe — no such step kind, no build to look at, or
+    no gate recorded — so the caller falls back to saying so rather than inventing a verdict.
+    """
+    gate_names = _OBSERVED_GATES.get(key)
+    if not gate_names:
+        return None
+    run_id = _build_run_id(context)
+    if not run_id:
+        return None
+    try:
+        row = connection.execute(
+            text(
+                """
+                SELECT status, tests_passed, adversarial_verdict, gates_passed, gates_failed,
+                       evidence, risk_tier
+                FROM quality_gates
+                WHERE project_id = :p AND code_task_run_id = :r
+                """
+            ),
+            {"p": project_id, "r": run_id},
+        ).mappings().first()
+    except Exception as error:  # noqa: BLE001 — an unreadable gate must not sink the run
+        log.warning("cannot read the quality gate for %s: %s", run_id, error)
+        return None
+    if row is None:
+        return None
+
+    failed = [g for g in (row["gates_failed"] or []) if g in gate_names]
+    passed = [g for g in (row["gates_passed"] or []) if g in gate_names]
+    evidence = row["evidence"] if isinstance(row["evidence"], dict) else {}
+    detail: dict[str, Any] = {
+        "capability": key,
+        "tool": None,
+        "code_task_run_id": run_id,
+        "gates_passed": passed,
+        "gates_failed": failed,
+        "risk_tier": row["risk_tier"],
+        "seats": evidence.get("steps_run") or [],
+    }
+    if key == "test":
+        detail["tests_passed"] = bool(row["tests_passed"])
+        detail["test_commands"] = evidence.get("test_commands") or []
+        if not row["tests_passed"]:
+            failed = [*failed, "tests_passed"]
+    else:
+        detail["adversarial_verdict"] = row["adversarial_verdict"]
+
+    if failed:
+        # The step FAILS, naming the gate. "if it stops at some step, we should know" — and a
+        # green step above a red gate is the most expensive way not to know.
+        raise CapabilityExecutionError(
+            f"{', '.join(failed)} did not pass on {run_id}."
+        )
+    detail["status"] = "observed"
+    detail["note"] = (
+        f"{', '.join(passed) if passed else 'nothing'} passed on the build "
+        f"(risk tier {row['risk_tier']})."
+    )
+    return detail
+
+
 def execute_step(
     connection: Connection,
     ctx: Any,
@@ -302,9 +392,15 @@ def execute_step(
     inputs = _fill_optional_from_run_input(capability, inputs, context)
 
     if capability.tool is None:
+        # OBSERVED, NOT STARTED. `review` and `test` do not commission anything — the governed
+        # pipeline already reviewed and tested the build, and recorded the verdicts. Reporting
+        # "recorded from the work it accompanies" left three of the nine steps saying nothing
+        # about work that had definitely happened and was definitely written down.
+        observed = _observed_from_the_build(connection, key, project_id, context)
+        if observed is not None:
+            return observed
         # Capabilities with no tool yet are honest no-ops that say so, rather than silently
-        # succeeding as though the work had happened. `review`, `test` and `monitor` are
-        # observed from the run they belong to rather than started separately.
+        # succeeding as though the work had happened.
         return {
             "capability": key,
             "status": "recorded",

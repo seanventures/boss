@@ -679,6 +679,130 @@ def test_an_adopted_build_is_referenced_the_same_way(eng, project, monkeypatch):
     assert preview.calls[0]["args"]["run_id"] == "crun_adopt_ref"
 
 
+def _quality_gate(c, project_id, run_id, *, passed, failed, tests_passed=True, evidence=None):
+    import json as _json
+    c.execute(
+        text("INSERT INTO quality_gates (id, project_id, code_task_run_id, risk_tier, "
+             "tests_passed, adversarial_verdict, status, gates_passed, gates_failed, evidence) "
+             "VALUES (:i,:p,:r,2,:tp,'survived',:st,CAST(:gp AS JSONB),CAST(:gf AS JSONB),"
+             "CAST(:ev AS JSONB)) ON CONFLICT (project_id, code_task_run_id) DO UPDATE SET "
+             "gates_passed=EXCLUDED.gates_passed, gates_failed=EXCLUDED.gates_failed"),
+        {"i": f"qg_{run_id}", "p": project_id, "r": run_id, "tp": tests_passed,
+         "st": "pass" if not failed else "fail",
+         "gp": _json.dumps(passed), "gf": _json.dumps(failed),
+         "ev": _json.dumps(evidence or {"steps_run": ["implement", "review_code"]})},
+    )
+
+
+def _observing_workflow(c, project, key, step_key):
+    return _publish(c, project, key, [
+        {"id": "build", "kind": "capability",
+         "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+         "next": [step_key]},
+        {"id": step_key, "kind": "capability", "binding": {"capability": step_key}, "next": []},
+    ], "build")
+
+
+def test_review_reports_what_the_pipeline_actually_found(eng, project, monkeypatch):
+    """`review` commissions nothing — the governed pipeline already reviewed the build and wrote
+    the verdicts down. Reporting "recorded from the work it accompanies" left three of the nine
+    steps saying nothing about work that had definitely happened."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _observing_workflow(c, project, "obsrev", "review")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_reviewed"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_reviewed", "completed")
+        _quality_gate(c, project, "crun_reviewed",
+                      passed=["code_review_passed", "security_clean", "consistent"], failed=[])
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    out = steps["review"]["output"]
+    assert steps["review"]["status"] == "succeeded", steps["review"]["last_error"]
+    assert out["status"] == "observed"
+    assert set(out["gates_passed"]) == {"code_review_passed", "security_clean", "consistent"}
+    assert out["code_task_run_id"] == "crun_reviewed"
+
+
+def test_a_green_step_is_never_shown_above_a_red_gate(eng, project, monkeypatch):
+    """A review step reporting success while the gate it stands for failed is the same lie as a
+    research step that succeeded in 0 seconds — and the most expensive way not to know."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _observing_workflow(c, project, "obsfail", "review")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_badreview"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_badreview", "completed")
+        _quality_gate(c, project, "crun_badreview",
+                      passed=["consistent"], failed=["security_clean"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["review"]["status"] != "succeeded"
+    assert "security_clean" in (steps["review"]["last_error"] or "")
+
+
+def test_test_reports_whether_the_tests_passed(eng, project, monkeypatch):
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _observing_workflow(c, project, "obstest", "test")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_tested"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_tested", "completed")
+        _quality_gate(c, project, "crun_tested", passed=["tests_strong_enough", "nothing_broke"],
+                      failed=[], tests_passed=True)
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["test"]["status"] == "succeeded", steps["test"]["last_error"]
+    assert steps["test"]["output"]["tests_passed"] is True
+
+
+def test_a_failing_suite_fails_the_test_step(eng, project, monkeypatch):
+    """`tests_passed` is not one of the named gates, so it has to be checked on its own — a suite
+    that did not pass, on a step whose whole subject is whether it did, must not read green."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _observing_workflow(c, project, "obstestfail", "test")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_redtests"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_redtests", "completed")
+        _quality_gate(c, project, "crun_redtests", passed=["nothing_broke"], failed=[],
+                      tests_passed=False)
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["test"]["status"] != "succeeded"
+    assert "tests_passed" in (steps["test"]["last_error"] or "")
+
+
+def test_no_recorded_gate_says_so_rather_than_inventing_a_verdict(eng, project, monkeypatch):
+    """A build with no quality gate is a build nobody graded. Claiming it reviewed clean would be
+    worse than admitting there is nothing to report."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _observing_workflow(c, project, "obsnone", "review")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_ungraded"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_ungraded", "completed")
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["review"]["status"] == "succeeded"
+    assert steps["review"]["output"]["status"] == "recorded"
+
+
 def test_research_adopts_the_discovery_the_work_came_from(eng, project, monkeypatch):
     discovery = RecordingTool("create_discovery", {"run_id": "drun_second"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))

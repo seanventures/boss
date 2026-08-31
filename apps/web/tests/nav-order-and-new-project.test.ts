@@ -251,3 +251,16 @@ describe("a phase that never happened", () => {
     expect(DW).toContain("dw-step-note");
   });
 });
+
+describe("what review and test actually found", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+
+  it("shows the quality gates the build recorded", () => {
+    // `review` and `test` commission nothing — the governed pipeline already graded the build.
+    // Before this they were two rows saying only "succeeded" about the checks an operator most
+    // wants to read.
+    expect(DW).toContain("function observedGates");
+    expect(DW).toContain('"dw-step-gates"');
+    expect(DW).toContain('out.status !== "observed"');
+  });
+});
