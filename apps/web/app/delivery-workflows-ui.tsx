@@ -2,6 +2,8 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { resolveDecisionAction } from "./actions";
+
 /**
  * Delivery workflows: choose one, watch it run, build your own.
  *
@@ -93,6 +95,14 @@ type RunStep = {
   due_at: string | null;
   timeout_applied: string | null;
   attempt: number;
+  // The API has returned these since the runs endpoint was written; the type omitted them, so
+  // the one question every operator asks of a pipeline — how long did this take — could not be
+  // answered from data already on the page.
+  started_at: string | null;
+  completed_at: string | null;
+  // The gate's decision, which is what makes Approve/Deny answerable here rather than only in
+  // the Approvals area.
+  decision_id: string | null;
 };
 
 type Run = {
@@ -353,11 +363,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       {notice ? <p className="dw-notice" data-testid="dw-notice">{notice}</p> : null}
 
       {tab === "running" ? (
-        <>
-          <GovernedProjects projectId={projectId} />
-          <RunsView runs={runs} openRun={openRun} setOpenRun={setOpenRun}
-                    onAdvance={() => act("Advance", "advance", {})} busy={busy} />
-        </>
+        <RunsView runs={runs} openRun={openRun} setOpenRun={setOpenRun}
+                  onAdvance={() => act("Advance", "advance", {})} busy={busy} />
       ) : tab === "catalogue" ? (
         <CatalogueView
           catalogue={catalogue} installed={installed} busy={busy}
@@ -464,83 +471,48 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
 /* ── Running ─────────────────────────────────────────────────────────────────── */
 
+/** How long a step took, or has been going. The single most asked question of a pipeline. */
+function stepDuration(step: { started_at?: string | null; completed_at?: string | null }): string {
+  if (!step.started_at) return "";
+  const start = Date.parse(step.started_at);
+  const end = step.completed_at ? Date.parse(step.completed_at) : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
+  const secs = Math.round((end - start) / 1000);
+  const text = secs < 60 ? `${secs}s`
+    : secs < 3600 ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+    : `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+  return step.completed_at ? text : `${text}…`;
+}
+
 /**
- * PROJECTS GOVERNED BY A WORKFLOW.
+ * Where the thing a step produced actually lives.
  *
- * The Running tab lists `workflow_runs` — the workflow runtime's own executions. A project is
- * a CODE TASK, and the coding pipeline never creates a workflow run, so a project could never
- * appear here however long you waited. Asked "where do I watch my project's workflow steps",
- * the honest answer was "nowhere", while the answer looked like a stale unrelated run sitting
- * in the list.
- *
- * A project's steps ARE tracked — the pipeline records every phase and its duration. This puts
- * them on the screen that names the workflow, which is where somebody goes looking.
- *
- * It does NOT pretend the pipeline is executing the workflow's declared steps. It is not: the
- * phases are the pipeline's own, and dressing them up as the workflow's would be a much more
- * confident claim than the system can support.
+ * A run view that shows only a status makes an operator open five other screens to find the PR
+ * it opened or the panel it convened. The ids are already in the step's output; these turn them
+ * into somewhere to go.
  */
-function GovernedProjects({ projectId }: { projectId: string }) {
-  const [items, setItems] = useState<Array<{
-    id: string; title?: string | null; status?: string; phase?: string;
-    finalize_ctx?: Record<string, unknown> | null }>>([]);
+function stepLinks(output: Record<string, unknown>): Array<{ label: string; href: string; external?: boolean }> {
+  const out: Array<{ label: string; href: string; external?: boolean }> = [];
+  const str = (k: string) => (typeof output[k] === "string" ? (output[k] as string) : "");
+  const awaited = (output.await as { kind?: string; id?: string } | undefined) ?? {};
 
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const res = await fetch(
-          `/api/code-tasks?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
-        if (!res.ok) return;
-        const body = await res.json();
-        const all = (body.code_tasks ?? body.items ?? []) as typeof items;
-        if (alive) setItems(all.filter((r) => (r.finalize_ctx as Record<string, unknown> | null)
-          ?.workflow));
-      } catch { /* the tab still shows workflow runs */ }
-    };
-    void load();
-    // A running project changes phase every few minutes; a stale list here is the thing being
-    // complained about.
-    const t = setInterval(load, 15000);
-    return () => { alive = false; clearInterval(t); };
-  }, [projectId]);
-
-  if (!items.length) return null;
-  const live = items.filter((r) => ["running", "queued", "repairing"].includes(String(r.status)));
-  const shown = (live.length ? live : items).slice(0, 8);
-  return (
-    <div className="dw-governed" data-testid="dw-governed-projects">
-      <div className="dw-runs-head">
-        <span className="detail">
-          {shown.length} project{shown.length === 1 ? "" : "s"} on a workflow
-          {live.length ? "" : " (none running)"}
-        </span>
-      </div>
-      {shown.map((r) => {
-        const wf = (r.finalize_ctx as Record<string, unknown>).workflow as
-          { name?: string; version?: number; source?: string };
-        return (
-          <div key={r.id} className="dw-governed-row" data-testid={`dw-governed-${r.id}`}>
-            <span className={`cap-badge tone-${r.status === "completed" ? "green"
-              : r.status === "blocked" || r.status === "failed" ? "amber" : "blue"}`}>
-              {r.status}
-            </span>
-            <span className="dw-governed-title">{r.title ?? r.id}</span>
-            <span className="detail dw-governed-wf">
-              {wf?.name}{typeof wf?.version === "number" ? ` v${wf.version}` : ""}
-              {wf?.source === "default" ? " (default)" : ""}
-            </span>
-            {/* The pipeline's own phase, named as such. */}
-            <span className="detail dw-governed-phase">{r.phase ?? "—"}</span>
-          </div>
-        );
-      })}
-      <p className="detail dw-governed-note">
-        These are projects, not workflow runs. The phase shown is the coding pipeline&apos;s own
-        step; open a project to see every step with its duration.
-      </p>
-    </div>
-  );
+  const codeTask = str("code_task_run_id") || (awaited.kind === "code_task" ? awaited.id ?? "" : "")
+    || (output.capability === "build" ? str("run_id") : "");
+  if (codeTask) {
+    out.push({ label: "open the project", href: `?area=code_tasks&run=${encodeURIComponent(codeTask)}` });
+    // Debugging a step means reading what it actually did, filtered to this work.
+    out.push({ label: "activity log", href: `?area=activity&run=${encodeURIComponent(codeTask)}` });
+    out.push({ label: "Ask BOSS", href: `?area=code_tasks&run=${encodeURIComponent(codeTask)}&agent=${encodeURIComponent(codeTask)}` });
+  }
+  const meeting = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
+  if (meeting) out.push({ label: "open the panel", href: `?area=meetings` });
+  const discovery = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
+  if (discovery) out.push({ label: "open the research", href: `?area=discovery` });
+  const pr = str("pull_request_url");
+  if (pr) out.push({ label: "pull request", href: pr, external: true });
+  const preview = str("preview_url");
+  if (preview) out.push({ label: "preview", href: preview, external: true });
+  return out;
 }
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
@@ -615,7 +587,48 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
                     {step.timeout_applied ? (
                       <span className="dw-timeout">{step.timeout_applied.replace("_", " ")}</span>
                     ) : null}
+                    {/* HOW LONG IT TOOK. The first question anyone asks of a pipeline, and it
+                        was the one thing the step row never answered — the timestamps were in
+                        the payload all along, unused. */}
+                    {stepDuration(step) ? (
+                      <span className="dw-step-took" data-testid="dw-step-took">
+                        {stepDuration(step)}
+                      </span>
+                    ) : null}
                     {step.error ? <p className="dw-step-error">{step.error}</p> : null}
+                    {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate that can only be answered
+                        in another area makes the operator leave the screen that told them it
+                        was waiting, and find it again in a list of everything else. */}
+                    {step.decision_id && step.status === "waiting" ? (
+                      <span className="dw-step-decide" data-testid="dw-step-decide">
+                        <form action={resolveDecisionAction}>
+                          <input type="hidden" name="decision_id" value={step.decision_id} />
+                          <input type="hidden" name="action" value="approve" />
+                          <button type="submit" className="cap-btn primary dw-decide-btn">
+                            Approve
+                          </button>
+                        </form>
+                        <form action={resolveDecisionAction}>
+                          <input type="hidden" name="decision_id" value={step.decision_id} />
+                          <input type="hidden" name="action" value="decline" />
+                          <button type="submit" className="cap-btn dw-decide-btn">Deny</button>
+                        </form>
+                      </span>
+                    ) : null}
+                    {/* WHERE THE WORK IT PRODUCED LIVES. Debugging a step means reading what it
+                        actually did; these are the doors to it. */}
+                    {stepLinks(step.output || {}).length ? (
+                      <span className="dw-step-links" data-testid="dw-step-links">
+                        {stepLinks(step.output || {}).map((l) => (
+                          l.external ? (
+                            <a key={l.label} href={l.href} target="_blank" rel="noreferrer"
+                               className="dw-step-link">{l.label} ↗</a>
+                          ) : (
+                            <a key={l.label} href={l.href} className="dw-step-link">{l.label}</a>
+                          )
+                        ))}
+                      </span>
+                    ) : null}
                     {/* What the step PRODUCED. A run view that shows only status makes an
                         operator open five other screens to find the PR it opened. */}
                     {Object.keys(step.output || {}).length > 0 ? (

@@ -152,28 +152,60 @@ describe("choosing the workflow", () => {
   });
 });
 
-describe("watching a project's workflow", () => {
+describe("watching the outer workflow, step by step", () => {
   const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  const CSS_DW = codeOnly("app/globals.css");
 
-  it("the Running tab lists projects governed by a workflow", () => {
-    // The tab listed `workflow_runs` only. A project is a CODE TASK and the coding pipeline
-    // never creates a workflow run, so a project could never appear there however long you
-    // waited — while a stale unrelated run sat in the list looking like an answer.
-    expect(DW).toContain('data-testid="dw-governed-projects"');
-    expect(DW).toContain("GovernedProjects");
+  it("shows how long each step took", () => {
+    // The first question anyone asks of a pipeline, and the timestamps were in the payload all
+    // along — the RunStep type simply never declared them.
+    expect(DW).toContain("function stepDuration");
+    expect(DW).toContain('data-testid="dw-step-took"');
+    expect(DW).toContain("started_at: string | null;");
+    expect(DW).toContain("completed_at: string | null;");
   });
 
-  it("shows only projects that actually carry a workflow", () => {
-    expect(DW).toContain("?.workflow");
+  it("distinguishes a step still running from one that finished", () => {
+    // `${text}…` on an unfinished step: "8m" and "8m…" are different facts.
+    const fn = DW.slice(DW.indexOf("function stepDuration"), DW.indexOf("function stepLinks"));
+    expect(fn).toContain("step.completed_at ? text");
   });
 
-  it("refreshes, because a running project changes phase", () => {
-    expect(DW).toContain("setInterval(load");
+  it("links to what the step produced, for debugging", () => {
+    // A run view that shows only a status makes an operator open five other screens to find
+    // the PR it opened or the panel it convened.
+    expect(DW).toContain("function stepLinks");
+    expect(DW).toContain("open the project");
+    expect(DW).toContain("activity log");
+    expect(DW).toContain("Ask BOSS");
+    expect(DW).toContain("pull request");
   });
 
-  it("does not claim the pipeline is executing the workflow's steps", () => {
-    // It is not: the phases are the pipeline's own. Dressing them up as the workflow's
-    // declared steps would be a far more confident claim than the system can support.
-    expect(DW).toContain("These are projects, not workflow runs");
+  it("finds the code task whether the step produced it or adopted it", () => {
+    // An adopted build has the id under `await`, not under `code_task_run_id` — the same step
+    // in the two shapes it can legitimately take.
+    const fn = DW.slice(DW.indexOf("function stepLinks"), DW.indexOf("function RunsView"));
+    expect(fn).toContain('str("code_task_run_id")');
+    expect(fn).toContain('awaited.kind === "code_task"');
+  });
+
+  it("answers a gate where it is seen", () => {
+    // A gate answerable only in another area makes the operator leave the screen that told
+    // them it was waiting, and find it again in a list of everything else.
+    expect(DW).toContain('data-testid="dw-step-decide"');
+    expect(DW).toContain("resolveDecisionAction");
+    expect(DW).toContain('value="approve"');
+    expect(DW).toContain('value="decline"');
+  });
+
+  it("only offers Approve/Deny on a step actually waiting on one", () => {
+    expect(DW).toContain('step.decision_id && step.status === "waiting"');
+  });
+
+  it("drops the panel that showed the coding pipeline's own phase", () => {
+    // That is the layer INSIDE the build step — one step of nine, and the one an operator
+    // cares least about. Showing it on the workflow page answered a question nobody asked.
+    expect(DW).not.toContain("GovernedProjects");
+    expect(CSS_DW).not.toContain(".dw-governed");
   });
 });
