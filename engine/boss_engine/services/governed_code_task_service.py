@@ -1740,7 +1740,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                     END""",
             {"ph": name}, where=f"phase->{name}")
 
-    def _close_phase(c) -> None:
+    def _close_phase() -> None:
         """Bank the CURRENT phase's duration, without starting another one.
 
         A phase is only ever timed by the phase that FOLLOWS it, so the last one is never
@@ -1759,9 +1759,19 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         """
         from .run_fencing import guarded_update
         try:
-            guarded_update(
-                c, run_id, _fence,
-                """finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+            # ITS OWN TRANSACTION, COMMITTED BEFORE THE TERMINAL WRITE.
+            #
+            # The first version took a connection and was called inside the same `with
+            # _transaction(...)` block as `_fenced_status` — which opens a SECOND connection and
+            # updates the SAME row. The outer transaction held a row lock on the run, the inner
+            # one waited for it, and the outer could not commit until the inner returned. The
+            # run hung in `opening_pr` for 26 minutes with no error, its pull request already
+            # created and its receipt already written. Nothing before this wrote to
+            # `code_task_runs` from that block, which is why the nesting had been harmless.
+            with _transaction(engine) as c:
+                guarded_update(
+                    c, run_id, _fence,
+                    """finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
                      || CASE
                           WHEN finalize_ctx ? 'phase_started_at' AND phase IS NOT NULL THEN
                             jsonb_build_object(
@@ -1774,7 +1784,7 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                                         )) * 1000)::bigint)))
                           ELSE '{}'::jsonb
                         END""",
-                {}, where="phase->close")
+                    {}, where="phase->close")
         except Exception:  # noqa: BLE001 — a timing entry must never cost a finished run its PR
             pass
 
@@ -3750,6 +3760,9 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # Eval/bake-off runs (open_pr=false) measure the gate not the delivery; a non-final
             # decomposition slice defers its PR to the final slice. Either way: record the verified
             # outcome, keep the work on the shared branch, and let the chain advance.
+            # Same reason as the PR path, and the same rule: its OWN transaction,
+            # committed before the terminal write takes a lock on the same row.
+            _close_phase()
             with _transaction(engine) as c:
                 # BOSS-280: settle real LLM spend before releasing. A prior plain release
                 # (no run_id) left the reservation inactive so the settle path failed soft
@@ -3760,7 +3773,6 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                      if _nonfinal_slice else "gate passed; PR suppressed (open_pr=false)"),
                     run_id=run_id,
                 )
-                _close_phase(c)  # same reason as the PR path: the last phase is otherwise lost
                 if not _fenced_status("completed", "phase='done'"):
                     emit_event(c, project_id, "code_task.terminal_write_refused", "boss",
                                "code_task_run", run_id, {"attempted": "completed_no_pr"})
@@ -3876,9 +3888,11 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
                            "id": run_id})
             return {"status": "blocked", "done": True, "quality_gate_id": qg_id, **proposal}
 
+        # Bank `opening_pr` before the terminal write erases the clock it was measured
+        # by — in its OWN transaction, committed first, never nested inside the one the
+        # terminal write runs in.
+        _close_phase()
         with _transaction(engine) as c:
-            # Bank `opening_pr` before the terminal write erases the clock it was measured by.
-            _close_phase(c)
             _ok = _fenced_status(
                 "completed",
                 "phase='done', pull_request_url=:u, pull_request_number=:n, decision_id=:d",

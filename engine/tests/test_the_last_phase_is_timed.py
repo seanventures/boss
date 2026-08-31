@@ -47,6 +47,43 @@ def test_it_does_not_write_the_phase_column():
     assert '"ph":' not in body
 
 
+def test_it_never_runs_inside_the_terminal_write_transaction():
+    """THE REGRESSION THIS SHIPPED WITH, and it hung a run for 26 minutes.
+
+    `_fenced_status` opens its OWN connection and updates `code_task_runs`. The first version
+    of `_close_phase` took a connection and was called inside the same `with _transaction(...)`
+    block, so the outer transaction held a row lock on the run, the inner connection waited for
+    it, and the outer could not commit until the inner returned. Self-deadlock, no error, no
+    timeout — the pull request had already been created and its receipt written.
+
+    Nothing in that block had ever written to `code_task_runs` before, which is exactly why the
+    nesting looked harmless.
+    """
+    src = inspect.getsource(g)
+
+    # It takes no connection: it cannot be handed one from an enclosing transaction.
+    assert "def _close_phase() -> None:" in src
+    assert "def _close_phase(c" not in src
+
+    # And it opens its own, so the lock is released before the terminal write asks for it.
+    body = _source_of_inner("_close_phase")
+    assert "with _transaction(engine) as c:" in body
+
+    # Every call site is OUTSIDE a transaction block: none may pass a connection.
+    assert "_close_phase(c)" not in src
+
+
+def test_it_is_called_before_the_transaction_that_writes_the_status():
+    """Order matters as much as nesting: banked after the status write, the phase would already
+    read 'done' and the entry would name the wrong phase."""
+    src = inspect.getsource(g)
+    for anchor in ('"phase=\'done\', pull_request_url=:u', '{"attempted": "completed_no_pr"}'):
+        window = src[max(0, src.index(anchor) - 1200):src.index(anchor)]
+        assert "_close_phase()" in window, anchor
+        # ...and the call comes before the `with` that performs the write.
+        assert window.rindex("_close_phase()") < window.rindex("with _transaction(engine) as c:")
+
+
 def test_it_does_not_start_a_new_clock():
     """Setting `phase_started_at` again would leave a dangling open phase on a finished run,
     which the next reader would time from and report as an enormous final phase."""
@@ -67,11 +104,11 @@ def test_both_terminal_paths_bank_their_phase():
     src = inspect.getsource(g)
     pr_path = src[src.index('"phase=\'done\', pull_request_url=:u') - 900:
                   src.index('"phase=\'done\', pull_request_url=:u')]
-    assert "_close_phase(c)" in pr_path, "the PR path does not bank its last phase"
+    assert "_close_phase()" in pr_path, "the PR path does not bank its last phase"
 
-    no_pr = src[src.index('{"attempted": "completed_no_pr"}') - 700:
+    no_pr = src[src.index('{"attempted": "completed_no_pr"}') - 1400:
                 src.index('{"attempted": "completed_no_pr"}')]
-    assert "_close_phase(c)" in no_pr, "the PR-suppressed path does not bank its last phase"
+    assert "_close_phase()" in no_pr, "the PR-suppressed path does not bank its last phase"
 
 
 def test_it_is_banked_before_the_status_write_not_after():
@@ -80,7 +117,6 @@ def test_it_is_banked_before_the_status_write_not_after():
     src = inspect.getsource(g)
     anchor = src.index('"phase=\'done\', pull_request_url=:u')
     window = src[anchor - 900:anchor]
-    assert window.rindex("_close_phase(c)") < len(window)
-    # and there is no _close_phase between the status write and the event emit
+    assert "_close_phase()" in window
     after = src[anchor:anchor + 600]
-    assert "_close_phase(c)" not in after
+    assert "_close_phase()" not in after
