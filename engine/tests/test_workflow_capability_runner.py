@@ -620,6 +620,69 @@ def test_meeting_adopts_the_panel_the_project_came_from(eng, project, monkeypatc
     assert steps["m"]["output"]["await"]["id"] == "mrun_first"
 
 
+def test_research_adopts_the_discovery_the_work_came_from(eng, project, monkeypatch):
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_second"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "adoptdisc", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        run = _start(c, project, version["id"], {"adopt_discovery_run_id": "drun_first"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not discovery.calls, "research was commissioned twice for one project"
+    assert steps["r"]["output"]["await"]["id"] == "drun_first"
+
+
+def test_a_retrospective_run_does_not_research_what_is_already_built(eng, project, monkeypatch):
+    """A run started with an adopted build is retrospective: the code was already being written
+    when the workflow began. Running `research` forwards there commissions web research, at real
+    cost, for a thing that exists — and `meeting` convenes a panel to debate a settled question.
+    Recorded as not applicable, which is what actually happened."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_x"})
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_x"})
+    monkeypatch.setattr(runner, "_tool_registry",
+                        lambda: RecordingRegistry([discovery, meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "retro", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": ["m"]},
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "go"}}, "next": []},
+        ], "r")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_live"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert not discovery.calls and not meeting.calls, "money was spent re-deciding a built thing"
+    assert steps["r"]["status"] == "succeeded"
+    assert steps["r"]["output"]["status"] == "not_applicable"
+    assert "started directly" in steps["r"]["output"]["note"]
+    assert steps["m"]["output"]["status"] == "not_applicable"
+
+
+def test_a_run_with_nothing_adopted_still_researches(eng, project, monkeypatch):
+    """The ordinary forward path — a workflow started on its own, with no build in flight — must
+    be untouched by any of this."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_fwd"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "forward", [
+            {"id": "r", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "go"}}, "next": []},
+        ], "r")
+        _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+
+    assert discovery.calls, "the ordinary forward path stopped doing research"
+
+
 def test_an_approved_spec_is_not_approved_again(eng, project, monkeypatch):
     """The panel path approves the spec BEFORE the project exists. Opening a spec_review gate
     then asks the same person the same question a second time, about a build already running —

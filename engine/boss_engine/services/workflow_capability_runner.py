@@ -143,6 +143,8 @@ def _invoke_tool(
 #: Work a run was started WITH, which the matching step should wait on rather than start again.
 _ADOPTABLE: dict[str, tuple[str, str]] = {
     "build": ("adopt_code_task_run_id", "code_task"),
+    # Work that began with research waits on THAT research rather than commissioning more.
+    "research": ("adopt_discovery_run_id", "discovery"),
     # A project created from a PRD panel already HAD its meeting — that panel is why the
     # project exists. Convening another one debates a question that was settled.
     "meeting": ("adopt_meeting_run_id", "meeting"),
@@ -202,6 +204,11 @@ def _adopted_gate(
         "approved_at": approved_at.isoformat() if hasattr(approved_at, "isoformat")
                        else approved_at,
     }
+
+
+#: Phases that HAPPEN BEFORE a build. On a retrospective run — one started for a project whose
+#: build is already going — running these forwards spends money re-deciding a settled question.
+_RETROSPECTIVE_KINDS = frozenset({"research", "meeting"})
 
 
 def _fill_optional_from_run_input(
@@ -311,6 +318,28 @@ def execute_step(
     # pressed a button that makes a project. If `build` also called create_code_task there
     # would be two builds racing over one repository — a far worse outcome than a missing step.
     # So the run carries the id of the task it already has, and this step waits on that one.
+    # THE PROJECT ALREADY EXISTS, so a step that comes BEFORE the build cannot be run forwards.
+    #
+    # A run started with `adopt_code_task_run_id` is retrospective: the build was under way
+    # before the workflow was. Executing `research` there commissions web research, at real
+    # cost, for a thing already being written — and `meeting` convenes a panel to debate a
+    # question the code has answered. Recorded as not applicable, with the reason, which is what
+    # actually happened: this project skipped that phase.
+    if (
+        key in _RETROSPECTIVE_KINDS
+        and not _adopted_handle(key, context)
+        and (context.get("input") or {}).get("adopt_code_task_run_id")
+    ):
+        return {
+            "capability": key,
+            "tool": None,
+            "status": "not_applicable",
+            "note": (
+                f"No {capability.label.lower()} phase — this project was started directly, "
+                f"and the build was already running when this workflow began."
+            ),
+        }
+
     adopted = _adopted_handle(key, context)
     if adopted:
         return {

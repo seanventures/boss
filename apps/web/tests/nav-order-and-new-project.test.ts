@@ -234,3 +234,20 @@ describe("which run the workflow page shows first", () => {
     expect(DW).toContain("runSubject(run) ?? run.workflow_name");
   });
 });
+
+describe("a phase that never happened", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+
+  it("reads as not run, not as a success", () => {
+    // A project started directly has no research phase and no panel. The runtime records those
+    // steps as not applicable rather than commissioning research for something already built —
+    // and showing them as plain successes would claim work nobody did.
+    expect(DW).toContain("function notApplicable");
+    expect(DW).toContain('"dw-step-na"');
+    expect(DW).toContain('"not run"');
+  });
+
+  it("says why", () => {
+    expect(DW).toContain("dw-step-note");
+  });
+});

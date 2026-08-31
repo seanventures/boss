@@ -710,6 +710,7 @@ def start_code_task(
                     "repository": repo,
                     "adopt_code_task_run_id": run_id,
                     "adopt_meeting_run_id": origin.get("meeting_run_id"),
+                    "adopt_discovery_run_id": origin.get("discovery_run_id"),
                     "adopt_decision_id": origin.get("decision_id"),
                 },
             )

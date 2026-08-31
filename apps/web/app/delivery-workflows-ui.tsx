@@ -133,6 +133,11 @@ function runSubject(run: Run): string | null {
 
 const LIVE = ["running", "waiting", "queued", "validating", "leased"];
 
+/** A step the runtime completed by recording that its phase never happened. */
+function notApplicable(step: RunStep): boolean {
+  return (step.output as { status?: string } | undefined)?.status === "not_applicable";
+}
+
 /** Live runs first, newest first within each group. Sorting by `updated_at` alone floats a
  *  blocked run from last week above the project that started a minute ago, purely because
  *  something touched it more recently — which is how the page came to show an expired run
@@ -601,7 +606,15 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
               <ol className="dw-steps">
                 {run.steps.map((step) => (
                   <li key={step.step_id} className="dw-step" data-status={step.status}>
-                    <span className="dw-badge" data-tone={tone(step.status)}>{step.status}</span>
+                    {/* A PHASE THAT DID NOT HAPPEN IS NOT A PHASE THAT SUCCEEDED. A project
+                        started directly has no research and no panel; the run records those
+                        steps as not applicable, and showing them as plain successes would claim
+                        work that was never done. */}
+                    <span className="dw-badge"
+                          data-tone={notApplicable(step) ? "muted" : tone(step.status)}
+                          data-testid={notApplicable(step) ? "dw-step-na" : undefined}>
+                      {notApplicable(step) ? "not run" : step.status}
+                    </span>
                     <span className="dw-step-id">{step.step_id}</span>
                     <span className="detail">{step.capability ?? step.kind}</span>
                     {step.approval && (step.approval as { mode?: string }).mode === "manual" ? (
@@ -627,6 +640,9 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
                       </span>
                     ) : null}
                     {step.error ? <p className="dw-step-error">{step.error}</p> : null}
+                    {notApplicable(step) ? (
+                      <p className="dw-step-note">{String(step.output?.note ?? "")}</p>
+                    ) : null}
                     {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate that can only be answered
                         in another area makes the operator leave the screen that told them it
                         was waiting, and find it again in a list of everything else. */}
