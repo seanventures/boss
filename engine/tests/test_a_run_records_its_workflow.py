@@ -151,3 +151,56 @@ def test_the_fallback_does_not_invent_a_mapping():
 def test_a_project_without_the_catalogue_gets_nothing_rather_than_a_guess():
     src = inspect.getsource(workflows._default_workflow)
     assert "if not row:" in src and "return None" in src
+
+
+# ── The outer run a project actually gets ──────────────────────────────────────
+
+def test_start_project_run_uses_the_workflow_the_project_resolves_to():
+    """Resolution and starting are the same decision. If they disagreed, a project would show
+    one workflow on its page and run a different one."""
+    src = inspect.getsource(workflows.start_project_run)
+    assert "workflow_by_version(" in src, "an explicit choice is ignored"
+    assert "workflow_for_code_task(" in src, "the project's mapping is ignored"
+    assert src.index("workflow_by_version(") < src.index("workflow_for_code_task(")
+
+
+def test_the_run_is_started_with_the_directive_not_the_title():
+    """The catalogue's first steps read `directive`: research seeds from it and the panel
+    debates it. A panel handed a title has a label to discuss, not a brief."""
+    src = inspect.getsource(workflows.start_project_run)
+    assert '"directive": directive' in src
+    assert '"title": title' in src
+
+
+def test_starting_the_same_project_twice_does_not_race_itself():
+    """Two nine-step pipelines over one repository is worse than a missing run."""
+    src = inspect.getsource(workflows.start_project_run)
+    assert "dedupe_key=" in src
+
+
+def test_a_project_without_a_workflow_still_starts():
+    """A fleet that has not installed the catalogue must still be able to work. It gets the
+    direct path and no outer run, rather than an error."""
+    src = inspect.getsource(workflows.start_project_run)
+    assert "return None" in src
+
+    from apps.api.app import main as api  # noqa: PLC0415
+    endpoint = inspect.getsource(api.start_code_task_endpoint)
+    block = endpoint[endpoint.index("start_project_run"):]
+    assert "except Exception" in block, "a failed outer run would sink the project"
+
+
+def test_the_code_task_records_the_run_that_governs_it():
+    """Otherwise the two halves of one project cannot be shown together."""
+    from apps.api.app import main as api  # noqa: PLC0415
+
+    endpoint = inspect.getsource(api.start_code_task_endpoint)
+    assert "'workflow_run_id'" in endpoint
+
+
+def test_a_simulated_project_starts_no_pipeline():
+    """A no-spend fixture must not convene a panel and open a pull request."""
+    from apps.api.app import main as api  # noqa: PLC0415
+
+    endpoint = inspect.getsource(api.start_code_task_endpoint)
+    assert "if not simulated:" in endpoint
