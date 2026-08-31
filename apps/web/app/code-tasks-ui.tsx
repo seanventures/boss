@@ -490,7 +490,7 @@ function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
         </label>
       </div>
       <div className="ct-form-actions">
-        <SubmitButton className="cap-btn primary" type="submit">Start coding task</SubmitButton>
+        <SubmitButton className="cap-btn primary" type="submit">Start project</SubmitButton>
         <span className="detail">The agent edits files in an isolated sandbox; BOSS re-runs the tests and opens a gated PR.</span>
       </div>
     </form>
