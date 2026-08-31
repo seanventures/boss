@@ -2076,7 +2076,7 @@ function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
   );
 }
 
-function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
+function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: PreviewRec[] }) {
   const st = run.state ?? {};
   const tests = structuredCodeTaskTests(st);
   // Operator View: running first, then verified-test with an open_url.
@@ -2126,7 +2126,9 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
     run.status === "completed" ? "passed" : run.status === "blocked" ? "gated" : run.status === "failed" ? "failed" : run.status;
   return (
     <div className="ct-detail">
-      <button className="mr-back" onClick={onBack}>← All code tasks</button>
+      {/* No back button here. It said "← All code tasks" while the one above said "← All
+          apps", and both called setSelected(null) — two names for one action, on one screen.
+          The surviving control sits at the top of the split, outside the dockable pane. */}
       <div className="ct-detail-head">
         <h3>{run.title}</h3>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
@@ -2703,15 +2705,21 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     return (
       <>
         {previewListError}
+        {/* THE WAY OUT DOES NOT LIVE IN THE THING THAT CAN BE HIDDEN.
+            "← All apps" sat inside the dockable run list, so docking the list took the only
+            way back with it — and the workaround for that was to drop the LABEL when docked,
+            which left an unexplained "»" as the sole control. A back button that disappears
+            when you tidy the pane is a trap.
+            It also duplicated "← All code tasks" further down the detail: two controls, two
+            names, one behaviour (setSelected(null)). One survives, at the top, outside the
+            pane, always visible. */}
+        <div className="ct-split-top">
+          <button type="button" className="cap-btn" onClick={() => setSelected(null)}
+                  data-testid="ct-detail-back">← All apps</button>
+        </div>
         <div className="ct-split" data-docked={listDocked}>
           <aside className="ct-split-list">
             <div className="ct-split-listbar">
-              {/* Docked, the label goes and only the toggle remains: at 44px wide "← All apps"
-                  wrapped onto three lines and collided with the toggle beside it. */}
-              {!listDocked ? (
-                <button type="button" className="cap-btn" onClick={() => setSelected(null)}
-                        data-testid="ct-detail-back">← All apps</button>
-              ) : null}
               <button type="button" className="cap-btn ct-dock-btn"
                       onClick={() => setListDocked((d) => !d)}
                       aria-expanded={!listDocked}
@@ -2839,7 +2847,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                 </button>
               </div>
             </div>
-            <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
+            <CodeTaskDetail run={active} previews={previews} />
           </section>
         </div>
       </>

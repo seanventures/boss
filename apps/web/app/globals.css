@@ -6966,6 +6966,19 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    minmax(280px, …) never collapses: below roughly 900px the 280px list plus the gap plus a
    detail pane that has its own content width adds up to more than the window, and the page
    runs off the right-hand edge. The builder already collapsed at 900px; this did not. */
+/* THE WAY OUT, ABOVE THE SPLIT AND OUTSIDE IT.
+   This button used to live in `.ct-split-listbar`, inside the dockable pane — so docking the
+   list hid the only way back, and the workaround was to drop its LABEL when docked, leaving a
+   bare "»" as the sole control. Out here it is unaffected by the dock state, and it is now the
+   ONLY back control: the detail below carried a second one reading "← All code tasks" that did
+   exactly the same thing. */
+.ct-split-top {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px;
+}
+/* The split follows it directly, so the two read as one header and body. */
+.ct-split-top + .ct-split { margin-top: 8px; }
+
 .ct-split {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
@@ -6981,12 +6994,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .ct-split-list { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .ct-split-listbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
   padding-bottom: 6px; border-bottom: 1px solid var(--border);
   min-height: 34px;
 }
-/* Docked, only the toggle is left and it centres in the 44px rail. With the label still in
-   place it wrapped onto three lines and collided with the button beside it. */
+/* Only the toggle lives in this bar now, so it centres in the 44px rail when docked. */
 .ct-split[data-docked="true"] .ct-split-listbar { justify-content: center; }
 .ct-split-listbar .cap-btn { white-space: nowrap; }
 .ct-dock-btn { padding: 2px 9px; line-height: 1.6; }
