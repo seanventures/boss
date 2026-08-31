@@ -348,7 +348,12 @@ def execute_step(
             "status": "awaiting",
             "await": adopted,
             "adopted": True,
-            "note": "waiting on the code task this project was started with",
+            # Named as a downstream step expects to find it, so `preview` and `deploy` can
+            # reference an adopted build exactly as they would one this step had started.
+            **({_CANONICAL_FIELD[adopted["kind"]]: adopted["id"]}
+               if adopted["kind"] in _CANONICAL_FIELD else {}),
+            "note": f"waiting on the {adopted['kind'].replace('_', ' ')} "
+                    f"this project was started with",
         }
 
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
@@ -368,6 +373,11 @@ def execute_step(
     if awaited:
         result["status"] = "awaiting"
         result["await"] = awaited
+        # create_code_task returns `run_id`; the catalogue reads `code_task_run_id`. Writing the
+        # canonical name here is what makes "deploy the thing you just built" resolve.
+        field = _CANONICAL_FIELD.get(awaited["kind"])
+        if field:
+            result.setdefault(field, awaited["id"])
     return result
 
 
@@ -377,6 +387,17 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "research": ("discovery", ("discovery_id", "run_id", "id")),
     "meeting": ("meeting", ("meeting_run_id", "run_id", "id")),
     "build": ("code_task", ("code_task_run_id", "run_id", "id")),
+}
+
+
+#: The name downstream steps use for the thing a kind produced. `preview` and `deploy` bind
+#: `{"from_step": "build", "field": "code_task_run_id"}` — but create_code_task returns `run_id`,
+#: and an adopted build calls no tool at all, so that field existed in the catalogue and in
+#: nothing else. Both paths now write it, and the reference resolves.
+_CANONICAL_FIELD: dict[str, str] = {
+    "code_task": "code_task_run_id",
+    "discovery": "discovery_run_id",
+    "meeting": "meeting_run_id",
 }
 
 

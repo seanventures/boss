@@ -620,6 +620,65 @@ def test_meeting_adopts_the_panel_the_project_came_from(eng, project, monkeypatc
     assert steps["m"]["output"]["await"]["id"] == "mrun_first"
 
 
+def test_the_build_step_names_its_task_the_way_deploy_reads_it(eng, project, monkeypatch):
+    """The catalogue's `preview` and `deploy` bind {"from_step": "build", "field":
+    "code_task_run_id"}. create_code_task returns `run_id`, and an adopted build calls no tool at
+    all — so that field existed in the catalogue and nowhere else, and every standard workflow
+    would have failed at preview with "step 'build' did not produce 'code_task_run_id'"."""
+    build = RecordingTool("create_code_task", {"run_id": "crun_started"})
+    preview = RecordingTool("start_preview", {"preview_url": "https://example.test"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build, preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "canon", [
+            {"id": "build", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": ["preview"]},
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview",
+                         "inputs": {"run_id": {"from_step": "build",
+                                               "field": "code_task_run_id"}}},
+             "next": []},
+        ], "build")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_started", "completed")
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["build"]["output"]["code_task_run_id"] == "crun_started"
+    assert steps["preview"]["status"] == "succeeded", steps["preview"]["last_error"]
+    assert preview.calls[0]["args"]["run_id"] == "crun_started"
+
+
+def test_an_adopted_build_is_referenced_the_same_way(eng, project, monkeypatch):
+    """An adopted build calls no tool, so its output has no id at all unless one is written."""
+    preview = RecordingTool("start_preview", {"preview_url": "https://example.test"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "canon2", [
+            {"id": "build", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": ["preview"]},
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview",
+                         "inputs": {"run_id": {"from_step": "build",
+                                               "field": "code_task_run_id"}}},
+             "next": []},
+        ], "build")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_adopt_ref"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_adopt_ref", "completed")
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["preview"]["status"] == "succeeded", steps["preview"]["last_error"]
+    assert preview.calls[0]["args"]["run_id"] == "crun_adopt_ref"
+
+
 def test_research_adopts_the_discovery_the_work_came_from(eng, project, monkeypatch):
     discovery = RecordingTool("create_discovery", {"run_id": "drun_second"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
