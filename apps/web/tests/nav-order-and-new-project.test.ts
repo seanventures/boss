@@ -151,3 +151,29 @@ describe("choosing the workflow", () => {
     expect(CT).toContain('name="workflow_version_id"');
   });
 });
+
+describe("watching a project's workflow", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+
+  it("the Running tab lists projects governed by a workflow", () => {
+    // The tab listed `workflow_runs` only. A project is a CODE TASK and the coding pipeline
+    // never creates a workflow run, so a project could never appear there however long you
+    // waited — while a stale unrelated run sat in the list looking like an answer.
+    expect(DW).toContain('data-testid="dw-governed-projects"');
+    expect(DW).toContain("GovernedProjects");
+  });
+
+  it("shows only projects that actually carry a workflow", () => {
+    expect(DW).toContain("?.workflow");
+  });
+
+  it("refreshes, because a running project changes phase", () => {
+    expect(DW).toContain("setInterval(load");
+  });
+
+  it("does not claim the pipeline is executing the workflow's steps", () => {
+    // It is not: the phases are the pipeline's own. Dressing them up as the workflow's
+    // declared steps would be a far more confident claim than the system can support.
+    expect(DW).toContain("These are projects, not workflow runs");
+  });
+});

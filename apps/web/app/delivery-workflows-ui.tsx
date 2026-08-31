@@ -353,8 +353,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       {notice ? <p className="dw-notice" data-testid="dw-notice">{notice}</p> : null}
 
       {tab === "running" ? (
-        <RunsView runs={runs} openRun={openRun} setOpenRun={setOpenRun}
-                  onAdvance={() => act("Advance", "advance", {})} busy={busy} />
+        <>
+          <GovernedProjects projectId={projectId} />
+          <RunsView runs={runs} openRun={openRun} setOpenRun={setOpenRun}
+                    onAdvance={() => act("Advance", "advance", {})} busy={busy} />
+        </>
       ) : tab === "catalogue" ? (
         <CatalogueView
           catalogue={catalogue} installed={installed} busy={busy}
@@ -460,6 +463,85 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 }
 
 /* ── Running ─────────────────────────────────────────────────────────────────── */
+
+/**
+ * PROJECTS GOVERNED BY A WORKFLOW.
+ *
+ * The Running tab lists `workflow_runs` — the workflow runtime's own executions. A project is
+ * a CODE TASK, and the coding pipeline never creates a workflow run, so a project could never
+ * appear here however long you waited. Asked "where do I watch my project's workflow steps",
+ * the honest answer was "nowhere", while the answer looked like a stale unrelated run sitting
+ * in the list.
+ *
+ * A project's steps ARE tracked — the pipeline records every phase and its duration. This puts
+ * them on the screen that names the workflow, which is where somebody goes looking.
+ *
+ * It does NOT pretend the pipeline is executing the workflow's declared steps. It is not: the
+ * phases are the pipeline's own, and dressing them up as the workflow's would be a much more
+ * confident claim than the system can support.
+ */
+function GovernedProjects({ projectId }: { projectId: string }) {
+  const [items, setItems] = useState<Array<{
+    id: string; title?: string | null; status?: string; phase?: string;
+    finalize_ctx?: Record<string, unknown> | null }>>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch(
+          `/api/code-tasks?project_id=${encodeURIComponent(projectId)}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const body = await res.json();
+        const all = (body.code_tasks ?? body.items ?? []) as typeof items;
+        if (alive) setItems(all.filter((r) => (r.finalize_ctx as Record<string, unknown> | null)
+          ?.workflow));
+      } catch { /* the tab still shows workflow runs */ }
+    };
+    void load();
+    // A running project changes phase every few minutes; a stale list here is the thing being
+    // complained about.
+    const t = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(t); };
+  }, [projectId]);
+
+  if (!items.length) return null;
+  const live = items.filter((r) => ["running", "queued", "repairing"].includes(String(r.status)));
+  const shown = (live.length ? live : items).slice(0, 8);
+  return (
+    <div className="dw-governed" data-testid="dw-governed-projects">
+      <div className="dw-runs-head">
+        <span className="detail">
+          {shown.length} project{shown.length === 1 ? "" : "s"} on a workflow
+          {live.length ? "" : " (none running)"}
+        </span>
+      </div>
+      {shown.map((r) => {
+        const wf = (r.finalize_ctx as Record<string, unknown>).workflow as
+          { name?: string; version?: number; source?: string };
+        return (
+          <div key={r.id} className="dw-governed-row" data-testid={`dw-governed-${r.id}`}>
+            <span className={`cap-badge tone-${r.status === "completed" ? "green"
+              : r.status === "blocked" || r.status === "failed" ? "amber" : "blue"}`}>
+              {r.status}
+            </span>
+            <span className="dw-governed-title">{r.title ?? r.id}</span>
+            <span className="detail dw-governed-wf">
+              {wf?.name}{typeof wf?.version === "number" ? ` v${wf.version}` : ""}
+              {wf?.source === "default" ? " (default)" : ""}
+            </span>
+            {/* The pipeline's own phase, named as such. */}
+            <span className="detail dw-governed-phase">{r.phase ?? "—"}</span>
+          </div>
+        );
+      })}
+      <p className="detail dw-governed-note">
+        These are projects, not workflow runs. The phase shown is the coding pipeline&apos;s own
+        step; open a project to see every step with its duration.
+      </p>
+    </div>
+  );
+}
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
   runs: Run[];

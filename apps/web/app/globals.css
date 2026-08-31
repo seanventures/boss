@@ -7621,3 +7621,23 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-wf-select:disabled { opacity: .6; }
 .askboss-wf-note { font-size: 0.7rem; color: var(--faint); white-space: nowrap; }
 @media (max-width: 1200px) { .askboss-wf { flex-basis: 100%; margin-left: 0; } }
+
+/* PROJECTS ON A WORKFLOW, above the workflow runtime's own runs. Two different things on one
+   screen, so they are visually separated rather than blended into one list — a project is not
+   a workflow run and must not be read as one. */
+.dw-governed {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; margin-bottom: 14px; background: var(--surface-2);
+}
+.dw-governed-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 0; border-top: 1px solid var(--border);
+}
+.dw-governed-row:first-of-type { border-top: 0; }
+.dw-governed-title { font-weight: 600; font-size: 0.85rem; min-width: 0; flex: 1 1 220px; }
+.dw-governed-wf { white-space: nowrap; }
+.dw-governed-phase {
+  font-family: var(--mono, monospace); font-size: 0.72rem;
+  color: var(--accent); white-space: nowrap;
+}
+.dw-governed-note { margin: 8px 0 0; font-size: 0.72rem; }
