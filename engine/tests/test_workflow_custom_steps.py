@@ -219,6 +219,31 @@ def test_a_workflow_cannot_publish_a_dangerous_custom_step_as_auto(eng, project)
     assert "requires a person" in str(error.value)
 
 
+def test_a_dangerous_custom_step_cannot_approve_itself_on_timeout(eng, project):
+    """The same ceiling built-in capabilities already have. Without it, a tier-3 custom
+    step could publish with on_timeout=approve and, after the SLA, run unattended."""
+    with eng.begin() as c:
+        _skill(c, project, "prod.truncate", risk_tier=3)
+        custom_steps.create(
+            c, project_id=project, label="Reset prod", binding_kind="skill",
+            skill_id="prod.truncate", actor="test", step_key="reset_prod",
+        )
+        definition = workflows.create_definition(
+            c, project_id=project, workflow_key="wf_sla", name="wf", description=None,
+            actor="test", namespace="product",
+        )
+        with pytest.raises(Exception) as error:
+            workflows.publish_version(
+                c, project_id=project, definition_id=definition["id"], actor="test",
+                spec={"entry_step": "s", "steps": [
+                    {"id": "s", "kind": "capability", "next": [],
+                     "approval": {"mode": "manual", "sla_hours": 1, "on_timeout": "approve"},
+                     "binding": {"custom_step": "reset_prod"}},
+                ]},
+            )
+    assert "cannot approve itself on a timeout" in str(error.value)
+
+
 def test_an_untrusted_skill_cannot_be_given_reach(eng, project):
     with eng.begin() as c:
         _skill(c, project, "random.download", risk_tier=2, trusted=False)

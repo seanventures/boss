@@ -1619,3 +1619,46 @@ def test_a_workflow_without_a_preview_step_is_not_blocked(eng, project):
         ], "deploy")
         run = _start(c, project, version["id"], {})
         assert runner._preview_missing_for_run(c, {"run_id": run["id"]}) is None
+
+
+def test_timeout_approve_on_a_work_step_still_runs_the_tool(eng, project, monkeypatch):
+    """on_timeout=approve means 'proceed with the work', not 'pretend the work happened'.
+
+    A person-approval of a work step (build, meeting, preview, …) only unblocks it; the tool
+    still has to run. The timeout sweep used to mark those steps succeeded without ever
+    calling execute_step, so a build that nobody approved in time was recorded as built
+    without a code task. Gates — where the approval IS the work — still complete here.
+    """
+    meeting = RecordingTool("request_meeting", {"meeting_run_id": "mrun_sla", "task_id": "tsk_sla"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "sla_work", [
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "Build it"}},
+             "approval": {"mode": "manual", "sla_hours": 1, "on_timeout": "approve"},
+             "next": []},
+        ], "m")
+        run = _start(c, project, version["id"])
+        opened = runner.tick(c, Ctx(eng), project_id=project)
+        assert opened["performed"][0]["outcome"] == "gate_opened", opened
+        assert not meeting.calls, "the tool ran before anyone (or policy) approved it"
+
+        _overdue(c, run["id"])
+        swept = runner.sweep_gate_timeouts(c, project_id=project)
+        after_sweep = _steps(c, run["id"])["m"]
+        assert swept["applied"][0]["outcome"] == "auto_approved"
+        assert after_sweep["status"] == "ready", (
+            "timeout-approve finished the work step without running it: "
+            f"{after_sweep['status']} output={after_sweep.get('output')}"
+        )
+        assert not meeting.calls, "the sweep itself executed the tool"
+
+        released = runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert meeting.calls, "policy approved the step and the tool still never ran"
+    assert meeting.calls[0]["args"] == {"directive": "Build it"}
+    assert steps["m"]["status"] == "succeeded"
+    assert steps["m"]["output"]["meeting_run_id"] == "mrun_sla"
+    assert released["performed"][0]["outcome"] == "succeeded"

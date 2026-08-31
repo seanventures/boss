@@ -30,7 +30,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from .core import emit_event, make_id
-from .workflow_capabilities import MANUAL_APPROVAL_RISK_FLOOR
+from .workflow_capabilities import (
+    MANUAL_APPROVAL_RISK_FLOOR,
+    TIMEOUT_ACTIONS,
+    TIMEOUT_APPROVE_RISK_CEILING,
+)
 
 BINDING_KINDS = ("skill", "mcp_tool")
 
@@ -450,12 +454,26 @@ def validate_step(
                 f"step '{step_id}' ({definition['label']}) needs '{declared['name']}'."
             )
 
-    approval = (step.get("approval") or {}).get("mode")
-    if definition["approval_forced_manual"] and str(approval).lower() == "auto":
+    approval = step.get("approval") or {}
+    requested = approval.get("mode")
+    if definition["approval_forced_manual"] and str(requested).lower() == "auto":
         problems.append(
             f"step '{step_id}' ({definition['label']}) runs something at risk tier "
             f"{definition['risk_tier']} and always requires a person."
         )
+    on_timeout = approval.get("on_timeout")
+    if on_timeout is not None:
+        action = str(on_timeout).lower()
+        if action not in TIMEOUT_ACTIONS:
+            problems.append(
+                f"step '{step_id}' on_timeout must be one of: {', '.join(TIMEOUT_ACTIONS)}."
+            )
+        elif action == "approve" and definition["risk_tier"] >= TIMEOUT_APPROVE_RISK_CEILING:
+            problems.append(
+                f"step '{step_id}' ({definition['label']}) is risk tier "
+                f"{definition['risk_tier']} and cannot approve itself on a timeout. "
+                "Use 'escalate' or 'block'."
+            )
     if definition["risk_tier"] >= MANUAL_APPROVAL_RISK_FLOOR and not definition["trusted"]:
         problems.append(
             f"step '{step_id}' ({definition['label']}) binds an untrusted "

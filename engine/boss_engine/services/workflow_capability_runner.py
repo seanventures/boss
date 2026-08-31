@@ -3030,50 +3030,83 @@ def sweep_gate_timeouts(
         action = str(approval.get("on_timeout") or "block").lower()
         try:
             if action == "approve":
-                # NOT `complete_step`. That is the worker path and requires the step to be
-                # leased by the caller — this step is WAITING on a person, leased by nobody.
-                # Approving by policy is a different act from finishing work, and borrowing
-                # the worker's function to do it would have meant lying about who did what.
-                connection.execute(
-                    text(
-                        """
-                        UPDATE workflow_step_runs
-                        SET status='succeeded',
-                            output = CAST(:output AS JSONB),
-                            evidence = COALESCE(evidence, '[]'::jsonb)
-                                       || CAST(:evidence AS JSONB),
-                            completed_at = now(),
-                            updated_at = now()
-                        WHERE id = :id AND status = 'waiting'
-                        """
-                    ),
-                    {
-                        "id": row["id"],
-                        "output": json.dumps({
-                            "approved_by": "policy",
-                            "reason": "nobody answered within the agreed time",
-                            "sla_hours": approval.get("sla_hours"),
-                        }),
-                        # The evidence IS the record. "Approved by policy" beside the SLA it
-                        # was approved under is what an auditor needs; "approved" alone is not.
-                        "evidence": json.dumps([{
-                            "kind": "auto_approval",
-                            "decided_by": "policy",
-                            "sla_hours": approval.get("sla_hours"),
-                            "approver_role": approval.get("approver_role"),
-                            "due_at": snapshot.get("due_at"),
-                        }]),
-                    },
-                )
+                evidence = [{
+                    "kind": "auto_approval",
+                    "decided_by": "policy",
+                    "sla_hours": approval.get("sla_hours"),
+                    "approver_role": approval.get("approver_role"),
+                    "due_at": snapshot.get("due_at"),
+                }]
+                # Same split `_resume_answered_gates` already makes: a gate's approval IS the
+                # work, so it finishes here. A work step's approval only unblocks it. Treating
+                # both as "succeeded" marked builds and notifies complete without ever calling
+                # the tool — and on_timeout=approve is only legal below the risk ceiling, which
+                # is exactly the work-step side of that split.
+                if snapshot.get("gate_completes_step", True):
+                    # NOT `complete_step`. That is the worker path and requires the step to be
+                    # leased by the caller — this step is WAITING on a person, leased by nobody.
+                    connection.execute(
+                        text(
+                            """
+                            UPDATE workflow_step_runs
+                            SET status='succeeded',
+                                output = CAST(:output AS JSONB),
+                                evidence = COALESCE(evidence, '[]'::jsonb)
+                                           || CAST(:evidence AS JSONB),
+                                completed_at = now(),
+                                updated_at = now()
+                            WHERE id = :id AND status = 'waiting'
+                            """
+                        ),
+                        {
+                            "id": row["id"],
+                            "output": json.dumps({
+                                "approved_by": "policy",
+                                "reason": "nobody answered within the agreed time",
+                                "sla_hours": approval.get("sla_hours"),
+                            }),
+                            "evidence": json.dumps(evidence),
+                        },
+                    )
+                    # The run has to move on, or a policy approval leaves the workflow parked
+                    # at a step that has already been decided.
+                    workflows.advance_run(connection, project_id, row["workflow_run_id"])
+                else:
+                    connection.execute(
+                        text(
+                            """
+                            UPDATE workflow_step_runs
+                            SET status='ready',
+                                evidence = COALESCE(evidence, '[]'::jsonb)
+                                           || CAST(:evidence AS JSONB),
+                                binding_snapshot = COALESCE(binding_snapshot, '{}'::jsonb)
+                                                   || CAST(:patch AS JSONB),
+                                updated_at = now()
+                            WHERE id = :id AND status = 'waiting'
+                            """
+                        ),
+                        {
+                            "id": row["id"],
+                            "evidence": json.dumps(evidence),
+                            "patch": json.dumps({
+                                "approved_at": now_utc().isoformat(),
+                                "approved_by": "policy",
+                            }),
+                        },
+                    )
+                    connection.execute(
+                        text(
+                            "UPDATE workflow_runs SET status='running', updated_at=now() "
+                            "WHERE id=:id AND status='waiting'"
+                        ),
+                        {"id": row["workflow_run_id"]},
+                    )
                 emit_event(
                     connection, project_id, "workflow.gate_auto_approved", actor,
                     "workflow_step_run", row["id"],
                     {"step_id": row["step_id"], "workflow_key": row["workflow_key"],
                      "sla_hours": approval.get("sla_hours")},
                 )
-                # The run has to move on, or a policy approval leaves the workflow parked at a
-                # step that has already been decided.
-                workflows.advance_run(connection, project_id, row["workflow_run_id"])
                 outcome = "auto_approved"
             elif action == "escalate":
                 emit_event(
