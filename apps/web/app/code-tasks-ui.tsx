@@ -2112,7 +2112,7 @@ function WorkflowLink({ run }: { run: CodeTaskRun }) {
   );
 }
 
-function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: PreviewRec[] }) {
+function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; previews?: PreviewRec[]; onBack: () => void }) {
   const st = run.state ?? {};
   const tests = structuredCodeTaskTests(st);
   // Operator View: running first, then verified-test with an open_url.
@@ -2166,6 +2166,19 @@ function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: P
           apps", and both called setSelected(null) — two names for one action, on one screen.
           The surviving control sits at the top of the split, outside the dockable pane. */}
       <div className="ct-detail-head">
+        {/* THE WAY OUT, ON A ROW THAT ALREADY EXISTS.
+            It had a row of its own above the split — a whole line of vertical space for one
+            button, on a page whose header already spends four lines before any content. It
+            also used to live INSIDE the dockable run list, so docking the list took the only
+            way back with it; the workaround for that was to drop its label when docked, which
+            left an unexplained "»" on the rail.
+            Here it costs nothing, sits beside the thing it leaves, and the detail column never
+            docks — so it cannot disappear. Styled as a distinct back control rather than
+            another flat chip: it is the only thing in this header that NAVIGATES. */}
+        <button type="button" className="ct-back" onClick={onBack}
+                data-testid="ct-detail-back" title="Back to all projects">
+          <span aria-hidden>←</span> All projects
+        </button>
         <h3>{run.title}</h3>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
         <WorkflowLink run={run} />
@@ -2760,18 +2773,6 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     return (
       <>
         {previewListError}
-        {/* THE WAY OUT DOES NOT LIVE IN THE THING THAT CAN BE HIDDEN.
-            "← All apps" sat inside the dockable run list, so docking the list took the only
-            way back with it — and the workaround for that was to drop the LABEL when docked,
-            which left an unexplained "»" as the sole control. A back button that disappears
-            when you tidy the pane is a trap.
-            It also duplicated "← All code tasks" further down the detail: two controls, two
-            names, one behaviour (setSelected(null)). One survives, at the top, outside the
-            pane, always visible. */}
-        <div className="ct-split-top">
-          <button type="button" className="cap-btn" onClick={() => setSelected(null)}
-                  data-testid="ct-detail-back">← All apps</button>
-        </div>
         <div className="ct-split" data-docked={listDocked}>
           <aside className="ct-split-list">
             <div className="ct-split-listbar">
@@ -2902,7 +2903,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                 </button>
               </div>
             </div>
-            <CodeTaskDetail run={active} previews={previews} />
+            <CodeTaskDetail run={active} previews={previews} onBack={() => setSelected(null)} />
           </section>
         </div>
       </>

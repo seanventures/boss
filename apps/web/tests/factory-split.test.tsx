@@ -54,10 +54,12 @@ describe("factory master-detail", () => {
     expect(docked).toContain(".ct-split-items { display: none; }");
   });
 
-  it("the run list offers a way back to all apps", () => {
+  it("the split offers a way back to all projects", () => {
     // A split with no exit is a trap: the only way out was the browser back button.
+    // It now sits in the project's title row rather than a row of its own — same control,
+    // no wasted line — and in the detail column, which never docks.
     expect(UI).toContain("ct-detail-back");
-    expect(UI).toContain("← All apps");
+    expect(UI).toContain("All projects");
   });
 
   it("collapses to one column rather than two columns too narrow to use", () => {

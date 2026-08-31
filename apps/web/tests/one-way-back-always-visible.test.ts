@@ -19,36 +19,40 @@ const CSS = codeOnly("app/globals.css");
 
 describe("there is exactly one", () => {
   it("keeps a single back control", () => {
-    const backs = SRC.match(/←\s*All (apps|code tasks)/g) ?? [];
+    const backs = SRC.match(/←<\/span> All (projects|apps|code tasks)/g) ?? [];
     expect(backs).toHaveLength(1);
   });
 
   it("drops the duplicate that said 'All code tasks'", () => {
     expect(SRC).not.toContain('className="mr-back"');
-    // ...and the prop that existed only to feed it.
-    expect(SRC).not.toContain("onBack");
   });
 });
 
 describe("it survives docking", () => {
-  it("lives outside the dockable pane", () => {
-    const top = SRC.slice(SRC.indexOf('className="ct-split-top"'),
-                          SRC.indexOf('className="ct-split"'));
-    expect(top).toContain('data-testid="ct-detail-back"');
+  it("lives in the detail column, which never docks", () => {
+    // Not in `.ct-split-list` — that pane collapses to a 44px rail, and a back button that
+    // disappears when you tidy the pane is a trap.
+    const head = SRC.slice(SRC.indexOf('className="ct-detail-head"'),
+                           SRC.indexOf('<h3>{run.title}</h3>'));
+    expect(head).toContain('data-testid="ct-detail-back"');
   });
 
   it("is not rendered conditionally on the dock state", () => {
-    // `{!listDocked ? <button…> : null}` was the bug: the control existed only while the pane
-    // was open, which is precisely when you least need it.
-    const top = SRC.slice(SRC.indexOf('className="ct-split-top"'),
-                          SRC.indexOf('className="ct-split"'));
-    expect(top).not.toContain("listDocked");
+    const head = SRC.slice(SRC.indexOf('className="ct-detail-head"'),
+                           SRC.indexOf('<h3>{run.title}</h3>'));
+    expect(head).not.toContain("listDocked");
   });
 
-  it("sits above the split, not inside either column", () => {
-    expect(SRC.indexOf('className="ct-split-top"'))
-      .toBeLessThan(SRC.indexOf('<div className="ct-split" data-docked'));
-    expect(CSS).toContain(".ct-split-top");
+  it("costs no row of its own", () => {
+    // It had one — a whole line of vertical space for one button, on a page whose header
+    // already spends four lines before any content.
+    expect(SRC).not.toContain("ct-split-top");
+    expect(CSS).not.toContain(".ct-split-top");
+  });
+
+  it("is styled as a back control, not another flat chip", () => {
+    expect(CSS).toContain(".ct-back");
+    expect(CSS).toContain(".ct-back:hover span");   // the arrow moves
   });
 
   it("leaves only the dock toggle in the list bar", () => {
