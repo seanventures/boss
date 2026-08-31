@@ -390,15 +390,15 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 
 
-#: The name downstream steps use for the thing a kind produced. `preview` and `deploy` bind
-#: `{"from_step": "build", "field": "code_task_run_id"}` — but create_code_task returns `run_id`,
-#: and an adopted build calls no tool at all, so that field existed in the catalogue and in
-#: nothing else. Both paths now write it, and the reference resolves.
-_CANONICAL_FIELD: dict[str, str] = {
-    "code_task": "code_task_run_id",
-    "discovery": "discovery_run_id",
-    "meeting": "meeting_run_id",
-}
+#: The name downstream steps use for the thing a kind produced — the FIRST field of its await
+#: spec, which is also what the capability registry declares it `produces`.
+#:
+#: `preview` and `deploy` bind {"from_step": "build", "field": "code_task_run_id"}, but
+#: create_code_task returns `run_id` and an adopted build calls no tool at all — so that field
+#: existed in the catalogue and in nothing else, and every standard workflow would have failed
+#: at preview after a successful build. Derived rather than written out a second time, because
+#: two hand-maintained lists of the same names is how they came to disagree in the first place.
+_CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_KINDS.values()}
 
 
 def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]]:
