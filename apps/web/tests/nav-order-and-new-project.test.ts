@@ -116,3 +116,36 @@ describe("the top bar does not repeat the nav", () => {
     expect(SHELL).toContain('id="boss-console-title"');
   });
 });
+
+describe("choosing the workflow", () => {
+  const HERO = codeOnly("app/ask-boss-hero.tsx");
+
+  it("Command Center sets the project DEFAULT, not a one-off", () => {
+    // "Build →" does not create a project — it sends the directive down panel → PRD → then
+    // code. Threading a per-press choice through a meeting and an approval before it reaches
+    // the eventual code task is real plumbing for a choice nobody makes twice.
+    expect(HERO).toContain('data-testid="askboss-default-workflow"');
+    expect(HERO).toContain("Workflow for new projects");
+  });
+
+  it("writes through the mapping action that already exists", () => {
+    // One way a mapping gets created, not two that can disagree — the Workflows area uses the
+    // same endpoint.
+    expect(HERO).toContain('action: "apply"');
+    expect(HERO).toContain('work_class: "project.new"');
+  });
+
+  it("says whether it saved", () => {
+    // A silent select is indistinguishable from one that did nothing, and this control changes
+    // what every future project does.
+    expect(HERO).toContain('data-testid="askboss-wf-note"');
+    expect(HERO).toContain("could not save");
+  });
+
+  it("the per-project picker still exists on the form", () => {
+    // Two different questions: "what should THIS project follow" and "what should new projects
+    // follow from now on".
+    expect(CT).toContain('data-testid="ct-new-workflow"');
+    expect(CT).toContain('name="workflow_version_id"');
+  });
+});

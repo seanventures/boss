@@ -367,6 +367,80 @@ async function postBounded(
   }
 }
 
+/**
+ * The workflow every new project in this project follows.
+ *
+ * "Build →" does not create a project — it sends the directive down panel → PRD → then code.
+ * Threading a per-press workflow choice through a meeting and an approval before it reaches
+ * the eventual code task would be real plumbing for a choice nobody makes twice. Setting the
+ * project's DEFAULT is one control that governs everything that follows, including whatever
+ * the panel produces, and it is what workflow mappings are for.
+ *
+ * Writes through the `apply` action that already exists — the same one the Workflows area
+ * uses — so there is one way a mapping gets created, not two that can disagree.
+ */
+function DefaultWorkflowPicker({ projectId }: { projectId: string }) {
+  const [items, setItems] = useState<Array<{
+    id: string; name: string; workflow_key: string; is_catalogue?: boolean }>>([]);
+  const [current, setCurrent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/delivery-workflows?view=installed&project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (res.ok && alive) setItems((await res.json()).items ?? []);
+      } catch { /* the hero still works without it */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+
+  const apply = async (key: string) => {
+    if (!key) return;
+    setSaving(true);
+    setNote("");
+    try {
+      const res = await fetch("/api/delivery-workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // `project.new` is the work class the catalogue gives Standard Product Delivery, and
+        // the first one a code task resolves against.
+        body: JSON.stringify({ action: "apply", project_id: projectId,
+                               workflow_key: key, work_class: "project.new" }),
+      });
+      // SAY WHICH WAY IT WENT. A silent select is indistinguishable from one that did nothing,
+      // and this control changes what every future project does.
+      setNote(res.ok ? "saved — new projects follow this" : `could not save (${res.status})`);
+      if (res.ok) setCurrent(key);
+    } catch {
+      setNote("could not save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!items.length) return null;
+  return (
+    <div className="askboss-wf" data-testid="askboss-default-workflow">
+      <label className="askboss-wf-label" htmlFor="askboss-wf-select">Workflow for new projects</label>
+      <select id="askboss-wf-select" className="askboss-wf-select" value={current}
+              disabled={saving} onChange={(e) => void apply(e.target.value)}>
+        <option value="">Standard Product Delivery (default)</option>
+        {items.map((w) => (
+          <option key={w.id} value={w.workflow_key}>
+            {w.name}{w.is_catalogue ? " (standard)" : ""}
+          </option>
+        ))}
+      </select>
+      {note ? <span className="askboss-wf-note" data-testid="askboss-wf-note">{note}</span> : null}
+    </div>
+  );
+}
+
 export function AskBossHero({
   projectId,
   actor,
@@ -717,6 +791,7 @@ export function AskBossHero({
                 Build →
               </button>
             </div>
+            <DefaultWorkflowPicker projectId={projectId} />
           </div>
 
           {!reply && !busy ? (

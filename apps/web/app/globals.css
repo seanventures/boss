@@ -7596,3 +7596,15 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 /* The title row is now: back · name · status · workflow. Wrap gracefully rather than crush. */
 .ct-detail-head { flex-wrap: wrap; row-gap: 6px; }
+
+/* The path every new project follows, set where the work is started. Quiet: it is a setting
+   that persists, not an action being invited. */
+.askboss-wf { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.askboss-wf-label { font-size: 0.72rem; color: var(--faint); white-space: nowrap; }
+.askboss-wf-select {
+  font: inherit; font-size: 0.78rem; color: var(--ink-soft);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 9px; max-width: 320px;
+}
+.askboss-wf-select:disabled { opacity: .6; }
+.askboss-wf-note { font-size: 0.72rem; color: var(--faint); }
