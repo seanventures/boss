@@ -325,9 +325,10 @@ def execute_step(
     # cost, for a thing already being written — and `meeting` convenes a panel to debate a
     # question the code has answered. Recorded as not applicable, with the reason, which is what
     # actually happened: this project skipped that phase.
+    adopted = _adopted_handle(key, context)
     if (
         key in _RETROSPECTIVE_KINDS
-        and not _adopted_handle(key, context)
+        and not adopted
         and (context.get("input") or {}).get("adopt_code_task_run_id")
     ):
         return {
@@ -340,7 +341,6 @@ def execute_step(
             ),
         }
 
-    adopted = _adopted_handle(key, context)
     if adopted:
         return {
             "capability": key,
