@@ -2554,6 +2554,21 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     } catch { /* private mode: the dock still works, with generic prompts */ }
     const url = new URL(window.location.href);
     url.searchParams.set("agent", m.id);
+    // AND SAY WHICH APP THE PAGE IS ON, or a stale `?run=` will hijack it.
+    //
+    // The dock is opened by pushing a param and firing a SYNTHETIC popstate so the shell
+    // notices. That event is a broadcast: every listener wakes, including this file's own
+    // `?run=` reader, which "only ever SETS" so as not to fight the back button. Selection is
+    // component state, so clicking a card never updated the URL — the `?run=` still in it
+    // belongs to whatever app was opened before. Pressing Ask BOSS therefore re-applied that
+    // old value and threw the operator into a different app, mid-question.
+    //
+    // Reported exactly that way: open "[latency-probe] add a formatBytes helper" (PR #125),
+    // press Ask BOSS, and the page becomes "Database Schema Drift Detector" (PRs #114/#129).
+    //
+    // Writing the run we are asking ABOUT makes the URL describe one coherent state instead of
+    // two contradictory ones, so the broadcast can only re-assert what is already true.
+    url.searchParams.set("run", m.id);
     window.history.pushState({}, "", url.toString());
     window.dispatchEvent(new PopStateEvent("popstate"));
   }, [suggestionsFor]);
