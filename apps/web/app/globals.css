@@ -7554,3 +7554,9 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   .agent-send-spin { animation: none; }
   .agent-suggest:hover, .agent-send:hover:not(:disabled) { transform: none; }
 }
+
+/* WHICH WORKFLOW GOVERNS THIS PROJECT. Quiet — it is a fact about the run, not a control —
+   but always present, because "no workflow linked" and a line that failed to render must not
+   look the same. */
+.ct-workflow { margin-left: auto; white-space: nowrap; }
+.ct-workflow b { font-weight: 600; color: var(--ink-soft); }

@@ -3243,3 +3243,68 @@ def seed_specpack_workflows(
             }
         )
     return registered
+
+
+#: The selector a code task resolves its workflow by. A mapping on the exact task id targets
+#: one task; the `'*'` the resolver already understands is the project's DEFAULT workflow,
+#: which is what "link the standard workflow" means in practice.
+CODE_TASK_SELECTOR_KIND = "code_task"
+
+
+def workflow_for_code_task(
+    connection: Connection,
+    *,
+    project_id: str,
+    task_id: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Which workflow governs this code task, or None when nothing maps to it.
+
+    The workflow runtime and the coding pipeline were built as separate systems: 54 definitions
+    existed, one workflow run had ever been started, and no code task had ever recorded which
+    workflow it belonged to — there was nowhere to record it. So the console could show a
+    catalogue of workflows and a list of runs with no way to say that either had anything to do
+    with the other.
+
+    This is the first half of the join: the fact, resolved and written down at creation. It
+    does NOT change how a run executes — the pipeline's phase sequence is still its own — and
+    saying otherwise on screen would be worse than saying nothing.
+
+    Returns None rather than raising. A project with no mapping is the normal state today, and
+    an unmapped task must still run.
+    """
+    try:
+        resolution = resolve_mapping(
+            connection,
+            project_id=project_id,
+            selector_kind=CODE_TASK_SELECTOR_KIND,
+            selector_value=str(task_id or "*"),
+        )
+    except Exception:  # noqa: BLE001 — a missing link must never stop a task from starting
+        return None
+    if resolution.get("status") != "selected":
+        return None
+    selected = resolution.get("selected") or {}
+    version_id = selected.get("workflow_version_id")
+    if not version_id:
+        return None
+    row = connection.execute(
+        text(
+            """
+            SELECT d.id AS definition_id, d.workflow_key, d.name, v.version
+            FROM workflow_versions v
+            JOIN workflow_definitions d ON d.id = v.workflow_definition_id
+            WHERE v.id = :version_id
+            """
+        ),
+        {"version_id": version_id},
+    ).mappings().first()
+    if not row:
+        return None
+    return {
+        "definition_id": row["definition_id"],
+        "version_id": version_id,
+        "mapping_id": selected.get("id"),
+        "workflow_key": row["workflow_key"],
+        "name": row["name"],
+        "version": row["version"],
+    }

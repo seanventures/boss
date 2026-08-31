@@ -552,6 +552,27 @@ def start_code_task(
     if simulated:
         run_finalize["simulated"] = True
         run_finalize["fixture"] = True
+    # WHICH WORKFLOW GOVERNS THIS, recorded at creation.
+    #
+    # The workflow runtime and the coding pipeline were built as separate systems. The console
+    # could show 54 workflow definitions and a list of runs with no way to say that either had
+    # anything to do with the other, because a run had nowhere to record it.
+    #
+    # Written into finalize_ctx rather than a new column: additive, no migration, and the same
+    # place app_id / origin / execution_substrate already live, so the API returns it and the
+    # console reads it with no plumbing. A real foreign key is the better long-term shape — it
+    # is what makes "every run of this workflow" a cheap query — and this does not preclude it.
+    #
+    # Resolution failing is the NORMAL state until a project maps one, so it is never fatal.
+    try:
+        from .workflows import workflow_for_code_task
+
+        governing = workflow_for_code_task(
+            connection, project_id=project_id, task_id=task_id)
+        if governing:
+            run_finalize["workflow"] = governing
+    except Exception:  # noqa: BLE001 — an unmapped task must still run
+        pass
     if hasattr(connection, "save_run"):
         connection.save_run(
             run_id,

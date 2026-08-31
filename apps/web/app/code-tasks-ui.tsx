@@ -2076,6 +2076,37 @@ function CodeTaskActivity({ runId, live }: { runId: string; live: boolean }) {
   );
 }
 
+/**
+ * Which workflow governs this project.
+ *
+ * The workflow runtime and the coding pipeline were built as separate systems: the console
+ * showed 54 workflow definitions and a list of runs, with nothing on either screen saying that
+ * they had anything to do with each other. The engine now resolves the governing workflow when
+ * a run is created and records it, so this reads a fact rather than guessing one.
+ *
+ * SAYS "not linked" RATHER THAN NOTHING. A project with no mapping is the normal state today,
+ * and an absent line is indistinguishable from a line that failed to load — which is the exact
+ * ambiguity that made the rest of this console hard to trust.
+ */
+function WorkflowLink({ run }: { run: CodeTaskRun }) {
+  const wf = (run.finalize_ctx as Record<string, unknown> | undefined)?.workflow as
+    { name?: string; version?: number; workflow_key?: string } | undefined;
+  if (!wf?.name) {
+    return (
+      <span className="detail ct-workflow" data-testid="ct-workflow-none"
+            title="No workflow is mapped to this project yet">
+        no workflow linked
+      </span>
+    );
+  }
+  return (
+    <span className="detail ct-workflow" data-testid="ct-workflow"
+          title={`Resolved from this project's workflow mapping when the run was created`}>
+      workflow: <b>{wf.name}</b>{typeof wf.version === "number" ? ` v${wf.version}` : ""}
+    </span>
+  );
+}
+
 function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: PreviewRec[] }) {
   const st = run.state ?? {};
   const tests = structuredCodeTaskTests(st);
@@ -2132,6 +2163,7 @@ function CodeTaskDetail({ run, previews = [] }: { run: CodeTaskRun; previews?: P
       <div className="ct-detail-head">
         <h3>{run.title}</h3>
         <span className={`cap-badge tone-${statusTone(run.status)}`}>{run.status}</span>
+        <WorkflowLink run={run} />
       </div>
       {/* What the work must do, and how it is proven.
           This was on the LIST cards, which is what made them unreadable at tile size — and
