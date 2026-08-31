@@ -119,7 +119,29 @@ type Run = {
   blocked_reason: string | null;
   error: string | null;
   updated_at: string | null;
+  /** What the run was started with — `title` is the project it is delivering. */
+  input?: Record<string, unknown> | null;
+  created_at?: string | null;
 };
+
+/** The project this run is delivering. Five runs of "Standard Product Delivery" are five
+ *  identical rows unless the thing being delivered is on the row. */
+function runSubject(run: Run): string | null {
+  const title = (run.input ?? {})["title"];
+  return typeof title === "string" && title.trim() ? title.trim() : null;
+}
+
+const LIVE = ["running", "waiting", "queued", "validating", "leased"];
+
+/** Live runs first, newest first within each group. Sorting by `updated_at` alone floats a
+ *  blocked run from last week above the project that started a minute ago, purely because
+ *  something touched it more recently — which is how the page came to show an expired run
+ *  while a build was in flight. */
+function byLiveness(a: Run, b: Run): number {
+  const live = (r: Run) => (LIVE.includes(r.status) ? 0 : 1);
+  if (live(a) !== live(b)) return live(a) - live(b);
+  return (b.created_at ?? b.updated_at ?? "").localeCompare(a.created_at ?? a.updated_at ?? "");
+}
 
 /** A step on the canvas. `kind` is "capability" for the work steps and a control kind
  *  ("timer", "decision", "subworkflow") for the blocks the runtime has always supported. */
@@ -541,15 +563,24 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy }: {
           {busy === "Advance" ? "Advancing…" : "Advance now"}
         </button>
       </div>
-      {runs.map((run) => {
+      {[...runs].sort(byLiveness).map((run) => {
         const open = openRun === run.id;
         return (
           <article key={run.id} className="dw-run" data-status={run.status} data-testid="dw-run">
             <button type="button" className="dw-run-head" aria-expanded={open}
                     onClick={() => setOpenRun(open ? null : run.id)}>
               <span className="dw-badge" data-tone={tone(run.status)}>{run.status}</span>
-              <span className="dw-run-name">{run.workflow_name}</span>
-              <span className="detail dw-run-version">v{run.version}</span>
+              <span className="dw-run-name">
+                {runSubject(run) ?? run.workflow_name}
+                {runSubject(run) ? (
+                  <em className="dw-run-wf" data-testid="dw-run-workflow">
+                    {run.workflow_name} v{run.version}
+                  </em>
+                ) : null}
+              </span>
+              {runSubject(run) ? null : (
+                <span className="detail dw-run-version">v{run.version}</span>
+              )}
               {/* Progress as a count, not only a bar: "4 of 7" survives a screenshot. */}
               <span className="dw-run-progress">
                 {run.steps_done} of {run.step_count}

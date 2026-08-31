@@ -209,3 +209,28 @@ describe("watching the outer workflow, step by step", () => {
     expect(CSS_DW).not.toContain(".dw-governed");
   });
 });
+
+describe("which run the workflow page shows first", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+
+  it("puts live runs above finished and blocked ones", () => {
+    // The page showed a blocked run from an earlier day while a project was building, because
+    // the only ordering was `updated_at` — and anything that touches an old run floats it back
+    // to the top. Liveness first, recency within it.
+    expect(DW).toContain("function byLiveness");
+    expect(DW).toContain("[...runs].sort(byLiveness)");
+  });
+
+  it("names a run by the project it is delivering", () => {
+    // Five runs of "Standard Product Delivery" are five identical rows. The workflow name stays,
+    // demoted to the second line, because which workflow is still worth knowing.
+    expect(DW).toContain("function runSubject");
+    expect(DW).toContain('data-testid="dw-run-workflow"');
+  });
+
+  it("still names the workflow when the run has no title", () => {
+    // A run started by something other than a project has no subject, and an empty heading is
+    // worse than a repeated one.
+    expect(DW).toContain("runSubject(run) ?? run.workflow_name");
+  });
+});
