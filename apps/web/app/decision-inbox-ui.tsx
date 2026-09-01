@@ -227,6 +227,21 @@ export function DecisionInbox({
     };
   }, []);
 
+  // WHICH DECISION SOMEBODY WAS SENT HERE FOR. A workflow gate links here naming it; read on
+  // navigation as well as on mount, because the console moves between areas without reloading.
+  const [wanted, setWanted] = useState<string | null>(null);
+  useEffect(() => {
+    const read = () =>
+      setWanted(new URLSearchParams(window.location.search).get("decision"));
+    read();
+    window.addEventListener("popstate", read);
+    window.addEventListener("boss:navigate", read);
+    return () => {
+      window.removeEventListener("popstate", read);
+      window.removeEventListener("boss:navigate", read);
+    };
+  }, []);
+
   const visible = useMemo(
     () => filterDecisionInbox(feed.items, filter),
     [feed.items, filter],
@@ -326,9 +341,12 @@ export function DecisionInbox({
         <DecisionInboxEmpty filter={filter} orgId={orgId} />
       ) : (
         <div className="dq" data-testid="decision-inbox-list">
+          {/* THE ONE SOMEBODY WAS SENT HERE TO DECIDE. A workflow gate links here with the
+              decision named; without this the operator arrives at a list and has to find it. */}
           {visible.map((decision) => (
             <DecisionInboxRow
               key={decision.id}
+              highlighted={decision.id === wanted}
               decision={decision}
               tasks={tasks}
               roles={roles}
@@ -447,7 +465,10 @@ function DecisionInboxRow({
   roles,
   projectId,
   actorId,
+  highlighted = false,
 }: {
+  /** Sent here by a workflow gate that named this decision. */
+  highlighted?: boolean;
   decision: DecisionFeedItem;
   tasks: TaskFeedItem[];
   roles: RoleFeedItem[];
@@ -500,6 +521,10 @@ function DecisionInboxRow({
       className="dq-row"
       data-testid="decision-row"
       data-decision-status={decision.status}
+      // Sent here by a workflow gate that named this one: marked, and brought into view, so
+      // the operator does not arrive at a list and have to find what they were sent to decide.
+      data-highlighted={highlighted || undefined}
+      ref={(el) => { if (el && highlighted) el.scrollIntoView({ block: "center" }); }}
       id={`decision-${decision.id}`}
     >
       <div className="dq-body">

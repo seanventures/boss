@@ -579,11 +579,18 @@ export function AskBossHero({
       const runId = String((d?.run as Record<string, unknown> | undefined)?.id ?? d?.id ?? "");
       setInput("");
       setReply(
-        `**Started.** A workflow run is under way for this directive.\n\n` +
-        (runId ? `Run \`${runId}\` — open **Workflow** to watch it.\n\n` : "") +
-        `It convenes a panel, drafts the PRD, waits for your approval, then builds, previews ` +
-        `and asks before it deploys.`,
+        `**Started.** Taking you to the workflow…\n\n` +
+        (runId ? `Run \`${runId}\`.` : ""),
       );
+      // GO WHERE THE WORK IS. Telling somebody to "open Workflow" after they pressed Build is
+      // asking them to do the navigation the press already implied — and they had no way to
+      // know the run had appeared, because the page they were on does not show runs.
+      const url = new URL(window.location.href);
+      url.searchParams.set("area", "delivery_workflows");
+      if (runId) url.searchParams.set("wfr", runId);
+      window.history.pushState({}, "", url.toString());
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      window.dispatchEvent(new CustomEvent("boss:navigate"));
     });
   }, [busy, projectId, actor]);
 

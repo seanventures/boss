@@ -192,20 +192,19 @@ describe("watching the outer workflow, step by step", () => {
     expect(fn).toContain('awaited.kind === "code_task"');
   });
 
-  it("answers a gate where it is seen", () => {
-    // A gate answerable only in another area makes the operator leave the screen that told
-    // them it was waiting, and find it again in a list of everything else.
-    expect(DW).toContain('data-testid="dw-step-decide"');
-    expect(DW).toContain("resolveDecisionAction");
-    expect(DW).toContain('value="approve"');
-    // "decline" was rejected by the server, which only accepts approve|reject|revise|
-    // delegate|execute — so Deny threw "Unsupported decision action" and did nothing.
-    expect(DW).toContain('value="reject"');
+  it("sends a gate to where the decision can be READ", () => {
+    // This asserted the opposite — two buttons answering a release from the step badge, with
+    // no recommendation, no cost, no risk tier and no note in sight. Approving a deployment
+    // from there is a decision made blind; the Approvals page is where that context lives.
+    expect(DW).toContain('data-testid="dw-step-review"');
+    expect(DW).toContain('area: "decisions"');
+    expect(DW).toContain("decision: step.decision_id");
+    expect(DW).not.toContain("resolveDecisionAction");
   });
 
-  it("only offers Approve/Deny on a step actually waiting on one", () => {
-    // The condition moved into `needsYou`, which the path view also uses to mark the node —
-    // so the button and the highlight can never disagree about who is being asked.
+  it("only offers the decision on a step actually waiting on one", () => {
+    // The condition lives in `needsYou`, which the path view also uses to mark the node — so
+    // the control and the highlight can never disagree about who is being asked.
     expect(DW).toContain("function needsYou");
     expect(DW).toContain('Boolean(step.decision_id) && step.status === "waiting"');
     expect(DW).toContain("{needsYou(step) ? (");
@@ -503,12 +502,10 @@ describe("deciding a release, and where it ships", () => {
     expect(DW3).toContain("no verified host");
   });
 
-  it("shows the press happening", () => {
-    // Approve and Deny were plain buttons on a server action that takes seconds: the page
-    // looked identical before and after, which is how people end up pressing Deny twice.
-    expect(DW3).toContain('data-testid="dw-deny"');
-    expect(DW3).toContain('data-testid="dw-approve"');
-    expect(DW3).toContain("SubmitButton");
+  it("names who signs it off", () => {
+    // The gate says "release_manager" on the node; the control should say it too, so the
+    // operator knows whether the decision is theirs before they follow the link.
+    expect(DW3).toContain("signs this off");
   });
 
   it("reads a denial as a decision rather than a fault", () => {
@@ -529,6 +526,7 @@ describe("deciding a release, and where it ships", () => {
 describe("Build starts the workflow, not a panel", () => {
   const BUILDS = codeOnly("app/api/builds/route.ts");
   const HERO2 = codeOnly("app/ask-boss-hero.tsx");
+  const DW_WAIT = codeOnly("app/delivery-workflows-ui.tsx");
 
   it("starts a workflow run on the press", () => {
     // This posted straight to /v1/meetings/prd: a panel convened, a PRD was drafted, somebody
@@ -544,8 +542,17 @@ describe("Build starts the workflow, not a panel", () => {
     expect(BUILDS).toContain("input: { title, directive }");
   });
 
-  it("tells the operator a run started, not a panel", () => {
-    expect(HERO2).toContain("A workflow run is under way");
-    expect(HERO2).toContain("open **Workflow** to watch it");
+  it("takes the operator to the workflow rather than telling them to navigate", () => {
+    // "Open Workflow to watch it" asked somebody to do the navigation the press implied — and
+    // gave them no way to know the run had appeared, since the page they were on shows none.
+    expect(HERO2).toContain('url.searchParams.set("area", "delivery_workflows")');
+    expect(HERO2).toContain('url.searchParams.set("wfr", runId)');
+  });
+
+  it("waits visibly for a run that is still being created", () => {
+    // Arriving from Build, the run may not be in the list yet — an empty list reads as
+    // "nothing happened".
+    expect(DW_WAIT).toContain('data-testid="dw-awaiting"');
+    expect(DW_WAIT).toContain("the run appears here the moment it is created");
   });
 });

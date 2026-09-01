@@ -4,8 +4,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref } from "./url-intent";
-import { resolveDecisionAction } from "./actions";
-import { SubmitButton } from "./submit-button";
 
 /**
  * Delivery workflows: choose one, watch it run, build your own.
@@ -420,6 +418,16 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(t);
   }, [anyLive, load]);
 
+  // A RUN THAT IS ON ITS WAY. Arriving from Build, the run may not be in the list yet — it is
+  // created by the press, and this page had loaded before it. Poll fast until it shows rather
+  // than presenting an empty list, which reads as "nothing happened".
+  const awaited = openRun && !runs.some((r) => r.id === openRun) ? openRun : null;
+  useEffect(() => {
+    if (!awaited) return;
+    const t = window.setInterval(() => { void load(); }, 2000);
+    return () => window.clearInterval(t);
+  }, [awaited, load]);
+
   // OPEN THE RUN THE OPERATOR WAS SENT HERE TO SEE. Creating a project redirects here with
   // `?wfr=<id>`; expanding it on arrival is the difference between "your project is somewhere
   // in this list" and showing them the steps.
@@ -472,6 +480,11 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
       {notice ? <p className="dw-notice" data-testid="dw-notice">{notice}</p> : null}
 
+      {tab === "running" && awaited ? (
+        <p className="dw-awaiting detail" data-testid="dw-awaiting">
+          Starting <code>{awaited}</code>… the run appears here the moment it is created.
+        </p>
+      ) : null}
       {tab === "running" ? (
         <RunsView
           runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
@@ -1092,27 +1105,28 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           operator leave the screen that told them it was waiting. */}
       {needsYou(step) ? (
         <div className="dw-step-decide" data-testid="dw-step-decide">
-          {/* WHERE IT SHIPS is part of the release decision, not a setting somewhere else.
-              `deploy` takes an optional target_id and optional inputs are filled from the run
-              input, so choosing here is the same mechanism the workflow already uses. */}
+          {/* WHERE IT SHIPS is part of the release decision, not a setting somewhere else. */}
           {step.capability === "deploy" ? (
             <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
                          onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
           ) : null}
-          <form action={resolveDecisionAction}>
-            <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
-            <input type="hidden" name="action" value="approve" />
-            <SubmitButton className="cap-btn primary dw-decide-btn" data-testid="dw-approve">
-              Approve
-            </SubmitButton>
-          </form>
-          <form action={resolveDecisionAction}>
-            <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
-            <input type="hidden" name="action" value="reject" />
-            <SubmitButton className="cap-btn dw-decide-btn" data-testid="dw-deny">
-              Deny
-            </SubmitButton>
-          </form>
+          {/* DECIDE WHERE THE DECISION CAN BE READ.
+              Two buttons here answered a release without showing what was being released — no
+              recommendation, no cost, no risk tier, no note, and no record of who else is
+              waiting on the same call. Approving a deployment off a step badge is a decision
+              made blind. The Approvals page is where that context lives, so this goes there
+              with the decision already selected. */}
+          <a className="cap-btn primary dw-decide-btn" data-testid="dw-step-review"
+             href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
+                               { area: "decisions", decision_filter: "needs_action",
+                                 decision: step.decision_id })}>
+            Review and decide →
+          </a>
+          <span className="detail">
+            {(step.approval as { approver_role?: string })?.approver_role
+              ? `${(step.approval as { approver_role?: string }).approver_role} signs this off.`
+              : "Opens the approval with its recommendation, cost and risk."}
+          </span>
         </div>
       ) : null}
 
