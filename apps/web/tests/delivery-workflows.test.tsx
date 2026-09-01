@@ -559,20 +559,23 @@ describe("importing does not need a name typed first", () => {
     // is disabled reads as broken — which is how it was reported. Copying something has an
     // obvious name available.
     expect(UI).toContain("const name = newName.trim() || defaultImportName;");
-    expect(UI).toContain("`${base} (copy)`");
+    expect(UI).toContain("uniqueWorkflowName(source.name, installed.map((i) => i.name))");
   });
 
-  it("does not let copies of copies compound", () => {
-    // Copying a copy produced "Minor Feature (copy) (copy)", and the one after that would have
-    // been worse.
-    expect(UI).toContain("replace(/\\s*\\(copy(?:\\s+\\d+)?\\)\\s*$/i, \"\")");
+  it("puts no bookkeeping in the name", () => {
+    // Forking appended "(yours)", copying appended "(copy)", and doing both produced
+    // "Standard Product Delivery (yours) (copy)" — three words of bookkeeping in the one
+    // string an operator reads, none of which said anything the row did not already show.
+    // The rule itself, including compounding and collisions, is tested in workflow-names.
+    expect(UI).not.toContain("(yours)");
+    expect(UI).not.toContain("(copy)`");
+    expect(UI).toContain("uniqueWorkflowName");
   });
 
-  it("does not let two workflows end up with the same name", () => {
-    // The KEY was made unique but the NAME was not, so the picker listed two entries reading
-    // "Minor Feature (yours) (copy)" and neither said which was which.
-    expect(UI).toContain("const taken = new Set(installed.map((i) => i.name));");
-    expect(UI).toContain("`${base} (copy ${n})`");
+  it("uses the same rule when forking as when importing", () => {
+    // Two mint sites with two rules is how the two suffixes came to be combinable.
+    const forkAt = UI.indexOf("new_name:");
+    expect(UI.slice(forkAt, forkAt + 120)).toContain("uniqueWorkflowName");
   });
 });
 

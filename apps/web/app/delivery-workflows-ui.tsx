@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
+import { uniqueWorkflowName } from "./workflow-names";
 import { resolveDecisionAction } from "./actions";
 
 /**
@@ -466,7 +467,10 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             const result = await act(`Fork ${entry?.name ?? key}`, "fork", {
               workflow_key: key,
               new_key: candidate,
-              new_name: `${entry?.name ?? key} (yours)`,
+              // Called what it is a copy OF. "(yours)" said nothing the row does not already
+              // show — the console knows which workflows are catalogue templates and which are
+              // the customer's own.
+              new_name: uniqueWorkflowName(entry?.name ?? key, installed.map((i) => i.name)),
             });
             // IT IS CALLED "FORK TO EDIT", SO GO AND EDIT IT.
             //
@@ -1177,13 +1181,7 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
     if (!importFrom) return "";
     const source = installed.find((i) => i.workflow_key === importFrom);
     if (!source) return "";
-    const base = source.name.replace(/\s*\(copy(?:\s+\d+)?\)\s*$/i, "").trim();
-    const taken = new Set(installed.map((i) => i.name));
-    let candidate = `${base} (copy)`;
-    for (let n = 2; taken.has(candidate) && n < 200; n += 1) {
-      candidate = `${base} (copy ${n})`;
-    }
-    return candidate;
+    return uniqueWorkflowName(source.name, installed.map((i) => i.name));
   }, [importFrom, installed]);
   const [defining, setDefining] = useState(false);
 
