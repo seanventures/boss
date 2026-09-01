@@ -85,6 +85,9 @@ def project(eng):
         # delete and every later run of this module fails on setup instead of on its subject.
         for table in ("workflow_mappings", "workflow_versions", "workflow_definitions",
                       "decisions", "events", "receipts",
+                      # A settled failure deadletters on the FIRST attempt, so these rows now
+                      # exist where before three retries were still pending at teardown.
+                      "deadletters", "quality_gates",
                       "deployment_health_samples", "deployment_targets"):
             try:
                 c.execute(text(f"DELETE FROM {table} WHERE project_id=:p"), {"p": pid})
@@ -730,9 +733,13 @@ def test_review_reports_what_the_pipeline_actually_found(eng, project, monkeypat
     assert out["code_task_run_id"] == "crun_reviewed"
 
 
-def test_a_green_step_is_never_shown_above_a_red_gate(eng, project, monkeypatch):
-    """A review step reporting success while the gate it stands for failed is the same lie as a
-    research step that succeeded in 0 seconds — and the most expensive way not to know."""
+def test_a_blocking_finding_asks_you_instead_of_killing_the_run(eng, project, monkeypatch):
+    """A finding meant to stop the line is a DECISION, not a dead end.
+
+    Deadlettering answered it for the operator — "no, do not continue" — with no way to say
+    "ship it anyway", and left preview, deploy and monitor pending forever on work that was
+    already built. Measured on wfr_c8578ea1abbf4a1383cc: the run deadlettered at `review` while
+    the app it had built was previewable in a browser."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
@@ -744,10 +751,49 @@ def test_a_green_step_is_never_shown_above_a_red_gate(eng, project, monkeypatch)
                       passed=["consistent"], failed=["security_clean"])
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
+        row = c.execute(
+            text("SELECT status, decision_id, output FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND step_id='review'"),
+            {"r": run["id"]},
+        ).mappings().first()
+        question = c.execute(text("SELECT question FROM decisions WHERE id=:d"),
+                             {"d": row["decision_id"]}).scalar()
+
+    assert row["status"] == "waiting", "the run was killed instead of asking"
+    assert row["decision_id"], "no decision was raised for a blocking finding"
+    assert "security_clean" in question and "anyway" in question
+    assert row["output"]["findings"] == ["security_clean"]
+
+
+def test_an_advisory_finding_does_not_hold_the_line(eng, project, monkeypatch):
+    """An advisory first pass surfaces a failing check and ships the pull request anyway, ON
+    PURPOSE, so there is something to iterate on. Reading `gates_failed` without reading that
+    policy stopped preview and deploy for a build the operator could already open in a
+    browser."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _observing_workflow(c, project, "obsadvisory", "review")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_advisory"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_advisory", "completed")
+        c.execute(
+            text("UPDATE code_task_runs SET finalize_ctx = "
+                 "jsonb_build_object('advisory_failing_gates', "
+                 "CAST('[\"security_clean\"]' AS JSONB)) WHERE id = :r"),
+            {"r": "crun_advisory"},
+        )
+        _quality_gate(c, project, "crun_advisory", passed=[], failed=["security_clean"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
 
-    assert steps["review"]["status"] != "succeeded"
-    assert "security_clean" in (steps["review"]["last_error"] or "")
+    out = steps["review"]["output"]
+    assert steps["review"]["status"] == "succeeded", steps["review"]["last_error"]
+    assert out["advisory"] is True
+    assert out["findings"] == ["security_clean"]
+    # Not green either: "shipped with findings" and "clean" are different facts.
+    assert "shipped with findings" in out["note"]
 
 
 def test_test_reports_whether_the_tests_passed(eng, project, monkeypatch):
@@ -768,9 +814,9 @@ def test_test_reports_whether_the_tests_passed(eng, project, monkeypatch):
     assert steps["test"]["output"]["tests_passed"] is True
 
 
-def test_a_failing_suite_fails_the_test_step(eng, project, monkeypatch):
-    """`tests_passed` is not one of the named gates, so it has to be checked on its own — a suite
-    that did not pass, on a step whose whole subject is whether it did, must not read green."""
+def test_a_failing_suite_asks_rather_than_reading_green(eng, project, monkeypatch):
+    """`tests_passed` is not one of the named gates, so it is checked on its own — a suite that
+    did not pass, on the step whose whole subject is whether it did, must not read green."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
@@ -782,10 +828,15 @@ def test_a_failing_suite_fails_the_test_step(eng, project, monkeypatch):
                       tests_passed=False)
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
-        steps = _steps(c, run["id"])
+        row = c.execute(
+            text("SELECT status, decision_id, output FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND step_id='test'"),
+            {"r": run["id"]},
+        ).mappings().first()
 
-    assert steps["test"]["status"] != "succeeded"
-    assert "tests_passed" in (steps["test"]["last_error"] or "")
+    assert row["status"] == "waiting"
+    assert row["decision_id"]
+    assert "tests_passed" in row["output"]["findings"]
 
 
 def test_no_recorded_gate_says_so_rather_than_inventing_a_verdict(eng, project, monkeypatch):
@@ -824,6 +875,97 @@ def _monitor_workflow(c, project, key):
         {"id": "monitor", "kind": "capability", "binding": {"capability": "monitor"},
          "next": []},
     ], "monitor")
+
+
+def test_preview_adopts_one_that_is_already_serving(eng, project, monkeypatch):
+    """The build pipeline starts a preview itself. Calling start_preview again boots a SECOND
+    copy of the same app on a second port, and tells the operator — who has the first one open
+    in a browser — about a different URL."""
+    preview = RecordingTool("start_preview", {"preview_url": "https://second.test"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+
+    with eng.begin() as c:
+        c.execute(
+            text("INSERT INTO app_previews (id, project_id, run_id, url, status) "
+                 "VALUES (:i,:p,:r,'https://already.test','running') "
+                 "ON CONFLICT (id) DO NOTHING"),
+            {"i": f"prev_{project}", "p": project, "r": "crun_previewed"},
+        )
+        _, version = _publish(c, project, "prevadopt", [
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_previewed"}},
+             "next": []},
+        ], "preview")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        c.execute(text("DELETE FROM app_previews WHERE project_id=:p"), {"p": project})
+
+    assert not preview.calls, "a second copy of the app was booted on a second port"
+    assert steps["preview"]["output"]["preview_url"] == "https://already.test"
+
+
+def test_preview_still_starts_one_when_there_is_none(eng, project, monkeypatch):
+    """Adopt-or-start: the workflow must DRIVE when there is nothing to adopt."""
+    preview = RecordingTool("start_preview", {"preview_url": "https://started.test"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "prevstart", [
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_nopreview"}},
+             "next": []},
+        ], "preview")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert preview.calls, "the workflow observed instead of driving"
+    assert steps["preview"]["output"]["preview_url"] == "https://started.test"
+
+
+def test_a_settled_verdict_fails_once_instead_of_three_times(eng, project, monkeypatch):
+    """A tool call can fail because a network blipped, and running it again is right. A recorded
+    fact is not like that — re-reading the row reaches the same conclusion. Monitoring is the
+    remaining settled case: no active target means no probe will ever run, however many times
+    the step is retried."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _monitor_workflow(c, project, "settledmon")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        row = c.execute(
+            text("SELECT status, attempt FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND step_id='monitor'"),
+            {"r": run["id"]},
+        ).mappings().first()
+
+    assert row["status"] == "deadlettered", "a settled verdict was queued for another attempt"
+    assert row["attempt"] == 1, f"tried {row['attempt']} times to re-read one recorded fact"
+
+
+def test_an_ordinary_failure_is_still_retried(eng, project, monkeypatch):
+    """Only SETTLED failures skip the retry. A tool that failed transiently must still get its
+    attempts — making everything permanent would turn one bad minute into a dead run."""
+    flaky = RecordingTool("create_code_task", {"ok": False, "error": "connection reset"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([flaky]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "transient", [
+            {"id": "b", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "b")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        row = c.execute(
+            text("SELECT status, attempt FROM workflow_step_runs WHERE workflow_run_id=:r"),
+            {"r": run["id"]},
+        ).mappings().first()
+
+    assert row["status"] == "ready", "a transient failure was made permanent"
 
 
 def test_monitoring_names_what_is_actually_being_watched(eng, project, monkeypatch):

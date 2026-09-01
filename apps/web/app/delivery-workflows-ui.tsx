@@ -138,12 +138,18 @@ const LIVE = ["running", "waiting", "queued", "validating", "leased"];
  *  two rows that said only "succeeded" about the checks an operator most wants to read. */
 function observedGates(step: RunStep): string | null {
   const out = (step.output ?? {}) as {
-    status?: string; gates_passed?: unknown; targets?: unknown;
+    status?: string; gates_passed?: unknown; targets?: unknown; findings?: unknown;
   };
   if (out.status !== "observed") return null;
   // The monitoring step reports targets rather than gates: which apps are under health probing
   // and whether a probe has run yet. "2 watched · app (production)" answers the question the
   // step exists to answer.
+  // Findings the build shipped with. Not a failure — the pipeline's own policy said surface
+  // and continue — but not a clean pass either, and the two must not look the same.
+  if (Array.isArray((out as { findings?: unknown }).findings)) {
+    const found = ((out as { findings: unknown[] }).findings).map(String);
+    if (found.length) return `findings: ${found.join(" · ")}`;
+  }
   if (Array.isArray(out.targets)) {
     const names = out.targets
       .map((t) => (t as { app_name?: string; environment?: string }))
@@ -661,12 +667,18 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities }: 
 /* ── The path the work takes ─────────────────────────────────────────────────── */
 
 /** Where a step sits in the story: done, happening now, still ahead, or never happened. */
-function phaseOf(step: RunStep): "done" | "now" | "ahead" | "skipped" | "failed" {
+/** Findings the build shipped with: reported, not fatal, and never shown as clean. */
+function hasFindings(step: RunStep): boolean {
+  const f = (step.output as { findings?: unknown } | undefined)?.findings;
+  return Array.isArray(f) && f.length > 0;
+}
+
+function phaseOf(step: RunStep): "done" | "now" | "ahead" | "skipped" | "failed" | "findings" {
   if (notApplicable(step) || step.status === "skipped") return "skipped";
   if (step.status === "failed" || step.status === "deadlettered" || step.status === "cancelled") {
     return "failed";
   }
-  if (step.status === "succeeded") return "done";
+  if (step.status === "succeeded") return hasFindings(step) ? "findings" : "done";
   if (["running", "leased", "ready", "waiting", "queued"].includes(step.status)) return "now";
   return "ahead";
 }
@@ -714,7 +726,7 @@ function StepPath({ run, capabilities }: { run: Run; capabilities: Capability[] 
                 // The connector INTO this step: solid once the work has flowed through it,
                 // animated while it is flowing, dim before.
                 <i className="dw-link" aria-hidden
-                   data-flow={previous === "done" || previous === "skipped"
+                   data-flow={["done", "skipped", "findings"].includes(previous ?? "")
                      ? (phase === "now" ? "moving" : "past") : "future"} />
               ) : null}
               <button type="button" className="dw-node-btn"
@@ -722,6 +734,7 @@ function StepPath({ run, capabilities }: { run: Run; capabilities: Capability[] 
                       onClick={() => setPicked(step.step_id)}>
                 <span className="dw-dot" aria-hidden>
                   {phase === "done" ? "✓" : phase === "failed" ? "!"
+                    : phase === "findings" ? "▲"
                     : phase === "skipped" ? "–" : index + 1}
                 </span>
                 <span className="dw-node-name">{capability?.label ?? step.capability ?? step.step_id}</span>

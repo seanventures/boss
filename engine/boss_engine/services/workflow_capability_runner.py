@@ -46,6 +46,20 @@ class CapabilityExecutionError(RuntimeError):
     """The capability could not be performed. Carries the reason the step will record."""
 
 
+class SettledCapabilityError(CapabilityExecutionError):
+    """The capability failed on a FACT that cannot change, so retrying is pointless.
+
+    A tool call can fail because a network blipped; running it again is the right response. A
+    recorded quality gate is not like that: `security_clean did not pass` is a verdict already
+    written down about a build that has finished. Retrying re-reads the same row and reaches the
+    same conclusion.
+
+    Measured on wfr_c8578ea1abbf4a1383cc: the review step failed, retried twice more on a
+    schedule, and deadlettered 3m47s later with the identical message it had at 0s — three
+    ticks and four minutes to learn nothing.
+    """
+
+
 def _resolve_inputs(
     inputs: dict[str, Any], context: dict[str, Any]
 ) -> dict[str, Any]:
@@ -274,7 +288,7 @@ def _observed_monitoring(
         {"p": project_id},
     ).mappings().all()
     if not targets:
-        raise CapabilityExecutionError(
+        raise SettledCapabilityError(
             "nothing is being watched: this project has no active deployment target, so no "
             "health probe will ever run against it."
         )
@@ -389,18 +403,74 @@ def _observed_from_the_build(
     else:
         detail["adversarial_verdict"] = row["adversarial_verdict"]
 
-    if failed:
-        # The step FAILS, naming the gate. "if it stops at some step, we should know" — and a
-        # green step above a red gate is the most expensive way not to know.
-        raise CapabilityExecutionError(
-            f"{', '.join(failed)} did not pass on {run_id}."
+    if not failed:
+        detail["status"] = "observed"
+        detail["note"] = (
+            f"{', '.join(passed) if passed else 'nothing'} passed on the build "
+            f"(risk tier {row['risk_tier']})."
         )
-    detail["status"] = "observed"
-    detail["note"] = (
-        f"{', '.join(passed) if passed else 'nothing'} passed on the build "
-        f"(risk tier {row['risk_tier']})."
+        return detail
+
+    detail["findings"] = failed
+
+    # THE BUILD'S OWN POLICY DECIDES WHETHER A FINDING BLOCKS — NOT THIS STEP.
+    #
+    # An advisory first pass surfaces a failing check and ships the pull request anyway, on
+    # purpose, so there is something to iterate on. This step read `gates_failed`, ignored that
+    # the pipeline had already decided the finding was advisory, and deadlettered the whole
+    # workflow — stopping preview, deploy and monitor for work that had already previewed
+    # successfully and that the operator could open in a browser.
+    #
+    # Reported, prominently, and the run continues. Not green: "shipped with findings" and
+    # "clean" are different facts and the console shows them differently.
+    advisory = connection.execute(
+        text("SELECT COALESCE(finalize_ctx->>'advisory_failing_gates', '') <> '' "
+             "FROM code_task_runs WHERE id = :r"),
+        {"r": run_id},
+    ).scalar()
+    if advisory:
+        detail["status"] = "observed"
+        detail["advisory"] = True
+        detail["note"] = (
+            f"shipped with findings — {', '.join(failed)} did not pass, and this build's policy "
+            f"is to surface that rather than hold the change."
+        )
+        return detail
+
+    # Not advisory: the finding is meant to stop the line. That is a decision for a person, not
+    # a deadletter — "we can also build the approval in the workflow step to approve / deny".
+    # Deadlettering answered it for them, with no way to say "ship it anyway".
+    detail["status"] = "needs_decision"
+    detail["question"] = (
+        f"{', '.join(failed)} did not pass on this build. Continue the workflow anyway?"
     )
+    detail["note"] = f"{', '.join(failed)} did not pass on {run_id}."
     return detail
+
+
+def _running_preview(
+    connection: Connection, project_id: str, run_id: Any
+) -> Optional[dict[str, Any]]:
+    """A preview already serving this build, or None.
+
+    Returns the same field names `start_preview` produces, so a downstream step referencing
+    `preview_url` cannot tell the difference between one this step started and one it adopted.
+    """
+    if not isinstance(run_id, str) or not run_id.strip():
+        return None
+    row = connection.execute(
+        text(
+            """
+            SELECT id, url FROM app_previews
+            WHERE project_id = :p AND run_id = :r AND status = 'running' AND url IS NOT NULL
+            ORDER BY created_at DESC LIMIT 1
+            """
+        ),
+        {"p": project_id, "r": run_id.strip()},
+    ).mappings().first()
+    if not row:
+        return None
+    return {"preview_id": row["id"], "preview_url": row["url"], "adopted": True}
 
 
 def execute_step(
@@ -525,6 +595,18 @@ def execute_step(
             "note": f"waiting on the {adopted['kind'].replace('_', ' ')} "
                     f"this project was started with",
         }
+
+    # ADOPT A PREVIEW THAT IS ALREADY UP. The build pipeline starts a preview itself, so a
+    # workflow that called start_preview again would boot a second copy of the same app on a
+    # second port — and the operator, who has the first one open in a browser, would be told
+    # about a different URL. Same adopt-or-start rule as `build`: use what exists, start what
+    # does not.
+    if key == "preview":
+        existing = _running_preview(connection, project_id, inputs.get("run_id"))
+        if existing:
+            return {"capability": key, "tool": None, "status": "observed",
+                    **existing,
+                    "note": "this app is already previewable — adopted the running preview."}
 
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
@@ -805,6 +887,61 @@ def _open_gate(
         {"capability": subject["key"], "step_id": step_row["step_id"]},
     )
 
+def _park_for_decision(
+    connection: Connection, project_id: str, run: dict[str, Any], step_row: dict[str, Any],
+    output: dict[str, Any],
+) -> str:
+    """Turn a step that hit a blocking finding into a question a person can answer.
+
+    A finding that is meant to stop the line is a decision, not a dead end. Deadlettering it
+    answered the question for the operator — "no, do not continue" — with no way to say "ship it
+    anyway", and left preview, deploy and monitor pending forever on work that had already been
+    built.
+
+    The lease is released along with it: a parked step holds no lease, or the reclaimer treats
+    the worker as crashed and re-runs a step that is waiting on a person.
+    """
+    decision_id = create_blocking_decision(
+        connection,
+        project_id,
+        run.get("task_id"),
+        str(output.get("question") or "Continue this workflow?"),
+        {
+            "capability": output.get("capability"),
+            "step_id": step_row["step_id"],
+            "workflow_run_id": run["id"],
+            "findings": output.get("findings") or [],
+            "code_task_run_id": output.get("code_task_run_id"),
+        },
+        {"estimated_usd": 0.0},
+        str(output.get("note") or ""),
+        risk_tier=3,
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE workflow_step_runs
+            SET status='waiting',
+                decision_id=:decision_id,
+                output = CAST(:output AS JSONB),
+                lease_owner=NULL, lease_expires_at=NULL,
+                binding_snapshot = COALESCE(binding_snapshot, '{}'::jsonb)
+                                   || CAST(:snapshot AS JSONB),
+                updated_at=now()
+            WHERE id=:id
+            """
+        ),
+        {
+            "id": step_row["id"], "decision_id": decision_id,
+            "output": json.dumps(output),
+            # Approving means "carry on past this review", so the approval completes the step.
+            "snapshot": json.dumps({"gate_completes_step": True,
+                                    "approval": {"mode": "manual"}}),
+        },
+    )
+    return decision_id
+
+
 def _resume_answered_gates(
     connection: Connection, project_id: str, run: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -992,7 +1129,19 @@ def tick(
                     actor=run.get("actor") or "workflow",
                     step=spec_step, context=_run_context(connection, run_id),
                 )
-                if output.get("status") == "awaiting":
+                if output.get("status") == "needs_decision":
+                    # A finding that is meant to stop the line asks the operator, in place,
+                    # rather than deadlettering the run and answering for them.
+                    decision_id = _park_for_decision(
+                        connection, project_id, {**dict(run), "id": run_id},
+                        claimed, output,
+                    )
+                    performed.append({
+                        "run_id": run_id, "step_id": claimed["step_id"],
+                        "capability": output.get("capability"), "outcome": "needs_decision",
+                        "decision_id": decision_id,
+                    })
+                elif output.get("status") == "awaiting":
                     # Started, not finished. Park it against the id it is waiting on;
                     # `resume_awaited` finishes it when that work reaches a terminal state.
                     workflows.park_step_awaiting(
@@ -1021,7 +1170,10 @@ def tick(
             except CapabilityExecutionError as error:
                 workflows.fail_step(
                     connection, project_id=project_id, step_run_id=claimed["id"],
-                    worker_id=worker_id, error=str(error), retryable=True,
+                    worker_id=worker_id, error=str(error),
+                    # A settled verdict fails once and says so. Retrying it spends ticks and
+                    # minutes to arrive at the same sentence.
+                    retryable=not isinstance(error, SettledCapabilityError),
                 )
                 performed.append({
                     "run_id": run_id, "step_id": claimed["step_id"],

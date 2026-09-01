@@ -7704,6 +7704,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 .dw-node[data-phase="done"] .dw-dot { background: var(--ok, #3fb950); color: #04120a; }
 .dw-node[data-phase="failed"] .dw-dot { background: var(--bad, #f85149); color: #1a0503; }
+/* Shipped, but with something the reviewers flagged. Its own colour, because "clean" and
+   "shipped with findings" are different facts and green would claim the first. */
+.dw-node[data-phase="findings"] .dw-dot { background: var(--warn, #d29922); color: #171102; }
+.dw-node[data-phase="findings"] .dw-node-btn { border-color: var(--warn, #d29922); }
+.dw-detail[data-phase="findings"] { border-color: var(--warn, #d29922); }
 .dw-node[data-phase="skipped"] .dw-node-btn { border-style: dashed; opacity: .62; }
 .dw-node[data-phase="ahead"] .dw-node-btn { opacity: .55; }
 .dw-node[data-phase="now"] .dw-dot { background: var(--live, #58a6ff); color: #04121f; }
