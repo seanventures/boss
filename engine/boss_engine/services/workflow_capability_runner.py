@@ -411,41 +411,17 @@ def _observed_from_the_build(
         )
         return detail
 
+    # REPORTED, NEVER A GATE. The inner pipeline decides whether a finding blocks — it already
+    # did, by opening or not opening a pull request, and the build step carries that answer.
+    # Failing or parking out here overrode a decision that was not the outer loop's to make.
     detail["findings"] = failed
-
-    # THE BUILD'S OWN POLICY DECIDES WHETHER A FINDING BLOCKS — NOT THIS STEP.
-    #
-    # An advisory first pass surfaces a failing check and ships the pull request anyway, on
-    # purpose, so there is something to iterate on. This step read `gates_failed`, ignored that
-    # the pipeline had already decided the finding was advisory, and deadlettered the whole
-    # workflow — stopping preview, deploy and monitor for work that had already previewed
-    # successfully and that the operator could open in a browser.
-    #
-    # Reported, prominently, and the run continues. Not green: "shipped with findings" and
-    # "clean" are different facts and the console shows them differently.
-    advisory = connection.execute(
-        text("SELECT COALESCE(finalize_ctx->>'advisory_failing_gates', '') <> '' "
-             "FROM code_task_runs WHERE id = :r"),
-        {"r": run_id},
-    ).scalar()
-    if advisory:
-        detail["status"] = "observed"
-        detail["advisory"] = True
-        detail["note"] = (
-            f"shipped with findings — {', '.join(failed)} did not pass, and this build's policy "
-            f"is to surface that rather than hold the change."
-        )
-        return detail
-
-    # Not advisory: the finding is meant to stop the line. That is a decision for a person, not
-    # a deadletter — "we can also build the approval in the workflow step to approve / deny".
-    # Deadlettering answered it for them, with no way to say "ship it anyway".
-    detail["status"] = "needs_decision"
-    detail["question"] = (
-        f"{', '.join(failed)} did not pass on this build. Continue the workflow anyway?"
+    detail["status"] = "observed"
+    detail["note"] = (
+        f"the build's reviewers flagged {', '.join(failed)}. The build opened its pull request "
+        f"anyway, which is the inner pipeline's call, not this step's."
     )
-    detail["note"] = f"{', '.join(failed)} did not pass on {run_id}."
     return detail
+
 
 
 def _running_preview(
@@ -687,6 +663,31 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
 }
 
 
+def _terminal_evidence(
+    connection: Connection, kind: str, awaited_id: str
+) -> dict[str, Any]:
+    """What the finished work produced, for the step that was waiting on it.
+
+    A build's pull request is both its outcome and the input every later step needs, so it goes
+    onto the step's output rather than being looked up again by preview and deploy.
+    """
+    if kind != "code_task":
+        return {}
+    try:
+        row = connection.execute(
+            text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
+                 "WHERE id = :r"),
+            {"r": awaited_id},
+        ).mappings().first()
+    except Exception as error:  # noqa: BLE001 — never fail a step over its own evidence
+        log.warning("cannot read the result of %s: %s", awaited_id, error)
+        return {}
+    if not row or not row["pull_request_url"]:
+        return {}
+    return {"pull_request_url": row["pull_request_url"],
+            "pull_request_number": row["pull_request_number"]}
+
+
 def resume_awaited(
     connection: Connection, *, project_id: str, run_id: str, worker_id: str
 ) -> list[dict[str, Any]]:
@@ -738,9 +739,26 @@ def resume_awaited(
             continue
         status = str(row["status"] or "")
         if status in ok_states:
+            # DID IT PRODUCE A PULL REQUEST?
+            #
+            # That is the whole question the outer loop asks of a build. The inner pipeline —
+            # implement, adversarial review, security check, mutation check, tests — owns every
+            # judgement inside it, and reports its verdict through its RESULT: a refuted change
+            # opens no PR. Reading its individual gates from out here was the outer loop doing
+            # the inner loop's job, and it stopped a run whose app was already previewable.
+            evidence = _terminal_evidence(connection, kind, awaited_id)
+            if kind == "code_task" and not evidence.get("pull_request_url"):
+                workflows.force_fail_waiting_step(
+                    connection, project_id=project_id, step_run_id=step["id"],
+                    error=("the build finished without opening a pull request — its reviewers "
+                           "refused the change, so there is nothing to preview or deploy."),
+                )
+                done.append({"run_id": run_id, "step_id": step["step_id"],
+                             "outcome": "failed", "awaited": kind, "reason": "no pull request"})
+                continue
             workflows.force_complete_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                output={**output, "status": "succeeded", "awaited_status": status},
+                output={**output, "status": "succeeded", "awaited_status": status, **evidence},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})

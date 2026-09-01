@@ -135,13 +135,18 @@ def _steps(c, run_id):
 
 
 
-def _finish_code_task(c, project_id, run_id, status):
-    """Land a code_task_runs row in a terminal state, as the pipeline would."""
+def _finish_code_task(c, project_id, run_id, status, pr="https://github.com/o/r/pull/1"):
+    """Land a code_task_runs row in a terminal state, as the pipeline would.
+
+    A completed build carries its pull request: that IS the outcome the outer workflow reads.
+    Pass pr=None for the case where the reviewers refused the change and none was opened.
+    """
     c.execute(
-        text("INSERT INTO code_task_runs (id, project_id, status, phase, title) "
-             "VALUES (:id,:p,:s,'done','awaited') "
-             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status"),
-        {"id": run_id, "p": project_id, "s": status},
+        text("INSERT INTO code_task_runs (id, project_id, status, phase, title, "
+             "pull_request_url) VALUES (:id,:p,:s,'done','awaited',:pr) "
+             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, "
+             "pull_request_url=EXCLUDED.pull_request_url"),
+        {"id": run_id, "p": project_id, "s": status, "pr": pr},
     )
 
 
@@ -733,13 +738,11 @@ def test_review_reports_what_the_pipeline_actually_found(eng, project, monkeypat
     assert out["code_task_run_id"] == "crun_reviewed"
 
 
-def test_a_blocking_finding_asks_you_instead_of_killing_the_run(eng, project, monkeypatch):
-    """A finding meant to stop the line is a DECISION, not a dead end.
-
-    Deadlettering answered it for the operator — "no, do not continue" — with no way to say
-    "ship it anyway", and left preview, deploy and monitor pending forever on work that was
-    already built. Measured on wfr_c8578ea1abbf4a1383cc: the run deadlettered at `review` while
-    the app it had built was previewable in a browser."""
+def test_review_reports_a_finding_without_gating_on_it(eng, project, monkeypatch):
+    """TWO LOOPS. The outer one is the customer's steps; the inner one is the governed coding
+    pipeline. Whether a finding blocks is the INNER loop's call, and it already made it — by
+    opening, or not opening, a pull request. Failing or parking out here overrode a decision
+    that was not this step's to make, and stopped a run whose app was already previewable."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
@@ -756,44 +759,61 @@ def test_a_blocking_finding_asks_you_instead_of_killing_the_run(eng, project, mo
                  "WHERE workflow_run_id=:r AND step_id='review'"),
             {"r": run["id"]},
         ).mappings().first()
-        question = c.execute(text("SELECT question FROM decisions WHERE id=:d"),
-                             {"d": row["decision_id"]}).scalar()
 
-    assert row["status"] == "waiting", "the run was killed instead of asking"
-    assert row["decision_id"], "no decision was raised for a blocking finding"
-    assert "security_clean" in question and "anyway" in question
+    assert row["status"] == "succeeded", "the outer loop judged the inner loop's gate"
+    assert row["decision_id"] is None, "it asked a person about somebody else's decision"
     assert row["output"]["findings"] == ["security_clean"]
+    assert "inner pipeline's call" in row["output"]["note"]
 
 
-def test_an_advisory_finding_does_not_hold_the_line(eng, project, monkeypatch):
-    """An advisory first pass surfaces a failing check and ships the pull request anyway, ON
-    PURPOSE, so there is something to iterate on. Reading `gates_failed` without reading that
-    policy stopped preview and deploy for a build the operator could already open in a
-    browser."""
+def test_the_build_step_fails_when_no_pull_request_was_opened(eng, project, monkeypatch):
+    """This is how the inner loop reports a refusal: it opens no PR.
+
+    The outer loop asks one question of a build — did it produce a pull request — because that
+    is the thing every later step needs. A change the adversarial or security reviewer refused
+    has nothing to preview and nothing to deploy, and the step says exactly that."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
-        _, version = _observing_workflow(c, project, "obsadvisory", "review")
-        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_advisory"})
+        _, version = _publish(c, project, "nopr", [
+            {"id": "build", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "build")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_refused"})
         runner.tick(c, Ctx(eng), project_id=project)
-        _finish_code_task(c, project, "crun_advisory", "completed")
-        c.execute(
-            text("UPDATE code_task_runs SET finalize_ctx = "
-                 "jsonb_build_object('advisory_failing_gates', "
-                 "CAST('[\"security_clean\"]' AS JSONB)) WHERE id = :r"),
-            {"r": "crun_advisory"},
-        )
-        _quality_gate(c, project, "crun_advisory", passed=[], failed=["security_clean"])
+        _finish_code_task(c, project, "crun_refused", "completed", pr=None)
         runner.tick(c, Ctx(eng), project_id=project)
+        row = c.execute(
+            text("SELECT status, last_error FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND step_id='build'"),
+            {"r": run["id"]},
+        ).mappings().first()
+
+    assert row["status"] != "succeeded", "a refused change was passed on to preview and deploy"
+    assert "without opening a pull request" in (row["last_error"] or "")
+
+
+def test_the_build_step_carries_its_pull_request_forward(eng, project, monkeypatch):
+    """The PR is both the outcome and what the later steps need, so it lands on the step's
+    output rather than being looked up again by preview and deploy."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "withpr", [
+            {"id": "build", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "build")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_shipped"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_shipped", "completed",
+                          pr="https://github.com/o/r/pull/143")
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
 
-    out = steps["review"]["output"]
-    assert steps["review"]["status"] == "succeeded", steps["review"]["last_error"]
-    assert out["advisory"] is True
-    assert out["findings"] == ["security_clean"]
-    # Not green either: "shipped with findings" and "clean" are different facts.
-    assert "shipped with findings" in out["note"]
+    assert steps["build"]["status"] == "succeeded"
+    assert steps["build"]["output"]["pull_request_url"] == "https://github.com/o/r/pull/143"
 
 
 def test_test_reports_whether_the_tests_passed(eng, project, monkeypatch):
@@ -814,9 +834,9 @@ def test_test_reports_whether_the_tests_passed(eng, project, monkeypatch):
     assert steps["test"]["output"]["tests_passed"] is True
 
 
-def test_a_failing_suite_asks_rather_than_reading_green(eng, project, monkeypatch):
-    """`tests_passed` is not one of the named gates, so it is checked on its own — a suite that
-    did not pass, on the step whose whole subject is whether it did, must not read green."""
+def test_a_failing_suite_is_reported_not_gated(eng, project, monkeypatch):
+    """Same rule for tests: the build's own pipeline ran them and decided what to do about the
+    result. This step says what happened; it does not re-decide."""
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
@@ -834,8 +854,8 @@ def test_a_failing_suite_asks_rather_than_reading_green(eng, project, monkeypatc
             {"r": run["id"]},
         ).mappings().first()
 
-    assert row["status"] == "waiting"
-    assert row["decision_id"]
+    assert row["status"] == "succeeded"
+    assert row["decision_id"] is None
     assert "tests_passed" in row["output"]["findings"]
 
 

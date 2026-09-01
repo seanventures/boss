@@ -113,8 +113,9 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         _cap(
             key="build",
-            label="Build",
-            summary="A governed code task: sandbox, tests, review seats, gated PR.",
+            label="Build, review and test",
+            summary="The whole inner pipeline: implement, adversarial review, security check, "
+                    "run the tests, open a gated pull request. Succeeds when a PR exists.",
             tool="create_code_task",
             risk_tier=1,
             required_inputs=("title", "instructions"),
@@ -128,7 +129,8 @@ CAPABILITIES: dict[str, Capability] = {
         _cap(
             key="review",
             label="Adversarial review",
-            summary="Independent seats judge the change: correctness, security, consistency.",
+            summary="Reports what the build's own reviewers found. The verdict belongs to the "
+                    "build step — this only surfaces it.",
             tool=None,
             risk_tier=1,
             optional_inputs=("seats",),
@@ -139,7 +141,8 @@ CAPABILITIES: dict[str, Capability] = {
         _cap(
             key="test",
             label="Verify",
-            summary="BOSS re-runs the tests itself and keeps the output as evidence.",
+            summary="Reports the build's own test outcome. The verdict belongs to the build "
+                    "step — this only surfaces it.",
             tool=None,
             risk_tier=0,
             optional_inputs=("commands",),
