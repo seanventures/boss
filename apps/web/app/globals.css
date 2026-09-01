@@ -7754,3 +7754,55 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-detail .dw-step-out dd {
   margin: 0; font-size: 12px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
 }
+
+/* ── Adding to a project ─────────────────────────────────────────────────────────
+   This was an unstyled textarea and a bare input sitting on the page — the first
+   thing anyone does with an app they just built, presented as a blank box with a
+   placeholder for guidance. */
+.ct-iterate { display: grid; gap: 14px; }
+.ct-iterate-head h4 { margin: 0 0 2px; font-size: 15px; }
+.ct-iterate-head .detail { margin: 0; }
+
+/* Starting points, not a blank box. */
+.ct-templates {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+}
+.ct-template {
+  display: grid; gap: 2px; text-align: left; cursor: pointer;
+  padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--border, #30363d);
+  background: color-mix(in srgb, var(--panel, #0d1117) 70%, transparent);
+  color: inherit;
+}
+.ct-template:hover { border-color: var(--live, #58a6ff); }
+.ct-template[data-picked="true"] {
+  border-color: var(--live, #58a6ff);
+  background: color-mix(in srgb, var(--live, #58a6ff) 12%, transparent);
+}
+.ct-template-label { font-size: 12.5px; font-weight: 600; }
+.ct-template-hint { font-size: 11px; color: var(--muted, #8b949e); }
+
+.ct-iterate-form { display: grid; gap: 12px; }
+.ct-iterate-form .mr-field-label { display: grid; gap: 5px; }
+/* Two fields that belong side by side: what "done" means, and which path it follows. */
+.ct-iterate-row {
+  display: grid; gap: 12px;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+}
+@media (max-width: 720px) { .ct-iterate-row { grid-template-columns: 1fr; } }
+.ct-iterate-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.ct-iterate-note { margin: 0; font-size: 12px; }
+.ct-iterate-note[data-tone="ask"] { color: var(--warn, #d29922); }
+.ct-iterate-note[data-tone="bad"] { color: var(--bad, #f85149); }
+
+.ct-proposal {
+  display: grid; gap: 9px; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--live, #58a6ff) 45%, transparent);
+  background: color-mix(in srgb, var(--live, #58a6ff) 7%, transparent);
+}
+.ct-proposal pre {
+  margin: 0; white-space: pre-wrap; font-size: 12px; line-height: 1.5;
+  overflow-wrap: anywhere;
+}

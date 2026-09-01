@@ -334,40 +334,160 @@ function ConfirmFeedback({ threadId }: { threadId: string }) {
   );
 }
 
+/**
+ * WHAT SOMEONE ADDS TO A PROJECT, as starting points rather than a blank box.
+ *
+ * The panel was an empty textarea whose placeholder was the only guidance, and the first thing
+ * anyone does with an app they have just built is add to it. These are the shapes that
+ * request usually takes; picking one fills the fields in and leaves them editable.
+ *
+ * Deliberately a plain list: adding a template is one entry here, no other file touched.
+ */
+const FEATURE_TEMPLATES: Array<{
+  key: string; label: string; hint: string; message: string; expected: string;
+}> = [
+  {
+    key: "page",
+    label: "A new screen",
+    hint: "a page or view users navigate to",
+    message: "Add a new page at /<route> that shows ",
+    expected: "the page loads, is reachable from the nav, and renders real data from the API",
+  },
+  {
+    key: "api",
+    label: "An API endpoint",
+    hint: "server route + storage",
+    message: "Add an API endpoint that ",
+    expected: "the endpoint returns the right shape, persists through the database, and is covered by a test",
+  },
+  {
+    key: "data",
+    label: "Store something new",
+    hint: "a migration and the routes for it",
+    message: "Persist ",
+    expected: "the data survives a reload and a restart, through a migration rather than local state",
+  },
+  {
+    key: "auth",
+    label: "Accounts & access",
+    hint: "sign-in, roles, permissions",
+    message: "Add accounts so that ",
+    expected: "a signed-out visitor cannot reach protected pages, and each user sees only their own data",
+  },
+  {
+    key: "design",
+    label: "Design & polish",
+    hint: "layout, styling, responsiveness",
+    message: "Improve the look of ",
+    expected: "it reads clearly on a phone and a laptop, and matches the rest of the app",
+  },
+  {
+    key: "bug",
+    label: "Something is wrong",
+    hint: "fix behaviour that is broken",
+    message: "Fix: ",
+    expected: "the described behaviour no longer happens, and a test proves it",
+  },
+];
+
 // Feedback is conversational and confirmation-gated. The agent clarifies vague
 // requests, structures the fix, classifies its scope, then reuses the same branch/PR.
-function FeedbackControls({ runId, status, anchor = "" }: { runId: string; status: string; anchor?: string }) {
+function FeedbackControls({ runId, status, anchor = "", projectId }: {
+  runId: string; status: string; anchor?: string; projectId: string;
+}) {
   const completed = status === "completed";
   const [state, action, pending] = useActionState(submitCodeTaskFeedbackAction, null);
+  const workflows = useProjectWorkflows(projectId);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
+  const [expected, setExpected] = useState("");
+
+  const useTemplate = (t: typeof FEATURE_TEMPLATES[number]) => {
+    setPicked(t.key);
+    setMessage(t.message);
+    setExpected(t.expected);
+  };
+
   return (
-    <div style={{ display: "grid", gap: 8, maxWidth: 680 }}>
-      <div className="ct-block-title">
-        {completed ? "Extend this completed task on its existing PR" : "Diagnose and retry with feedback"}
-      </div>
-      <form action={action} style={{ display: "grid", gap: 7 }}>
+    <div className="ct-iterate">
+      <header className="ct-iterate-head">
+        <h4>{completed ? "Add to this project" : "Diagnose and retry"}</h4>
+        <p className="detail">
+          {completed
+            ? "Builds on the existing branch and pull request — the agent keeps the context it already has."
+            : "Prior findings are carried forward automatically; nothing is rebuilt from scratch."}
+        </p>
+      </header>
+
+      {completed ? (
+        <div className="ct-templates" data-testid="ct-templates">
+          {FEATURE_TEMPLATES.map((t) => (
+            <button key={t.key} type="button" className="ct-template"
+                    data-picked={picked === t.key}
+                    onClick={() => useTemplate(t)}>
+              <span className="ct-template-label">{t.label}</span>
+              <span className="ct-template-hint">{t.hint}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <form action={action} className="ct-iterate-form">
         <input type="hidden" name="run_id" value={runId} />
         <input type="hidden" name="anchor" value={anchor} />
-        <textarea name="message" className="cap-input" rows={2} required
-          placeholder={completed
-            ? "Describe the behavior to add or change. The agent will clarify and propose a scoped extension."
-            : "Describe what failed or should change. Prior findings are carried forward automatically."}
-          style={{ minWidth: 320, resize: "vertical" }} />
-        <input name="expected" className="cap-input" placeholder="Expected behavior (helps avoid a clarification round)" />
-        <SubmitButton className="cap-btn" disabled={pending} style={{ justifySelf: "start" }}>
-          {pending ? "Reviewing feedback…" : completed ? "Propose extension" : "Propose retry"}
-        </SubmitButton>
+        <label className="mr-field-label">
+          {completed ? "What should it do?" : "What went wrong?"}
+          <textarea name="message" className="mr-input" rows={3} required
+            value={message} onChange={(e) => setMessage(e.target.value)}
+            placeholder={completed
+              ? "Describe the behaviour to add or change. The agent will clarify and propose a scoped extension."
+              : "Describe what failed or should change."} />
+        </label>
+        <div className="ct-iterate-row">
+          <label className="mr-field-label">
+            Done when
+            <input name="expected" className="mr-input" value={expected}
+                   onChange={(e) => setExpected(e.target.value)}
+                   placeholder="How you will know it worked" />
+          </label>
+          {/* WHICH PATH THIS CHANGE FOLLOWS. Adding a feature is a piece of work like any
+              other, and it deserves the same choice the New project form offers — a small
+              addition through Minor Feature, something larger through a workflow with a spec
+              and a sign-off in front of it. */}
+          <label className="mr-field-label">
+            Workflow
+            <select className="mr-select" name="workflow_version_id"
+                    data-testid="ct-iterate-workflow" defaultValue="">
+              <option value="">Follow the inner pipeline only</option>
+              {workflows.filter((w) => w.active_version_id).map((w) => (
+                <option key={w.id} value={w.active_version_id as string}>
+                  {w.name}{w.is_catalogue ? " (standard)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="ct-iterate-actions">
+          <SubmitButton className="cap-btn primary" disabled={pending}>
+            {pending ? "Reviewing…" : completed ? "Propose the change" : "Propose retry"}
+          </SubmitButton>
+          <span className="detail">
+            The agent scopes it, you confirm, then it runs on the same branch and PR.
+          </span>
+        </div>
       </form>
+
       {state?.question ? (
-        <div className="detail" style={{ color: "#d29922" }}>Agent question: {state.question}</div>
+        <p className="ct-iterate-note" data-tone="ask">Agent question: {state.question}</p>
       ) : null}
       {state?.proposal ? (
-        <div style={{ display: "grid", gap: 8, padding: 10, border: "1px solid rgba(88,166,255,.35)", borderRadius: 8 }}>
+        <div className="ct-proposal">
           <span className="cap-badge tone-blue">{state.proposal.classification.replace("_", " ")}</span>
-          <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>{state.proposal.fix_note}</pre>
+          <pre>{state.proposal.fix_note}</pre>
           {state.thread_id ? <ConfirmFeedback threadId={state.thread_id} /> : null}
         </div>
       ) : null}
-      {state?.error ? <span className="detail" style={{ color: "#f85149" }}>{state.error}</span> : null}
+      {state?.error ? <p className="ct-iterate-note" data-tone="bad">{state.error}</p> : null}
     </div>
   );
 }
@@ -2463,6 +2583,7 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
             <FeedbackControls
               runId={run.id}
               status={run.status}
+              projectId={run.project_id}
               anchor={livePreviews[0] ? `/v1/previews/${livePreviews[0].id}/web/` : ""}
             />
           </div>

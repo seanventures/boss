@@ -3762,6 +3762,7 @@ export async function submitCodeTaskFeedbackAction(
       anchor: String(formData.get("anchor") ?? "").trim(),
       severity: String(formData.get("severity") ?? "normal").trim(),
       selected_element: String(formData.get("selected_element") ?? "").trim(),
+      workflow_version_id: String(formData.get("workflow_version_id") ?? "").trim(),
     });
     revalidatePath("/");
     return result;

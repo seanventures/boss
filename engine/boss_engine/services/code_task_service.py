@@ -576,8 +576,14 @@ def start_code_task(
     # prd_decomposition) — so the FIRST task of a brand new app carries a root_run_id, and
     # treating that as "continuation" would have silently skipped an outer run for the panel
     # path, which is the main way projects are started.
+    # AN EXPLICIT CHOICE OVERRIDES ALL OF THIS. "Add to this project" lets the operator pick
+    # the path the change should follow, and a picker whose choice is then ignored is worse
+    # than no picker. Choosing one makes the change a piece of work with its own outer run;
+    # choosing nothing leaves a follow-up as what it was, work inside the project's existing
+    # run.
+    _chose_a_workflow = bool(run_finalize.get("workflow_version_id"))
     _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark")
-    _is_new_project = (
+    _is_new_project = _chose_a_workflow or (
         not any(run_finalize.get(k) for k in _continuation)
         # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
         and int(run_finalize.get("decomposition_index") or 1) <= 1
@@ -910,7 +916,7 @@ def retry_code_task(
     engine, settings: Settings, jobs, run_id: str, *, fix_note: str = "",
     profile: Optional[str] = None, repair_retries: Optional[int] = None,
     allow_test_retirement: bool = False, job_priority: Optional[int] = None,
-    attempt_ceiling: Optional[int] = None,
+    attempt_ceiling: Optional[int] = None, workflow_version_id: str = "",
 ) -> dict:
     """Resume a failed/blocked code task as a NEW attempt in the same lineage — carrying the prior
     attempt's findings forward as explicit feedback so the agent fixes the identified issues instead
@@ -1068,6 +1074,11 @@ def retry_code_task(
             repo=spec.get("repo") or settings.target_github_repo,
             base_branch=spec.get("base_branch") or "main",
             finalize_ctx={"parent_run_id": run_id, "root_run_id": root, "attempt": attempt,
+                          # AN EXPLICIT CHOICE MAKES THIS A PIECE OF WORK IN ITS OWN RIGHT.
+                          # A retry inherits its parent's run; a change the operator chose a
+                          # workflow for is a new piece of work following that path.
+                          **({"workflow_version_id": workflow_version_id}
+                             if workflow_version_id else {}),
                           "feedback_history": history,
                           # Carried across every attempt: a retry is the same outcome, and a
                           # console that loses that shows one app as several.

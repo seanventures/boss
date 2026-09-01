@@ -84,6 +84,7 @@ def _structured_fix_note(
 def submit_feedback(
     engine, run_id: str, *, message: str, expected: str = "", anchor: str = "",
     severity: str = "normal", selected_element: str = "", screenshot_url: str = "",
+    workflow_version_id: str = "",
 ) -> dict:
     message = message.strip()
     if not message:
@@ -127,6 +128,11 @@ def submit_feedback(
             "fix_note": fix_note,
             "profile": "strict" if classification == "full_rerun" else "balanced",
             "repair_retries": 2 if classification == "full_rerun" else 1,
+            # THE PATH THE OPERATOR CHOSE FOR THIS CHANGE. Carried on the proposal because the
+            # choice is made when the change is described and acted on when it is confirmed —
+            # two requests, and nothing else survives between them.
+            **({"workflow_version_id": workflow_version_id.strip()}
+               if workflow_version_id.strip() else {}),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         _add_message(connection, thread["id"], role="agent", kind="proposal",
@@ -165,6 +171,7 @@ def confirm_feedback(
             engine, settings, jobs, proposal["source_run_id"],
             fix_note=proposal["fix_note"], profile=proposal["profile"],
             repair_retries=int(proposal["repair_retries"]),
+            workflow_version_id=str(proposal.get("workflow_version_id") or ""),
         )
     except Exception:
         with begin(engine) as connection:

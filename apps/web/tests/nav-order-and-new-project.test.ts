@@ -377,3 +377,44 @@ describe("following a link never logs you out", () => {
     expect(DW_SRC).not.toContain("href: `?area=code_tasks&run=");
   });
 });
+
+describe("adding a feature to a project", () => {
+  const CT_UI = codeOnly("app/code-tasks-ui.tsx");
+  const CSS_IT = codeOnly("app/globals.css");
+
+  it("offers starting points instead of a blank box", () => {
+    // The first thing anyone does with an app they have just built is add to it, and the panel
+    // was an empty textarea whose placeholder was the only guidance.
+    expect(CT_UI).toContain("const FEATURE_TEMPLATES");
+    expect(CT_UI).toContain('data-testid="ct-templates"');
+    expect(CSS_IT).toContain(".ct-template {");
+  });
+
+  it("keeps templates to one entry each, so adding one touches nothing else", () => {
+    // A template is data. If adding "an API endpoint" meant editing markup, nobody would.
+    const list = CT_UI.slice(CT_UI.indexOf("const FEATURE_TEMPLATES"),
+                             CT_UI.indexOf("// Feedback is conversational"));
+    for (const key of ["page", "api", "data", "auth", "design", "bug"]) {
+      expect(list).toContain(`key: "${key}"`);
+    }
+    expect(CT_UI).toContain("FEATURE_TEMPLATES.map((t) =>");
+  });
+
+  it("fills the fields in and leaves them editable", () => {
+    // A template that cannot be edited is a form that argues with you.
+    expect(CT_UI).toContain("value={message} onChange=");
+    expect(CT_UI).toContain("onChange={(e) => setExpected(e.target.value)}");
+  });
+
+  it("lets the change follow a workflow, like a new project does", () => {
+    // Adding a feature is a piece of work like any other and deserves the same choice.
+    expect(CT_UI).toContain('data-testid="ct-iterate-workflow"');
+    expect(CT_UI).toContain('name="workflow_version_id"');
+  });
+
+  it("is styled rather than assembled from inline rules", () => {
+    expect(CT_UI).toContain('className="ct-iterate"');
+    expect(CSS_IT).toContain(".ct-iterate {");
+    expect(CSS_IT).toContain(".ct-proposal {");
+  });
+});

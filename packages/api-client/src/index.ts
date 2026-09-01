@@ -6076,6 +6076,9 @@ export function createBossApiClient(config: BossApiClientConfig) {
       severity?: string;
       selected_element?: string;
       screenshot_url?: string;
+      /** The path the operator chose for this change, from the picker on "Add to this
+       *  project". Empty means the change follows the inner pipeline only, as before. */
+      workflow_version_id?: string;
     }) {
       return request<FeedbackResponse>(
         "POST", `/v1/code-tasks/${encodeURIComponent(runId)}/feedback`, { body: payload });
