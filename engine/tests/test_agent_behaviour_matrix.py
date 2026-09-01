@@ -749,7 +749,9 @@ def test_build_reports_success_and_failure():
     body = hero[i:i + 1400]
     assert "setError(" in body, "a failed build is still silent"
     assert "setReply(" in body, "a started build gives no confirmation"
-    assert "task_id" in body, "the operator is not told what was created"
+    # The press starts a WORKFLOW RUN now, not a panel, so the id worth naming is the run's —
+    # it is the thing the operator goes and watches.
+    assert "runId" in body, "the operator is not told what was created"
 
 
 # --------------------------------------------------------------------------- #

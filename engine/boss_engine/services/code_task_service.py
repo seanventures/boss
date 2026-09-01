@@ -581,13 +581,17 @@ def start_code_task(
     # than no picker. Choosing one makes the change a piece of work with its own outer run;
     # choosing nothing leaves a follow-up as what it was, work inside the project's existing
     # run.
+    # A task created BY a workflow step already belongs to that run. Starting another would
+    # nest a pipeline inside a step of the pipeline that made it, and each would wait on the
+    # other's build.
+    _already_governed = bool(run_finalize.get("workflow_run_id"))
     _chose_a_workflow = bool(run_finalize.get("workflow_version_id"))
     _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark")
-    _is_new_project = _chose_a_workflow or (
+    _is_new_project = (not _already_governed) and (_chose_a_workflow or (
         not any(run_finalize.get(k) for k in _continuation)
         # Slice 1 of a decomposition IS the project; slices 2..N are the rest of the same one.
         and int(run_finalize.get("decomposition_index") or 1) <= 1
-    )
+    ))
 
     try:
         from .workflows import workflow_by_version, workflow_for_code_task

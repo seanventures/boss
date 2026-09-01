@@ -574,12 +574,15 @@ export function AskBossHero({
         setError(r.error ?? "Could not start the build.");
         return;
       }
-      const taskId = String(d?.task_id ?? "");
+      // SAY WHAT STARTED. This announced a panel, because that is what used to happen; the
+      // press now starts the workflow run, and the run is the thing to go and watch.
+      const runId = String((d?.run as Record<string, unknown> | undefined)?.id ?? d?.id ?? "");
       setInput("");
       setReply(
-        `**Started.** A PRD panel is convening for this directive.\n\n` +
-        (taskId ? `Task \`${taskId}\` — track it under **Meetings**, then Factory once the PRD is approved.\n\n` : "") +
-        `The sequence from here is: panel debates → PRD drafted → you approve → project runs.`,
+        `**Started.** A workflow run is under way for this directive.\n\n` +
+        (runId ? `Run \`${runId}\` — open **Workflow** to watch it.\n\n` : "") +
+        `It convenes a panel, drafts the PRD, waits for your approval, then builds, previews ` +
+        `and asks before it deploys.`,
       );
     });
   }, [busy, projectId, actor]);

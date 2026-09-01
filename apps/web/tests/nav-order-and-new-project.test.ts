@@ -525,3 +525,27 @@ describe("deciding a release, and where it ships", () => {
     expect(DW3).toContain("live_preview_url?: string | null;");
   });
 });
+
+describe("Build starts the workflow, not a panel", () => {
+  const BUILDS = codeOnly("app/api/builds/route.ts");
+  const HERO2 = codeOnly("app/ask-boss-hero.tsx");
+
+  it("starts a workflow run on the press", () => {
+    // This posted straight to /v1/meetings/prd: a panel convened, a PRD was drafted, somebody
+    // approved it, and only THEN did a workflow run appear — a record written after the fact,
+    // adopting a meeting and an approval that had already happened. Which is why its first
+    // three steps read 20s, 0s and "not run", and why nothing showed for several minutes.
+    expect(BUILDS).toContain("/v1/delivery-workflows/start");
+    expect(BUILDS).not.toContain("/v1/meetings/prd");
+    expect(BUILDS).toContain('work_class: "project.new"');
+  });
+
+  it("gives the run the directive to work from", () => {
+    expect(BUILDS).toContain("input: { title, directive }");
+  });
+
+  it("tells the operator a run started, not a panel", () => {
+    expect(HERO2).toContain("A workflow run is under way");
+    expect(HERO2).toContain("open **Workflow** to watch it");
+  });
+});

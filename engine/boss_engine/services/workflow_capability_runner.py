@@ -189,6 +189,34 @@ _ADOPTABLE_GATES: dict[str, str] = {"spec_review": "adopt_decision_id"}
 _GATE_ANSWERED = frozenset({"approved", "executed", "completed"})
 
 
+def _decision_from_the_panel(
+    connection: Connection, project_id: str, context: dict[str, Any]
+) -> Optional[str]:
+    """The PRD approval the meeting step's panel already raised, if it has.
+
+    When the workflow DRIVES — Build starts the run, and its `meeting` step convenes the panel —
+    the panel produces a PRD and the decision to approve it. `spec_review` raising a second,
+    generic "approve the spec" would ask the same person about the same document twice, one
+    dialog after the other. The panel's own decision IS this gate.
+    """
+    task_id = None
+    for produced in (context.get("steps") or {}).values():
+        if not isinstance(produced, dict):
+            continue
+        meeting = produced.get("meeting")
+        if isinstance(meeting, dict):
+            task_id = meeting.get("task_id") or task_id
+        task_id = produced.get("task_id") or task_id
+    if not isinstance(task_id, str) or not task_id.strip():
+        return None
+    row = connection.execute(
+        text("SELECT id FROM decisions WHERE project_id = :p AND task_id = :t "
+             "ORDER BY created_at DESC LIMIT 1"),
+        {"p": project_id, "t": task_id.strip()},
+    ).mappings().first()
+    return row["id"] if row else None
+
+
 def _adopted_gate(
     connection: Connection, key: str, context: dict[str, Any]
 ) -> Optional[dict[str, Any]]:
@@ -584,6 +612,11 @@ def execute_step(
                     **existing,
                     "note": "this app is already previewable — adopted the running preview."}
 
+    # A BUILD THIS RUN STARTS BELONGS TO THIS RUN. Without saying so, start_code_task would
+    # open a second workflow run for the task, nesting a pipeline inside the step that made it.
+    if key == "build":
+        inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
+
     output = _invoke_tool(ctx, capability.tool, project_id, actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
 
@@ -826,6 +859,17 @@ def _gate_subject(
             # Already answered. Returning None sends it down the ordinary path, where
             # execute_step records the approval it was started with.
             return None
+        if key == "spec_review" and context is not None:
+            existing = _decision_from_the_panel(connection, project_id, context)
+            if existing:
+                # WAIT ON THE PANEL'S OWN DECISION. Raising a second "approve the spec" would
+                # ask the same person about the same document twice, one dialog after the other.
+                return {
+                    "key": key, "label": capability.label,
+                    "summary": capability.summary,
+                    "risk_tier": max(2, capability.risk_tier), "completes_step": True,
+                    "decision_id": existing,
+                }
         return {
             "key": key, "label": capability.label, "summary": capability.summary,
             "risk_tier": max(2, capability.risk_tier), "completes_step": True,
@@ -853,7 +897,9 @@ def _open_gate(
     # Matches core.create_blocking_decision exactly: it takes a question and a recommendation,
     # returns the decision id, and defaults to HOLD — which is the behaviour a gate wants. A
     # gate that defaulted to "proceed" would be a gate in name only.
-    decision_id = create_blocking_decision(
+    # An existing decision the subject named — the panel's own PRD approval — is used as this
+    # gate rather than a new one raised beside it.
+    decision_id = subject.get("decision_id") or create_blocking_decision(
         connection,
         project_id,
         run.get("task_id"),

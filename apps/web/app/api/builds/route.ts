@@ -22,8 +22,21 @@ export async function POST(req: Request) {
   if (!projectId || !directive) {
     return NextResponse.json({ error: "project_id and directive are required" }, { status: 400 });
   }
+  // BUILD STARTS THE WORKFLOW, NOT THE PANEL.
+  //
+  // This posted straight to /v1/meetings/prd: a panel convened, a PRD was drafted, somebody
+  // approved it, and only THEN — inside start_code_task — did a workflow run appear. So the
+  // workflow was a record written after the fact, adopting a meeting and an approval that had
+  // already happened, which is why its first three steps completed in 20s, 0s and "not run",
+  // and why nothing showed on the Workflow page for the first several minutes.
+  //
+  // The outer loop is supposed to DRIVE. Starting the run first means its own `meeting` step
+  // convenes the panel (the same convene_prd_meeting_core), `spec_review` waits on the PRD
+  // approval that panel raises, and `build` creates the project. One press, and every step
+  // after it is visible from the first second.
+  const title = directive.length > 72 ? `${directive.slice(0, 69)}…` : directive;
   try {
-    const r = await fetch(`${API_URL}/v1/meetings/prd`, {
+    const r = await fetch(`${API_URL}/v1/delivery-workflows/start`, {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       // No invented actor. Claiming a principal you are not is impersonation even when it is
@@ -31,7 +44,8 @@ export async function POST(req: Request) {
       // Omitted, the action is attributed to whoever is actually authenticated.
       body: JSON.stringify({
         project_id: projectId,
-        directive,
+        work_class: "project.new",
+        input: { title, directive },
         ...(String(body.actor ?? "").trim() ? { actor: String(body.actor).trim() } : {}),
       }),
       cache: "no-store",

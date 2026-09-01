@@ -248,7 +248,7 @@ def test_choosing_a_workflow_makes_a_follow_up_its_own_piece_of_work():
     outer run even for work that would otherwise be a continuation."""
     src = inspect.getsource(code_task_service.start_code_task)
     assert "_chose_a_workflow" in src
-    assert "_is_new_project = _chose_a_workflow or (" in src
+    assert "_chose_a_workflow or (" in src
 
 
 def test_choosing_nothing_leaves_a_follow_up_alone():
@@ -258,3 +258,12 @@ def test_choosing_nothing_leaves_a_follow_up_alone():
     guard = src[src.index("_chose_a_workflow ="):src.index("try:", src.index("_chose_a_workflow ="))]
     for marker in ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark"):
         assert marker in guard, marker
+
+
+def test_a_task_a_workflow_step_created_does_not_start_another_run():
+    """When Build kicks off the WORKFLOW, its `build` step creates the code task — and that
+    task already belongs to the run that created it. Starting another would nest a nine-step
+    pipeline inside a step of the pipeline that made it, each waiting on the other's build."""
+    src = inspect.getsource(code_task_service.start_code_task)
+    assert "_already_governed" in src
+    assert "_is_new_project = (not _already_governed)" in src

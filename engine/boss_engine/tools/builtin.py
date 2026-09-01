@@ -315,6 +315,12 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "primary. See list_repositories.",
                 },
                 "base_branch": {"type": "string", "description": "branch to build on (default main)"},
+                "workflow_run_id": {
+                    "type": "string",
+                    "description": "the outer workflow run this task belongs to, when a "
+                                   "workflow step is creating it. Names the run that already "
+                                   "governs the work so a second one is not started for it.",
+                },
                 "risk_tier": {"type": "integer", "minimum": 0, "maximum": 3},
                 "profile": {
                     "type": "string",
@@ -338,7 +344,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
         task_id = args.get("task_id")
         instructions = args.get("instructions") or ""
         base_branch = args.get("base_branch") or "main"
-        finalize_ctx: dict = {}
+        # ALREADY GOVERNED. When a workflow step creates this task, the run that governs it
+        # exists — naming it here stops start_code_task opening a SECOND one, which would put
+        # a whole nine-step pipeline inside a step of the pipeline that created it.
+        finalize_ctx: dict = ({"workflow_run_id": str(args["workflow_run_id"])}
+                              if args.get("workflow_run_id") else {})
         risk_tier = args.get("risk_tier")
         extended_from = None
         rr = services_module("repo_registry")
