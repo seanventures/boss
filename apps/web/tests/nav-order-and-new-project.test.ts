@@ -198,7 +198,9 @@ describe("watching the outer workflow, step by step", () => {
     expect(DW).toContain('data-testid="dw-step-decide"');
     expect(DW).toContain("resolveDecisionAction");
     expect(DW).toContain('value="approve"');
-    expect(DW).toContain('value="decline"');
+    // "decline" was rejected by the server, which only accepts approve|reject|revise|
+    // delegate|execute — so Deny threw "Unsupported decision action" and did nothing.
+    expect(DW).toContain('value="reject"');
   });
 
   it("only offers Approve/Deny on a step actually waiting on one", () => {
@@ -225,7 +227,8 @@ describe("which run the workflow page shows first", () => {
     // the only ordering was `updated_at` — and anything that touches an old run floats it back
     // to the top. Liveness first, recency within it.
     expect(DW).toContain("function byLiveness");
-    expect(DW).toContain("[...runs].sort(byLiveness)");
+    expect(DW).toContain("byLiveness");
+    expect(DW).toContain(".sort(byLiveness)");
   });
 
   it("names a run by the project it is delivering", () => {
@@ -416,5 +419,63 @@ describe("adding a feature to a project", () => {
     expect(CT_UI).toContain('className="ct-iterate"');
     expect(CSS_IT).toContain(".ct-iterate {");
     expect(CSS_IT).toContain(".ct-proposal {");
+  });
+});
+
+describe("managing runs, not just watching them", () => {
+  const DW2 = codeOnly("app/delivery-workflows-ui.tsx");
+  const CSS2 = codeOnly("app/globals.css");
+
+  it("does not file waiting, stopped and finished runs under 'Running'", () => {
+    // Every run sat under one heading, so a run stopped dead and a run waiting on a person
+    // looked like a run making progress.
+    expect(DW2).toContain("const BUCKETS =");
+    for (const b of ["needs_you", "running", "blocked", "done"]) {
+      expect(DW2).toContain(`"${b}"`);
+    }
+    expect(DW2).toContain('data-testid={`dw-filter-${b}`}');
+  });
+
+  it("puts a line between one run and the next", () => {
+    expect(CSS2).toContain(".dw-runs .dw-run {");
+    expect(CSS2).toContain('.dw-runs .dw-run[data-status="waiting"]');
+  });
+
+  it("says what Advance actually did", () => {
+    // It reported success while advancing nothing — a run waiting on a person cannot be
+    // ticked forward — and a button that always says "done" reads as one that does nothing.
+    expect(DW2).toContain("Nothing to advance — every run is finished or waiting on a person.");
+    expect(DW2).toContain("Advanced ${moved.length} step");
+  });
+
+  it("can put a failed step back in the queue", () => {
+    expect(DW2).toContain('data-testid="dw-step-retry"');
+    expect(DW2).toContain('"retry_step"');
+  });
+
+  it("can start the whole workflow again", () => {
+    expect(DW2).toContain('data-testid="dw-rerun"');
+    expect(DW2).toContain("Run this workflow again");
+  });
+
+  it("lets the release decision say WHERE it ships", () => {
+    // A gate that only says yes/no cannot express "yes, to staging".
+    expect(DW2).toContain('data-testid="dw-deploy-target"');
+    expect(DW2).toContain('"set_input"');
+  });
+
+  it("links to the panel that ran, not the list of every panel", () => {
+    expect(DW2).toContain('link({ area: "meetings", meeting })');
+  });
+
+  it("shows the preview url the tool actually returns", () => {
+    // start_preview nests it under `preview.url`; this looked only for a flat `preview_url`,
+    // so the one link an operator most wants never appeared.
+    expect(DW2).toContain("output.preview as { url?: string }");
+    expect(DW2).toContain("open the preview");
+  });
+
+  it("names the pull request by number instead of a truncated url", () => {
+    expect(DW2).toContain("pull request #${number}");
   });
 });

@@ -84,6 +84,12 @@ const ACTIONS: Record<string, string> = {
   define_step: "/v1/delivery-workflows/custom-steps",
 };
 
+/** Actions addressed to ONE run. Kept apart because their path carries the run id. */
+const RUN_ACTIONS: Record<string, (runId: string) => string> = {
+  retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
+  set_input: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/input`,
+};
+
 export async function POST(req: Request) {
   let body: Record<string, unknown>;
   try {
@@ -92,7 +98,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
   }
   const action = String(body.action ?? "");
-  const path = ACTIONS[action];
+  const runAction = RUN_ACTIONS[action];
+  const runId = String((body as { run_id?: string }).run_id ?? "");
+  const path = runAction ? (runId ? runAction(runId) : "") : ACTIONS[action];
+  if (runAction !== undefined && !runId) {
+    return NextResponse.json({ error: `'${action}' needs a run_id` }, { status: 400 });
+  }
   if (!path) {
     return NextResponse.json(
       { error: `unknown action '${action}'. Known: ${Object.keys(ACTIONS).join(", ")}` },

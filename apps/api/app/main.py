@@ -20254,6 +20254,79 @@ def delete_delivery_workflow(definition_id: str, project_id: str,
             raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.post("/v1/delivery-workflows/runs/{run_id}/retry-step")
+def retry_delivery_step(run_id: str, payload: dict) -> dict:
+    """Put a failed or dead-lettered step back in the queue.
+
+    A step that failed for a reason since dealt with — a target that did not exist, a service
+    that was down — had no way back: the run sat dead-lettered and the only recourse was to
+    start the whole workflow again and repeat every step before it. This resets THAT step.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    step_id = str(payload.get("step_id") or "").strip()
+    if not project_id or not step_id:
+        raise HTTPException(status_code=400, detail="project_id and step_id are required")
+    with begin(engine) as connection:
+        row = connection.execute(
+            text("SELECT id, status FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND project_id=:p AND step_id=:s "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"r": run_id, "p": project_id, "s": step_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="step not found on this run")
+        if row["status"] not in ("failed", "deadlettered", "cancelled"):
+            # Re-queueing a step that is running would run it twice.
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{step_id}' is {row['status']}, so there is nothing to retry.")
+        connection.execute(
+            text("UPDATE workflow_step_runs SET status='ready', attempt=0, last_error=NULL, "
+                 "lease_owner=NULL, lease_expires_at=NULL, updated_at=now() WHERE id=:id"),
+            {"id": row["id"]},
+        )
+        # The RUN has to come back too, or a re-queued step sits ready under a dead run.
+        connection.execute(
+            text("UPDATE workflow_runs SET status='running', blocked_reason=NULL, error=NULL, "
+                 "updated_at=now() WHERE id=:r AND project_id=:p"),
+            {"r": run_id, "p": project_id},
+        )
+    return {"run_id": run_id, "step_id": step_id, "status": "ready"}
+
+
+@app.post("/v1/delivery-workflows/runs/{run_id}/input")
+def set_delivery_run_input(run_id: str, payload: dict) -> dict:
+    """Set a value the remaining steps will read — the deployment target, most of all.
+
+    `deploy` takes an optional `target_id`, and optional inputs are filled from the run's own
+    input. So choosing where to ship, at the moment of approving the release, is a write here
+    rather than a new plumbing path.
+
+    Deliberately an allowlist: a run's input is what its steps were bound against, and letting
+    a form overwrite any of it would let somebody redirect a build after the fact.
+    """
+    ALLOWED = {"target_id", "environment"}
+    project_id = str(payload.get("project_id") or "").strip()
+    values = payload.get("values") if isinstance(payload.get("values"), dict) else {}
+    clean = {k: v for k, v in values.items() if k in ALLOWED and isinstance(v, str) and v.strip()}
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    if not clean:
+        raise HTTPException(
+            status_code=400,
+            detail=f"nothing to set; allowed: {', '.join(sorted(ALLOWED))}")
+    with begin(engine) as connection:
+        updated = connection.execute(
+            text("UPDATE workflow_runs SET input = COALESCE(input,'{}'::jsonb) "
+                 "|| CAST(:v AS JSONB), updated_at=now() "
+                 "WHERE id=:r AND project_id=:p RETURNING id"),
+            {"v": json.dumps(clean), "r": run_id, "p": project_id},
+        ).first()
+        if not updated:
+            raise HTTPException(status_code=404, detail="run not found")
+    return {"run_id": run_id, "set": clean}
+
+
 @app.post("/v1/delivery-workflows/start")
 def start_delivery_workflow(payload: dict) -> dict:
     """Launch a piece of work on a workflow."""

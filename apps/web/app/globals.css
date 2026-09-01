@@ -7806,3 +7806,50 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   margin: 0; white-space: pre-wrap; font-size: 12px; line-height: 1.5;
   overflow-wrap: anywhere;
 }
+
+/* ── Managing runs ───────────────────────────────────────────────────────────────
+   Every run sat under one heading called "Running", with no line between one row
+   and the next: a run stopped dead, a run waiting on a person and a run making
+   progress all looked alike, in an undifferentiated stack. */
+.dw-runs-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin-bottom: 10px;
+}
+.dw-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.dw-filter {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 5px 11px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--border, #30363d); background: transparent; color: var(--muted, #8b949e);
+}
+.dw-filter em {
+  font-style: normal; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 11px;
+  opacity: .85;
+}
+.dw-filter:hover { color: inherit; border-color: var(--live, #58a6ff); }
+.dw-filter[data-active="true"] { color: inherit; border-color: currentColor; }
+/* The state is in the colour as well as the word, so the counts read at a glance. */
+.dw-filter[data-active="true"][data-tone="needs_you"] { color: var(--warn, #d29922); }
+.dw-filter[data-active="true"][data-tone="running"]   { color: var(--live, #58a6ff); }
+.dw-filter[data-active="true"][data-tone="blocked"]    { color: var(--bad, #f85149); }
+.dw-filter[data-active="true"][data-tone="done"]       { color: var(--ok, #3fb950); }
+
+/* ONE RUN, THEN THE NEXT. */
+.dw-runs .dw-run {
+  border: 1px solid var(--border, #30363d); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 12px;
+  background: color-mix(in srgb, var(--panel, #0d1117) 55%, transparent);
+}
+.dw-runs .dw-run[data-status="waiting"]      { border-left: 3px solid var(--warn, #d29922); }
+.dw-runs .dw-run[data-status="running"]      { border-left: 3px solid var(--live, #58a6ff); }
+.dw-runs .dw-run[data-status="blocked"],
+.dw-runs .dw-run[data-status="failed"],
+.dw-runs .dw-run[data-status="deadlettered"] { border-left: 3px solid var(--bad, #f85149); }
+.dw-runs .dw-run[data-status="completed"]    { border-left: 3px solid var(--ok, #3fb950); }
+
+.dw-run-actions {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px solid var(--border, #30363d);
+}
+.dw-target { display: grid; gap: 4px; min-width: 210px; }
+.dw-target select { font-size: 12px; }

@@ -325,6 +325,24 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [customSteps, setCustomSteps] = useState<CustomStep[]>([]);
   const [bindable, setBindable] = useState<Bindable>({ skills: [], mcp_servers: [] });
   const [runs, setRuns] = useState<Run[]>([]);
+  // WHERE THIS PROJECT CAN SHIP. Fetched once for the release gate: choosing a target is part
+  // of the deploy decision, and a gate that only says yes/no cannot express "yes, to staging".
+  const [targets, setTargets] = useState<DeployTarget[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/deployment-targets?project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (!res.ok) return;
+        const body = await res.json();
+        if (alive) setTargets((body.items ?? []).filter(
+          (t: DeployTarget) => (t.status ?? "active") === "active"));
+      } catch { /* the gate still works; it just cannot offer a target */ }
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
   // Loading, failed and empty are three different things. A screen that renders nothing while
   // it loads and nothing when the API is down says "you have no workflows" in both cases.
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
@@ -441,9 +459,30 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       {notice ? <p className="dw-notice" data-testid="dw-notice">{notice}</p> : null}
 
       {tab === "running" ? (
-        <RunsView runs={runs} openRun={openRun} setOpenRun={setOpenRun}
-                  onAdvance={() => act("Advance", "advance", {})} busy={busy}
-                  capabilities={capabilities} />
+        <RunsView
+          runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
+          capabilities={capabilities} targets={targets}
+          // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
+          // waiting on a person cannot be ticked forward — and a button that always says
+          // "done" is indistinguishable from a button that does nothing.
+          onAdvance={async () => {
+            setBusy("Advance");
+            const r = await post("advance", { project_id: projectId, actor });
+            setBusy(null);
+            const moved = ((r.ok ? (r.data as { performed?: unknown[] })?.performed : []) ?? []);
+            setNotice(!r.ok ? `Advance — ${r.error}`
+              : moved.length ? `Advanced ${moved.length} step${moved.length === 1 ? "" : "s"}.`
+              : "Nothing to advance — every run is finished or waiting on a person.");
+            if (r.ok) await load();
+          }}
+          onRetryStep={(runId, stepId) =>
+            act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
+          onSetTarget={(runId, targetId) =>
+            act("Set target", "set_input", { run_id: runId, values: { target_id: targetId } })}
+          onRerun={(run) => act("Re-run", "start", {
+            workflow_key: run.workflow_key, input: run.input ?? {},
+          })}
+        />
       ) : tab === "catalogue" ? (
         <CatalogueView
           catalogue={catalogue} installed={installed} busy={busy}
@@ -593,25 +632,62 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
     out.push({ label: "Ask BOSS",
                href: link({ area: "code_tasks", run: codeTask, agent: codeTask }) });
   }
+  // THE PANEL, not the list of panels. This linked to `?area=meetings` — the landing page —
+  // so "open the panel" meant "go and find it", on a screen listing every meeting the project
+  // has ever held. The meeting room reads `?meeting=`, and the step knows which one it adopted.
   const meeting = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
-  if (meeting) out.push({ label: "open the panel", href: link({ area: "meetings" }) });
+  if (meeting) {
+    out.push({ label: "open the panel", href: link({ area: "meetings", meeting }) });
+  }
   const discovery = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
-  if (discovery) out.push({ label: "open the research", href: link({ area: "discovery" }) });
+  if (discovery) {
+    out.push({ label: "open the research", href: link({ area: "discovery", run: discovery }) });
+  }
   const pr = str("pull_request_url");
-  if (pr) out.push({ label: "pull request", href: pr, external: true });
-  const preview = str("preview_url");
-  if (preview) out.push({ label: "preview", href: preview, external: true });
+  if (pr) {
+    // Numbered, not a 60-character URL truncated mid-path. The number is what a person says
+    // out loud, and the link still goes to the same place.
+    const number = String(output.pull_request_number ?? "").trim() || pr.split("/").pop();
+    out.push({ label: `pull request #${number}`, href: pr, external: true });
+  }
+  // START_PREVIEW NESTS ITS RESULT. The tool returns `{preview: {url, id, ...}}`, and this
+  // looked only for a flat `preview_url` — so the one link an operator most wants, to the app
+  // they just built, was the one that never appeared.
+  const nested = output.preview as { url?: string } | undefined;
+  const preview = str("preview_url") || (typeof nested?.url === "string" ? nested.url : "");
+  if (preview) out.push({ label: "open the preview", href: preview, external: true });
   return out;
 }
 
-function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities }: {
+/** The four states an operator acts on differently, plus everything. */
+/** Somewhere this project can ship to. Offered at the release gate so "deploy" is a choice
+ *  about WHERE, not just whether. */
+type DeployTarget = { id: string; app_name: string; environment: string; status?: string };
+
+const BUCKETS = ["needs_you", "running", "blocked", "done"] as const;
+type Bucket = typeof BUCKETS[number];
+const BUCKET_LABEL: Record<Bucket | "all", string> = {
+  all: "All",
+  needs_you: "Needs you",
+  running: "Running",
+  blocked: "Stopped",
+  done: "Done",
+};
+
+function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
+                   onRetryStep, onRerun, onSetTarget, targets }: {
   runs: Run[];
   openRun: string | null;
   setOpenRun: (id: string | null) => void;
   onAdvance: () => void;
   busy: string | null;
   capabilities: Capability[];
+  onRetryStep: (runId: string, stepId: string) => void;
+  onRerun: (run: Run) => void;
+  onSetTarget: (runId: string, targetId: string) => void;
+  targets: DeployTarget[];
 }) {
+  const [bucket, setBucket] = useState<Bucket | "all">("all");
   if (runs.length === 0) {
     return (
       <div className="dw-empty" data-testid="dw-no-runs">
@@ -622,16 +698,49 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities }: 
       </div>
     );
   }
+  // WAITING, BLOCKED AND DEAD-LETTERED ARE NOT "RUNNING".
+  //
+  // Every run sat under one heading called Running, so a run stopped dead and a run waiting on
+  // a person looked like a run making progress. These are the four states an operator acts on
+  // differently: one needs them, one needs nothing, one needs a decision about a failure, and
+  // one is history.
+  const bucketOf = (run: Run): Bucket =>
+    run.steps.some(needsYou) ? "needs_you"
+      : ["failed", "deadlettered", "blocked", "cancelled"].includes(run.status) ? "blocked"
+      : LIVE.includes(run.status) ? "running"
+      : "done";
+  const counts = BUCKETS.reduce((acc, b) => {
+    acc[b] = runs.filter((r) => bucketOf(r) === b).length;
+    return acc;
+  }, {} as Record<Bucket, number>);
+  const shown = [...runs].filter((r) => bucket === "all" || bucketOf(r) === bucket)
+    .sort(byLiveness);
+
   return (
     <div className="dw-runs">
       <div className="dw-runs-head">
-        <span className="detail">{runs.length} run{runs.length === 1 ? "" : "s"}</span>
+        <div className="dw-filters" role="tablist" aria-label="Run state">
+          {(["all", ...BUCKETS] as const).map((b) => (
+            <button key={b} type="button" role="tab" aria-selected={bucket === b}
+                    className="dw-filter" data-active={bucket === b}
+                    data-tone={b} onClick={() => setBucket(b)}
+                    data-testid={`dw-filter-${b}`}>
+              {BUCKET_LABEL[b]}
+              <em>{b === "all" ? runs.length : counts[b as Bucket]}</em>
+            </button>
+          ))}
+        </div>
         <button type="button" className="cap-btn" onClick={onAdvance} disabled={!!busy}
                 data-testid="dw-advance">
           {busy === "Advance" ? "Advancing…" : "Advance now"}
         </button>
       </div>
-      {[...runs].sort(byLiveness).map((run) => {
+      {shown.length === 0 ? (
+        <p className="dw-empty detail" data-testid="dw-none-in-bucket">
+          Nothing {BUCKET_LABEL[bucket].toLowerCase()}.
+        </p>
+      ) : null}
+      {shown.map((run) => {
         const open = openRun === run.id;
         return (
           <article key={run.id} className="dw-run" data-status={run.status} data-testid="dw-run">
@@ -666,7 +775,10 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities }: 
               <p className="dw-blocked">{run.blocked_reason}</p>
             ) : null}
             {open ? (
-              <StepPath run={run} capabilities={capabilities} />
+              <StepPath run={run} capabilities={capabilities} targets={targets}
+                        onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
+                        onRerun={() => onRerun(run)} busy={busy}
+                        onSetTarget={(targetId) => onSetTarget(run.id, targetId)} />
             ) : null}
           </article>
         );
@@ -713,7 +825,11 @@ function needsYou(step: RunStep): boolean {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities }: { run: Run; capabilities: Capability[] }) {
+function StepPath({ run, capabilities, targets, onRetryStep, onRerun, onSetTarget, busy }: {
+  run: Run; capabilities: Capability[]; targets: DeployTarget[];
+  onRetryStep: (stepId: string) => void; onRerun: () => void;
+  onSetTarget: (targetId: string) => void; busy: string | null;
+}) {
   const byKey = new Map(capabilities.map((c) => [c.key, c]));
   const steps = run.steps;
   // Open on the step that wants attention, then the one in flight, then the first. Landing on
@@ -761,15 +877,38 @@ function StepPath({ run, capabilities }: { run: Run; capabilities: Capability[] 
           );
         })}
       </ol>
-      {current ? <StepDetail step={current} capability={
-        current.capability ? byKey.get(current.capability) : undefined
-      } /> : null}
+      {current ? (
+        <StepDetail
+          step={current}
+          capability={current.capability ? byKey.get(current.capability) : undefined}
+          targets={targets}
+          onRetry={() => onRetryStep(current.step_id)}
+          onSetTarget={(targetId) => onSetTarget(targetId)}
+          busy={busy}
+        />
+      ) : null}
+      {/* START IT AGAIN, FROM THE TOP. A run that failed early had no way back except
+          retyping the directive into the New project form — the workflow, the title and the
+          instructions are all right here. */}
+      <div className="dw-run-actions">
+        <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
+                data-testid="dw-rerun">
+          {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
+        </button>
+        <span className="detail">
+          Starts a new run of {run.workflow_name} with the same input. The existing run is
+          left as it is.
+        </span>
+      </div>
     </div>
   );
 }
 
 /** Everything known about one step, in the order an operator asks for it. */
-function StepDetail({ step, capability }: { step: RunStep; capability?: Capability }) {
+function StepDetail({ step, capability, targets, onRetry, onSetTarget, busy }: {
+  step: RunStep; capability?: Capability; targets: DeployTarget[];
+  onRetry: () => void; onSetTarget: (targetId: string) => void; busy: string | null;
+}) {
   const phase = phaseOf(step);
   const links = stepLinks(step.output || {});
   const approval = step.approval as { mode?: string; approver_role?: string };
@@ -808,10 +947,39 @@ function StepDetail({ step, capability }: { step: RunStep; capability?: Capabili
         <p className="dw-step-gates" data-testid="dw-step-gates">{observedGates(step)}</p>
       ) : null}
 
+      {/* BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that
+          did not exist, a service that was down — had no way back: the run sat stopped and the
+          only recourse was to start the whole workflow again and repeat everything before it. */}
+      {["failed", "deadlettered", "cancelled"].includes(step.status) ? (
+        <div className="dw-step-decide">
+          <button type="button" className="cap-btn primary" onClick={onRetry} disabled={!!busy}
+                  data-testid="dw-step-retry">
+            {busy === "Retry" ? "Queueing…" : `Try ${capability?.label ?? step.step_id} again`}
+          </button>
+          <span className="detail">Runs this step only; everything before it stays done.</span>
+        </div>
+      ) : null}
+
       {/* ANSWER THE APPROVAL WHERE IT IS SEEN. A gate answerable only in another area makes the
           operator leave the screen that told them it was waiting. */}
       {needsYou(step) ? (
         <div className="dw-step-decide" data-testid="dw-step-decide">
+          {/* WHERE IT SHIPS is part of the release decision, not a setting somewhere else.
+              `deploy` takes an optional target_id and optional inputs are filled from the run
+              input, so choosing here is the same mechanism the workflow already uses. */}
+          {step.capability === "deploy" && targets.length ? (
+            <label className="mr-field-label dw-target">
+              Ship to
+              <select className="mr-select" data-testid="dw-deploy-target"
+                      defaultValue="" disabled={!!busy}
+                      onChange={(e) => { if (e.target.value) onSetTarget(e.target.value); }}>
+                <option value="">Choose a target…</option>
+                {targets.map((t) => (
+                  <option key={t.id} value={t.id}>{t.app_name} · {t.environment}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <form action={resolveDecisionAction}>
             <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
             <input type="hidden" name="action" value="approve" />
@@ -819,7 +987,7 @@ function StepDetail({ step, capability }: { step: RunStep; capability?: Capabili
           </form>
           <form action={resolveDecisionAction}>
             <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
-            <input type="hidden" name="action" value="decline" />
+            <input type="hidden" name="action" value="reject" />
             <button type="submit" className="cap-btn dw-decide-btn">Deny</button>
           </form>
         </div>
