@@ -7853,3 +7853,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .dw-target { display: grid; gap: 4px; min-width: 210px; }
 .dw-target select { font-size: 12px; }
+
+/* A denial is a decision, not a crash: same row, different voice. */
+.dw-blocked[data-denied="true"] { color: var(--warn, #d29922); }
+.dw-target-set { margin: 0; font-size: 12px; }

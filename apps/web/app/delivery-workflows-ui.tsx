@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref } from "./url-intent";
 import { resolveDecisionAction } from "./actions";
+import { SubmitButton } from "./submit-button";
 
 /**
  * Delivery workflows: choose one, watch it run, build your own.
@@ -105,6 +106,9 @@ type RunStep = {
   // The gate's decision, which is what makes Approve/Deny answerable here rather than only in
   // the Approvals area.
   decision_id: string | null;
+  /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
+   *  The one recorded in `output` was live when the step ran, and previews expire. */
+  live_preview_url?: string | null;
 };
 
 type Run = {
@@ -328,6 +332,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   // WHERE THIS PROJECT CAN SHIP. Fetched once for the release gate: choosing a target is part
   // of the deploy decision, and a gate that only says yes/no cannot express "yes, to staging".
   const [targets, setTargets] = useState<DeployTarget[]>([]);
+  const [hosts, setHosts] = useState<DeployHost[]>([]);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -340,6 +345,15 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         if (alive) setTargets((body.items ?? []).filter(
           (t: DeployTarget) => (t.status ?? "active") === "active"));
       } catch { /* the gate still works; it just cannot offer a target */ }
+      try {
+        const res = await fetch(
+          `/api/deployment-hosts?project_id=${encodeURIComponent(projectId)}`,
+          { cache: "no-store" });
+        if (!res.ok) return;
+        const body = await res.json();
+        if (alive) setHosts((body.items ?? []).filter(
+          (h: DeployHost) => ["verified", "ready", "active"].includes(h.status ?? "")));
+      } catch { /* no hosts offered; the operator can still deny */ }
     })();
     return () => { alive = false; };
   }, [projectId]);
@@ -461,7 +475,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       {tab === "running" ? (
         <RunsView
           runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
-          capabilities={capabilities} targets={targets}
+          capabilities={capabilities} targets={targets} hosts={hosts}
           // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
           // waiting on a person cannot be ticked forward — and a button that always says
           // "done" is indistinguishable from a button that does nothing.
@@ -479,6 +493,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             act("Retry", "retry_step", { run_id: runId, step_id: stepId })}
           onSetTarget={(runId, targetId) =>
             act("Set target", "set_input", { run_id: runId, values: { target_id: targetId } })}
+          onPrepareTarget={(runId, hostId) =>
+            act("Prepare target", "prepare_target",
+                { run_id: runId, host_id: hostId, environment: "staging" })}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: run.input ?? {},
           })}
@@ -653,8 +670,14 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
   // START_PREVIEW NESTS ITS RESULT. The tool returns `{preview: {url, id, ...}}`, and this
   // looked only for a flat `preview_url` — so the one link an operator most wants, to the app
   // they just built, was the one that never appeared.
+  //
+  // `live_preview_url` wins when the API supplies it: the step recorded the preview that was
+  // live WHEN IT RAN, and previews expire and are replaced, so the recorded one answers
+  // "preview not running (status=expired)" while the app is up on a new URL.
   const nested = output.preview as { url?: string } | undefined;
-  const preview = str("preview_url") || (typeof nested?.url === "string" ? nested.url : "");
+  const preview = str("live_preview_url")
+    || str("preview_url")
+    || (typeof nested?.url === "string" ? nested.url : "");
   if (preview) out.push({ label: "open the preview", href: preview, external: true });
   return out;
 }
@@ -663,6 +686,14 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
 /** Somewhere this project can ship to. Offered at the release gate so "deploy" is a choice
  *  about WHERE, not just whether. */
 type DeployTarget = { id: string; app_name: string; environment: string; status?: string };
+
+/** A machine this project can ship to. Choosing one is what MAKES a target: `deploy_app`
+ *  refuses without an active target and never creates infrastructure itself, so a project
+ *  built for the first time had nowhere to go. */
+type DeployHost = { id: string; name: string; address?: string; status?: string };
+
+/** How the runtime words a gate somebody said no to. */
+const DENIED = /^step '(.+)' was rejected$/;
 
 const BUCKETS = ["needs_you", "running", "blocked", "done"] as const;
 type Bucket = typeof BUCKETS[number];
@@ -675,7 +706,7 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onSetTarget, targets }: {
+                   onRetryStep, onRerun, onSetTarget, onPrepareTarget, targets, hosts }: {
   runs: Run[];
   openRun: string | null;
   setOpenRun: (id: string | null) => void;
@@ -685,7 +716,9 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   onRetryStep: (runId: string, stepId: string) => void;
   onRerun: (run: Run) => void;
   onSetTarget: (runId: string, targetId: string) => void;
+  onPrepareTarget: (runId: string, hostId: string) => void;
   targets: DeployTarget[];
+  hosts: DeployHost[];
 }) {
   const [bucket, setBucket] = useState<Bucket | "all">("all");
   if (runs.length === 0) {
@@ -772,13 +805,23 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
               ) : null}
             </button>
             {run.blocked_reason ? (
-              <p className="dw-blocked">{run.blocked_reason}</p>
+              // A DENIED RELEASE IS A DECISION, NOT A FAULT. "step 'deploy' was rejected"
+              // rendered in the same red as a crash, with no hint of what happens next — so a
+              // deliberate no looked like a failure the operator had to debug.
+              <p className="dw-blocked" data-denied={DENIED.test(run.blocked_reason)}
+                 data-testid="dw-blocked">
+                {DENIED.test(run.blocked_reason)
+                  ? `You denied ${run.blocked_reason.replace(DENIED, "$1")}. Nothing shipped — `
+                    + "reopen it with “Try … again”, or leave the run as it is."
+                  : run.blocked_reason}
+              </p>
             ) : null}
             {open ? (
-              <StepPath run={run} capabilities={capabilities} targets={targets}
+              <StepPath run={run} capabilities={capabilities} targets={targets} hosts={hosts}
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} busy={busy}
-                        onSetTarget={(targetId) => onSetTarget(run.id, targetId)} />
+                        onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
+                        onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)} />
             ) : null}
           </article>
         );
@@ -825,10 +868,12 @@ function needsYou(step: RunStep): boolean {
  * opens everything known about that step below it — duration, error, what it produced, and the
  * doors to the pages where it can be debugged.
  */
-function StepPath({ run, capabilities, targets, onRetryStep, onRerun, onSetTarget, busy }: {
-  run: Run; capabilities: Capability[]; targets: DeployTarget[];
+function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onSetTarget,
+                   onPrepareTarget, busy }: {
+  run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void;
-  onSetTarget: (targetId: string) => void; busy: string | null;
+  onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
+  busy: string | null;
 }) {
   const byKey = new Map(capabilities.map((c) => [c.key, c]));
   const steps = run.steps;
@@ -882,8 +927,11 @@ function StepPath({ run, capabilities, targets, onRetryStep, onRerun, onSetTarge
           step={current}
           capability={current.capability ? byKey.get(current.capability) : undefined}
           targets={targets}
+          hosts={hosts}
+          runInput={run.input ?? {}}
           onRetry={() => onRetryStep(current.step_id)}
           onSetTarget={(targetId) => onSetTarget(targetId)}
+          onPrepareTarget={onPrepareTarget}
           busy={busy}
         />
       ) : null}
@@ -904,13 +952,93 @@ function StepPath({ run, capabilities, targets, onRetryStep, onRerun, onSetTarge
   );
 }
 
+/**
+ * WHERE THIS SHIPS — the half of the release decision that was missing.
+ *
+ * `deploy_app` refuses unless an ACTIVE target exists for the environment, and it never creates
+ * one: it does not make infrastructure. So a project built for the first time had nowhere to
+ * go, and the gate could only offer targets belonging to OTHER apps — picking one would have
+ * shipped this app over somebody else's.
+ *
+ * Choosing a HOST is the act that was missing. A target is that host plus this app's name, its
+ * environment and a free port, and the button that makes one also points the run at it.
+ */
+function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTarget }: {
+  targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
+  busy: string | null;
+  onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
+}) {
+  const chosenId = typeof runInput.target_id === "string" ? runInput.target_id : "";
+  const chosen = targets.find((t) => t.id === chosenId);
+  const appName = typeof runInput.title === "string" ? runInput.title : "";
+  // A target for THIS app, not one of the others. Matching by name is how the API keys them.
+  const mine = targets.filter((t) => t.app_name === appName);
+
+  if (chosen) {
+    return (
+      <p className="dw-target-set" data-testid="dw-deploy-chosen">
+        Ships to <b>{chosen.app_name}</b> · {chosen.environment}
+      </p>
+    );
+  }
+  if (mine.length) {
+    return (
+      <label className="mr-field-label dw-target">
+        Ship to
+        <select className="mr-select" data-testid="dw-deploy-target" defaultValue=""
+                disabled={!!busy}
+                onChange={(e) => { if (e.target.value) onSetTarget(e.target.value); }}>
+          <option value="">Choose a target…</option>
+          {mine.map((t) => (
+            <option key={t.id} value={t.id}>{t.app_name} · {t.environment}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+  if (hosts.length) {
+    return (
+      <label className="mr-field-label dw-target">
+        Ship to a host
+        <select className="mr-select" data-testid="dw-deploy-host" defaultValue=""
+                disabled={!!busy}
+                onChange={(e) => { if (e.target.value) onPrepareTarget(e.target.value); }}>
+          <option value="">
+            {busy === "Prepare target" ? "Preparing…" : "Choose a host…"}
+          </option>
+          {hosts.map((h) => (
+            <option key={h.id} value={h.id}>{h.name}{h.address ? ` · ${h.address}` : ""}</option>
+          ))}
+        </select>
+        <span className="detail">
+          This app has no target yet. Choosing a host creates one for it — name, environment and
+          a free port — and points this run at it.
+        </span>
+      </label>
+    );
+  }
+  return (
+    <p className="dw-target-set detail" data-testid="dw-deploy-nowhere">
+      Nowhere to ship: this project has no verified host. Add one under Infra and Models, then
+      come back — approving now would fail at the first connection.
+    </p>
+  );
+}
+
 /** Everything known about one step, in the order an operator asks for it. */
-function StepDetail({ step, capability, targets, onRetry, onSetTarget, busy }: {
-  step: RunStep; capability?: Capability; targets: DeployTarget[];
-  onRetry: () => void; onSetTarget: (targetId: string) => void; busy: string | null;
+function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
+                     onPrepareTarget, busy }: {
+  step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
+  runInput: Record<string, unknown>;
+  onRetry: () => void; onSetTarget: (targetId: string) => void;
+  onPrepareTarget: (hostId: string) => void; busy: string | null;
 }) {
   const phase = phaseOf(step);
-  const links = stepLinks(step.output || {});
+  // The live preview is resolved per-step by the API and lives ON the step, not in the output
+  // the runtime recorded — merged here so the link builder sees one object.
+  const links = stepLinks({ ...(step.output || {}),
+                            ...(step.live_preview_url
+                                ? { live_preview_url: step.live_preview_url } : {}) });
   const approval = step.approval as { mode?: string; approver_role?: string };
   const produced = Object.entries(step.output || {})
     .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
@@ -967,28 +1095,23 @@ function StepDetail({ step, capability, targets, onRetry, onSetTarget, busy }: {
           {/* WHERE IT SHIPS is part of the release decision, not a setting somewhere else.
               `deploy` takes an optional target_id and optional inputs are filled from the run
               input, so choosing here is the same mechanism the workflow already uses. */}
-          {step.capability === "deploy" && targets.length ? (
-            <label className="mr-field-label dw-target">
-              Ship to
-              <select className="mr-select" data-testid="dw-deploy-target"
-                      defaultValue="" disabled={!!busy}
-                      onChange={(e) => { if (e.target.value) onSetTarget(e.target.value); }}>
-                <option value="">Choose a target…</option>
-                {targets.map((t) => (
-                  <option key={t.id} value={t.id}>{t.app_name} · {t.environment}</option>
-                ))}
-              </select>
-            </label>
+          {step.capability === "deploy" ? (
+            <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
+                         onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
           ) : null}
           <form action={resolveDecisionAction}>
             <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
             <input type="hidden" name="action" value="approve" />
-            <button type="submit" className="cap-btn primary dw-decide-btn">Approve</button>
+            <SubmitButton className="cap-btn primary dw-decide-btn" data-testid="dw-approve">
+              Approve
+            </SubmitButton>
           </form>
           <form action={resolveDecisionAction}>
             <input type="hidden" name="decision_id" value={step.decision_id ?? ""} />
             <input type="hidden" name="action" value="reject" />
-            <button type="submit" className="cap-btn dw-decide-btn">Deny</button>
+            <SubmitButton className="cap-btn dw-decide-btn" data-testid="dw-deny">
+              Deny
+            </SubmitButton>
           </form>
         </div>
       ) : null}

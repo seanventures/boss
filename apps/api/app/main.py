@@ -19980,6 +19980,29 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "completed_at": step["completed_at"].isoformat() if step["completed_at"] else None,
         })
 
+    # A PREVIEW LINK THAT STILL WORKS.
+    #
+    # The preview step records the preview that was live WHEN IT RAN, and previews expire and
+    # are replaced. So the workflow offered a dead URL — "preview not running (status=expired)"
+    # — while the project page, which looks the preview up fresh, opened the live one. A link
+    # that 404s is worse than no link: it says the thing is broken when it is running.
+    live_preview: dict[str, str] = {}
+    task_ids = {
+        str(((s["output"] or {}).get("await") or {}).get("id")
+            or (s["output"] or {}).get("code_task_run_id") or "")
+        for s in steps
+    }
+    task_ids.discard("")
+    if task_ids:
+        with begin(engine) as connection:
+            for row in connection.execute(
+                text("SELECT DISTINCT ON (run_id) run_id, url FROM app_previews "
+                     "WHERE run_id = ANY(:ids) AND status = 'running' AND url IS NOT NULL "
+                     "ORDER BY run_id, created_at DESC"),
+                {"ids": list(task_ids)},
+            ).mappings():
+                live_preview[row["run_id"]] = row["url"]
+
     out = []
     for run in runs:
         order = spec_order.get(run["id"], {})
@@ -19989,6 +20012,25 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             # unusual, and burying the known sequence under it would be the worse failure.
             key=lambda step: order.get(step["step_id"], len(order) + 1),
         )
+        # Attach the CURRENT preview to whichever step is about previewing, so the console
+        # links to what is running rather than to what once was.
+        # THIS RUN'S OWN BUILD, never somebody else's. Falling back to "any running preview"
+        # would link an operator to a different app entirely, which is the same failure in a
+        # new place.
+        own_task = str((run["input"] or {}).get("adopt_code_task_run_id") or "")
+        if not own_task:
+            for step in run_steps:
+                candidate = (step["output"] or {}).get("code_task_run_id") \
+                    or ((step["output"] or {}).get("await") or {}).get("id")
+                if isinstance(candidate, str) and candidate.startswith("crun_"):
+                    own_task = candidate
+                    break
+        url = live_preview.get(own_task) if own_task else None
+        if url:
+            for step in run_steps:
+                if step.get("capability") == "preview":
+                    step["live_preview_url"] = url
+
         done = sum(1 for s in run_steps if s["status"] in ("succeeded", "skipped"))
         current = next(
             (s for s in run_steps if s["status"] in ("waiting", "running", "leased", "ready")),
@@ -20292,6 +20334,125 @@ def retry_delivery_step(run_id: str, payload: dict) -> dict:
             {"r": run_id, "p": project_id},
         )
     return {"run_id": run_id, "step_id": step_id, "status": "ready"}
+
+
+@app.post("/v1/delivery-workflows/runs/{run_id}/deploy-target")
+def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
+    """Give this run somewhere to ship to, and point its deploy step at it.
+
+    `deploy_app` refuses unless an ACTIVE target already exists for the environment, and it
+    never creates one — by design, it does not make infrastructure. So the release gate could
+    offer only targets belonging to OTHER apps, and a project that had just been built for the
+    first time had no way to be deployed at all. Choosing a HOST is the missing act: a target is
+    that host plus this app's name, environment and port.
+
+    Idempotent: an app already registered for this environment is reused rather than refused,
+    because pressing the button twice should not be an error.
+    """
+    project_id = str(payload.get("project_id") or "").strip()
+    host_id = str(payload.get("host_id") or "").strip()
+    environment = str(payload.get("environment") or "staging").strip()
+    actor = str(payload.get("actor") or "operator").strip()
+    if not project_id or not host_id:
+        raise HTTPException(status_code=400, detail="project_id and host_id are required")
+
+    with begin(engine) as connection:
+        run = connection.execute(
+            text("SELECT input FROM workflow_runs WHERE id=:r AND project_id=:p"),
+            {"r": run_id, "p": project_id},
+        ).mappings().first()
+        if not run:
+            raise HTTPException(status_code=404, detail="run not found")
+        run_input = run["input"] or {}
+        app_name = str(run_input.get("title") or "").strip()
+        code_task_run_id = str(run_input.get("adopt_code_task_run_id") or "").strip()
+        repo = str(run_input.get("repository") or "").strip()
+        if code_task_run_id and not repo:
+            repo = connection.execute(
+                text("SELECT spec->>'repo' FROM code_task_runs WHERE id=:r"),
+                {"r": code_task_run_id},
+            ).scalar() or ""
+        if not app_name:
+            raise HTTPException(status_code=422,
+                                detail="this run has no title, so the app has no name")
+
+        host = connection.execute(
+            text("SELECT id, name, address, ssh_user, ssh_port, port_min, port_max, status "
+                 "FROM deployment_hosts WHERE id=:h AND project_id=:p"),
+            {"h": host_id, "p": project_id},
+        ).mappings().first()
+        if not host:
+            raise HTTPException(status_code=404, detail="host not found")
+        if host["status"] not in ("verified", "ready", "active"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"host '{host['name']}' is {host['status']} — it has not been verified, "
+                       f"so shipping to it would fail at the first connection.")
+
+        existing = connection.execute(
+            text("SELECT id, status FROM deployment_targets "
+                 "WHERE project_id=:p AND app_name=:a AND environment=:e"),
+            {"p": project_id, "a": app_name, "e": environment},
+        ).mappings().first()
+        if existing:
+            if existing["status"] != "active":
+                connection.execute(
+                    text("UPDATE deployment_targets SET status='active', updated_at=now() "
+                         "WHERE id=:i"), {"i": existing["id"]})
+            target_id = existing["id"]
+            created = False
+        else:
+            # A PORT NOBODY ELSE IS ON. Existing targets record theirs in `domains` as
+            # host:port, so the ones in use are readable without a separate ledger.
+            taken = set()
+            for row in connection.execute(
+                text("SELECT domains FROM deployment_targets WHERE project_id=:p"),
+                {"p": project_id},
+            ).mappings():
+                for domain in (row["domains"] or []):
+                    _, _, port = str(domain).rpartition(":")
+                    if port.isdigit():
+                        taken.add(int(port))
+            low = int(host["port_min"] or 3000)
+            high = int(host["port_max"] or (low + 200))
+            port = next((n for n in range(low, high + 1) if n not in taken), None)
+            if port is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"host '{host['name']}' has no free port between {low} and {high}.")
+            target_id = make_id("deptgt")
+            connection.execute(text("""
+                INSERT INTO deployment_targets
+                  (id, project_id, app_name, repo, environment, target_kind, target_ref,
+                   domains, required_resources, secret_refs, health_checks, status, created_by,
+                   created_at, updated_at)
+                VALUES (:id,:p,:app,:repo,:env,'ssh',:ref,CAST(:dom AS JSONB),'[]'::jsonb,
+                        '[]'::jsonb,CAST(:hc AS JSONB),'active',:by, now(), now())
+            """), {
+                "id": target_id, "p": project_id, "app": app_name, "repo": repo or "",
+                "env": environment,
+                "ref": f"{host['ssh_user'] or 'root'}@{host['address']}:{host['ssh_port'] or 22}",
+                "dom": json.dumps([f"{host['address']}:{port}"]),
+                "hc": json.dumps([{"kind": "http", "path": "/", "expect": 200,
+                                   "scheme": "http"}]),
+                "by": actor,
+            })
+            created = True
+
+        # AND POINT THE RUN AT IT. `deploy` reads target_id and environment as optional inputs,
+        # filled from the run's own input — so this is the same mechanism, not a new one.
+        connection.execute(
+            text("UPDATE workflow_runs SET input = COALESCE(input,'{}'::jsonb) "
+                 "|| CAST(:v AS JSONB), updated_at=now() WHERE id=:r AND project_id=:p"),
+            {"v": json.dumps({"target_id": target_id, "environment": environment}),
+             "r": run_id, "p": project_id},
+        )
+        target = connection.execute(
+            text("SELECT id, app_name, environment, target_ref, domains FROM deployment_targets "
+                 "WHERE id=:i"), {"i": target_id},
+        ).mappings().first()
+    return {"run_id": run_id, "created": created, "host": host["name"],
+            "target": dict(target)}
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/input")

@@ -479,3 +479,49 @@ describe("managing runs, not just watching them", () => {
     expect(DW2).toContain("pull request #${number}");
   });
 });
+
+describe("deciding a release, and where it ships", () => {
+  const DW3 = codeOnly("app/delivery-workflows-ui.tsx");
+  const CSS3 = codeOnly("app/globals.css");
+
+  it("offers a HOST when the app has no target of its own", () => {
+    // deploy_app refuses without an active target and never creates infrastructure, so a
+    // project built for the first time had nowhere to go — and the gate could only offer
+    // targets belonging to other apps, which would have shipped this one over somebody else's.
+    expect(DW3).toContain("function DeployWhere");
+    expect(DW3).toContain('data-testid="dw-deploy-host"');
+    expect(DW3).toContain('"prepare_target"');
+  });
+
+  it("never offers another app's target", () => {
+    expect(DW3).toContain("targets.filter((t) => t.app_name === appName)");
+  });
+
+  it("says so plainly when there is nowhere to ship", () => {
+    // Better than an empty dropdown, which reads as a broken control.
+    expect(DW3).toContain('data-testid="dw-deploy-nowhere"');
+    expect(DW3).toContain("no verified host");
+  });
+
+  it("shows the press happening", () => {
+    // Approve and Deny were plain buttons on a server action that takes seconds: the page
+    // looked identical before and after, which is how people end up pressing Deny twice.
+    expect(DW3).toContain('data-testid="dw-deny"');
+    expect(DW3).toContain('data-testid="dw-approve"');
+    expect(DW3).toContain("SubmitButton");
+  });
+
+  it("reads a denial as a decision rather than a fault", () => {
+    // "step 'deploy' was rejected" in crash-red, with no hint of what happens next.
+    expect(DW3).toContain("const DENIED =");
+    expect(DW3).toContain("You denied ${");
+    expect(CSS3).toContain('.dw-blocked[data-denied="true"]');
+  });
+
+  it("links the preview that is running, not the one that has expired", () => {
+    // The step recorded the preview live WHEN IT RAN; previews expire and are replaced, so the
+    // recorded one answers "preview not running (status=expired)".
+    expect(DW3).toContain('str("live_preview_url")');
+    expect(DW3).toContain("live_preview_url?: string | null;");
+  });
+});

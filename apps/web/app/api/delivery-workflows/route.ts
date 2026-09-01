@@ -88,6 +88,8 @@ const ACTIONS: Record<string, string> = {
 const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   retry_step: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/retry-step`,
   set_input: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/input`,
+  prepare_target: (id) =>
+    `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/deploy-target`,
 };
 
 export async function POST(req: Request) {
