@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { workflowHref } from "./actions-href";
+import { orgFromReferer, workflowHref } from "./actions-href";
 import { BossApiError, type DataBoundary, type LlmCallRow } from "@boss/api-client";
 import { API_URL, client, PROJECT_ID, resolveProjectId, authHeaders} from "../lib/client";
 import { buildCommandRequest } from "../lib/commands";
@@ -717,7 +718,9 @@ export async function resolveDecisionAction(formData: FormData): Promise<void> {
   // there is no run id to carry yet — but the Workflow page polls, and a run that appears a few
   // seconds later sorts to the top because it is live. Only for `approve`: rejecting a spec
   // starts nothing, and sending someone to watch an empty pipeline would be a lie.
-  if (action === "approve") redirect(workflowHref(null));
+  if (action === "approve") {
+    redirect(workflowHref(null, orgFromReferer((await headers()).get("referer"))));
+  }
 }
 
 export async function submitCommandAction(formData: FormData): Promise<void> {
@@ -3064,7 +3067,8 @@ export async function createCodeTaskAction(formData: FormData): Promise<void> {
   // with no sign anything had happened — the run they wanted to watch was two clicks away in
   // another area, and they had to know to look. `redirect` throws, so it must be the last
   // thing here and outside any try.
-  redirect(workflowHref(created?.workflow_run_id ?? null));
+  redirect(workflowHref(created?.workflow_run_id ?? null,
+                        orgFromReferer((await headers()).get("referer"))));
 }
 
 /**

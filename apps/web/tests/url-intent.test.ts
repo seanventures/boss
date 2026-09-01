@@ -147,3 +147,70 @@ describe("where you land after starting a project", () => {
     expect(new URLSearchParams(href.split("?")[1]).get("wfr")).toBeNull();
   });
 });
+
+/**
+ * "Select your organization", mid-run.
+ *
+ * The console gates on `?org=`. Every href built from scratch — `?area=code_tasks&run=…` —
+ * dropped it, so the workflow's own "open the project" and "activity log" links, and the
+ * redirect after creating a project, threw the operator onto the organisation picker. It reads
+ * as being logged out, and it happened repeatedly because several links did it.
+ */
+describe("a link inside the console keeps who you are", () => {
+  it("carries the org", async () => {
+    const { consoleHref } = await import("../app/url-intent");
+    const href = consoleHref("?org=org_boss&area=delivery_workflows",
+                             { area: "code_tasks", run: "crun_1" });
+    const p = new URLSearchParams(href.slice(1));
+    expect(p.get("org")).toBe("org_boss");
+    expect(p.get("area")).toBe("code_tasks");
+    expect(p.get("run")).toBe("crun_1");
+  });
+
+  it("accepts the other spelling links have shipped with", async () => {
+    const { consoleHref } = await import("../app/url-intent");
+    const href = consoleHref("?org_id=org_boss", { area: "meetings" });
+    expect(new URLSearchParams(href.slice(1)).get("org_id")).toBe("org_boss");
+  });
+
+  it("does not carry a one-shot command along with a link to a place", async () => {
+    const { consoleHref } = await import("../app/url-intent");
+    const href = consoleHref("?org=org_boss&new=1", { area: "code_tasks" });
+    expect(new URLSearchParams(href.slice(1)).get("new")).toBeNull();
+  });
+
+  it("drops what the destination replaces", async () => {
+    // Opening the panel should not carry the previous screen's run id.
+    const { consoleHref } = await import("../app/url-intent");
+    const href = consoleHref("?org=org_boss&run=crun_old", { area: "meetings" });
+    expect(new URLSearchParams(href.slice(1)).get("run")).toBeNull();
+  });
+});
+
+describe("the redirect after starting a project keeps who you are", () => {
+  it("puts the org in the destination", async () => {
+    const { workflowHref } = await import("../app/actions-href");
+    const p = new URLSearchParams(workflowHref("wfr_1", "org_boss").split("?")[1]);
+    expect(p.get("org")).toBe("org_boss");
+    expect(p.get("area")).toBe("delivery_workflows");
+    expect(p.get("wfr")).toBe("wfr_1");
+  });
+
+  it("lifts the org from the page that submitted the form", async () => {
+    // A server action has no URL of its own; the referer is the page the operator was on, and
+    // it carries the org because the console cannot render without one.
+    const { orgFromReferer } = await import("../app/actions-href");
+    expect(orgFromReferer("https://boss.local.sean.network/?org=org_boss&area=code_tasks"))
+      .toBe("org_boss");
+    expect(orgFromReferer("https://boss.local.sean.network/?org_id=org_boss")).toBe("org_boss");
+  });
+
+  it("survives a missing or unparseable referer", async () => {
+    // Still navigates — the org gate is recoverable; a crashed action is not.
+    const { orgFromReferer, workflowHref } = await import("../app/actions-href");
+    for (const bad of [null, undefined, "", "not a url"]) {
+      expect(orgFromReferer(bad)).toBeNull();
+    }
+    expect(workflowHref("wfr_1", null)).toContain("area=delivery_workflows");
+  });
+});

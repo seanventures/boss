@@ -1,6 +1,6 @@
 "use client";
 
-import { searchForNewProject } from "./url-intent";
+import { IDENTITY_PARAMS, searchForNewProject } from "./url-intent";
 import { isInConsoleLink } from "./console-href";
 import { ConsoleToggle } from "../components/v2/ConsoleToggle";
 import { AgentChat } from "./agent-ui";
@@ -493,6 +493,18 @@ export default function ConsoleShell({
         knownAreas: AREAS.map((a) => a.id),
       })) return;
       const area = url.searchParams.get("area") as AreaId;
+
+      // KEEP WHO YOU ARE, WHATEVER THE LINK SAYS.
+      //
+      // The console gates on `?org=`: a URL without it renders "Select your organization".
+      // Any in-console link written as `?area=…` — and several were — dropped it, so following
+      // one mid-session read as being logged out. Restored here, at the single place every one
+      // of these links passes through, so a link written without it cannot break the session.
+      for (const key of IDENTITY_PARAMS) {
+        if (url.searchParams.get(key)) continue;
+        const mine = new URLSearchParams(window.location.search).get(key);
+        if (mine) url.searchParams.set(key, mine);
+      }
 
       event.preventDefault();
       window.history.pushState({}, "", url.toString());

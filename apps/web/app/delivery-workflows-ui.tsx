@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { uniqueWorkflowName } from "./workflow-names";
+import { consoleHref } from "./url-intent";
 import { resolveDecisionAction } from "./actions";
 
 /**
@@ -574,21 +575,28 @@ function stepDuration(step: { started_at?: string | null; completed_at?: string 
  */
 function stepLinks(output: Record<string, unknown>): Array<{ label: string; href: string; external?: boolean }> {
   const out: Array<{ label: string; href: string; external?: boolean }> = [];
+  // KEEP WHO YOU ARE. These hrefs were built from scratch — `?area=code_tasks&run=…` — which
+  // dropped `?org=`, and the console gates on that: no org means the organisation picker. So
+  // every one of these links threw the operator onto "Select your organization" and read as
+  // the session expiring mid-run.
+  const here = typeof window !== "undefined" ? window.location.search : "";
+  const link = (params: Record<string, string | null | undefined>) => consoleHref(here, params);
   const str = (k: string) => (typeof output[k] === "string" ? (output[k] as string) : "");
   const awaited = (output.await as { kind?: string; id?: string } | undefined) ?? {};
 
   const codeTask = str("code_task_run_id") || (awaited.kind === "code_task" ? awaited.id ?? "" : "")
     || (output.capability === "build" ? str("run_id") : "");
   if (codeTask) {
-    out.push({ label: "open the project", href: `?area=code_tasks&run=${encodeURIComponent(codeTask)}` });
+    out.push({ label: "open the project", href: link({ area: "code_tasks", run: codeTask }) });
     // Debugging a step means reading what it actually did, filtered to this work.
-    out.push({ label: "activity log", href: `?area=activity&run=${encodeURIComponent(codeTask)}` });
-    out.push({ label: "Ask BOSS", href: `?area=code_tasks&run=${encodeURIComponent(codeTask)}&agent=${encodeURIComponent(codeTask)}` });
+    out.push({ label: "activity log", href: link({ area: "activity", run: codeTask }) });
+    out.push({ label: "Ask BOSS",
+               href: link({ area: "code_tasks", run: codeTask, agent: codeTask }) });
   }
   const meeting = str("meeting_run_id") || (awaited.kind === "meeting" ? awaited.id ?? "" : "");
-  if (meeting) out.push({ label: "open the panel", href: `?area=meetings` });
+  if (meeting) out.push({ label: "open the panel", href: link({ area: "meetings" }) });
   const discovery = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
-  if (discovery) out.push({ label: "open the research", href: `?area=discovery` });
+  if (discovery) out.push({ label: "open the research", href: link({ area: "discovery" }) });
   const pr = str("pull_request_url");
   if (pr) out.push({ label: "pull request", href: pr, external: true });
   const preview = str("preview_url");

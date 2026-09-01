@@ -78,3 +78,35 @@ export function searchForNewProject(search: string): string {
   params.delete("agent");
   return `?${params.toString()}`;
 }
+
+
+/** Parameters that identify WHO you are looking at this console as. Losing one drops the
+ *  operator on the organisation picker mid-session, which reads as being logged out. */
+export const IDENTITY_PARAMS = ["org", "org_id"] as const;
+
+/**
+ * A link to somewhere else in the console, keeping who you are.
+ *
+ * Every href built from scratch — `?area=code_tasks&run=…` — silently dropped `?org=`, and the
+ * page gates on that: no org in the URL means the organisation picker. So the workflow's own
+ * "open the project" and "activity log" links, and the redirect after creating a project,
+ * threw the operator back to "Select your organization" and looked like a session expiring.
+ *
+ * Built from the CURRENT query string so identity survives, with the one-shot commands dropped
+ * because a link to a place is not a request to start something.
+ */
+export function consoleHref(
+  currentSearch: string, params: Record<string, string | null | undefined>,
+): string {
+  const next = new URLSearchParams();
+  const now = new URLSearchParams(currentSearch);
+  for (const key of IDENTITY_PARAMS) {
+    const value = now.get(key);
+    if (value) next.set(key, value);
+  }
+  for (const [key, value] of Object.entries(params)) {
+    if (value) next.set(key, value);
+  }
+  const rest = next.toString();
+  return rest ? `?${rest}` : "";
+}

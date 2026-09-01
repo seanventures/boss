@@ -359,3 +359,21 @@ describe("a phase that was restarted says so", () => {
     expect(CT_SRC).toContain("_fc.redelivered_attempts");
   });
 });
+
+describe("following a link never logs you out", () => {
+  const SHELL_SRC = codeOnly("app/ConsoleShell.tsx");
+  const DW_SRC = codeOnly("app/delivery-workflows-ui.tsx");
+
+  it("restores identity at the one place every in-console link passes through", () => {
+    // The console renders "Select your organization" for any URL without `?org=`. Links
+    // written as `?area=…` dropped it, so following one mid-session read as being logged out.
+    // Fixed in the interceptor so a link written without it cannot break the session.
+    expect(SHELL_SRC).toContain("for (const key of IDENTITY_PARAMS)");
+    expect(SHELL_SRC).toContain("url.searchParams.set(key, mine)");
+  });
+
+  it("and the workflow's own step links build from the current URL", () => {
+    expect(DW_SRC).toContain("consoleHref(here, params)");
+    expect(DW_SRC).not.toContain("href: `?area=code_tasks&run=");
+  });
+});
