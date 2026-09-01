@@ -1,6 +1,7 @@
 import argparse
 import logging
 import signal
+import threading
 import time
 
 from apps.api.app.db import database_is_reachable, get_engine
@@ -326,6 +327,41 @@ def _advance_delivery_workflows(client: ControlPlaneClient, settings) -> None:
         LOGGER.debug("delivery_workflow_tick_failed", exc_info=True)
 
 
+
+def _run_background_sweeps(settings) -> None:
+    """Sweeps that must keep running WHILE the worker is busy, on their own thread.
+
+    `run_worker_cycle` blocks for the entire duration of a job — a governed code task is
+    forty-five minutes of blocking — and every periodic sweep sat below it in the same loop,
+    behind `if not ran_job`. So the two things whose whole purpose is to watch work in flight
+    could only run when there was no work in flight.
+
+    Measured on wfr_c8578ea1abbf4a1383cc: its `build` step waited 46m47s on a code task that had
+    already finished, opened its pull request and passed its tests. Driving the same tick by
+    hand completed the step in 6 seconds. Nothing was wrong with the tick; it was never called.
+
+    Its own client, because the main loop is using the other one on another thread and an HTTP
+    session shared across threads is a race nobody wants to debug at 2am. Daemon, so a stop
+    signal does not wait on it.
+    """
+    client = ControlPlaneClient(settings.control_plane_url, api_key=settings.api_key)
+    try:
+        while not _STOPPING:
+            # Each of these keeps its own interval guard, so this loop can tick often and
+            # cheaply without changing how frequently any individual sweep actually runs.
+            try:
+                _advance_delivery_workflows(client, settings)
+                _watch_running_tasks(client)
+            except Exception:  # noqa: BLE001 — a sweep must never take the worker down
+                LOGGER.debug("background_sweep_failed", exc_info=True)
+            for _ in range(5):
+                if _STOPPING:
+                    break
+                time.sleep(1)
+    finally:
+        client.close()
+
+
 def _prune_activity_log(client: ControlPlaneClient) -> None:
     """Age out captured transcripts past the retention window.
 
@@ -394,6 +430,12 @@ def main() -> None:
             run_worker_cycle(client, settings)
             return
 
+        # WATCHING WORK IN FLIGHT CANNOT WAIT FOR THE WORKER TO BE IDLE. See
+        # _run_background_sweeps: the main loop blocks for the whole of a job, so anything
+        # sharing it only runs between jobs.
+        threading.Thread(target=_run_background_sweeps, args=(settings,),
+                         name="boss-worker-sweeps", daemon=True).start()
+
         while not _STOPPING:
             try:
                 ran_job = run_worker_cycle(client, settings)
@@ -414,11 +456,12 @@ def main() -> None:
                 break
             if not ran_job:
                 _sweep_deployment_health(client)
-                _watch_running_tasks(client)
                 _run_shepherd_autopilot(client, settings)
                 _sweep_qa_benchmark_evaluations(client)
                 _prune_activity_log(client)
-                _advance_delivery_workflows(client, settings)
+                # _advance_delivery_workflows and _watch_running_tasks now run on their own
+                # thread — see _run_background_sweeps. Leaving them here too would double every
+                # call for no benefit.
                 # Interruptible sleep: an idle worker that is asked to stop should not hold the
                 # deploy open for a full poll interval doing nothing.
                 for _ in range(max(1, int(settings.poll_interval_seconds))):
