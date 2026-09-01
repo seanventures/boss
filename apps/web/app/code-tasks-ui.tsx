@@ -1965,13 +1965,16 @@ function agentLabel(role: string | null | undefined): string {
  * Phases with no model call still appear — cloning a repo takes time and no agent — because a
  * timing table that silently drops the slow non-model steps mis-attributes the wall clock.
  */
-function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs, totalMs }: {
+function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs, totalMs,
+                        redelivered }: {
   runId: string;
   live: boolean;
   phaseTimings: { ms: number; phase: string }[];
   currentPhase: string | null;
   currentPhaseMs: number | null;
   totalMs: number;
+  /** This run was re-delivered: an earlier attempt lost its lease and its work was replayed. */
+  redelivered: boolean;
 }) {
   const [calls, setCalls] = useState<LlmCallRow[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -1989,13 +1992,16 @@ function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs
   // Phases carry the WALL CLOCK; calls carry who did it and what it cost. Nesting the calls
   // under their phase is what makes this one table instead of two lists of the same work.
   const used = new Set<number>();
-  const groups = phaseTimings.map((t) => {
+  const groups = phaseTimings.map((t, i) => {
     const stages = PHASE_STAGES[t.phase] ?? [t.phase];
     const mine = calls
       .map((c, i) => ({ c, i }))
       .filter(({ c, i }) => !used.has(i) && stages.includes(c.stage));
     mine.forEach(({ i }) => used.add(i));
-    return { phase: t.phase, ms: t.ms, calls: mine.map((x) => x.c) };
+    // A phase that appears AGAIN after an earlier copy of itself, on a run the worker
+    // re-delivered, is the interrupted attempt being redone — not new work.
+    const replayed = redelivered && phaseTimings.slice(0, i).some((p) => p.phase === t.phase);
+    return { phase: t.phase, ms: t.ms, calls: mine.map((x) => x.c), replayed };
   });
   // Calls whose stage no phase claimed still belong on the screen — dropping them would hide
   // spend, and hidden spend is the worst thing this table could do.
@@ -2039,8 +2045,16 @@ function CodeTaskSteps({ runId, live, phaseTimings, currentPhase, currentPhaseMs
             {g.calls.length > 0 ? (
               <div className="ct-phase-calls">{g.calls.map((c, j) => <CallRow c={c} key={j} />)}</div>
             ) : loaded ? (
-              // Said once, quietly. A row of dashes across four columns reads as missing data.
-              <div className="ct-phase-nocall">no model call — BOSS's own machinery</div>
+              // A REPLAYED PHASE IS NOT MACHINERY. When the run was re-delivered, the same
+              // phase appears twice and the second copy finds no unclaimed call to show — so
+              // this said "no model call — BOSS's own machinery" about thirty minutes of work
+              // that was thrown away when a lease expired. Saying which it is turns an
+              // inexplicable duration into a legible one.
+              <div className="ct-phase-nocall" data-testid={g.replayed ? "ct-phase-replayed" : undefined}>
+                {g.replayed
+                  ? "restarted — the previous attempt was interrupted and its work was lost"
+                  : "no model call — BOSS's own machinery"}
+              </div>
             ) : null}
           </div>
         ))}
@@ -2273,6 +2287,8 @@ function CodeTaskDetail({ run, previews = [], onBack }: { run: CodeTaskRun; prev
           "what took 16 minutes, and who was doing it". They are one thing: a step, the agent
           that owns it, the model it used, and what it cost. */}
       <CodeTaskSteps runId={run.id} live={live} phaseTimings={phaseTimings}
+                     redelivered={Array.isArray(_fc.redelivered_attempts)
+                       && (_fc.redelivered_attempts as unknown[]).length > 0}
                      currentPhase={live ? (PHASE_LABEL[run.phase] ?? run.phase) : null}
                      currentPhaseMs={currentPhaseMs} totalMs={totalMs} />
 

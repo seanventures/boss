@@ -335,3 +335,27 @@ describe("the workflow drawn as a path", () => {
     }
   });
 });
+
+describe("a phase that was restarted says so", () => {
+  const CT_SRC = codeOnly("app/code-tasks-ui.tsx");
+
+  it("does not call a replayed phase 'BOSS's own machinery'", () => {
+    // When a run is re-delivered the same phase appears twice, and the second copy finds no
+    // unclaimed model call — so the timeline said "no model call — BOSS's own machinery" about
+    // thirty minutes of work thrown away when a lease expired. That is how a 46-minute build
+    // became a forensic exercise instead of a legible one.
+    expect(CT_SRC).toContain('data-testid={g.replayed ? "ct-phase-replayed" : undefined}');
+    expect(CT_SRC).toContain("restarted — the previous attempt was interrupted");
+  });
+
+  it("only marks the SECOND appearance of a phase", () => {
+    // The first attempt was real work; only its repeat is the replay.
+    expect(CT_SRC).toContain("phaseTimings.slice(0, i).some((p) => p.phase === t.phase)");
+  });
+
+  it("only when the run was actually re-delivered", () => {
+    // A workflow that legitimately runs a phase twice is not a replay.
+    expect(CT_SRC).toContain("redelivered && phaseTimings.slice(0, i)");
+    expect(CT_SRC).toContain("_fc.redelivered_attempts");
+  });
+});

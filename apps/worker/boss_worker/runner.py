@@ -1028,6 +1028,24 @@ def _sweep_deployment_health() -> None:
         LOGGER.debug("health_sweep_skipped", exc_info=True)
 
 
+def _record_redelivery(client: ControlPlaneClient, job) -> None:
+    """Note on the code task that this attempt is a REPLAY, so its timeline can say so.
+
+    Best effort in every direction: a run that cannot be annotated must still be executed, and
+    a job whose payload names no run (most kinds do not) simply has nothing to annotate.
+    """
+    run_id = None
+    payload = getattr(job, "payload", None)
+    if isinstance(payload, dict):
+        run_id = payload.get("run_id") or payload.get("code_task_run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        return
+    try:
+        client.note_code_task_redelivery(run_id.strip(), int(job.attempt))
+    except Exception:  # noqa: BLE001 — annotation is never worth losing the job over
+        LOGGER.debug("redelivery_note_failed job_id=%s", job.id, exc_info=True)
+
+
 def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bool:
     _tick_ai_sre_overwatch(settings)
     job = client.poll(
@@ -1052,6 +1070,13 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
             "was interrupted and its in-flight work was lost; this run restarts the stage",
             settings.worker_id, job.id, job.kind, job.attempt,
         )
+        # AND PUT IT WHERE THE RUN IS READ, not only in a log nobody has open.
+        #
+        # The line above existed for this exact case and it still took a forensic session to
+        # explain a 46-minute build: the console showed "Engineer implementing 30m1s" with no
+        # model call and nothing anywhere said the stage had been restarted. Recorded on the run
+        # so the phase timeline can say so itself.
+        _record_redelivery(client, job)
     LOGGER.info(
         "job_leased worker_id=%s job_id=%s kind=%s attempt=%s",
         settings.worker_id,
@@ -1126,14 +1151,31 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         # So renewal is BOUNDED. Past the ceiling we stop renewing; the lease then expires
         # within one TTL and the reclaimer picks the job up (or fails it on max_attempts)
         # instead of the run hanging open forever.
-        interval = max(15, settings.lease_ttl_seconds // 2)
+        # ONE MISSED HEARTBEAT MUST NOT THROW AWAY THIRTY MINUTES OF WORK.
+        #
+        # This was ttl // 2, which leaves exactly ONE heartbeat between a job and its lease
+        # expiring. Miss it once — a blip on the control plane, a slow query — and the lease
+        # dies on the dot, the reclaimer re-delivers the job, and everything the stage had done
+        # is replayed from the clone.
+        #
+        # Measured on crun_b09f23f3bd134953b961: implement ran 1800.902s and recorded no model
+        # call at all, then a second provisioning + implement did the same work in 10m41s. TTL
+        # was 1800 and the interval 900, so the whole build hung on a single heartbeat.
+        #
+        # A quarter of the TTL tolerates three consecutive failures before expiry, which is the
+        # difference between a transient blip and a genuinely dead worker.
+        interval = max(15, settings.lease_ttl_seconds // 4)
+        # And a FAILED heartbeat retries soon rather than sleeping out another full interval —
+        # waiting the same 450s after a failure gives back the margin this just bought.
+        retry_interval = max(10, min(60, interval // 4))
+        misses = 0
         max_runtime = max(0, int(getattr(settings, "job_max_runtime_seconds", 5400) or 0))
         started_at = time.monotonic()
         # SLICED, so a stop request is noticed within a second rather than up to half a lease
         # TTL later. Docker's grace period before SIGKILL is ~10s: a renewal interval of 150s
         # would mean the process is dead long before the loop next looks at anything.
         while True:
-            if _wait_in_slices(hb_stop, interval):
+            if _wait_in_slices(hb_stop, retry_interval if misses else interval):
                 return  # the job finished; nothing to renew
             if SHUTDOWN.is_set():
                 _hand_back_on_shutdown()
@@ -1152,6 +1194,7 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                     settings.worker_id, job.id, job.lease_token,
                     settings.lease_ttl_seconds,
                 )
+                misses = 0
             except Exception as exc:  # noqa: BLE001
                 # A 409 is NOT transient: the control plane is telling us this lease now belongs
                 # to somebody else, because ours expired and another worker reclaimed the job.
@@ -1167,9 +1210,12 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                     )
                     lease_lost.set()
                     return
+                misses += 1
                 LOGGER.warning(
-                    "heartbeat_renew_failed worker_id=%s job_id=%s",
-                    settings.worker_id, job.id,
+                    "heartbeat_renew_failed worker_id=%s job_id=%s miss=%d retry_in=%ds "
+                    "— the lease expires in at most %ds if these keep failing",
+                    settings.worker_id, job.id, misses, retry_interval,
+                    settings.lease_ttl_seconds,
                 )
 
     lease_lost = threading.Event()

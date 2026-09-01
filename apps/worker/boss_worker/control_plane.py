@@ -111,6 +111,13 @@ class ControlPlaneClient:
         response.raise_for_status()
         return response.json()
 
+    def note_code_task_redelivery(self, run_id: str, attempt: int) -> dict[str, Any]:
+        """Record that this attempt is a replay of interrupted work."""
+        response = self._client.post(
+            f"/v1/code-tasks/{run_id}/redelivered", json={"attempt": attempt})
+        response.raise_for_status()
+        return response.json()
+
     def create_openai_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self._client.post("/v1/openai/plans", json=payload)
         response.raise_for_status()

@@ -7227,6 +7227,35 @@ def code_task_live_endpoint(run_id: str, limit: int = 40, fmt: str = "json"):
     return live_activity(run_id, limit=limit)
 
 
+@app.post("/v1/code-tasks/{run_id}/redelivered")
+def code_task_redelivered_endpoint(run_id: str, payload: dict) -> dict:
+    """Record that an attempt of this run is a REPLAY of interrupted work.
+
+    A re-delivery means a previous attempt lost its lease — a deploy, a crash, a missed
+    heartbeat — and every minute it had spent is charged to the run's phase timing as though it
+    were work. Without this the console shows "Engineer implementing 30m1s" with no model call
+    against it and nothing anywhere says the stage was restarted, which is precisely how a
+    46-minute build became a forensic exercise.
+    """
+    attempt = int(payload.get("attempt") or 0)
+    with begin(engine) as connection:
+        connection.execute(
+            text(
+                """
+                UPDATE code_task_runs
+                SET finalize_ctx = COALESCE(finalize_ctx, '{}'::jsonb)
+                                   || jsonb_build_object('redelivered_attempts',
+                                        COALESCE(finalize_ctx->'redelivered_attempts', '[]'::jsonb)
+                                        || to_jsonb(:attempt::int)),
+                    updated_at = now()
+                WHERE id = :run_id
+                """
+            ),
+            {"run_id": run_id, "attempt": attempt},
+        )
+    return {"run_id": run_id, "attempt": attempt, "recorded": True}
+
+
 @app.get("/v1/code-tasks/{run_id}/activity")
 def code_task_activity_endpoint(run_id: str):
     """Per-stage model-call activity for a code task — the internal detail behind
