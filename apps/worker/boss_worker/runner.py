@@ -1164,11 +1164,22 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
         #
         # A quarter of the TTL tolerates three consecutive failures before expiry, which is the
         # difference between a transient blip and a genuinely dead worker.
-        interval = max(15, settings.lease_ttl_seconds // 4)
+        # HEARTBEAT OFTEN, AND SAY SO.
+        #
+        # ttl // 4 was still a guess dressed as a fix: it assumes the beats land. Two runs in a
+        # row lost their lease at exactly the TTL with NO failure logged — so either the beats
+        # were not happening or they were not extending anything, and the logs could not tell
+        # the two apart, because only failures were ever written.
+        #
+        # A minute is cheap — one small POST — and it turns a lease into something that
+        # survives thirty consecutive misses instead of three. And every beat is now recorded,
+        # so the next occurrence answers "was it heartbeating?" instead of raising it.
+        interval = max(15, min(60, settings.lease_ttl_seconds // 4))
         # And a FAILED heartbeat retries soon rather than sleeping out another full interval —
         # waiting the same 450s after a failure gives back the margin this just bought.
-        retry_interval = max(10, min(60, interval // 4))
+        retry_interval = max(10, min(30, max(5, interval // 2)))
         misses = 0
+        beats = 0
         max_runtime = max(0, int(getattr(settings, "job_max_runtime_seconds", 5400) or 0))
         started_at = time.monotonic()
         # SLICED, so a stop request is noticed within a second rather than up to half a lease
@@ -1194,7 +1205,15 @@ def run_worker_cycle(client: ControlPlaneClient, settings: WorkerSettings) -> bo
                     settings.worker_id, job.id, job.lease_token,
                     settings.lease_ttl_seconds,
                 )
+                beats += 1
                 misses = 0
+                # Every beat for the first few, then one a minute's worth apart, so a long job
+                # leaves a trail without filling the log with itself.
+                if beats <= 3 or beats % 10 == 0:
+                    LOGGER.info(
+                        "lease_heartbeat worker_id=%s job_id=%s beat=%d ttl=%ds every=%ds",
+                        settings.worker_id, job.id, beats, settings.lease_ttl_seconds, interval,
+                    )
             except Exception as exc:  # noqa: BLE001
                 # A 409 is NOT transient: the control plane is telling us this lease now belongs
                 # to somebody else, because ours expired and another worker reclaimed the job.

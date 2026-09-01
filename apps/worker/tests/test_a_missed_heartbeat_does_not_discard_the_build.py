@@ -73,3 +73,30 @@ def test_the_warning_says_how_long_is_left():
     body = _renew_source()
     assert "miss=%d" in body
     assert "retry_in=%ds" in body
+
+
+def test_every_heartbeat_is_recorded_not_only_the_failures():
+    """Two runs lost their lease at exactly the TTL with NO failure logged — so either the
+    beats were not happening or they were not extending anything, and the logs could not tell
+    the two apart, because only failures were ever written. The next occurrence has to answer
+    "was it heartbeating?" rather than raise it."""
+    body = _renew_source()
+    assert "lease_heartbeat" in body
+    assert "beat=%d" in body
+    assert "beats += 1" in body
+
+
+def test_a_long_job_does_not_fill_the_log_with_its_own_heartbeat():
+    """A trail, not a flood: the first few, then one in ten."""
+    body = _renew_source()
+    assert "beats <= 3 or beats % 10 == 0" in body
+
+
+def test_a_lease_survives_many_consecutive_misses():
+    """ttl // 4 was a guess dressed as a fix: three misses and the lease is gone. A minute is
+    one small POST, and it turns three chances into thirty."""
+    body = _renew_source()
+    assert "min(60, settings.lease_ttl_seconds // 4)" in body
+    for ttl in (300, 600, 1800, 3600):
+        interval = max(15, min(60, ttl // 4))
+        assert interval * 5 < ttl, f"ttl={ttl}: five misses already past expiry"
