@@ -135,18 +135,24 @@ def _steps(c, run_id):
 
 
 
-def _finish_code_task(c, project_id, run_id, status, pr="https://github.com/o/r/pull/1"):
+def _finish_code_task(c, project_id, run_id, status, pr="https://github.com/o/r/pull/1",
+                      finalize_ctx=None):
     """Land a code_task_runs row in a terminal state, as the pipeline would.
 
-    A completed build carries its pull request: that IS the outcome the outer workflow reads.
-    Pass pr=None for the case where the reviewers refused the change and none was opened.
+    A completed build often carries its pull request, but `completed` with no PR is also a
+    first-class success: non-final decomposition slices and `open_pr=false` runs finish as
+    `completed_no_pr`. Reviewer refusal is `blocked` / `failed`, not a silent missing URL.
     """
+    import json
     c.execute(
         text("INSERT INTO code_task_runs (id, project_id, status, phase, title, "
-             "pull_request_url) VALUES (:id,:p,:s,'done','awaited',:pr) "
+             "pull_request_url, finalize_ctx) VALUES "
+             "(:id,:p,:s,'done','awaited',:pr, CAST(:fc AS JSONB)) "
              "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, "
-             "pull_request_url=EXCLUDED.pull_request_url"),
-        {"id": run_id, "p": project_id, "s": status, "pr": pr},
+             "pull_request_url=EXCLUDED.pull_request_url, "
+             "finalize_ctx=EXCLUDED.finalize_ctx"),
+        {"id": run_id, "p": project_id, "s": status, "pr": pr,
+         "fc": json.dumps(finalize_ctx or {})},
     )
 
 
@@ -929,12 +935,16 @@ def test_review_reports_a_finding_without_gating_on_it(eng, project, monkeypatch
     assert "inner pipeline's call" in row["output"]["note"]
 
 
-def test_the_build_step_fails_when_no_pull_request_was_opened(eng, project, monkeypatch):
-    """This is how the inner loop reports a refusal: it opens no PR.
+def test_a_completed_build_without_a_pr_is_not_a_refusal(eng, project, monkeypatch):
+    """`completed` with no pull request is a SUCCESS the inner pipeline already named.
 
-    The outer loop asks one question of a build — did it produce a pull request — because that
-    is the thing every later step needs. A change the adversarial or security reviewer refused
-    has nothing to preview and nothing to deploy, and the step says exactly that."""
+    Slice 1 of a decomposed project finishes as `completed_no_pr` on purpose — only the last
+    slice opens a PR. Treating a missing URL as "reviewers refused" deadletters the outer
+    workflow (no preview, no deploy) while later slices are still building the product.
+
+    The same status is used for `open_pr=false` eval/bake-off runs. Reviewer refusal is
+    `blocked` or `failed`, which `resume_awaited` already fails on.
+    """
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
 
     with eng.begin() as c:
@@ -943,9 +953,39 @@ def test_the_build_step_fails_when_no_pull_request_was_opened(eng, project, monk
              "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
              "next": []},
         ], "build")
-        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_refused"})
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_slice1"})
         runner.tick(c, Ctx(eng), project_id=project)
-        _finish_code_task(c, project, "crun_refused", "completed", pr=None)
+        _finish_code_task(
+            c, project, "crun_slice1", "completed", pr=None,
+            finalize_ctx={"decomposition_index": 1, "decomposition_total": 4},
+        )
+        runner.tick(c, Ctx(eng), project_id=project)
+        row = c.execute(
+            text("SELECT status, last_error, output FROM workflow_step_runs "
+                 "WHERE workflow_run_id=:r AND step_id='build'"),
+            {"r": run["id"]},
+        ).mappings().first()
+
+    assert row["status"] == "succeeded", (
+        f"a successful completed_no_pr was treated as a refusal: "
+        f"status={row['status']} error={row['last_error']}"
+    )
+    assert not row["last_error"]
+
+
+def test_a_blocked_build_still_fails_the_step(eng, project, monkeypatch):
+    """Reviewer refusal is `blocked`, not a completed row with a missing URL."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "blockedbuild", [
+            {"id": "build", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "build")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_blocked"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_blocked", "blocked", pr=None)
         runner.tick(c, Ctx(eng), project_id=project)
         row = c.execute(
             text("SELECT status, last_error FROM workflow_step_runs "
@@ -953,8 +993,8 @@ def test_the_build_step_fails_when_no_pull_request_was_opened(eng, project, monk
             {"r": run["id"]},
         ).mappings().first()
 
-    assert row["status"] != "succeeded", "a refused change was passed on to preview and deploy"
-    assert "without opening a pull request" in (row["last_error"] or "")
+    assert row["status"] != "succeeded"
+    assert "blocked" in (row["last_error"] or "")
 
 
 def test_the_build_step_carries_its_pull_request_forward(eng, project, monkeypatch):

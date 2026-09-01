@@ -1936,23 +1936,12 @@ def resume_awaited(
             continue
         status = str(row["status"] or "")
         if status in ok_states:
-            # DID IT PRODUCE A PULL REQUEST?
-            #
-            # That is the whole question the outer loop asks of a build. The inner pipeline —
-            # implement, adversarial review, security check, mutation check, tests — owns every
-            # judgement inside it, and reports its verdict through its RESULT: a refuted change
-            # opens no PR. Reading its individual gates from out here was the outer loop doing
-            # the inner loop's job, and it stopped a run whose app was already previewable.
+            # `completed` IS the inner pipeline's success. A missing pull request is not a
+            # refusal — reviewer refusal lands as `blocked` / `failed`, already handled below.
+            # Non-final decomposition slices and `open_pr=false` eval runs finish as
+            # `completed_no_pr` on purpose. Treating a missing URL as "reviewers refused"
+            # deadlettered the outer workflow while later slices were still building.
             evidence = _terminal_evidence(connection, kind, awaited_id)
-            if kind == "code_task" and not evidence.get("pull_request_url"):
-                workflows.force_fail_waiting_step(
-                    connection, project_id=project_id, step_run_id=step["id"],
-                    error=("the build finished without opening a pull request — its reviewers "
-                           "refused the change, so there is nothing to preview or deploy."),
-                )
-                done.append({"run_id": run_id, "step_id": step["step_id"],
-                             "outcome": "failed", "awaited": kind, "reason": "no pull request"})
-                continue
             workflows.force_complete_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
                 output={**output, "status": "succeeded", "awaited_status": status, **evidence},
