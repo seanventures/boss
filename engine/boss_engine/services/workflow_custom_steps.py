@@ -178,6 +178,7 @@ def create(
     mcp_tool_name: Optional[str] = None,
     inputs: Any = None,
     produces: Any = None,
+    knowledge: str = "",
     step_key: Optional[str] = None,
 ) -> dict[str, Any]:
     label = (label or "").strip()
@@ -214,11 +215,11 @@ def create(
             INSERT INTO workflow_custom_steps (
                 id, project_id, step_key, label, summary, binding_kind,
                 skill_id, mcp_server_id, mcp_tool_name,
-                inputs, produces, created_by
+                inputs, produces, knowledge, created_by
             ) VALUES (
                 :id, :p, :key, :label, :summary, :kind,
                 :skill, :server, :tool,
-                CAST(:inputs AS JSONB), CAST(:produces AS JSONB), :actor
+                CAST(:inputs AS JSONB), CAST(:produces AS JSONB), :knowledge, :actor
             ) RETURNING *
             """
         ),
@@ -228,6 +229,9 @@ def create(
             "skill": skill_id, "server": mcp_server_id, "tool": mcp_tool_name,
             "inputs": _json.dumps(_clean_inputs(inputs)),
             "produces": _json.dumps([str(p) for p in (produces or []) if str(p).strip()]),
+            # Trimmed, not truncated to a token count: this is prose an operator wrote, and
+            # cutting it mid-sentence would be worse than asking them to be brief.
+            "knowledge": (knowledge or "").strip()[:8000] or None,
             "actor": actor,
         },
     ).mappings().one()
@@ -257,6 +261,7 @@ def serialize(connection: Connection, project_id: str, row: Any) -> dict[str, An
         "mcp_tool_name": row["mcp_tool_name"],
         "inputs": row["inputs"] if isinstance(row["inputs"], list) else [],
         "produces": row["produces"] if isinstance(row["produces"], list) else [],
+        "knowledge": row["knowledge"] if "knowledge" in row.keys() else None,
         "enabled": bool(row["enabled"]),
         # Resolved, never stored.
         "risk_tier": risk["risk_tier"],
@@ -394,6 +399,20 @@ def execute(
         raise CustomStepError(
             f"'{row['label']}' needs {', '.join(missing)}, which the step did not supply."
         )
+
+    # WHAT THE STEP KNOWS, handed to the thing that runs.
+    #
+    # A binding says WHICH skill or tool runs; it says nothing about the standard the step is
+    # meant to hold to — the ticket format the team uses, the clauses that matter, the internal
+    # doc explaining the system it touches. That lived in the head of whoever defined the step,
+    # so the step called the tool correctly and got the house style wrong.
+    #
+    # Passed as an ordinary input under a reserved name rather than a new parameter, because
+    # every skill and every MCP tool already takes inputs and none of them would take a new
+    # positional argument. A step with no knowledge passes nothing, so nothing changes for it.
+    knowledge = (row["knowledge"] if "knowledge" in row.keys() else None) or ""
+    if knowledge.strip():
+        inputs = {**inputs, "knowledge": knowledge.strip()}
 
     if row["binding_kind"] == "skill":
         from .agent_loop import _invoke_agent_skill

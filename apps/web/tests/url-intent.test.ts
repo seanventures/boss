@@ -95,9 +95,12 @@ describe("starting a new project", () => {
     expect(readNewProjectIntent(search).open).toBe(true);
   });
 
-  it("goes to the area that owns the form", () => {
+  it("goes to the area that WATCHES the work", () => {
+    // This opened the Factory form, because Factory was where projects were listed. The press
+    // now starts a workflow RUN — panel, spec, approval, build, preview, deploy — so it lands
+    // on the page that shows those steps.
     expect(new URLSearchParams(searchForNewProject("?area=monitoring")).get("area"))
-      .toBe("code_tasks");
+      .toBe("delivery_workflows");
   });
 });
 

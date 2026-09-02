@@ -19840,6 +19840,7 @@ def create_delivery_custom_step(payload: dict) -> dict:
                 mcp_server_id=payload.get("mcp_server_id") or None,
                 mcp_tool_name=payload.get("mcp_tool_name") or None,
                 inputs=payload.get("inputs"),
+                knowledge=str(payload.get("knowledge") or ""),
                 produces=payload.get("produces"),
                 step_key=payload.get("step_key") or None,
                 actor=str(payload.get("actor") or "operator"),

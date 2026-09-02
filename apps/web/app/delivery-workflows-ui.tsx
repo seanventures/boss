@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { uniqueWorkflowName } from "./workflow-names";
-import { consoleHref } from "./url-intent";
+import { consoleHref, readNewProjectIntent } from "./url-intent";
 
 /**
  * Delivery workflows: choose one, watch it run, build your own.
@@ -428,6 +428,26 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.clearInterval(t);
   }, [awaited, load]);
 
+  // SENT HERE TO START SOMETHING. `?new=1` is a one-shot command, consumed on read so a later
+  // navigation cannot re-deliver it — the same rule the Factory form learned the hard way.
+  useEffect(() => {
+    const read = () => {
+      const intent = readNewProjectIntent(window.location.search);
+      if (!intent.open) return;
+      setTab("running");
+      window.setTimeout(() => {
+        document.querySelector<HTMLTextAreaElement>('[data-testid="dw-new-directive"]')?.focus();
+      }, 0);
+      try {
+        window.history.replaceState(null, "",
+          `${window.location.pathname}${intent.nextSearch}${window.location.hash}`);
+      } catch { /* non-browser — the composer is on screen either way */ }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
+
   // OPEN THE RUN THE OPERATOR WAS SENT HERE TO SEE. Creating a project redirects here with
   // `?wfr=<id>`; expanding it on arrival is the difference between "your project is somewhere
   // in this list" and showing them the steps.
@@ -480,6 +500,16 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
 
       {notice ? <p className="dw-notice" data-testid="dw-notice">{notice}</p> : null}
 
+      {tab === "running" ? (
+        <NewProjectComposer
+          projectId={projectId} actor={actor} workflows={installed}
+          onStarted={(runId) => {
+            if (runId) setOpenRun(runId);
+            setNotice(runId ? `Started ${runId}.` : "Started.");
+            void load();
+          }}
+        />
+      ) : null}
       {tab === "running" && awaited ? (
         <p className="dw-awaiting detail" data-testid="dw-awaiting">
           Starting <code>{awaited}</code>… the run appears here the moment it is created.
@@ -693,6 +723,82 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
     || (typeof nested?.url === "string" ? nested.url : "");
   if (preview) out.push({ label: "open the preview", href: preview, external: true });
   return out;
+}
+
+/**
+ * STARTING WORK, WHERE THE WORK IS WATCHED.
+ *
+ * "New project" lived in Factory because Factory was where projects were listed. Now the
+ * workflow drives — the press starts a run, and the run convenes the panel, waits for the
+ * approval, builds, previews and asks before it deploys — so the page that shows those steps
+ * is the page that should start them. Factory keeps its own entry for changing an app that
+ * already exists, which is a different act.
+ */
+function NewProjectComposer({ projectId, actor, workflows, onStarted }: {
+  projectId: string; actor: string;
+  workflows: Installed[];
+  onStarted: (runId: string | null) => void;
+}) {
+  const [directive, setDirective] = useState("");
+  const [workflowKey, setWorkflowKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const start = async () => {
+    const text = directive.trim();
+    if (!text || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const title = text.length > 72 ? `${text.slice(0, 69)}…` : text;
+      const r = await post("start", {
+        project_id: projectId, actor,
+        // No key means "whatever this project maps for a new project" — the honest default,
+        // and the same resolution every other entry point uses.
+        ...(workflowKey ? { workflow_key: workflowKey } : { work_class: "project.new" }),
+        input: { title, directive: text },
+      });
+      if (!r.ok) { setError(r.error ?? "Could not start it."); return; }
+      const run = (r.data as { run?: { id?: string }; id?: string } | undefined);
+      setDirective("");
+      onStarted(String(run?.run?.id ?? run?.id ?? "") || null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="dw-new" data-testid="dw-new-project">
+      <h3>Start a project</h3>
+      <p className="detail">
+        Describe what to build. The workflow convenes a panel, drafts the spec, waits for your
+        approval, then builds, previews, and asks before it deploys.
+      </p>
+      <textarea className="mr-input" rows={3} value={directive} data-testid="dw-new-directive"
+                placeholder="A shift-swap board where staff can offer and claim shifts…"
+                onChange={(e) => setDirective(e.target.value)} />
+      <div className="dw-new-row">
+        <label className="mr-field-label">
+          Workflow
+          <select className="mr-select" value={workflowKey} data-testid="dw-new-workflow"
+                  onChange={(e) => setWorkflowKey(e.target.value)}>
+            <option value="">This project&apos;s usual path</option>
+            {/* Keyed by workflow_key, not a version id: `start` resolves the ACTIVE version
+                itself, so naming a version here would pin a run to whatever was current when
+                the page happened to load. */}
+            {workflows.map((w) => (
+              <option key={w.id} value={w.workflow_key}>{w.name}</option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="cap-btn primary" disabled={busy || !directive.trim()}
+                onClick={() => void start()} data-testid="dw-new-start">
+          {busy ? "Starting…" : "Start"}
+        </button>
+      </div>
+      {error ? <p className="dw-new-error" data-testid="dw-new-error">{error}</p> : null}
+    </section>
+  );
 }
 
 /** The four states an operator acts on differently, plus everything. */
@@ -1291,6 +1397,9 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
   // single decision — picking a kind and then a thing is two ways to get it half-made.
   const [bindingRef, setBindingRef] = useState("");
   const [inputs, setInputs] = useState("");
+  // WHAT THE STEP KNOWS. A binding says which tool runs; it says nothing about the standard
+  // the step has to hold to, and that lived in the head of whoever defined it.
+  const [knowledge, setKnowledge] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
 
   const chosen = useMemo(() => {
@@ -1331,6 +1440,7 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
         summary: summary.trim(),
         binding_kind: kind === "skill" ? "skill" : "mcp_tool",
         inputs: inputs.split(",").map((i) => i.trim()).filter(Boolean),
+        knowledge: knowledge.trim(),
       };
       if (kind === "skill") {
         fields.skill_id = rest.join(":");
@@ -1378,6 +1488,18 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
         <input className="input" value={inputs} data-testid="dw-define-inputs"
                placeholder="ticket, severity"
                onChange={(e) => setInputs(e.target.value)} />
+      </label>
+      {/* WHAT THIS STEP KNOWS. Carried into every execution, so the step behaves the same on
+          its hundredth run as on the one where somebody was watching. */}
+      <label className="field">
+        <span>What should it know?</span>
+        <textarea className="mr-input" rows={4} value={knowledge}
+                  data-testid="dw-step-knowledge"
+                  placeholder="House style, the clauses that matter, the internal doc that explains this system — anything the step must hold to that its tool does not already know."
+                  onChange={(e) => setKnowledge(e.target.value)} />
+        <span className="detail">
+          Optional. Handed to the skill or tool on every run as context.
+        </span>
       </label>
       <label className="field">
         <span>What it does</span>
@@ -1754,8 +1876,29 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
 
         {/* THE CUSTOMER'S OWN STEPS, in the same palette as the built-in ones. A separate
             drawer for "your" steps would make people learn which of their steps BOSS wrote. */}
-        <h4 className="dw-palette-heading">Your steps</h4>
-        {customSteps.length === 0 ? (
+        {/* THE CONTROL WITH ITS HEADING, not below whatever happens to be listed. With eleven
+            of the customer's own steps the button sat off the bottom of the panel, so the way
+            to make one was the one thing you had to scroll to find. */}
+        <div className="dw-palette-heading-row">
+          <h4 className="dw-palette-heading">Your steps</h4>
+          {!defining ? (
+            <button type="button" className="cap-btn dw-define" disabled={!!busy}
+                    onClick={() => setDefining(true)} data-testid="dw-define-step">
+              + Define a step
+            </button>
+          ) : null}
+        </div>
+        {defining ? (
+          <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
+                          projectId={projectId}
+                          onCancel={() => setDefining(false)}
+                          onDefine={async (fields) => {
+                            const result = await onDefineStep(fields);
+                            if (result.ok) setDefining(false);
+                            return result;
+                          }} />
+        ) : null}
+        {customSteps.length === 0 && !defining ? (
           <p className="detail dw-palette-summary">
             None yet. A step of your own runs one of your skills or an MCP tool — filing a
             ticket, telling a compliance system, running your own scanner.
@@ -1787,21 +1930,6 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
                   onClick={(e) => { e.stopPropagation(); onRemoveStep(c.step_key); }}>×</span>
           </button>
         ))}
-        {defining ? (
-          <DefineStepForm bindable={bindable} riskFloor={riskFloor} busy={busy}
-                          projectId={projectId}
-                          onCancel={() => setDefining(false)}
-                          onDefine={async (fields) => {
-                            const result = await onDefineStep(fields);
-                            if (result.ok) setDefining(false);
-                            return result;
-                          }} />
-        ) : (
-          <button type="button" className="cap-btn dw-define" disabled={!!busy}
-                  onClick={() => setDefining(true)} data-testid="dw-define-step">
-            + Define a step
-          </button>
-        )}
 
         {/* CONTROL BLOCKS. The runtime has supported these since it was written and the
             builder never offered them, so a customer could only ever author a straight line.
@@ -1863,17 +1991,20 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
             the canvas and `cancelCreating` restores it, so the tabs are a faithful control for
             state that was always there — no behaviour changes, the choice is just visible. */}
         <div className="dw-mode-tabs" role="tablist" aria-label="What do you want to do?">
+          {/* MAKING ONE COMES FIRST. Somebody who opens "Build your own" is usually here to
+              build one; editing is what you do on a return visit. Reading order should match
+              that, and the first tab is where the eye lands. */}
+          <button type="button" role="tab" className="dw-mode-tab"
+                  aria-selected={creating} data-testid="dw-tab-new"
+                  disabled={!!busy}
+                  onClick={() => { if (!creating) beginCreating(); }}>
+            <WfIcon id="plus" /> Create a new workflow
+          </button>
           <button type="button" role="tab" className="dw-mode-tab"
                   aria-selected={!creating} data-testid="dw-tab-edit"
                   disabled={!!busy}
                   onClick={() => { if (creating) cancelCreating(); }}>
             <WfIcon id="edit" /> Edit an existing workflow
-          </button>
-          <button type="button" role="tab" className="dw-mode-tab"
-                  aria-selected={creating} data-testid="dw-tab-new"
-                  disabled={!!busy}
-                  onClick={() => { if (!creating) beginCreating(); }}>
-            <WfIcon id="plus" /> Create a new one
           </button>
         </div>
         <div className="dw-canvas-head" data-mode={creating ? "creating" : "editing"}>

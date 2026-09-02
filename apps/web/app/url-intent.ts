@@ -72,7 +72,10 @@ export function searchForProject(search: string, runId: string | null): string {
  */
 export function searchForNewProject(search: string): string {
   const params = new URLSearchParams(search);
-  params.set("area", "code_tasks");
+  // STARTING WORK BELONGS WHERE THE WORK IS WATCHED. This opened the Factory form, because
+  // Factory was where projects were listed. The press now starts a workflow RUN — panel, spec,
+  // approval, build, preview, deploy — so it lands on the page that shows those steps.
+  params.set("area", "delivery_workflows");
   params.set("new", "1");
   params.delete("run");
   params.delete("agent");

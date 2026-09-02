@@ -7886,3 +7886,22 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .settings-source[data-source="project"] { color: var(--live, #58a6ff); border-color: currentColor; }
 .settings-note { margin: 4px 0 0; font-size: 12px; color: var(--muted, #8b949e); }
+
+/* Starting a project, on the page that watches it. */
+.dw-new {
+  display: grid; gap: 8px; margin-bottom: 16px; padding: 14px 16px; border-radius: 12px;
+  border: 1px solid var(--border, #30363d);
+  background: color-mix(in srgb, var(--panel, #0d1117) 65%, transparent);
+}
+.dw-new h3 { margin: 0; font-size: 15px; }
+.dw-new .detail { margin: 0; }
+.dw-new-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.dw-new-row .mr-field-label { display: grid; gap: 4px; min-width: 240px; }
+.dw-new-error { margin: 0; font-size: 12px; color: var(--bad, #f85149); }
+
+/* The control with its heading, not below whatever happens to be listed. */
+.dw-palette-heading-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: 14px;
+}
+.dw-palette-heading-row .dw-palette-heading { margin: 0; }

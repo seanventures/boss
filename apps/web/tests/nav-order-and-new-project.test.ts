@@ -75,18 +75,25 @@ describe("New project, from anywhere", () => {
     expect(CSS).toContain(".bx-new-project");
   });
 
-  it("opens the Factory area and asks it for the form", () => {
+  it("opens the Workflow area and asks it to start something", () => {
     const btn = SHELL.slice(SHELL.indexOf('data-testid="topbar-new-project"'),
                             SHELL.indexOf('className="bx-topbar-spacer"'));
-    expect(btn).toContain('go("code_tasks")');
+    expect(btn).toContain('go("delivery_workflows")');
     expect(btn).toContain("searchForNewProject(window.location.search)");
   });
 
-  it("is answered by the area that owns the form", () => {
-    // The shell must not reach into the area's state, and the area must not know about the
-    // shell. `?new=1` is the handoff.
-    expect(CT).toContain("readNewProjectIntent(window.location.search)");
-    expect(CT).toContain("setShowNew(true)");
+  it("is answered by the area that watches the work", () => {
+    // Starting work and watching it belong together now that the workflow drives: the press
+    // creates a RUN, and the run is what the operator then needs to see.
+    const DWN = codeOnly("app/delivery-workflows-ui.tsx");
+    expect(DWN).toContain("readNewProjectIntent(window.location.search)");
+    expect(DWN).toContain('data-testid="dw-new-project"');
+    expect(DWN).toContain('data-testid="dw-new-start"');
+  });
+
+  it("Factory keeps its own entry for changing an app that already exists", () => {
+    // A different act from starting something: it builds on a branch and a PR that exist.
+    expect(CT).toContain('data-testid="ct-new-workflow"');
   });
 
   it("CONSUMES the request rather than leaving it in the URL", () => {

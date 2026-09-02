@@ -333,9 +333,20 @@ describe("the catalogue card is scannable across twelve of them", () => {
 describe("build your own actually lets you build one", () => {
   it("offers a way to author one, not only to fork", () => {
     // The tab was called "Build your own" and the only way in was to fork something, so a
-    // screen that promised authorship offered only editing. It is now the second TAB.
+    // screen that promised authorship offered only editing. It is now the FIRST tab: somebody
+    // who opens "Build your own" is usually here to build one, and editing is the return trip.
     expect(UI).toContain('data-testid="dw-tab-new"');
-    expect(UI).toContain("Create a new one");
+    expect(UI).toContain("Create a new workflow");
+    expect(UI.indexOf('data-testid="dw-tab-new"'))
+      .toBeLessThan(UI.indexOf('data-testid="dw-tab-edit"'));
+  });
+
+  it("puts Define a step with its heading, not below the list", () => {
+    // With eleven of the customer's own steps the button sat off the bottom of the panel, so
+    // the way to make one was the one thing you had to scroll to find.
+    expect(UI).toContain("dw-palette-heading-row");
+    expect(UI.indexOf('data-testid="dw-define-step"'))
+      .toBeLessThan(UI.indexOf("None yet. A step of your own"));
   });
 
   it("makes authoring a mode you are IN, not a button among buttons", () => {

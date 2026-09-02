@@ -3077,6 +3077,15 @@ CREATE TABLE IF NOT EXISTS workflow_custom_steps (
   inputs JSONB NOT NULL DEFAULT '[]'::jsonb,
   -- Names a later step can read out of this one.
   produces JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- WHAT THIS STEP KNOWS.
+  --
+  -- A binding says which skill or tool runs; it says nothing about the standard the step is
+  -- meant to hold to — the ticket format your team uses, the compliance clauses that matter,
+  -- the internal doc that explains the system it is touching. That knowledge lived in the head
+  -- of whoever defined the step, so the step ran the tool and got the house style wrong.
+  -- Carried into every execution as context, so the step behaves the same on its hundredth run
+  -- as on the one where somebody was watching.
+  knowledge TEXT,
   enabled BOOLEAN NOT NULL DEFAULT true,
   created_by TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -5760,3 +5769,7 @@ CREATE TABLE IF NOT EXISTS project_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, key)
 );
+
+-- workflow_custom_steps.knowledge, for databases created before it existed. The CREATE above
+-- covers a fresh install; this covers every deployment that already has the table.
+ALTER TABLE workflow_custom_steps ADD COLUMN IF NOT EXISTS knowledge TEXT;

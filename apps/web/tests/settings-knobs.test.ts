@@ -69,3 +69,26 @@ describe("the knob is read by the thing it governs", () => {
     expect(STORE).toContain("return fallback if row is None else row");
   });
 });
+
+describe("a step can carry what it needs to KNOW", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  const SVC = codeOnly("../../engine/boss_engine/services/workflow_custom_steps.py");
+
+  it("asks for it when the step is defined", () => {
+    // A binding says WHICH skill or tool runs; it says nothing about the standard the step is
+    // meant to hold to — house style, the clauses that matter, the doc explaining the system
+    // it touches. That lived in the head of whoever defined the step.
+    expect(DW).toContain('data-testid="dw-step-knowledge"');
+    expect(DW).toContain("knowledge: knowledge.trim()");
+  });
+
+  it("hands it to the thing that actually runs", () => {
+    // Stored and unused would be worse than not asking.
+    expect(SVC).toContain('inputs = {**inputs, "knowledge": knowledge.strip()}');
+  });
+
+  it("passes nothing when a step has none", () => {
+    // A step defined before this existed must behave exactly as it did.
+    expect(SVC).toContain("if knowledge.strip():");
+  });
+});

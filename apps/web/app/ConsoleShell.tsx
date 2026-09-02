@@ -837,7 +837,7 @@ export default function ConsoleShell({
             data-testid="topbar-new-project"
             title="Start a new project — an agent clones the repo, edits code, runs your tests"
             onClick={() => {
-              go("code_tasks");
+              go("delivery_workflows");
               try {
                 // CLEAR WHAT YOU WERE LOOKING AT. `?run=` and `?agent=` name a specific
                 // project, and the Factory area's `?run=` reader only ever SETS so as not to
