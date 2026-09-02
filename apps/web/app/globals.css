@@ -7887,17 +7887,53 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .settings-source[data-source="project"] { color: var(--live, #58a6ff); border-color: currentColor; }
 .settings-note { margin: 4px 0 0; font-size: 12px; color: var(--muted, #8b949e); }
 
-/* Starting a project, on the page that watches it. */
-.dw-new {
-  display: grid; gap: 8px; margin-bottom: 16px; padding: 14px 16px; border-radius: 12px;
-  border: 1px solid var(--border, #30363d);
-  background: color-mix(in srgb, var(--panel, #0d1117) 65%, transparent);
+/* ── Starting a project, on the page that watches it ─────────────────────────────
+   This read as a form: a bare white box, a floating label, and a button the same
+   weight as the thing it acts on. It is the same act as the Command Center's
+   composer, done from a different page, so it should look like it. */
+.dw-new { display: grid; gap: 10px; margin-bottom: 18px; }
+.dw-new-head h3 { margin: 0 0 2px; font-size: 15px; }
+.dw-new-head .detail { margin: 0; }
+
+/* ONE SURFACE. The field and its controls live inside a single bordered box that
+   lights on focus, rather than three separate elements sharing a row. */
+.dw-new-box {
+  display: grid; gap: 2px;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border, #1C2740);
+  background: rgba(4, 9, 22, .62);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
 }
-.dw-new h3 { margin: 0; font-size: 15px; }
-.dw-new .detail { margin: 0; }
-.dw-new-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
-.dw-new-row .mr-field-label { display: grid; gap: 4px; min-width: 240px; }
+.dw-new-box:focus-within {
+  border-color: var(--accent, #4C8DF6);
+  box-shadow: 0 0 0 4px rgba(76, 141, 246, .16);
+}
+.dw-new-input {
+  width: 100%; background: transparent; border: 0; outline: none; resize: vertical;
+  color: var(--ink, #E8EEFC); font: inherit; font-size: .95rem; line-height: 1.55;
+  padding: 2px 0 6px; min-height: 66px;
+}
+.dw-new-input::placeholder { color: var(--ink-dim, #7C8CB0); }
+.dw-new-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding-top: 8px; border-top: 1px solid var(--border, #1C2740);
+}
+.dw-new-pick { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.dw-new-pick > span {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--ink-dim, #7C8CB0);
+}
+.dw-new-pick .mr-select { max-width: 260px; }
+/* The keyboard shortcut sits between the choice and the button, so the button is the
+   last thing on the line and reads as the end of the sentence. */
+.dw-new-hint { margin-left: auto; }
 .dw-new-error { margin: 0; font-size: 12px; color: var(--bad, #f85149); }
+
+@media (max-width: 640px) {
+  .dw-new-foot { align-items: stretch; }
+  .dw-new-hint { display: none; }
+}
 
 /* The control with its heading, not below whatever happens to be listed. */
 .dw-palette-heading-row {

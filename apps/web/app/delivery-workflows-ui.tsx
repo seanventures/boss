@@ -785,32 +785,47 @@ function NewProjectComposer({ projectId, actor, workflows, onStarted }: {
 
   return (
     <section className="dw-new" data-testid="dw-new-project">
-      <h3>Start a project</h3>
-      <p className="detail">
-        Describe what to build. The workflow convenes a panel, drafts the spec, waits for your
-        approval, then builds, previews, and asks before it deploys.
-      </p>
-      <textarea className="mr-input" rows={3} value={directive} data-testid="dw-new-directive"
-                placeholder="A shift-swap board where staff can offer and claim shifts…"
-                onChange={(e) => setDirective(e.target.value)} />
-      <div className="dw-new-row">
-        <label className="mr-field-label">
-          Workflow
-          <select className="mr-select" value={workflowKey} data-testid="dw-new-workflow"
-                  onChange={(e) => setWorkflowKey(e.target.value)}>
-            <option value="">This project&apos;s usual path</option>
-            {/* Keyed by workflow_key, not a version id: `start` resolves the ACTIVE version
-                itself, so naming a version here would pin a run to whatever was current when
-                the page happened to load. */}
-            {workflows.map((w) => (
-              <option key={w.id} value={w.workflow_key}>{w.name}</option>
-            ))}
-          </select>
-        </label>
-        <button type="button" className="cap-btn primary" disabled={busy || !directive.trim()}
-                onClick={() => void start()} data-testid="dw-new-start">
-          {busy ? "Starting…" : "Start"}
-        </button>
+      <div className="dw-new-head">
+        <h3>Start a project</h3>
+        <p className="detail">
+          A panel specs it, you approve, then it builds, previews, and asks before it deploys.
+        </p>
+      </div>
+      {/* ONE FIELD AND ONE BUTTON. The composer read as a form — a bare box, a floating label,
+          a control the same weight as the thing it acts on. Everything lives inside one
+          bordered surface that lights on focus, the way the Command Center's composer does,
+          because they are the same act done from two places. */}
+      <div className="dw-new-box">
+        <textarea
+          className="dw-new-input" rows={3} value={directive} data-testid="dw-new-directive"
+          placeholder="A shift-swap board where staff can offer and claim shifts…"
+          onChange={(e) => setDirective(e.target.value)}
+          onKeyDown={(e) => {
+            // Send on ⌘/Ctrl+Enter, like every other composer in this console. Plain Enter
+            // stays a newline: a directive is usually more than one line.
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void start(); }
+          }}
+        />
+        <div className="dw-new-foot">
+          <label className="dw-new-pick">
+            <span>Workflow</span>
+            <select className="mr-select" value={workflowKey} data-testid="dw-new-workflow"
+                    onChange={(e) => setWorkflowKey(e.target.value)}>
+              <option value="">This project&apos;s usual path</option>
+              {/* Keyed by workflow_key, not a version id: `start` resolves the ACTIVE version
+                  itself, so naming a version here would pin a run to whatever was current
+                  when the page happened to load. */}
+              {workflows.map((w) => (
+                <option key={w.id} value={w.workflow_key}>{w.name}</option>
+              ))}
+            </select>
+          </label>
+          <span className="detail dw-new-hint">⌘↵ to start</span>
+          <button type="button" className="cap-btn primary" disabled={busy || !directive.trim()}
+                  onClick={() => void start()} data-testid="dw-new-start">
+            {busy ? "Starting…" : "Start"}
+          </button>
+        </div>
       </div>
       {error ? <p className="dw-new-error" data-testid="dw-new-error">{error}</p> : null}
     </section>
@@ -1508,7 +1523,7 @@ function DefineStepForm({ bindable, riskFloor, busy, projectId, onDefine, onCanc
           its hundredth run as on the one where somebody was watching. */}
       <label className="field">
         <span>What should it know?</span>
-        <textarea className="mr-input" rows={4} value={knowledge}
+        <textarea className="textarea" rows={4} value={knowledge}
                   data-testid="dw-step-knowledge"
                   placeholder="House style, the clauses that matter, the internal doc that explains this system — anything the step must hold to that its tool does not already know."
                   onChange={(e) => setKnowledge(e.target.value)} />

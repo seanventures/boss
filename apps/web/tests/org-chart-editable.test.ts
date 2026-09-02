@@ -126,3 +126,28 @@ describe("the Engineering Captain leads the work", () => {
     expect(CT).toContain("could not put a captain on");
   });
 });
+
+describe("the composer looks like the console it is in", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  const CSS_N = codeOnly("app/globals.css");
+  const DS = codeOnly("app/design-system.css");
+
+  it("uses a class the stylesheet actually defines", () => {
+    // `mr-input` was invented and defined nowhere, so every field wearing it rendered as a
+    // browser-default white box in a dark console. The design system defines .input and
+    // .textarea.
+    expect(DW).not.toContain('className="mr-input"');
+    expect(DS).toContain(".textarea,");
+  });
+
+  it("puts the field and its controls on one surface", () => {
+    // Three separate elements sharing a row read as a form; the Command Center's composer is
+    // the same act from another page and looks like one thing.
+    expect(CSS_N).toContain(".dw-new-box {");
+    expect(CSS_N).toContain(".dw-new-box:focus-within");
+  });
+
+  it("starts on the shortcut every other composer uses", () => {
+    expect(DW).toContain("(e.metaKey || e.ctrlKey) && e.key === \"Enter\"");
+  });
+});

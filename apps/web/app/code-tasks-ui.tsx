@@ -437,7 +437,7 @@ function FeedbackControls({ runId, status, anchor = "", projectId }: {
         <input type="hidden" name="anchor" value={anchor} />
         <label className="mr-field-label">
           {completed ? "What should it do?" : "What went wrong?"}
-          <textarea name="message" className="mr-input" rows={3} required
+          <textarea name="message" className="textarea" rows={3} required
             value={message} onChange={(e) => setMessage(e.target.value)}
             placeholder={completed
               ? "Describe the behaviour to add or change. The agent will clarify and propose a scoped extension."
@@ -446,7 +446,7 @@ function FeedbackControls({ runId, status, anchor = "", projectId }: {
         <div className="ct-iterate-row">
           <label className="mr-field-label">
             Done when
-            <input name="expected" className="mr-input" value={expected}
+            <input name="expected" className="input" value={expected}
                    onChange={(e) => setExpected(e.target.value)}
                    placeholder="How you will know it worked" />
           </label>

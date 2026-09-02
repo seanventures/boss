@@ -73,7 +73,7 @@ export function SettingsKnobs({ projectId, actor }: { projectId: string; actor: 
           <div className="settings-knob-row">
             <input
               id={`knob-${k.key}`}
-              className="mr-input"
+              className="input"
               type="number"
               min={k.min ?? undefined}
               max={k.max ?? undefined}
