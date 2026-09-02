@@ -131,3 +131,44 @@ class TestEverySpawnPointGoesThroughIt:
             "this runs the project's own test command; unfiltered, `make test` in a sandbox "
             "points at the production database"
         )
+
+
+class TestTheConsoleShellIsFilteredToo:
+    """The other spawn point, which already believed it was safe.
+
+    agent_shell dropped anything whose NAME matched TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL and
+    described itself as giving the child "no BOSS credentials to find". DATABASE_URL matches
+    none of those words, so the single most dangerous variable in the environment — password
+    included, inside the URL — was the one that filter passed through.
+
+    A denylist has to predict the next dangerous name. This is why the rule is deny-by-default
+    everywhere, not just where the incident happened to land.
+    """
+
+    def test_the_shell_uses_the_shared_allow_list(self):
+        from pathlib import Path
+
+        source = Path("engine/boss_engine/services/agent_shell.py").read_text()
+        assert "agent_environment(" in source
+
+    def test_the_old_name_denylist_is_gone(self):
+        from pathlib import Path
+
+        source = Path("engine/boss_engine/services/agent_shell.py").read_text()
+        assert "TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL" not in source.replace("\n", " ") or \
+            "agent_environment(" in source
+
+    def test_a_database_url_would_not_have_survived_the_old_filter_either(self):
+        """The regression this encodes: DATABASE_URL is invisible to a name-pattern denylist."""
+        import re
+
+        assert not re.search(r"(TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL)", "DATABASE_URL", re.I)
+        assert not is_allowed("DATABASE_URL")
+
+    def test_the_shell_still_gets_what_it_needs_to_clone(self):
+        env = agent_environment(
+            PRODUCTION_LIKE, {"HOME": "/tmp/ws", "GIT_TERMINAL_PROMPT": "0"},
+        )
+        assert env["HOME"] == "/tmp/ws"
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert "PATH" in env

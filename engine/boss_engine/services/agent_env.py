@@ -43,6 +43,8 @@ ALLOW_EXACT: frozenset[str] = frozenset({
     "CLAUDE_CONFIG_DIR",
     # Committing inside the sandbox. Identity only; no push credential.
     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    # Never block a clone waiting for a password prompt nobody can answer.
+    "GIT_TERMINAL_PROMPT",
     # Shared tool caches — the reason this env is built at all (see _shared_tool_caches).
     "npm_config_cache", "PLAYWRIGHT_BROWSERS_PATH", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
 })

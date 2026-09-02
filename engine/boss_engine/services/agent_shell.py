@@ -35,6 +35,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from .agent_env import agent_environment
+
 WORKSPACE_ROOT = Path(os.getenv("BOSS_AGENT_WORKSPACE_ROOT", "/tmp/boss-agent-ws"))
 COMMAND_TIMEOUT_SECONDS = int(os.getenv("BOSS_AGENT_SHELL_TIMEOUT", "90"))
 OUTPUT_CHAR_CAP = 20_000
@@ -135,12 +137,18 @@ def run_in_workspace(workspace: Path, command: str, cwd: Optional[str] = None) -
         return {"error": f"no such directory in the workspace: {cwd}", "exit_code": None}
 
     # A clean environment: the child gets no BOSS credentials to find.
-    env = {
-        k: v for k, v in os.environ.items()
-        if not re.search(r"(TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL)", k, re.I)
-    }
-    env["HOME"] = str(workspace)
-    env["GIT_TERMINAL_PROMPT"] = "0"          # never block waiting for credentials
+    #
+    # THIS USED TO BE A DENYLIST ON THE NAME — anything matching TOKEN|SECRET|KEY|PASSWORD|
+    # CREDENTIAL was dropped — and it read as though it worked. DATABASE_URL contains none of
+    # those words, so the one variable that could destroy the control plane was the one this
+    # filter let through, complete with the password inside it. On 2026-09-02 that is exactly
+    # what happened, by a different route.
+    #
+    # Deny by default instead, from the same list the agent subprocess uses. A denylist has to
+    # predict the next dangerous name; an allow list does not.
+    env = agent_environment(
+        os.environ, {"HOME": str(workspace), "GIT_TERMINAL_PROMPT": "0"},
+    )
 
     try:
         proc = subprocess.run(
