@@ -1512,6 +1512,9 @@ def execute_step(
     step_actor = str(step.get("captain") or "").strip().lower() or actor
     output = _invoke_tool(ctx, capability.tool, project_id, step_actor, inputs)
     result = {"capability": key, "tool": capability.tool, **output}
+    failed = _tool_failed_to_start(key, result)
+    if failed:
+        raise CapabilityExecutionError(failed)
 
     # STARTED IS NOT FINISHED. See `_settle_started_work`.
     return _settle_started_work(capability, key, result)
@@ -1662,6 +1665,25 @@ def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]
             value = scope.get(field)
             if isinstance(value, str) and value.strip():
                 return {"kind": kind, "id": value.strip()}
+    return None
+
+
+def _tool_failed_to_start(key: str, output: dict[str, Any]) -> Optional[str]:
+    """A sentence when the tool reported failure and there is nothing to wait on.
+
+    start_preview returns `{preview: null, error: preview_unavailable_no_pr}` when the build
+    has no PR. Completing that step as success lets deploy start with nothing to look at.
+    """
+    if key != "preview":
+        return None
+    if _awaited_handle(key, output):
+        return None
+    # Explicit failure only. A payload that merely omitted the nested record is the old
+    # flat shape (preview_url, preview_id at the top level) and is not a failed start.
+    if output.get("error") or ("preview" in output and output.get("preview") is None):
+        return str(
+            output.get("message") or output.get("error") or "preview did not start"
+        )
     return None
 
 

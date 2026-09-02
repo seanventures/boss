@@ -1152,6 +1152,121 @@ def test_preview_still_starts_one_when_there_is_none(eng, project, monkeypatch):
     assert steps["preview"]["output"]["preview_url"] == "https://started.test"
 
 
+def test_the_real_preview_tool_shape_is_waited_on(eng, project, monkeypatch):
+    """The live start_preview tool nests the record: {"preview": {"id": "prev_…", …}}.
+
+    The runner tests used to hand it a flat preview_id. Against the real shape, _awaited_handle
+    found nothing, the step completed the instant the tool returned, and preview→deploy walked
+    on while the app was still booting — or after it failed.
+    """
+    preview = RecordingTool("start_preview", {
+        "preview": {"id": "prev_nested", "status": "starting"},
+    })
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "prevnest", [
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_nested"}},
+             "next": []},
+        ], "preview")
+        started = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, started["id"])
+
+    assert preview.calls, "the tool was never called"
+    assert steps["preview"]["status"] == "waiting", steps["preview"]
+    assert steps["preview"]["output"]["await"] == {"kind": "preview", "id": "prev_nested"}
+
+
+def test_the_real_meeting_tool_shape_is_waited_on(eng, project, monkeypatch):
+    """request_meeting returns {"meeting": {"run_id": "mrun_…", "task_id": …}}, not meeting_run_id.
+
+    Completing the step on that shape let spec_review open a second gate before the panel had
+    written a PRD, so a person (or a timeout) could approve an empty spec and start a build.
+    """
+    meeting = RecordingTool("request_meeting", {
+        "status": "running",
+        "meeting": {"task_id": "tsk_1", "run_id": "mrun_nested", "job_id": "job_1"},
+        "project_id": project,
+    })
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "meetnest", [
+            {"id": "m", "kind": "capability",
+             "binding": {"capability": "meeting", "inputs": {"directive": "Build a thing"}},
+             "next": []},
+        ], "m")
+        started = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, started["id"])
+
+    assert meeting.calls, "the tool was never called"
+    assert steps["m"]["status"] == "waiting", steps["m"]
+    assert steps["m"]["output"]["await"] == {"kind": "meeting", "id": "mrun_nested"}
+
+
+def test_a_preview_that_did_not_start_fails_the_step(eng, project, monkeypatch):
+    """start_preview returns {preview: null, error: …} when there is no PR. That is a failure,
+    not a successful step with nothing to wait on — otherwise deploy starts anyway."""
+    preview = RecordingTool("start_preview", {
+        "preview": None,
+        "error": "preview_unavailable_no_pr",
+        "message": "This run has not opened a pull request yet, so there is no completed "
+                   "change to preview.",
+        "run_id": "crun_no_pr",
+    })
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "prevnone", [
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_no_pr"}},
+             "next": []},
+        ], "preview")
+        started = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, started["id"])
+
+    assert preview.calls, "the tool was never called"
+    assert steps["preview"]["status"] != "succeeded", steps["preview"]
+
+
+def test_awaited_handle_reads_the_real_tool_shapes():
+    """No database: the helper itself has to see the nested id the live tools return."""
+    assert runner._awaited_handle("preview", {
+        "preview": {"id": "prev_real", "status": "starting"},
+    }) == {"kind": "preview", "id": "prev_real"}
+    assert runner._awaited_handle("meeting", {
+        "status": "running",
+        "meeting": {"task_id": "tsk_1", "run_id": "mrun_real", "job_id": "job_1"},
+    }) == {"kind": "meeting", "id": "mrun_real"}
+    # Flat shapes the existing tests use must keep working.
+    assert runner._awaited_handle("preview", {"preview_id": "prev_flat"}) == {
+        "kind": "preview", "id": "prev_flat",
+    }
+    # A preview error carries the CODE TASK run_id. That is not a preview to wait on.
+    assert runner._awaited_handle("preview", {
+        "preview": None,
+        "error": "preview_unavailable_no_pr",
+        "run_id": "crun_no_pr",
+    }) is None
+    assert runner._tool_failed_to_start("preview", {
+        "preview": None,
+        "error": "preview_unavailable_no_pr",
+        "message": "This run has not opened a pull request yet",
+        "run_id": "crun_no_pr",
+    }) == "This run has not opened a pull request yet"
+    assert runner._tool_failed_to_start("preview", {
+        "preview": {"id": "prev_ok", "status": "starting"},
+    }) is None
+    # Flat success used by older tests: a URL and no nested record is not a failure.
+    assert runner._tool_failed_to_start("preview", {
+        "preview_url": "https://started.test",
+    }) is None
+
+
 def test_the_panel_argues_from_the_research(eng, project, monkeypatch):
     """Research produced a cited dossier and the panel that followed it debated the original
     one-line directive as though none of it had happened — which is what research was for."""
