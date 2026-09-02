@@ -92,3 +92,41 @@ describe("a step can carry what it needs to KNOW", () => {
     expect(SVC).toContain("if knowledge.strip():");
   });
 });
+
+describe("the starter shelf", () => {
+  const HERO = codeOnly("app/ask-boss-hero.tsx");
+  const CSS_I = codeOnly("app/globals.css");
+
+  it("offers a fresh set, not the ones already built", () => {
+    // All sixteen of the previous ideas had been run.
+    for (const gone of ["Flaky-test detector", "On-call rota with escalation",
+                        "CSV-to-chart explorer", "Waitlist with referral",
+                        "Dependency freshness report", "Shift swap for clinics"]) {
+      expect(HERO).not.toContain(gone);
+    }
+    for (const fresh of ["Incident timeline builder", "Subscription audit",
+                         "Interview scorecard", "Decision log"]) {
+      expect(HERO).toContain(fresh);
+    }
+  });
+
+  it("gives every card a mark and a hue", () => {
+    // Sixteen identical grey cards is a list pretending to be a gallery.
+    expect(HERO).toContain("const GLYPHS");
+    expect(HERO).toContain('className="askboss-idea-art"');
+    expect(CSS_I).toContain(".askboss-idea-art {");
+    expect(CSS_I).toContain("hsl(var(--idea-hue)");
+  });
+
+  it("draws the mark inline rather than fetching it", () => {
+    // The console must render with no network beyond its own origin, and a broken <img> is
+    // worse than no picture.
+    expect(HERO).toContain('<path d={GLYPHS[i.glyph]} />');
+    expect(HERO).not.toMatch(/<img[^>]+https?:/);
+  });
+
+  it("still only drafts — a click never spends money", () => {
+    // Clicking a suggestion used to fire a governed build immediately.
+    expect(HERO).toContain("onClick={() => draftIdea(i)}");
+  });
+});

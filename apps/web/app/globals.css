@@ -7905,3 +7905,36 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   margin-top: 14px;
 }
 .dw-palette-heading-row .dw-palette-heading { margin: 0; }
+
+/* ── Idea cards: a gallery, not a list ───────────────────────────────────────────
+   Sixteen cards of identical grey text is a list pretending to be a gallery. A mark
+   and a hue make them scannable at a glance, which is what a starter shelf is for. */
+.askboss-idea { position: relative; overflow: hidden; }
+.askboss-idea-art {
+  display: grid; place-items: center;
+  width: 40px; height: 40px; margin-bottom: 8px; border-radius: 11px;
+  color: hsl(var(--idea-hue) 82% 72%);
+  background:
+    radial-gradient(120% 120% at 20% 0%,
+      hsl(var(--idea-hue) 78% 58% / .30) 0%,
+      hsl(var(--idea-hue) 78% 40% / .10) 60%,
+      transparent 100%),
+    color-mix(in srgb, var(--panel, #0d1117) 70%, transparent);
+  border: 1px solid hsl(var(--idea-hue) 60% 55% / .32);
+}
+.askboss-idea-art svg { width: 21px; height: 21px; }
+/* A wash of the same hue behind the card, so the whole tile belongs to its subject
+   rather than a coloured square sitting on neutral grey. */
+.askboss-idea::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(160deg,
+    hsl(var(--idea-hue, 210) 70% 55% / .10) 0%, transparent 55%);
+  opacity: .9; transition: opacity .18s ease;
+}
+.askboss-idea:hover::before { opacity: 1; }
+.askboss-idea:hover .askboss-idea-art { border-color: hsl(var(--idea-hue) 70% 62% / .6); }
+.askboss-idea > * { position: relative; }
+
+@media (prefers-reduced-motion: reduce) {
+  .askboss-idea::before { transition: none; }
+}

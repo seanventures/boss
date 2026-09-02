@@ -62,248 +62,165 @@ const OPENERS = [
  * than fetched, so they work offline and cost nothing to show; a live feed is a separate
  * capability and is noted in the UI rather than faked here.
  */
-type Idea = { tag: string; title: string; brief: string };
+type Idea = {
+  tag: string; title: string; brief: string;
+  /** Hue for the card's thumbnail. A wall of identical grey cards is a list pretending to be a
+   *  gallery — colour is what makes sixteen of them scannable rather than readable. */
+  hue: number;
+  /** Which glyph the thumbnail draws. Inline SVG, not an image URL: the console must render
+   *  with no network beyond its own origin, and a broken <img> is worse than no picture. */
+  glyph: GlyphId;
+};
+
+type GlyphId = keyof typeof GLYPHS;
+
+/** Small, flat marks — a suggestion of the domain, not an illustration of it. Each is a single
+ *  path on a 24-box so they sit at the same optical weight. */
+const GLYPHS = {
+  board: "M3 5h18v14H3zM9 5v14M15 5v14",
+  chart: "M4 20V10M10 20V4M16 20v-7M22 20H2",
+  clock: "M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18zM12 7v5l3 2",
+  inbox: "M3 13h5l2 3h4l2-3h5M4 13 6 5h12l2 8v6H4z",
+  people: "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2 20a6 6 0 0 1 12 0M17 12a3 3 0 1 0 0-6M15 20h7a5 5 0 0 0-4-4.9",
+  shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+  spark: "M12 3l2.2 6.2L20 11l-5.8 1.8L12 19l-2.2-6.2L4 11l5.8-1.8z",
+  route: "M6 4v9a4 4 0 0 0 4 4h8M18 13l3 4-3 4",
+  tag: "M3 12l9-9h8v8l-9 9zM16 7h.01",
+  book: "M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 0-3 3zM5 4v19",
+  map: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z M9 4v14M15 6v14",
+  bell: "M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 0 0 4 0",
+} as const;
 
 const IDEAS: Idea[] = [
   {
-    tag: "DevTools",
-    title: "Flaky-test detector",
-    brief: `Build a flaky-test detector for CI.
-
-Who it is for: a team whose test suite fails intermittently and who currently re-run jobs by hand.
-
-What it must do:
-- Ingest JUnit XML from CI runs and store each test's pass/fail history per commit.
-- Flag a test as flaky when it both passed and failed on the SAME commit SHA.
-- Show a ranked list: flakiest first, with failure rate and last-seen date.
-- Let a user mute a known-flaky test and record who muted it and why.
-
-Done when: seeding two runs of the same commit with opposite results produces exactly one flagged test, and muting it removes it from the default list but keeps it in history.`,
+    tag: "Ops", title: "Incident timeline builder", hue: 4, glyph: "clock",
+    brief: `Build an incident timeline builder.
+Who it is for: an on-call engineer writing the post-mortem the morning after.
+Paste or upload the alert log and the chat transcript; it lays them on one timeline, marks
+detection, escalation, mitigation and all-clear, and computes time-to-detect and time-to-resolve.
+Editable — the tool proposes the milestones, the human corrects them.
+Exports a markdown post-mortem with the timeline embedded.`,
   },
   {
-    tag: "Ops",
-    title: "On-call rota with escalation",
-    brief: `Build an on-call rota tool.
-
-Who it is for: a small team that currently tracks who is on call in a spreadsheet.
-
-What it must do:
-- Define rotations (weekly/daily) over a list of people, with timezone-aware handover.
-- Show who is on call right now and who is next, with a shareable read-only page.
-- Support overrides for holidays without breaking the underlying rotation.
-- Escalate: if a page is unacknowledged for N minutes, notify the next person.
-
-Done when: a two-person weekly rotation shows the correct person across a handover boundary, and an unacknowledged page escalates exactly once.`,
+    tag: "Money", title: "Subscription audit", hue: 152, glyph: "chart",
+    brief: `Build a subscription audit tool.
+Who it is for: a founder who suspects they are paying for tools nobody opens.
+Upload a card statement CSV; it groups recurring charges by vendor, shows monthly and annual
+cost, flags anything that rose in price, and lets you mark each one keep / cancel / renegotiate.
+Shows the running total of what cancelling the marked ones would save.`,
   },
   {
-    tag: "Data",
-    title: "CSV-to-chart explorer",
-    brief: `Build a CSV-to-chart explorer.
-
-Who it is for: someone who receives CSV exports and wants a chart without opening a spreadsheet.
-
-What it must do:
-- Upload a CSV, infer column types (number, date, category), and show a preview.
-- Pick x and y and a chart type; render it; handle 100k rows without freezing the page.
-- Save a named view (file + columns + chart type) and reopen it later.
-- Export the chart as PNG.
-
-Done when: a 100k-row file renders in under two seconds and a saved view reopens with the same chart.`,
+    tag: "Team", title: "Interview scorecard", hue: 268, glyph: "people",
+    brief: `Build an interview scorecard app.
+Who it is for: a hiring manager tired of "seemed good?" as feedback.
+Define a role with its competencies; each interviewer scores against them independently and
+cannot see other scores until they submit theirs. Shows the spread, flags where interviewers
+disagree most, and produces one summary per candidate.
+Anti-anchoring is the point: hide the others until you have committed.`,
   },
   {
-    tag: "Agents",
-    title: "Weekly changelog writer",
-    brief: `Build a changelog writer that summarises merged pull requests.
-
-Who it is for: a maintainer who writes release notes by hand every week.
-
-What it must do:
-- Pull PRs merged in a date range from a GitHub repo.
-- Group them by label (feature / fix / chore) and drop anything labelled "no-changelog".
-- Write one plain sentence per PR, linking the PR number and crediting the author.
-- Output markdown ready to paste into a release.
-
-Done when: a week with mixed labels produces grouped markdown, and excluded PRs are absent.`,
+    tag: "Content", title: "Docs freshness board", hue: 196, glyph: "book",
+    brief: `Build a documentation freshness board.
+Who it is for: whoever owns docs nobody trusts any more.
+Point it at a docs folder in a repo. For each page it shows last edited, the code paths it
+mentions, and whether those paths have changed since. Sorts by "most likely to be wrong".
+Mark a page reviewed to reset its clock.`,
   },
   {
-    tag: "SaaS",
-    title: "Link shortener with analytics",
-    brief: `Build a link shortener with click analytics.
-
-Who it is for: someone sharing links across channels who wants to know which channel worked.
-
-What it must do:
-- Create a short code for a URL; redirect with a 301 and record the click.
-- Record referrer, coarse device type and country; never store raw IP addresses.
-- Dashboard: clicks over time per link, and a breakdown by referrer.
-- Support a custom alias, and reject one that is already taken.
-
-Done when: two links show independent counts, a duplicate alias is rejected with a clear error, and no raw IP is persisted anywhere.`,
+    tag: "Sales", title: "Lead triage inbox", hue: 28, glyph: "inbox",
+    brief: `Build a lead triage inbox.
+Who it is for: a small team drowning in inbound that is 80% noise.
+Paste a batch of enquiries; it scores each on fit against a profile you define, drafts a first
+reply for the good ones and a polite decline for the rest, and queues them for one-click send.
+Nothing sends without a human pressing send.`,
   },
   {
-    tag: "Vertical",
-    title: "Invoice chaser",
-    brief: `Build an invoice chaser for a small consultancy.
-
-Who it is for: a freelancer who forgets to chase unpaid invoices.
-
-What it must do:
-- Record invoices: client, amount, issue date, due date, paid/unpaid.
-- Show an ageing view: due soon, overdue by 1-30 days, overdue by 30+.
-- Draft a polite reminder email whose tone escalates with how overdue it is.
-- Never send anything automatically — the user reviews and sends.
-
-Done when: an invoice 45 days overdue appears in the right bucket with the firmest of the three drafts, and nothing is sent without an explicit click.`,
+    tag: "Ops", title: "Change calendar", hue: 340, glyph: "map",
+    brief: `Build a change calendar.
+Who it is for: a team that keeps deploying into someone else's launch.
+A shared calendar of planned changes with owner, blast radius and rollback plan. Warns when two
+changes to the same system land the same day, and supports a freeze window nobody can book over
+without stating a reason.`,
   },
   {
-    tag: "Internal",
-    title: "Access review helper",
-    brief: `Build an access review helper.
-
-Who it is for: a team that has to certify quarterly who has access to what.
-
-What it must do:
-- Import a list of users, systems and roles from CSV.
-- Generate a review round: each owner sees only their systems and approves or revokes per user.
-- Track progress and produce an export of every decision with a timestamp and reviewer.
-- Flag users with access to a system who have not logged in for 90 days.
-
-Done when: a round with two owners shows each only their own systems, and the export contains one row per decision.`,
+    tag: "Quality", title: "Bug triage board", hue: 12, glyph: "board",
+    brief: `Build a bug triage board.
+Who it is for: whoever runs triage and keeps re-litigating the same tickets.
+Import issues; it clusters near-duplicates, proposes severity from the words used, and shows
+what has been sitting untriaged longest. Every decision is one keystroke, and the board records
+who decided what and when.`,
   },
   {
-    tag: "DevTools",
-    title: "Env-var drift checker",
-    brief: `Build an environment variable drift checker.
-
-Who it is for: a team whose staging and production configs silently diverge.
-
-What it must do:
-- Read a .env.example as the schema and compare against each environment's actual key list.
-- Report three things separately: missing keys, extra keys, and keys present but empty.
-- Never read or display a value — key names only.
-- Exit non-zero in CI when a required key is missing.
-
-Done when: an environment missing one required key fails CI naming exactly that key, and no value is ever printed.`,
+    tag: "Learning", title: "Onboarding path", hue: 120, glyph: "route",
+    brief: `Build an onboarding path builder.
+Who it is for: the person who explains the same system to every new joiner.
+Compose a path of steps — read this, run that, ship a tiny change — with a checkpoint on each.
+New joiners see progress; the author sees where people get stuck, which is the signal that the
+docs are wrong.`,
   },
   {
-    tag: "DevTools",
-    title: "PR review-time tracker",
-    brief: `Build a pull-request review-time tracker.
-
-Who it is for: a team that suspects reviews are the bottleneck but has no numbers.
-
-What it must do:
-- For each merged PR, record time-to-first-review and time-to-merge.
-- Show p50 and p90 per week, and per reviewer.
-- Highlight PRs that waited more than 24h for a first look.
-- Exclude bot-authored PRs from the statistics but list them separately.
-
-Done when: a week with one 3-day-old PR shows a p90 clearly above p50, and bot PRs do not move either figure.`,
+    tag: "Money", title: "Pricing experiment log", hue: 44, glyph: "tag",
+    brief: `Build a pricing experiment log.
+Who it is for: a team changing prices and forgetting what they already tried.
+Record each experiment — what changed, for whom, when, expected effect — and the outcome when
+it lands. Prevents re-running a test you already lost, and shows the price history of every plan
+on one line.`,
   },
   {
-    tag: "Ops",
-    title: "Status page from health checks",
-    brief: `Build a public status page driven by real health checks.
-
-Who it is for: a team that announces outages manually, late.
-
-What it must do:
-- Poll a list of HTTP endpoints on an interval and record up/down with latency.
-- Compute uptime over 24h, 7d and 30d per service.
-- Show a 90-day history strip per service.
-- Let an operator post an incident note pinned above the services.
-
-Done when: taking one endpoint down for five minutes shows a dip in the strip and reduces its 24h uptime, without affecting the others.`,
+    tag: "Ops", title: "Vendor status watch", hue: 210, glyph: "bell",
+    brief: `Build a vendor status watcher.
+Who it is for: the engineer who finds out from a customer that Stripe is down.
+Track the status pages of the services you depend on, show current state on one board, and keep
+a history so "was it us or them?" is answerable a week later.
+Notify on state changes only — a watcher that shouts every poll is one people mute.`,
   },
   {
-    tag: "Data",
-    title: "Schema drift diff",
-    brief: `Build a database schema drift detector.
-
-Who it is for: a team whose staging schema quietly diverges from production.
-
-What it must do:
-- Snapshot table, column, type and index metadata for two databases.
-- Diff them: missing tables, missing columns, type mismatches, missing indexes.
-- Ignore an allowlist of expected differences, stored in a config file.
-- Output a readable report and exit non-zero when a non-allowlisted difference exists.
-
-Done when: adding a column to one side is reported with the exact table and column, and adding it to the allowlist makes the run pass.`,
+    tag: "Team", title: "Decision log", hue: 288, glyph: "shield",
+    brief: `Build a decision log.
+Who it is for: a team that keeps rediscovering why something is the way it is.
+One page per decision: the question, the options considered, what was chosen, who decided, and
+what would make us revisit it. Searchable, and linkable from code comments.
+Short by design — a template nobody fills in is worse than none.`,
   },
   {
-    tag: "Agents",
-    title: "Meeting-notes to tickets",
-    brief: `Build a tool that turns meeting notes into draft tickets.
-
-Who it is for: someone who leaves meetings with actions that never get written down.
-
-What it must do:
-- Accept pasted notes or a transcript.
-- Extract action items with an owner and a due date where stated.
-- Produce a draft ticket per action: title, description, owner — never created automatically.
-- Flag actions with no owner so they cannot be silently lost.
-
-Done when: notes with three actions, one unowned, produce three drafts and one visible warning.`,
+    tag: "Growth", title: "Changelog to email", hue: 172, glyph: "spark",
+    brief: `Build a changelog-to-email composer.
+Who it is for: whoever owes customers a "what's new" and never sends it.
+Reads merged pull requests since the last send, groups them into themes, drafts a short customer
+-facing email in plain language, and holds it for approval.
+Technical detail goes in a collapsible section; the top is what a customer cares about.`,
   },
   {
-    tag: "SaaS",
-    title: "Waitlist with referral",
-    brief: `Build a waitlist with referral positions.
-
-Who it is for: someone launching a product who wants signups to spread.
-
-What it must do:
-- Collect an email, confirm it double opt-in, and assign a queue position.
-- Give each signup a referral link; a confirmed referral moves the referrer up.
-- Show a person their position and how many referrals they have.
-- Resist obvious self-referral (same email, same link).
-
-Done when: a referral moves the referrer up exactly one place, and referring yourself does nothing.`,
+    tag: "Quality", title: "Test coverage trend", hue: 96, glyph: "chart",
+    brief: `Build a coverage trend board.
+Who it is for: a team whose coverage number moves and nobody knows why.
+Store coverage per commit, chart it, and attribute each drop to the change that caused it.
+Highlights files that lost coverage while being modified — the honest signal, as opposed to the
+project-wide percentage.`,
   },
   {
-    tag: "Vertical",
-    title: "Shift swap for clinics",
-    brief: `Build a shift-swap board for a small clinic.
-
-Who it is for: staff who arrange cover over text messages.
-
-What it must do:
-- Show the published roster and let someone offer a shift for swap.
-- Let a colleague claim it; the swap is pending until a manager approves.
-- Enforce that a claimer is qualified for that shift type.
-- Keep an audit trail: who offered, who claimed, who approved, when.
-
-Done when: an unqualified claim is refused with a clear reason, and an approved swap updates the roster and the trail.`,
+    tag: "Ops", title: "Access expiry tracker", hue: 356, glyph: "shield",
+    brief: `Build an access expiry tracker.
+Who it is for: whoever grants "temporary" access that is still live a year later.
+Record each grant with an expiry and an owner. Warns before it lapses, lists everything overdue,
+and produces the evidence an auditor asks for.
+Expiry is required — a grant with no end date is the thing this exists to prevent.`,
   },
   {
-    tag: "Internal",
-    title: "Runbook linter",
-    brief: `Build a linter for operational runbooks.
-
-Who it is for: a team whose runbooks are stale and fail at 3am.
-
-What it must do:
-- Parse markdown runbooks and extract every command block.
-- Flag commands referencing hosts, paths or services that no longer exist in an inventory file.
-- Flag steps with no verification ("how do I know it worked").
-- Report per runbook with line numbers.
-
-Done when: a runbook naming a decommissioned host fails with that host and line number, and a verified step passes.`,
+    tag: "Content", title: "Style guide linter", hue: 232, glyph: "book",
+    brief: `Build a style guide linter for prose.
+Who it is for: a team whose docs sound like four different companies.
+Define the rules — terms to prefer, phrases to avoid, sentence length, voice — and check pages
+against them. Every finding quotes the sentence and proposes a rewrite; nothing is changed
+without a human accepting it.`,
   },
   {
-    tag: "DevTools",
-    title: "Dependency freshness report",
-    brief: `Build a dependency freshness report.
-
-Who it is for: a team that only discovers outdated packages during an incident.
-
-What it must do:
-- Read a lockfile and compare each direct dependency against its latest release.
-- Classify: current, minor behind, major behind, unmaintained (no release in 24 months).
-- Show how far behind in time, not just in versions.
-- Exclude packages pinned deliberately, with the reason from a config file.
-
-Done when: a package two years old is marked unmaintained with its age, and a deliberately pinned one is excluded with its reason shown.`,
+    tag: "Team", title: "Rotation fairness board", hue: 64, glyph: "people",
+    brief: `Build a rotation fairness board.
+Who it is for: a team where the same two people always take the weekend.
+Import the on-call history and show who covered what, weighted by how unsociable the slot was.
+Proposes the next rotation to even it out, and shows the arithmetic — a fairness tool nobody can
+check is just another opinion.`,
   },
 ];
 
@@ -889,9 +806,19 @@ export function AskBossHero({
                     key={i.title}
                     type="button"
                     className="askboss-idea"
+                    style={{ ["--idea-hue" as string]: String(i.hue) }}
                     onClick={() => draftIdea(i)}
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
+                    {/* A LOOK, NOT JUST A LABEL. Sixteen identical grey cards is a list
+                        pretending to be a gallery; colour and a mark make them scannable. */}
+                    <span className="askboss-idea-art" aria-hidden
+                          style={{ ["--idea-hue" as string]: String(i.hue) }}>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                           strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d={GLYPHS[i.glyph]} />
+                      </svg>
+                    </span>
                     <span className="askboss-idea-tag">{i.tag}</span>
                     <span className="askboss-idea-title">{i.title}</span>
                     {/* The first brief line just restates the title ("PR review-time tracker"
