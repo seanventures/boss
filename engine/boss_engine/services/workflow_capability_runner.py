@@ -756,31 +756,48 @@ def _terminal_evidence(
 _DOSSIER_CHARS = 4000
 
 
+#: The sections a dossier actually stores, in the order a reader wants them, with the heading
+#: each becomes. Taken from a real completed run (drun_e615b07aa693491a8aba) rather than
+#: guessed: the first version of this list read `brief`/`findings`/`analysis`/`outcomes`, none
+#: of which exist, so the panel would have been handed a critique and a gate verdict while the
+#: twelve actual findings and the market analysis were silently dropped.
+_DOSSIER_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("research_brief", "What was researched"),
+    ("signal_findings", "What the research found"),
+    ("market_analysis", "Market analysis"),
+    ("critique", "Where this is weak"),
+    ("candidate_outcomes", "Outcomes worth considering"),
+    ("gate", "Evidence gate"),
+)
+
+
 def _dossier_brief(title: Any, state: Any) -> str:
     """The research, as something a panel can read.
 
-    The dossier is a nested document — brief, findings, analysis, critique, outcomes, gate.
-    Handing the panel the whole JSON would bury the directive; handing it nothing is what
-    happens today. These are the sections that change a product decision.
+    The dossier is a nested document. Handing the panel the whole JSON would bury the
+    directive; handing it nothing is what happened before this existed. These are the sections
+    that change a product decision.
     """
     if not isinstance(state, dict):
         return ""
     parts: list[str] = []
     if title:
         parts.append(f"# {title}")
-    for key in ("brief", "findings", "analysis", "critique", "outcomes", "gate"):
+    for key, heading in _DOSSIER_SECTIONS:
         value = state.get(key)
         if not value:
             continue
         if isinstance(value, str):
             body = value.strip()
         elif isinstance(value, list):
-            body = "\n".join(f"- {json.dumps(v) if isinstance(v, dict) else v}"
-                              for v in value[:12])
+            body = "\n".join(
+                f"- {json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v}"
+                for v in value[:12]
+            )
         else:
-            body = json.dumps(value, indent=1)[:1200]
+            body = json.dumps(value, indent=1, ensure_ascii=False)[:1200]
         if body:
-            parts.append(f"## {key}\n{body}")
+            parts.append(f"## {heading}\n{body}")
     return "\n\n".join(parts)[:_DOSSIER_CHARS]
 
 

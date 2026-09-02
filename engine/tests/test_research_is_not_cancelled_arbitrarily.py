@@ -64,3 +64,38 @@ def test_the_resume_is_recorded_where_somebody_can_see_it():
 def test_one_unresumable_run_does_not_block_the_others():
     body = inspect.getsource(ds.resume_interrupted)
     assert "except Exception" in body and "continue" in body
+
+
+def test_the_dossier_sections_are_the_ones_a_dossier_actually_has():
+    """Guessed section names hand the panel an empty document.
+
+    The first version of this list read `brief`, `findings`, `analysis`, `outcomes` — none of
+    which exist. A completed run (drun_e615b07aa693491a8aba) stores `research_brief`,
+    `signal_findings` (twelve of them), `market_analysis`, `critique`, `candidate_outcomes` and
+    `gate`. Reading the wrong names is silent: every section comes back empty, the handoff
+    "works", and the panel argues from nothing.
+    """
+    from boss_engine.services.workflow_capability_runner import _DOSSIER_SECTIONS
+
+    keys = {k for k, _ in _DOSSIER_SECTIONS}
+    for real in ("research_brief", "signal_findings", "market_analysis",
+                 "critique", "candidate_outcomes", "gate"):
+        assert real in keys, f"a dossier stores {real} and the handoff ignores it"
+    for invented in ("brief", "findings", "analysis", "outcomes"):
+        assert invented not in keys, f"{invented} is not a key any dossier has"
+
+
+def test_a_dossier_of_the_real_shape_produces_readable_prose():
+    """The panel reads this inside a prompt, so it has to be text — not JSON with a heading."""
+    from boss_engine.services.workflow_capability_runner import _dossier_brief
+
+    out = _dossier_brief("Dependency freshness", {
+        "research_brief": {"question": "how do teams keep deps current"},
+        "signal_findings": ["renovate is the default", "most teams batch monthly"],
+        "candidate_outcomes": [],
+    })
+    assert "Dependency freshness" in out
+    assert "What the research found" in out
+    assert "renovate is the default" in out
+    # An empty section is omitted rather than printed as a heading over nothing.
+    assert "Outcomes worth considering" not in out

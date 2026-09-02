@@ -958,8 +958,11 @@ def test_the_panel_argues_from_the_research(eng, project, monkeypatch):
                  "VALUES (:i,:p,'completed','done','Waitlists',CAST(:st AS JSONB)) "
                  "ON CONFLICT (id) DO NOTHING"),
             {"i": "drun_evidence", "p": project,
-             "st": '{"brief": "referral loops beat paid ads here",'
-                   ' "findings": ["three rivals gate by invite"]}'},
+             # The keys a real dossier uses, from drun_e615b07aa693491a8aba. An earlier
+             # version of this test invented `brief`/`findings`, which passed against code
+             # that read the same invented names and would have handed a live panel nothing.
+             "st": '{"research_brief": {"question": "referral loops beat paid ads here"},'
+                   ' "signal_findings": ["three rivals gate by invite"]}'},
         )
         _, version = _publish(c, project, "researchfeed", [
             {"id": "research", "kind": "capability",
@@ -1078,7 +1081,8 @@ def test_what_the_research_had_reached_still_goes_to_the_panel(eng, project, mon
                  "VALUES ('drun_partial', :p, 'cancelled', 'vet', 'Freshness', "
                  "CAST(:st AS JSONB)) ON CONFLICT (id) DO UPDATE "
                  "SET status='cancelled', state=EXCLUDED.state"),
-            {"p": project, "st": '{"brief": "teams check deps monthly at best"}'},
+            {"p": project,
+             "st": '{"research_brief": {"question": "teams check deps monthly at best"}}'},
         )
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
