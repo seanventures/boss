@@ -8,6 +8,7 @@ declarative; no workflow field is evaluated as Python or shell code.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,8 @@ from .workflow_capabilities import (
     project_requirements as capability_project_requirements,
     validate_step as capability_problems,
 )
+
+logger = logging.getLogger(__name__)
 
 
 WORKFLOW_KINDS = {
@@ -2776,6 +2779,21 @@ def cancel_run(
         raise WorkflowNotFoundError("Workflow run not found.")
     if run["status"] in TERMINAL_RUN_STATES:
         return get_run(connection, project_id, run_id)
+
+    # STOP THE WORK, NOT JUST THE BOOKKEEPING.
+    #
+    # Cancelling used to mark the step rows and the run row and stop there, which cancels
+    # nothing an operator would recognise as work: the code task the build step started keeps
+    # running, on its own job, in its own sandbox.
+    #
+    # On 2026-09-02 that gap turned a cancelled verification run into a destroyed database. The
+    # run was cancelled at 04:52 believing the build was stopped; the code task it had spawned
+    # carried on to its QA step and, twenty minutes later, ran the API test suite against the
+    # production DATABASE_URL it had inherited. 204 tables.
+    #
+    # "Cancel" has to mean the work stops. Anything else is a button that lies.
+    cancelled_work = _cancel_work_this_run_started(connection, project_id, run_id, actor, reason)
+
     connection.execute(
         text(
             """
@@ -2814,6 +2832,105 @@ def cancel_run(
         if compensation_count:
             begin_compensation(connection, project_id, run_id, actor, reason=reason)
     return get_run(connection, project_id, run_id)
+
+
+#: The long-running thing each async step starts, and the table that records its state. A step
+#: parks against one of these; cancelling the run has to reach through to it.
+_WORK_TABLES: dict[str, str] = {
+    "code_task": "code_task_runs",
+    "discovery": "discovery_runs",
+    "meeting": "meeting_runs",
+    "preview": "app_previews",
+}
+
+_WORK_TERMINAL: frozenset[str] = frozenset(
+    {"completed", "succeeded", "failed", "cancelled", "blocked", "stopped", "expired"}
+)
+
+
+def _cancel_work_this_run_started(
+    connection: Connection, project_id: str, run_id: str, actor: str, reason: str,
+) -> list[dict[str, Any]]:
+    """Stop the code tasks, discoveries, meetings and previews this run set going.
+
+    Each async step records what it is waiting on in its output, as {"await": {kind, id}} — the
+    same handle `resume_awaited` uses to complete it. That handle is the thread back to the real
+    work, so cancellation follows it rather than guessing from step ids.
+
+    Jobs are cancelled with force=True deliberately. The usual rule is that a running job is
+    left alone because killing it leaves a half-written branch — but here an operator has said
+    stop, and a half-written branch on an abandoned task is unambiguously better than an agent
+    that keeps running after being cancelled. That is precisely the trade the incident settled.
+
+    Best-effort per item, and never raises: a code task that cannot be stopped must not prevent
+    the run from being cancelled, or "cancel" fails exactly when it is needed most.
+    """
+    from .jobs import JobQueue
+
+    stopped: list[dict[str, Any]] = []
+    rows = connection.execute(
+        text(
+            """
+            SELECT step_id, output FROM workflow_step_runs
+            WHERE workflow_run_id = :run_id AND status IN ('waiting', 'running', 'leased')
+            """
+        ),
+        {"run_id": run_id},
+    ).mappings().all()
+
+    for row in rows:
+        output = _json(row["output"], {}) or {}
+        awaited = output.get("await") if isinstance(output.get("await"), dict) else None
+        if not awaited:
+            continue
+        kind = str(awaited.get("kind") or "")
+        work_id = str(awaited.get("id") or "").strip()
+        if not work_id or kind not in _WORK_TABLES:
+            continue
+
+        # The job first: that is the thing with a process behind it.
+        try:
+            jobs = connection.execute(
+                text(
+                    """
+                    SELECT id FROM jobs
+                    WHERE payload->>'run_id' = :work_id
+                      AND status NOT IN ('succeeded','cancelled','deadlettered')
+                    """
+                ),
+                {"work_id": work_id},
+            ).scalars().all()
+            for job_id in jobs:
+                JobQueue().cancel_queued_job(
+                    connection, job_id, force=True, actor=actor,
+                    reason=f"workflow run {run_id} was cancelled: {reason}",
+                )
+        except Exception:  # noqa: BLE001 — a job that will not stop must not block the cancel
+            logger.exception("could not cancel jobs for %s %s", kind, work_id)
+
+        # Then the record, so the console and every resume path agree it is over.
+        table = _WORK_TABLES[kind]
+        try:
+            connection.execute(
+                text(
+                    f"""
+                    UPDATE {table} SET status='cancelled', updated_at=now()
+                    WHERE id = :work_id AND status NOT IN :terminal
+                    """
+                ).bindparams(bindparam("terminal", expanding=True)),
+                {"work_id": work_id, "terminal": sorted(_WORK_TERMINAL)},
+            )
+        except Exception:  # noqa: BLE001 — table shapes differ; the job cancel is what matters
+            logger.exception("could not mark %s %s cancelled", kind, work_id)
+
+        stopped.append({"step_id": row["step_id"], "kind": kind, "id": work_id})
+
+    if stopped:
+        emit_event(
+            connection, project_id, "workflow.work_cancelled", actor, "workflow_run", run_id,
+            {"stopped": stopped, "reason": reason},
+        )
+    return stopped
 
 
 def begin_compensation(

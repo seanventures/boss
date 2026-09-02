@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from apps.api.app.bootstrap import seed
+from apps.api.tests.db_guard import assert_safe_to_wipe
 from apps.api.app.config import get_settings
 from apps.api.app.main import app
 from apps.api.app import main as api_main
@@ -30,7 +31,11 @@ api_main.settings.boss_edition = "community"
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
-    return os.environ["DATABASE_URL"]
+    # THE SAFETY CATCH. `seeded_database` below DELETEs from ~20 tables, and on 2026-09-02 it
+    # did that to production, because an agent ran this suite inside the deployed container
+    # where DATABASE_URL is prod. Everything that reaches the DELETE is built from this
+    # fixture, so this is the one place the guard has to be.
+    return assert_safe_to_wipe(os.environ["DATABASE_URL"])
 
 
 @pytest.fixture(scope="session")
