@@ -5741,3 +5741,22 @@ CREATE TABLE IF NOT EXISTS console_autonomy (
   set_by TEXT,
   set_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Knobs an operator can turn WITHOUT a deploy.
+--
+-- Everything that governs how hard BOSS runs — how many agents at once, how much it may
+-- spend, how long a lease lives — lived in environment variables, which means changing one is
+-- an ops action with a container restart behind it. That is the right home for a secret and
+-- the wrong home for a dial somebody wants to try at 20 and then at 5.
+--
+-- Per project, because two projects on one deployment should be able to run at different
+-- intensities. Values are JSON so a knob can grow from a number into a shape without a
+-- migration, and the runtime falls back to the environment when a project has said nothing.
+CREATE TABLE IF NOT EXISTS project_settings (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value JSONB NOT NULL,
+  updated_by TEXT NOT NULL DEFAULT 'operator',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, key)
+);

@@ -107,6 +107,7 @@ import {
 } from "../lib/area-data";
 import { fetchBudgetStatus, fetchBudgetIntensity } from "../lib/budget-status";
 import { BudgetIntensitySlider } from "./budget-intensity-ui";
+import { SettingsKnobs } from "./settings-knobs-ui";
 import { fetchLatestCanary } from "../lib/canaries";
 import { CanaryCard } from "./canary-ui";
 import { fetchDashboard } from "../lib/dashboard";
@@ -1615,6 +1616,18 @@ export default async function HomePage({ searchParams }: HomePageProps) {
           </div>
         </section>
 
+        <section className="panel-stack" data-area="budget" aria-label="Settings">
+          <div className="panel">
+            <span className="eyebrow" data-area="budget">Settings</span>
+            <h2>How hard BOSS runs</h2>
+            <p className="detail">
+              These lived in environment variables, so changing one meant an ops action and a
+              restart. Each says where its value comes from; a project value overrides the
+              deployment default.
+            </p>
+            <SettingsKnobs projectId={activeProjectId} actor={activeActorId} />
+          </div>
+        </section>
         <section className="panel-stack">
           <div className="section-head">
             <div>

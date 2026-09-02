@@ -2944,7 +2944,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
             # general lane). A low general concurrency was serializing the panel into ~2-3
             # batches of ~7-10min each → ~20min wall-clock. Provider 429s are handled by the
             # adapter's retry, so wider parallelism here is safe.
-            max_workers = min(len(checks), max(int(settings.code_agent_max_concurrency), 6))
+            # THE PROJECT'S OWN SETTING, when it has one. A knob that changes nothing is
+            # worse than no knob: this is the number an operator turns when review is
+            # saturating the box, so it has to be the number that is read.
+            from .project_settings import effective as _effective_setting
+            with _transaction(engine) as _sc:
+                _lanes = _effective_setting(
+                    _sc, project_id, settings, "code_agent_max_concurrency")
+            max_workers = min(len(checks), max(int(_lanes or 3), 6))
             panel_parallel = max_workers > 1
             # Safe defaults so a check that times out / errors DEGRADES instead of crashing or
             # auto-passing: security 'not_run' still BLOCKS (security_clean requires 'clean');

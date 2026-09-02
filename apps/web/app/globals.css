@@ -7864,3 +7864,25 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   box-shadow: 0 0 0 1px var(--warn, #d29922) inset;
 }
 .dw-awaiting { margin: 0 0 10px; }
+
+/* ── Settings ────────────────────────────────────────────────────────────────── */
+.settings-knobs { display: grid; gap: 16px; margin-top: 10px; }
+.settings-knob {
+  display: grid; gap: 5px; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--border, #30363d);
+  background: color-mix(in srgb, var(--panel, #0d1117) 60%, transparent);
+}
+.settings-knob-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.settings-knob-head label { font-size: 13px; font-weight: 600; }
+.settings-knob .detail { margin: 0; }
+.settings-knob-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.settings-knob-row input { width: 120px; }
+/* WHERE THE VALUE COMES FROM. "runs three agents" and "nobody chose, so it runs the
+   deployment default" are different facts, and only one says whether this dial does anything. */
+.settings-source {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border, #30363d);
+  color: var(--muted, #8b949e);
+}
+.settings-source[data-source="project"] { color: var(--live, #58a6ff); border-color: currentColor; }
+.settings-note { margin: 4px 0 0; font-size: 12px; color: var(--muted, #8b949e); }

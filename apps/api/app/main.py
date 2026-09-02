@@ -18271,6 +18271,54 @@ def budget_status(scope_type: str, scope_id: str) -> BudgetStatusResponse:
         )
 
 
+@app.get("/v1/settings")
+def get_project_settings(project_id: str) -> dict:
+    """The knobs, what each is worth now, and where that value came from.
+
+    Showing the value without its SOURCE is the difference between "this project runs three
+    agents" and "nobody has chosen, so it runs the deployment default" — and only one of those
+    tells an operator whether changing it here will do anything.
+    """
+    from boss_engine.services import project_settings as ps
+    with begin(engine) as connection:
+        chosen = ps.get_all(connection, project_id)
+        knobs = []
+        for key, spec in ps.KNOBS.items():
+            default = getattr(settings, spec["attr"], None)
+            knobs.append({
+                "key": key, "label": spec["label"], "help": spec["help"],
+                "kind": spec["kind"], "min": spec.get("min"), "max": spec.get("max"),
+                "value": chosen.get(key, default),
+                "default": default,
+                "source": "project" if key in chosen else "deployment default",
+            })
+    return {"project_id": project_id, "knobs": knobs}
+
+
+@app.put("/v1/settings/{key}")
+def put_project_setting(key: str, payload: dict) -> dict:
+    """Set one knob, or hand it back to the deployment default by sending no value."""
+    from boss_engine.services import project_settings as ps
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    actor = str(payload.get("actor") or "operator")
+    with begin(engine) as connection:
+        if payload.get("value") in (None, ""):
+            ps.clear_one(connection, project_id, key)
+            return {"key": key, "value": getattr(settings, ps.KNOBS.get(key, {}).get("attr", ""),
+                                                 None),
+                    "source": "deployment default"}
+        try:
+            value = ps.set_one(connection, project_id, key, payload.get("value"), actor)
+        except ps.UnknownKnob as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            # The bound, in words: "between 1 and 16" is actionable, "invalid" is not.
+            raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"key": key, "value": value, "source": "project"}
+
+
 @app.post("/v1/budget/set_intensity")
 def budget_set_intensity(payload: BudgetSetIntensityRequest) -> dict:
     """CEO Operational Intensity slider (0-100) → spend envelope + scaling limits."""
