@@ -209,7 +209,10 @@ def test_one_steps_output_becomes_the_next_steps_input(eng, project, monkeypatch
     assert preview.calls, "the second step never ran"
     assert preview.calls[0]["args"] == {"run_id": "crun_42"}, "the reference did not resolve"
     assert steps["b"]["status"] == "succeeded"
-    assert steps["p"]["status"] == "succeeded"
+    # A preview WAITS now: start_preview returns as soon as the request is accepted, so a
+    # step that completed there let the workflow walk on to deploy while the app was
+    # still booting. It parks until the preview is actually serving.
+    assert steps["p"]["status"] == "waiting"
 
 
 def test_a_reference_to_something_never_produced_fails_with_the_reason(eng, project, monkeypatch):
@@ -514,23 +517,22 @@ def test_a_capability_with_no_correlation_id_is_not_parked(eng, project, monkeyp
 
 
 def test_a_synchronous_capability_still_completes_immediately(eng, project, monkeypatch):
-    """Only the async ones wait. Making everything wait would stall workflows on steps that
-    genuinely finish when their tool returns."""
-    preview = RecordingTool("start_preview", {"preview_id": "prev_2"})
-    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+    """Only capabilities that START something and finish later park. A step whose work is done
+    the moment its tool returns must not sit waiting for an event that will never arrive."""
+    notify = RecordingTool("notify", {"delivered": True})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([notify]))
 
     with eng.begin() as c:
-        _, version = _publish(c, project, "sync_one", [
-            {"id": "p", "kind": "capability",
-             "binding": {"capability": "preview", "inputs": {"run_id": "crun_x"}},
+        _, version = _publish(c, project, "sync", [
+            {"id": "n", "kind": "capability",
+             "binding": {"capability": "notify", "inputs": {"message": "done"}},
              "next": []},
-        ], "p")
-        run = _start(c, project, version["id"])
+        ], "n")
+        run = _start(c, project, version["id"], {})
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
 
-    assert steps["p"]["status"] == "succeeded"
-
+    assert steps["n"]["status"] == "succeeded"
 
 def test_the_parked_step_holds_no_lease(eng, project, monkeypatch):
     """A lease held for the twenty minutes of a build would be reclaimed as a crashed worker,
@@ -1008,6 +1010,62 @@ def test_a_panel_still_convenes_when_there_was_no_research(eng, project, monkeyp
 
     assert steps["research"]["output"]["status"] == "not_applicable"
     assert steps["meeting"]["status"] != "failed", steps["meeting"]["last_error"]
+
+
+def test_research_that_did_not_finish_does_not_sink_the_project(eng, project, monkeypatch):
+    """Research is enrichment: it gives the panel evidence to argue from, and the binding into
+    `meeting` is optional precisely so a run without it still works. Failing the step failed
+    the whole RUN — measured on wfr_9782313e30cf4826a0, whose discovery was cancelled for a
+    reason of its own and took the build down with it before a line of code was written."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_doomed"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "researchdies", [
+            {"id": "research", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "x"}},
+             "next": ["notify"]},
+            {"id": "notify", "kind": "capability",
+             "binding": {"capability": "notify", "inputs": {"message": "done"}}, "next": []},
+        ], "research")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        c.execute(
+            text("INSERT INTO discovery_runs (id, project_id, status, phase, title) "
+                 "VALUES ('drun_doomed', :p, 'cancelled', 'done', 'x') "
+                 "ON CONFLICT (id) DO UPDATE SET status='cancelled'"),
+            {"p": project},
+        )
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+        row = c.execute(text("SELECT status FROM workflow_runs WHERE id=:r"),
+                        {"r": run["id"]}).scalar()
+        c.execute(text("DELETE FROM discovery_runs WHERE id='drun_doomed'"))
+
+    assert steps["research"]["status"] == "succeeded", steps["research"]["last_error"]
+    assert steps["research"]["output"]["status"] == "not_applicable"
+    assert "cancelled" in steps["research"]["output"]["note"]
+    assert row != "failed", "a cancelled research killed the run"
+
+
+def test_a_build_that_fails_still_stops_the_run(eng, project, monkeypatch):
+    """Only RESEARCH is tolerated. The build is the work: a run whose build failed has nothing
+    to preview and nothing to deploy, and carrying on would be a lie."""
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "builddies", [
+            {"id": "build", "kind": "capability",
+             "binding": {"capability": "build", "inputs": {"title": "X", "instructions": "go"}},
+             "next": []},
+        ], "build")
+        run = _start(c, project, version["id"], {"adopt_code_task_run_id": "crun_doomed"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_doomed", "failed", pr=None)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["build"]["status"] != "succeeded"
 
 
 def test_a_settled_verdict_fails_once_instead_of_three_times(eng, project, monkeypatch):

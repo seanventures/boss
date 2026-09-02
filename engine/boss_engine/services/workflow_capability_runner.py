@@ -658,6 +658,11 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "research": ("discovery", ("discovery_id", "run_id", "id")),
     "meeting": ("meeting", ("meeting_run_id", "run_id", "id")),
     "build": ("code_task", ("code_task_run_id", "run_id", "id")),
+    # STARTED IS NOT SERVING. start_preview returns as soon as the request is accepted, so the
+    # step completed while the app was still booting — and the workflow walked on to `deploy`
+    # with nothing anybody could look at. "Without a preview, do not move to deploy" is the
+    # whole reason this step sits where it does.
+    "preview": ("preview", ("preview_id", "id")),
 }
 
 
@@ -703,6 +708,9 @@ _AWAIT_TABLES: dict[str, tuple[str, frozenset[str], frozenset[str]]] = {
     "meeting": ("meeting_runs",
                 frozenset({"completed", "succeeded"}),
                 frozenset({"failed", "cancelled"})),
+    "preview": ("app_previews",
+                frozenset({"running", "verified"}),
+                frozenset({"failed", "stopped", "expired"})),
 }
 
 
@@ -850,6 +858,24 @@ def resume_awaited(
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})
+        elif status in bad_states and kind == "discovery":
+            # RESEARCH THAT DID NOT FINISH MUST NOT SINK THE PROJECT.
+            #
+            # Research is enrichment: it gives the panel evidence to argue from, and the
+            # binding into `meeting` is optional precisely so a run without it still works.
+            # Failing the step failed the whole RUN — so a discovery cancelled for a reason of
+            # its own took the build down with it before a line of code was written. Recorded,
+            # with what happened, and the workflow goes on.
+            workflows.force_complete_waiting_step(
+                connection, project_id=project_id, step_run_id=step["id"],
+                output={**output, "status": "not_applicable",
+                        "awaited_status": status,
+                        "note": f"research did not finish ({status}) — the panel will argue "
+                                f"from the directive alone."},
+            )
+            done.append({"run_id": run_id, "step_id": step["step_id"],
+                         "outcome": "not_applicable", "awaited": kind,
+                         "awaited_status": status})
         elif status in bad_states:
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],

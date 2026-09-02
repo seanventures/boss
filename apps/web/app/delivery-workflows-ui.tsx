@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
-import { operatorPreviewOpenHref } from "../lib/code-tasks";
+import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
 
 /** Where the API lives, for the proxy path a preview link resolves to. */
 const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
@@ -544,6 +544,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onPrepareTarget={(runId, hostId) =>
             act("Prepare target", "prepare_target",
                 { run_id: runId, host_id: hostId, environment: "staging" })}
+          onRunPreview={(buildRunId) =>
+            act("Preview", "start_preview", { run_id: buildRunId })}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: run.input ?? {},
           })}
@@ -856,7 +858,8 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 };
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
-                   onRetryStep, onRerun, onSetTarget, onPrepareTarget, targets, hosts }: {
+                   onRetryStep, onRerun, onSetTarget, onPrepareTarget, onRunPreview,
+                   targets, hosts }: {
   runs: Run[];
   openRun: string | null;
   setOpenRun: (id: string | null) => void;
@@ -867,6 +870,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   onRerun: (run: Run) => void;
   onSetTarget: (runId: string, targetId: string) => void;
   onPrepareTarget: (runId: string, hostId: string) => void;
+  onRunPreview: (buildRunId: string) => void;
   targets: DeployTarget[];
   hosts: DeployHost[];
 }) {
@@ -971,7 +975,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onRetryStep={(stepId) => onRetryStep(run.id, stepId)}
                         onRerun={() => onRerun(run)} busy={busy}
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
-                        onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)} />
+                        onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
+                        onRunPreview={onRunPreview} />
             ) : null}
           </article>
         );
@@ -1019,12 +1024,27 @@ function needsYou(step: RunStep): boolean {
  * doors to the pages where it can be debugged.
  */
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onSetTarget,
-                   onPrepareTarget, busy }: {
+                   onPrepareTarget, onRunPreview, busy }: {
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
+  onRunPreview: (buildRunId: string) => void;
   busy: string | null;
 }) {
+  // THE BUILD A PREVIEW IS FOR. Read from whichever step produced it rather than a step named
+  // "build", because a customer can rename their steps and the canonical field is the contract.
+  const buildRunId = (() => {
+    const fromInput = (run.input ?? {})["adopt_code_task_run_id"];
+    if (typeof fromInput === "string" && fromInput.trim()) return fromInput.trim();
+    for (const s of run.steps) {
+      const produced = (s.output ?? {}) as Record<string, unknown>;
+      const direct = produced.code_task_run_id;
+      if (typeof direct === "string" && direct.startsWith("crun_")) return direct;
+      const awaited = produced.await as { kind?: string; id?: string } | undefined;
+      if (awaited?.kind === "code_task" && awaited.id) return awaited.id;
+    }
+    return null;
+  })();
   const byKey = new Map(capabilities.map((c) => [c.key, c]));
   const steps = run.steps;
   // Open on the step that wants attention, then the one in flight, then the first. Landing on
@@ -1082,6 +1102,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           onRetry={() => onRetryStep(current.step_id)}
           onSetTarget={(targetId) => onSetTarget(targetId)}
           onPrepareTarget={onPrepareTarget}
+          buildRunId={buildRunId}
+          onRunPreview={onRunPreview}
           busy={busy}
         />
       ) : null}
@@ -1177,20 +1199,31 @@ function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTar
 
 /** Everything known about one step, in the order an operator asks for it. */
 function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
-                     onPrepareTarget, busy }: {
+                     onPrepareTarget, onRunPreview, buildRunId, busy }: {
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
   onRetry: () => void; onSetTarget: (targetId: string) => void;
-  onPrepareTarget: (hostId: string) => void; busy: string | null;
+  onPrepareTarget: (hostId: string) => void;
+  /** The code task this run built — what a preview is started FOR. */
+  buildRunId: string | null;
+  onRunPreview: (buildRunId: string) => void;
+  busy: string | null;
 }) {
   const phase = phaseOf(step);
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.
-  const links = stepLinks({ ...(step.output || {}),
-                            ...(step.live_preview ? { live_preview: step.live_preview } : {}) });
+  const merged = { ...(step.output || {}),
+                   ...(step.live_preview ? { live_preview: step.live_preview } : {}) };
+  const links = stepLinks(merged);
+  const previewHref = links.find((l) => l.label === "open the preview")?.href ?? null;
   const approval = step.approval as { mode?: string; approver_role?: string };
   const produced = Object.entries(step.output || {})
     .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
+    // A LOOPBACK URL IS NOT AN ADDRESS ANYBODY CAN USE. `preview_url` is where the app listens
+    // ON THE HOST — 127.0.0.1:42543 — and printing it under a heading reading PREVIEW URL
+    // invites somebody to copy it, paste it, and get nothing. The link above is the openable
+    // one; this grid is for facts, and that is not one.
+    .filter(([, v]) => !(typeof v === "string" && isLoopbackPreviewUrl(v)))
     .slice(0, 6);
 
   return (
@@ -1262,6 +1295,31 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
             {(step.approval as { approver_role?: string })?.approver_role
               ? `${(step.approval as { approver_role?: string }).approver_role} signs this off.`
               : "Opens the approval with its recommendation, cost and risk."}
+          </span>
+        </div>
+      ) : null}
+
+      {/* RUN IT, OR OPEN IT. The preview step reported what it had recorded and offered no way
+          to do anything: no button to start one, and — once the recorded preview expired — no
+          link either. Factory has had "Open preview" and a way to start one all along; this is
+          the same two controls, on the step whose whole subject is the preview. */}
+      {step.capability === "preview" ? (
+        <div className="dw-step-decide" data-testid="dw-preview-controls">
+          {previewHref ? (
+            <a className="cap-btn primary" href={previewHref} target="_blank" rel="noreferrer"
+               data-testid="dw-preview-open">Open preview</a>
+          ) : null}
+          {buildRunId ? (
+            <button type="button" className="cap-btn" disabled={!!busy}
+                    data-testid="dw-preview-run" onClick={() => onRunPreview(buildRunId)}>
+              {busy === "Preview" ? "Starting…"
+                : previewHref ? "Start a fresh one" : "Run preview"}
+            </button>
+          ) : null}
+          <span className="detail">
+            {previewHref
+              ? "A live preview of this build, on a URL you can open."
+              : "Nothing is serving this build right now. Starting one takes a few seconds."}
           </span>
         </div>
       ) : null}

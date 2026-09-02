@@ -151,3 +151,27 @@ describe("the composer looks like the console it is in", () => {
     expect(DW).toContain("(e.metaKey || e.ctrlKey) && e.key === \"Enter\"");
   });
 });
+
+describe("the preview step can be acted on", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+
+  it("offers Run preview and Open preview, like Factory", () => {
+    // The step reported what it had recorded and offered no way to do anything: no button to
+    // start one, and — once the recorded preview expired — no link either.
+    expect(DW).toContain('data-testid="dw-preview-run"');
+    expect(DW).toContain('data-testid="dw-preview-open"');
+    expect(DW).toContain('"start_preview"');
+  });
+
+  it("starts one against the build, not the workflow run", () => {
+    // A preview is a code-task operation; the endpoint is the one Factory calls.
+    expect(DW).toContain("const buildRunId");
+    expect(DW).toContain('awaited?.kind === "code_task"');
+  });
+
+  it("never prints a loopback address as if it were openable", () => {
+    // 127.0.0.1:42543 is where the app listens ON THE HOST. Printing it under a heading
+    // reading PREVIEW URL invites somebody to copy it, paste it, and get nothing.
+    expect(DW).toContain("isLoopbackPreviewUrl(v)");
+  });
+});

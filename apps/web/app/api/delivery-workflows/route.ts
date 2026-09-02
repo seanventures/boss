@@ -90,6 +90,9 @@ const RUN_ACTIONS: Record<string, (runId: string) => string> = {
   set_input: (id) => `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/input`,
   prepare_target: (id) =>
     `/v1/delivery-workflows/runs/${encodeURIComponent(id)}/deploy-target`,
+  // Starting a preview is a CODE TASK operation — the same endpoint Factory calls — so the
+  // run id here is the build's, not the workflow's.
+  start_preview: (id) => `/v1/code-tasks/${encodeURIComponent(id)}/preview`,
 };
 
 export async function POST(req: Request) {
