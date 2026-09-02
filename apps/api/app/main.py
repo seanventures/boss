@@ -20606,6 +20606,20 @@ def start_delivery_workflow(payload: dict) -> dict:
     workflow_key = str(payload.get("workflow_key") or "").strip()
     actor = str(payload.get("actor") or "operator").strip()
     run_input = payload.get("input") if isinstance(payload.get("input"), dict) else {}
+    # ADOPTION IS NOT SOMETHING A CALLER GETS TO ASSERT.
+    #
+    # `adopt_*` tells the runtime "this work already happened, go and watch it rather than
+    # doing it". It is set by start_project_run, from inside, when a code task creates the run
+    # that governs it — the one case where the claim is true by construction.
+    #
+    # Accepting it from a client let "Run this workflow again" hand back the previous run's
+    # input whole, so a re-run adopted the same finished build: research recorded as not-run,
+    # the old panel and approval adopted, `build` green in seconds against yesterday's code.
+    # The console now strips them, but a console is a client — and the next client, or an
+    # unrefreshed browser running last week's bundle, would do it again. Refused here, where
+    # it cannot be got wrong.
+    dropped = sorted(k for k in run_input if k.startswith("adopt_"))
+    run_input = {k: v for k, v in run_input.items() if not k.startswith("adopt_")}
     if not project_id or not (work_class or workflow_key):
         raise HTTPException(
             status_code=400,
@@ -20643,7 +20657,10 @@ def start_delivery_workflow(payload: dict) -> dict:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except workflow_runtime.WorkflowBindingBlockedError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        return {"run": run}
+        # Named in the response rather than dropped in silence: a caller that asked for
+        # adoption and did not get it should be able to see that, not wonder why its run
+        # behaved differently from the one it copied.
+        return {"run": run, **({"ignored_input": dropped} if dropped else {})}
 
 
 @app.get("/v1/delivery-workflows")
