@@ -92,19 +92,30 @@ describe("New project, from anywhere", () => {
   });
 
   it("Factory keeps its own entry for changing an app that already exists", () => {
-    // A different act from starting something: it builds on a branch and a PR that exist.
-    expect(CT).toContain('data-testid="ct-new-workflow"');
+    // A different act from starting something: it builds on a branch and a PR that exist, and
+    // it lives on a project's own page rather than on the list.
+    expect(CT).toContain('data-testid="ct-iterate-workflow"');
+    expect(CT).toContain("Add to this project");
   });
 
   it("CONSUMES the request rather than leaving it in the URL", () => {
-    // This test replaces one that asserted the reader must never close the form — which
-    // encoded the bug. `?new=1` is a one-shot command, and navigation copies the query string,
-    // so leaving it there re-delivered it forever: clicking a project set `?run=` on a URL that
-    // still said `new=1`, popstate fired, and the form reopened over the project you clicked.
-    // The sequence itself is tested in url-intent.test.ts.
-    const reader = CT.slice(CT.indexOf("readNewProjectIntent(window.location.search)"));
+    // `?new=1` is a one-shot command, and navigation copies the query string, so leaving it
+    // there re-delivered it forever: clicking a project set `?run=` on a URL that still said
+    // `new=1`, popstate fired, and the form reopened over the project you clicked. The reader
+    // lives on the Workflow page now, which is where the composer is.
+    const DWC = codeOnly("app/delivery-workflows-ui.tsx");
+    const reader = DWC.slice(DWC.indexOf("readNewProjectIntent(window.location.search)"));
     expect(reader.slice(0, 700)).toContain("history.replaceState");
     expect(reader.slice(0, 700)).toContain("intent.nextSearch");
+  });
+
+  it("Factory offers ONE way to start a project, and it is not a second form", () => {
+    // Starting a project moved to Workflow and the Factory form stayed, so there were two
+    // ways to do it on two pages — one of which showed the steps that follow and one of which
+    // did not. Two entry points for one act is how somebody ends up unsure which is real.
+    expect(CT).not.toContain("NewCodeTaskForm");
+    expect(CT).toContain('data-testid="ct-start-in-workflow"');
+    expect(CT).toContain("function startAProjectHref");
   });
 });
 
@@ -159,10 +170,13 @@ describe("choosing the workflow", () => {
     expect(HERO).toContain("could not save");
   });
 
-  it("the per-project picker still exists on the form", () => {
-    // Two different questions: "what should THIS project follow" and "what should new projects
-    // follow from now on".
-    expect(CT).toContain('data-testid="ct-new-workflow"');
+  it("a per-piece-of-work picker still exists", () => {
+    // Two different questions: "what should THIS work follow" and "what should new projects
+    // follow from now on". The first now lives in two places, each next to the work it
+    // governs: the Workflow composer for a new project, the Iterate panel for a change.
+    const DWP = codeOnly("app/delivery-workflows-ui.tsx");
+    expect(DWP).toContain('data-testid="dw-new-workflow"');
+    expect(CT).toContain('data-testid="ct-iterate-workflow"');
     expect(CT).toContain('name="workflow_version_id"');
   });
 });

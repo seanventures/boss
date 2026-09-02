@@ -2,7 +2,6 @@
 
 import { useSearchParams } from "next/navigation";
 
-import { readNewProjectIntent } from "./url-intent";
 import { consoleHref } from "./console-href";
 import { appIdentity, groupIdentity } from "./app-identity";
 
@@ -591,83 +590,18 @@ function useProjectWorkflows(projectId: string) {
   return items;
 }
 
-function NewCodeTaskForm({ projectId, defaultOwner, defaultRepo }: {
-  projectId: string;
-  defaultOwner?: string;
-  defaultRepo?: string;
-}) {
-  const workflows = useProjectWorkflows(projectId);
-  return (
-    <form action={createCodeTaskAction} className="ct-form">
-      <input type="hidden" name="project_id" value={projectId} />
-      <div className="ct-form-row">
-        <label className="mr-field-label">
-          Title
-          <input className="mr-select" name="title" placeholder="Add a temperature conversion module" required />
-        </label>
-      </div>
-      <div className="ct-form-row">
-        <label className="mr-field-label">
-          Instructions for the coding agent
-          <textarea className="mr-select" name="instructions" rows={4}
-            placeholder="Create temperature.py with c_to_f(c) and f_to_c(f). Add test_temperature.py with unittest covering both." required />
-        </label>
-      </div>
-      <div className="ct-form-grid">
-        <label className="mr-field-label">
-          Acceptance criteria (one per line)
-          <textarea className="mr-select" name="acceptance_criteria" rows={3}
-            placeholder={"defines c_to_f and f_to_c\ntests cover both\nunittest passes"} />
-        </label>
-        <label className="mr-field-label">
-          Test commands (one per line — must pass to open a PR)
-          <textarea className="mr-select" name="test_commands" rows={3}
-            placeholder={"python3 -m unittest discover -s . -p test_*.py"} />
-        </label>
-      </div>
-      <div className="ct-form-grid">
-        <label className="mr-field-label">
-          Owner
-          <input className="mr-select" name="owner" defaultValue={defaultOwner} placeholder="paramg" />
-        </label>
-        <label className="mr-field-label">
-          Repo
-          <input className="mr-select" name="repo" defaultValue={defaultRepo} placeholder="boss-sandbox" />
-        </label>
-        <label className="mr-field-label">
-          Base branch
-          <input className="mr-select" name="base_branch" defaultValue="main" placeholder="main" />
-        </label>
-      </div>
-      {/* WHICH PATH THIS WORK FOLLOWS.
-          The workflow runtime and the coding pipeline were separate systems: 54 definitions on
-          one screen, a list of runs on another, and nothing anywhere saying they were related.
-          Choosing here is the join, made at the moment the decision is actually being taken.
-          The empty option is not a blank — it is the honest default. Most projects should
-          follow whatever the project already maps, and forcing a choice on someone who has no
-          opinion would make the field an obstacle rather than a control. */}
-      <div className="ct-form-row">
-        <label className="mr-field-label">
-          Workflow
-          <select className="mr-select" name="workflow_version_id"
-                  data-testid="ct-new-workflow" defaultValue="">
-            <option value="">Use this project&apos;s workflow (Standard Product Delivery)</option>
-            {workflows
-              .filter((w) => w.active_version_id)
-              .map((w) => (
-                <option key={w.id} value={w.active_version_id as string}>
-                  {w.name}{w.is_catalogue ? " (standard)" : ""}
-                </option>
-              ))}
-          </select>
-        </label>
-      </div>
-      <div className="ct-form-actions">
-        <SubmitButton className="cap-btn primary" type="submit">Start project</SubmitButton>
-        <span className="detail">The agent edits files in an isolated sandbox; BOSS re-runs the tests and opens a gated PR.</span>
-      </div>
-    </form>
-  );
+/** Where a project is started now: the page that shows what happens after you press it. */
+function startAProjectHref(): string {
+  const now = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : "");
+  const next = new URLSearchParams();
+  for (const key of ["org", "org_id"]) {
+    const value = now.get(key);
+    if (value) next.set(key, value);
+  }
+  next.set("area", "delivery_workflows");
+  next.set("new", "1");
+  return `?${next.toString()}`;
 }
 
 /**
@@ -2683,33 +2617,7 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
     window.addEventListener("popstate", read);
     return () => window.removeEventListener("popstate", read);
   }, []);
-  const [showNew, setShowNew] = useState(false);
-  // OPENED FROM THE TOP BAR. The shell can start a project from any of the twenty-two screens
-  // by adding `?new=1`; this area owns the form.
-  //
-  // CONSUMED, not read. Unlike `?run=` above — which names a place and is meant to be re-read —
-  // this is a one-shot command, and navigation copies the query string. Leaving it in the URL
-  // re-delivered it on every later navigation: clicking a project in the top strip set `?run=`
-  // on a URL that still said `new=1`, fired popstate, and this handler ran again, opening the
-  // form and clearing the selection. Every project click landed on an empty form.
-  useEffect(() => {
-    const read = () => {
-      const intent = readNewProjectIntent(window.location.search);
-      if (!intent.open) return;
-      setShowNew(true);
-      // AND STOP SHOWING A PROJECT. Selection is component state, so clearing the URL param
-      // alone does not put the area back on its list — asking to start something new means
-      // you are no longer reading an existing one.
-      setSelected(null);
-      try {
-        window.history.replaceState(null, "",
-          `${window.location.pathname}${intent.nextSearch}${window.location.hash}`);
-      } catch { /* non-browser — the form is open either way */ }
-    };
-    read();
-    window.addEventListener("popstate", read);
-    return () => window.removeEventListener("popstate", read);
-  }, []);
+
   // The run list inside an app docks away when the detail is what you are reading. There is no
   // app-level selection state: clicking an app opens its newest built run, and the page you
   // land on owns which run is showing.
@@ -3145,16 +3053,18 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
                 : githubPlaneLabel || `GitHub: ${githubPlane}`}
           </span>
         ) : null}
+        {/* STARTING A PROJECT MOVED TO WORKFLOW, AND THIS STAYED — so there were two ways to
+            do it, on two pages, one of which showed the steps that follow and one of which
+            did not. Two entry points for one act is how an operator ends up unsure which of
+            them is the real one. Factory is where the RESULTS live: the code, the pull
+            request, the preview, and the panel for changing an app that already exists. */}
         <div className="ct-home-actions">
-          <button className="cap-btn primary" onClick={() => setShowNew((v) => !v)}>
-            {showNew ? "Close" : "＋ New project"}
-          </button>
+          <a className="cap-btn primary" href={startAProjectHref()}
+             data-testid="ct-start-in-workflow">
+            ＋ New project
+          </a>
         </div>
       </div>
-
-      {showNew ? (
-        <NewCodeTaskForm projectId={projectId} defaultOwner={lastRepo?.owner} defaultRepo={lastRepo?.repo} />
-      ) : null}
 
       <QaBenchmarkCatalog
         benchmarks={benchmarks}
