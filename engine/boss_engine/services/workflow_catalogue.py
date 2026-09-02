@@ -94,7 +94,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "project.new",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
-            _step("meeting", "meeting", {"directive": _in("directive")}),
+            # THE PANEL ARGUES FROM THE RESEARCH. Without this binding the research step ran,
+            # produced a cited dossier, and the panel that followed it debated the original
+            # one-line directive as though none of it had happened.
+            _step("meeting", "meeting", {"directive": _in("directive"),
+                                         "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="product_owner"),
             _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
@@ -127,7 +131,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "feature.major",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
-            _step("meeting", "meeting", {"directive": _in("directive")}),
+            # THE PANEL ARGUES FROM THE RESEARCH. Without this binding the research step ran,
+            # produced a cited dossier, and the panel that followed it debated the original
+            # one-line directive as though none of it had happened.
+            _step("meeting", "meeting", {"directive": _in("directive"),
+                                         "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="product_owner"),
             _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
@@ -233,7 +241,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
-            _step("meeting", "meeting", {"directive": _in("directive")}),
+            # THE PANEL ARGUES FROM THE RESEARCH. Without this binding the research step ran,
+            # produced a cited dossier, and the panel that followed it debated the original
+            # one-line directive as though none of it had happened.
+            _step("meeting", "meeting", {"directive": _in("directive"),
+                                         "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="product_owner"),
             _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
             _step("security_review", "security_review", approver_role="security_lead"),
@@ -252,7 +264,11 @@ CATALOGUE: list[dict[str, Any]] = [
         "work_class": "any",
         "steps": _chain([
             _step("research", "research", {"seed": _in("directive")}),
-            _step("meeting", "meeting", {"directive": _in("directive")}),
+            # THE PANEL ARGUES FROM THE RESEARCH. Without this binding the research step ran,
+            # produced a cited dossier, and the panel that followed it debated the original
+            # one-line directive as though none of it had happened.
+            _step("meeting", "meeting", {"directive": _in("directive"),
+                                         "research": _from("research", "dossier")}),
             _step("spec_review", "spec_review", approver_role="tech_lead"),
             _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},

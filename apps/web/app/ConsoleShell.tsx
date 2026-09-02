@@ -176,6 +176,15 @@ const ICONS = {
 // Why those three are cut from Community: Reliability and Evidence have nothing behind them
 // yet (incidents: 0 rows, drift_reports: 0), and Activity log holds 47,921 events of which
 // ~75% are a single internal audit-export event — not empty, unreadable.
+/** Areas that still EXIST but no longer earn a place in the left rail.
+ *
+ *  Research and the PRD panel are steps of a workflow now, not destinations: the workflow
+ *  drives both, and every run links to the dossier it produced and the panel it convened. Two
+ *  permanent nav entries for things you arrive at from somewhere else is two rows of standing
+ *  cost for a trip nobody takes deliberately. Reachable by URL and by every link that names
+ *  them — hidden from the rail, not removed from the console. */
+const OFF_THE_NAV = new Set<AreaId>(["discovery", "meetings"]);
+
 const AREAS: AreaDef[] = [
   { id: "overview", label: "Command Center", sub: "What changed · top risks · next actions", group: "Platform", icon: ICONS.overview },
   // THE ORDER IS THE ARGUMENT. The Run group opens with the place work is DONE and the path it
@@ -619,7 +628,8 @@ export default function ConsoleShell({
   // Sidebar only: Community v1 home is a small cut (UI_V1_CUT.md). Palette +
   // `?area=` keep every AreaId reachable (SSO stays in the sidebar).
   const navAreas = useMemo(
-    () => areasForEdition.filter((a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition)),
+    () => areasForEdition.filter(
+      (a) => isCommunityPrimaryNavVisible(a.id, resolvedEdition) && !OFF_THE_NAV.has(a.id)),
     [areasForEdition, resolvedEdition],
   );
 

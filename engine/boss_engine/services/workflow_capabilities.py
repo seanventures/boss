@@ -95,7 +95,10 @@ CAPABILITIES: dict[str, Capability] = {
             tool="request_meeting",
             risk_tier=1,
             required_inputs=("directive",),
-            optional_inputs=("task_id",),
+            # `research` is what makes the difference between a panel arguing from a one-line
+            # directive and one arguing from evidence. Optional, because a workflow may skip
+            # research entirely — but bindable, so one that does not can hand it over.
+            optional_inputs=("task_id", "research"),
             produces=("meeting_run_id", "prd_markdown", "task_id"),
             typical_minutes=20,
             is_async=True,

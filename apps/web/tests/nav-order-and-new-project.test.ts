@@ -31,11 +31,16 @@ describe("the Run group order", () => {
     ]);
   });
 
-  it("keeps Discovery and Meetings — they moved, they did not go", () => {
-    // They are the two ways IN besides starting a project directly. Demoting them is a
-    // judgement about emphasis; removing them would be a loss of function.
+  it("keeps Discovery and Meetings as AREAS, off the rail", () => {
+    // They are steps of a workflow now, not destinations: the workflow drives both, and every
+    // run links to the dossier it produced and the panel it convened. Two permanent nav rows
+    // for a trip nobody takes deliberately is standing cost. Hidden from the rail — not
+    // removed, or every link naming them would 404.
     expect(runOrder()).toContain("discovery");
     expect(runOrder()).toContain("meetings");
+    expect(SHELL).toContain("const OFF_THE_NAV");
+    expect(SHELL).toContain('new Set<AreaId>(["discovery", "meetings"])');
+    expect(SHELL).toContain("!OFF_THE_NAV.has(a.id)");
   });
 
   it("lists each area exactly once", () => {
@@ -554,5 +559,15 @@ describe("Build starts the workflow, not a panel", () => {
     // "nothing happened".
     expect(DW_WAIT).toContain('data-testid="dw-awaiting"');
     expect(DW_WAIT).toContain("the run appears here the moment it is created");
+  });
+});
+
+describe("the panel argues from the research", () => {
+  const CAT = codeOnly("../../engine/boss_engine/services/workflow_catalogue.py");
+
+  it("binds the dossier into the meeting step", () => {
+    // Research produced a cited dossier and the panel that followed debated the original
+    // one-line directive as though none of it had happened.
+    expect(CAT).toContain('"research": _from("research", "dossier")');
   });
 });

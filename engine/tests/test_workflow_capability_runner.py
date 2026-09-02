@@ -944,6 +944,72 @@ def test_preview_still_starts_one_when_there_is_none(eng, project, monkeypatch):
     assert steps["preview"]["output"]["preview_url"] == "https://started.test"
 
 
+def test_the_panel_argues_from_the_research(eng, project, monkeypatch):
+    """Research produced a cited dossier and the panel that followed it debated the original
+    one-line directive as though none of it had happened — which is what research was for."""
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_after_research"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([meeting]))
+
+    with eng.begin() as c:
+        c.execute(
+            text("INSERT INTO discovery_runs (id, project_id, status, phase, title, state) "
+                 "VALUES (:i,:p,'completed','done','Waitlists',CAST(:st AS JSONB)) "
+                 "ON CONFLICT (id) DO NOTHING"),
+            {"i": "drun_evidence", "p": project,
+             "st": '{"brief": "referral loops beat paid ads here",'
+                   ' "findings": ["three rivals gate by invite"]}'},
+        )
+        _, version = _publish(c, project, "researchfeed", [
+            {"id": "research", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "waitlist"}},
+             "next": ["meeting"]},
+            {"id": "meeting", "kind": "capability",
+             "binding": {"capability": "meeting",
+                         "inputs": {"directive": "build a waitlist",
+                                    "research": {"from_step": "research",
+                                                 "field": "dossier"}}},
+             "next": []},
+        ], "research")
+        run = _start(c, project, version["id"], {"adopt_discovery_run_id": "drun_evidence"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        c.execute(text("DELETE FROM discovery_runs WHERE id='drun_evidence'"))
+
+    assert meeting.calls, "the panel was never convened"
+    handed = meeting.calls[0]["args"].get("research") or ""
+    assert "referral loops beat paid ads" in handed, "the panel got no findings"
+    assert "three rivals gate by invite" in handed
+
+
+def test_a_panel_still_convenes_when_there_was_no_research(eng, project, monkeypatch):
+    """A project started directly has no research phase, so the dossier does not exist.
+    Failing there would make the binding that IMPROVES a panel the thing that stops it."""
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_no_research"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "noresearch", [
+            {"id": "research", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "x"}},
+             "next": ["meeting"]},
+            {"id": "meeting", "kind": "capability",
+             "binding": {"capability": "meeting",
+                         "inputs": {"directive": "build it",
+                                    "research": {"from_step": "research",
+                                                 "field": "dossier"}}},
+             "next": []},
+        ], "research")
+        run = _start(c, project, version["id"],
+                     {"adopt_code_task_run_id": "crun_direct"})
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        steps = _steps(c, run["id"])
+
+    assert steps["research"]["output"]["status"] == "not_applicable"
+    assert steps["meeting"]["status"] != "failed", steps["meeting"]["last_error"]
+
+
 def test_a_settled_verdict_fails_once_instead_of_three_times(eng, project, monkeypatch):
     """A tool call can fail because a network blipped, and running it again is right. A recorded
     fact is not like that — re-reading the row reaches the same conclusion. Monitoring is the

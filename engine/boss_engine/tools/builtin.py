@@ -538,6 +538,11 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 "url": {"type": "string", "description": "a reference site to study"},
                 "task_id": {"type": "string"},
                 "project_id": {"type": "string"},
+                "research": {
+                    "type": "string",
+                    "description": "findings the panel should argue FROM rather than "
+                                   "re-derive — a research step's dossier, typically.",
+                },
             },
             ["directive"],
         ),
@@ -546,6 +551,21 @@ def _register_write_tools(reg: ToolRegistry) -> None:
     def request_meeting(ctx, *, project_id, actor, args):
         pid = args.get("project_id") or project_id
         ms = services_module("meeting_service")
+        # RESEARCH THE PANEL CAN READ.
+        #
+        # The directive IS the panel's prompt, so evidence handed over as a separate field
+        # would have to be threaded through task creation, the agenda and every seat's context
+        # to reach the argument. Appended here it reaches all of them, because they all read
+        # the directive. Clearly delimited so nobody mistakes the findings for the ask.
+        directive = (args.get("directive") or "").strip()
+        research = (args.get("research") or "").strip()
+        if research:
+            directive = (
+                f"{directive}\n\n"
+                f"--- RESEARCH ALREADY DONE FOR THIS ---\n"
+                f"BOSS researched this before convening you. Argue from it: agree, disagree, "
+                f"or say what it missed — do not re-derive it from scratch.\n\n{research}"
+            )
         with ctx.begin() as c:
             result = ms.convene_prd_meeting_core(
                 c,
@@ -554,7 +574,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 intake=ctx.intake,
                 jobs=ctx.jobs,
                 project_id=pid,
-                directive=(args.get("directive") or "").strip(),
+                directive=directive,
                 url=(args.get("url") or "").strip(),
                 task_id=args.get("task_id"),
             )

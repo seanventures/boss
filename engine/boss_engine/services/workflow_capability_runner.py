@@ -61,7 +61,8 @@ class SettledCapabilityError(CapabilityExecutionError):
 
 
 def _resolve_inputs(
-    inputs: dict[str, Any], context: dict[str, Any]
+    inputs: dict[str, Any], context: dict[str, Any],
+    optional: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Substitute references to earlier steps' outputs.
 
@@ -88,6 +89,14 @@ def _resolve_inputs(
             field = str(value.get("field") or "")
             produced = (context.get("steps") or {}).get(step_id) or {}
             if field:
+                if field not in produced and name in optional:
+                    # AN OPTIONAL REFERENCE THAT CANNOT RESOLVE IS SIMPLY ABSENT.
+                    #
+                    # `meeting` reads the research dossier, and a run whose research was
+                    # skipped — a project started directly, with no research phase — produces
+                    # none. Failing there would make the binding that IMPROVES a panel the
+                    # thing that stops it happening at all.
+                    continue
                 if field not in produced:
                     raise CapabilityExecutionError(
                         f"step '{step_id}' did not produce '{field}', which this step needs."
@@ -536,7 +545,8 @@ def execute_step(
             f"'{capability.label}' waits for a person and is not executable work."
         )
 
-    inputs = _resolve_inputs(binding.get("inputs") or {}, context)
+    inputs = _resolve_inputs(binding.get("inputs") or {}, context,
+                             optional=frozenset(capability.optional_inputs or ()))
     inputs = _fill_optional_from_run_input(capability, inputs, context)
 
     if capability.tool is None:
@@ -704,21 +714,66 @@ def _terminal_evidence(
     A build's pull request is both its outcome and the input every later step needs, so it goes
     onto the step's output rather than being looked up again by preview and deploy.
     """
-    if kind != "code_task":
-        return {}
     try:
-        row = connection.execute(
-            text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
-                 "WHERE id = :r"),
-            {"r": awaited_id},
-        ).mappings().first()
+        if kind == "code_task":
+            row = connection.execute(
+                text("SELECT pull_request_url, pull_request_number FROM code_task_runs "
+                     "WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row or not row["pull_request_url"]:
+                return {}
+            return {"pull_request_url": row["pull_request_url"],
+                    "pull_request_number": row["pull_request_number"]}
+        if kind == "discovery":
+            # WHAT THE RESEARCH FOUND, not just that it finished. Without this the research
+            # step completes carrying nothing, and the panel that follows it debates the
+            # original one-line directive as though no research had happened — which is
+            # exactly what research was for.
+            row = connection.execute(
+                text("SELECT title, state FROM discovery_runs WHERE id = :r"),
+                {"r": awaited_id},
+            ).mappings().first()
+            if not row:
+                return {}
+            return {"discovery_id": awaited_id,
+                    "dossier": _dossier_brief(row["title"], row["state"] or {})}
     except Exception as error:  # noqa: BLE001 — never fail a step over its own evidence
         log.warning("cannot read the result of %s: %s", awaited_id, error)
-        return {}
-    if not row or not row["pull_request_url"]:
-        return {}
-    return {"pull_request_url": row["pull_request_url"],
-            "pull_request_number": row["pull_request_number"]}
+    return {}
+
+
+#: How much of a dossier travels into the next step's prompt. Enough to change what a panel
+#: argues about; not so much that it crowds out the directive itself.
+_DOSSIER_CHARS = 4000
+
+
+def _dossier_brief(title: Any, state: Any) -> str:
+    """The research, as something a panel can read.
+
+    The dossier is a nested document — brief, findings, analysis, critique, outcomes, gate.
+    Handing the panel the whole JSON would bury the directive; handing it nothing is what
+    happens today. These are the sections that change a product decision.
+    """
+    if not isinstance(state, dict):
+        return ""
+    parts: list[str] = []
+    if title:
+        parts.append(f"# {title}")
+    for key in ("brief", "findings", "analysis", "critique", "outcomes", "gate"):
+        value = state.get(key)
+        if not value:
+            continue
+        if isinstance(value, str):
+            body = value.strip()
+        elif isinstance(value, list):
+            body = "\n".join(f"- {json.dumps(v) if isinstance(v, dict) else v}"
+                              for v in value[:12])
+        else:
+            body = json.dumps(value, indent=1)[:1200]
+        if body:
+            parts.append(f"## {key}\n{body}")
+    return "\n\n".join(parts)[:_DOSSIER_CHARS]
 
 
 def resume_awaited(
