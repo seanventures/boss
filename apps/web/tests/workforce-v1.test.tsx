@@ -129,7 +129,16 @@ describe("v1 Org Chart", () => {
   });
 
   it("says nothing rather than drawing an empty tree", () => {
-    const out = renderToStaticMarkup(<OrgChartArea chart={chart()} />);
-    expect(out).toContain("no observed structure to draw yet");
+    const out = renderToStaticMarkup(
+      <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
+    expect(out).toContain("nothing to draw yet");
+  });
+
+  it("invites the operator to place somebody", () => {
+    // The chart was derived from observed handoffs and could not be edited, so it had no
+    // effect anywhere in the product: a measurement nobody can act on is a report.
+    const out = renderToStaticMarkup(
+      <OrgChartArea chart={chart()} projectId="p" actor="ceo" />);
+    expect(out).toContain("Drag an agent onto another");
   });
 });

@@ -5773,3 +5773,26 @@ CREATE TABLE IF NOT EXISTS project_settings (
 -- workflow_custom_steps.knowledge, for databases created before it existed. The CREATE above
 -- covers a fresh install; this covers every deployment that already has the table.
 ALTER TABLE workflow_custom_steps ADD COLUMN IF NOT EXISTS knowledge TEXT;
+
+-- The org chart somebody DECIDED, as opposed to the one BOSS observed.
+--
+-- The chart was derived entirely from handoffs: who passed work to whom in the last week. That
+-- is honest and it is useful, and it is also unchangeable — an operator looking at it could not
+-- say "the QA lead reports to the captain" or "add a security reviewer", because the chart was
+-- a measurement, not a structure. A measurement nobody can act on is a report.
+--
+-- Declared edges take precedence and observed ones remain visible underneath, so the chart
+-- shows both what was intended and what actually happened. Where they disagree is the most
+-- interesting thing on the page.
+CREATE TABLE IF NOT EXISTS org_assignments (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL,                    -- role key: engineering_captain, qa, ...
+  reports_to TEXT,                           -- another agent_id, or NULL for a root
+  display_name TEXT,                         -- what this team calls the role
+  sort INTEGER NOT NULL DEFAULT 0,
+  updated_by TEXT NOT NULL DEFAULT 'operator',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_org_assignments_reports_to
+  ON org_assignments(project_id, reports_to);

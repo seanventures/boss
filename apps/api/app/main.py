@@ -11863,12 +11863,55 @@ def console_v2_org_endpoint(project_id: str, hours: int = 168) -> dict:
     invented. The payload says so, and the screen repeats it: a derived shape presented as a
     declared structure would be a picture of an organisation that does not exist.
     """
+    from boss_engine.services import org_assignments as oa
     from boss_engine.services.console_v2_workforce import org_chart
 
     if not database_is_reachable(engine):
         raise HTTPException(status_code=503, detail="Postgres is not reachable.")
     with begin(engine) as connection:
-        return org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
+        chart = org_chart(connection, project_id, hours=max(1, min(int(hours), 24 * 90)))
+        # The declared chart laid over the observed one. Both are kept: where they disagree is
+        # the most interesting thing on the page, and averaging them would hide it.
+        return oa.apply_to(chart, oa.get_all(connection, project_id))
+
+
+@app.put("/v1/console/v2/org/{agent_id}")
+def put_org_assignment(agent_id: str, payload: dict) -> dict:
+    """Say where an agent sits: who it reports to, and what this team calls it."""
+    from boss_engine.services import org_assignments as oa
+
+    project_id = str(payload.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        try:
+            return oa.set_one(
+                connection, project_id, agent_id,
+                reports_to=payload.get("reports_to"),
+                display_name=payload.get("display_name"),
+                sort=int(payload.get("sort") or 0),
+                actor=str(payload.get("actor") or "operator"),
+            )
+        except oa.OrgCycle as error:
+            # 409, with the sentence: "X already sits above Y" is actionable; a tree that
+            # cannot be laid out is not something to discover at render time.
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.delete("/v1/console/v2/org/{agent_id}")
+def delete_org_assignment(agent_id: str, project_id: str) -> dict:
+    """Hand this agent back to the observed chart."""
+    from boss_engine.services import org_assignments as oa
+
+    if not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    with begin(engine) as connection:
+        if agent_id == "*":
+            return {"cleared": oa.clear_all(connection, project_id)}
+        oa.clear_one(connection, project_id, agent_id)
+    return {"agent_id": agent_id, "cleared": 1}
 
 
 @app.get("/v1/console/v2/workflows")

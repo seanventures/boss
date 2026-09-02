@@ -6932,7 +6932,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h3>Who actually passes work to whom.</h3>
             </div>
           </div>
-          <OrgChartArea chart={orgChartData} />
+          <OrgChartArea projectId={activeProjectId} actor={activeActorId} chart={orgChartData} />
         </section>
 
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">

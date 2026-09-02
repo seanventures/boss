@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { OrgChart, OrgNode, V2Agent, Workforce } from "../lib/v2/workforce";
 
@@ -225,56 +225,177 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
   );
 }
 
-export function OrgChartArea({ chart }: { chart: OrgChart }) {
-  if (!chart.apiReachable) {
-    return <p className="detail">Could not reach the control plane. An empty chart would read as a company with nobody in it.</p>;
-  }
-  const tree = chart.tree ?? [];
-  const levels = new Map<number, OrgNode[]>();
-  for (const n of tree) {
+/**
+ * THE ORG CHART, EDITABLE.
+ *
+ * It was derived entirely from observed handoffs — who passed work to whom in the last week.
+ * Honest, useful, and completely unchangeable: nobody could say "the QA lead reports to the
+ * captain" or add a seat that has not been filled yet. A measurement nobody can act on is a
+ * report, and this one had no effect anywhere else in the product.
+ *
+ * Declared placements are laid over the observed ones and both are kept. Where they disagree
+ * is the most interesting thing on the page: an agent who is meant to report to the captain
+ * and in practice hands everything to the architect is a fact worth seeing.
+ */
+export function OrgChartArea({ chart, projectId, actor }: {
+  chart: OrgChart; projectId: string; actor: string;
+}) {
+  const [live, setLive] = useState<OrgChart>(chart);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  useEffect(() => { setLive(chart); }, [chart]);
+
+  const reload = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/org?project_id=${encodeURIComponent(projectId)}`,
+                            { cache: "no-store" });
+      if (r.ok) setLive(await r.json());
+    } catch { /* keep what is on screen; a failed refresh is not a reason to blank it */ }
+  }, [projectId]);
+
+  const place = useCallback(async (agentId: string, reportsTo: string | null) => {
+    setBusy(true); setNote(null);
+    try {
+      const r = await fetch(`/api/org`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent_id: agentId, project_id: projectId, actor,
+                               reports_to: reportsTo }),
+      });
+      const body = await r.json().catch(() => ({}));
+      // The API's own sentence: "X already sits above Y, so this would make a loop" is
+      // actionable; "could not save" sends somebody looking in the wrong place.
+      if (!r.ok) setNote(body.error ?? body.detail ?? "Could not move it.");
+      else await reload();
+    } finally { setBusy(false); }
+  }, [projectId, actor, reload]);
+
+  const release = useCallback(async (agentId: string) => {
+    setBusy(true); setNote(null);
+    try {
+      const url = `/api/org?project_id=${encodeURIComponent(projectId)}`
+        + `&agent_id=${encodeURIComponent(agentId)}`;
+      const r = await fetch(url, { method: "DELETE" });
+      if (!r.ok) setNote("Could not reset it.");
+      else await reload();
+    } finally { setBusy(false); }
+  }, [projectId, reload]);
+
+  const chartNow = live;
+  const declared = (chartNow as { declared?: Record<string, unknown> }).declared ?? {};
+  const placedCount = Object.keys(declared).length;
+  const treeNow = chartNow.tree ?? [];
+  const levelsNow = new Map<number, OrgNode[]>();
+  for (const n of treeNow) {
     const d = n.depth ?? 0;
-    levels.set(d, [...(levels.get(d) ?? []), n]);
+    levelsNow.set(d, [...(levelsNow.get(d) ?? []), n]);
   }
-  const rows = [...levels.entries()].sort((a, b) => a[0] - b[0]);
-  const isolated = (chart.nodes ?? []).filter((n) => !n.connected);
+  const rowsNow = [...levelsNow.entries()].sort((a, b) => a[0] - b[0]);
+  const isolated = (chartNow.nodes ?? []).filter((n) => !n.connected);
+  const unplaced = (chartNow.nodes ?? []).filter(
+    (n) => !Object.prototype.hasOwnProperty.call(declared, n.id));
 
   return (
     <div className="org">
       <p className="detail" data-testid="org-provenance">
-        {chart.note || `Derived from ${chart.derived_from}.`}
-        {chart.root_inferred
+        {chartNow.note || `Derived from ${chartNow.derived_from}.`}
+        {chartNow.root_inferred
           ? " Every agent here is handed work by someone, so the busiest was taken as the top."
           : ""}
       </p>
 
-      {tree.length === 0 ? (
+      {/* WHAT THIS CHART IS FOR. Placing a seat is the act that turns a measurement into a
+          structure; saying so beats a drag target nobody knows is a drag target. */}
+      <div className="org-toolbar">
+        <span className="detail">
+          {placedCount
+            ? `${placedCount} placed by your team. Drag an agent onto another to change who it reports to.`
+            : "Nobody is placed yet. Drag an agent onto another to say who it reports to."}
+        </span>
+        {placedCount ? (
+          <button type="button" className="cap-btn" disabled={busy} data-testid="org-reset-all"
+                  onClick={() => void release("*")}>
+            Back to observed
+          </button>
+        ) : null}
+      </div>
+      {note ? <p className="org-note" data-testid="org-note">{note}</p> : null}
+
+      {treeNow.length === 0 ? (
         <p className="detail" data-testid="org-empty">
-          No work has passed between agents in the last {chart.window_hours} hours, so there is no
-          observed structure to draw yet.
+          Nothing is placed and no work has passed between agents in the last
+          {" "}{chartNow.window_hours} hours, so there is nothing to draw yet.
         </p>
       ) : (
         <div className="org-tree" data-testid="org-tree">
-          {rows.map(([depth, nodes]) => (
+          {rowsNow.map(([depth, nodes]) => (
             <div className="org-level" key={depth} data-depth={depth}>
               {nodes.map((n) => (
                 <div className="org-node" key={n.id} data-root={depth === 0}
-                     data-testid={`org-node-${n.id}`}>
+                     data-testid={`org-node-${n.id}`}
+                     data-placed={Object.prototype.hasOwnProperty.call(declared, n.id)}
+                     data-over={over === n.id || undefined}
+                     draggable={!busy}
+                     onDragStart={() => setDragging(n.id)}
+                     onDragEnd={() => { setDragging(null); setOver(null); }}
+                     onDragOver={(e) => { e.preventDefault(); setOver(n.id); }}
+                     onDragLeave={() => setOver((c) => (c === n.id ? null : c))}
+                     onDrop={(e) => {
+                       e.preventDefault();
+                       setOver(null);
+                       if (dragging && dragging !== n.id) void place(dragging, n.id);
+                       setDragging(null);
+                     }}>
                   <span className="org-node-name">{n.name}</span>
-                  {/* Only when it ADDS something. "Product Manager / Product Manager" and
-                      "CTO / CTO" are the same duplication the operator flagged elsewhere. */}
+                  {/* Only when it ADDS something. "Product Manager / Product Manager" is the
+                      same duplication flagged elsewhere. */}
                   {humanise(n.role || n.id) !== n.name ? (
                     <span className="org-node-role">{humanise(n.role || n.id)}</span>
                   ) : null}
                   {n.task ? <span className="org-node-task">{n.task}</span> : null}
-                  {!n.registered ? (
-                    <span className="roster-ungov" data-testid={`org-unreg-${n.id}`}>no registered role</span>
-                  ) : null}
+                  <span className="org-node-tools">
+                    <button type="button" className="org-node-act" disabled={busy}
+                            title="Make this a top-level seat"
+                            data-testid={`org-top-${n.id}`}
+                            onClick={() => void place(n.id, null)}>top</button>
+                    {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
+                      <button type="button" className="org-node-act" disabled={busy}
+                              title="Hand this seat back to the observed chart"
+                              data-testid={`org-reset-${n.id}`}
+                              onClick={() => void release(n.id)}>reset</button>
+                    ) : null}
+                  </span>
                 </div>
               ))}
             </div>
           ))}
         </div>
       )}
+
+      {/* SEATS NOBODY HAS PLACED. The list of agents BOSS knows about is the thing you build a
+          chart FROM; without it the only agents you could place are the ones already placed. */}
+      {unplaced.length > 0 ? (
+        <>
+          <div className="ct-block-title" style={{ marginTop: 18 }}>Not placed yet</div>
+          <p className="detail">
+            Drag one onto a seat above to put it under them, or press top to make it a root.
+          </p>
+          <div className="org-bench" data-testid="org-bench">
+            {unplaced.map((n) => (
+              <span className="org-benchchip" key={n.id} draggable={!busy}
+                    data-testid={`org-bench-${n.id}`}
+                    onDragStart={() => setDragging(n.id)}
+                    onDragEnd={() => setDragging(null)}>
+                {n.name}
+                <button type="button" className="org-node-act" disabled={busy}
+                        onClick={() => void place(n.id, null)}>top</button>
+              </span>
+            ))}
+          </div>
+        </>
+      ) : null}
 
       {isolated.length > 0 ? (
         <>

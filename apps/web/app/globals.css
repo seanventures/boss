@@ -7938,3 +7938,34 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   .askboss-idea::before { transition: none; }
 }
+
+/* ── Org chart: a structure you can change ───────────────────────────────────────
+   It was derived from observed handoffs and could not be edited, so it had no
+   effect anywhere: a measurement nobody can act on is a report. */
+.org-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin: 8px 0 12px;
+}
+.org-note { margin: 0 0 10px; font-size: 12px; color: var(--bad, #f85149); }
+.org-node { position: relative; cursor: grab; }
+.org-node:active { cursor: grabbing; }
+/* A seat somebody DECIDED, as opposed to one BOSS inferred. */
+.org-node[data-placed="true"] { border-color: var(--live, #58a6ff); }
+.org-node[data-over] {
+  border-color: var(--ok, #3fb950);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok, #3fb950) 45%, transparent);
+}
+.org-node-tools { display: flex; gap: 6px; margin-top: 6px; }
+.org-node-act {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em; cursor: pointer;
+  padding: 2px 7px; border-radius: 999px; background: transparent; color: var(--muted, #8b949e);
+  border: 1px solid var(--border, #30363d);
+}
+.org-node-act:hover { color: inherit; border-color: var(--live, #58a6ff); }
+.org-bench { display: flex; gap: 8px; flex-wrap: wrap; }
+.org-benchchip {
+  display: inline-flex; align-items: center; gap: 8px; cursor: grab;
+  padding: 5px 10px; border-radius: 999px; font-size: 12px;
+  border: 1px dashed var(--border, #30363d); color: var(--muted, #8b949e);
+}
+.org-benchchip:hover { color: inherit; border-color: var(--live, #58a6ff); }
