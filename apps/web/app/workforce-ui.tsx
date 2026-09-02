@@ -322,13 +322,26 @@ export function OrgChartArea({ chart, projectId, actor }: {
     (n) => !Object.prototype.hasOwnProperty.call(declared, n.id));
 
   return (
-    <div className="org">
-      <p className="detail" data-testid="org-provenance">
-        {chartNow.note || `Derived from ${chartNow.derived_from}.`}
-        {chartNow.root_inferred
-          ? " Every agent here is handed work by someone, so the busiest was taken as the top."
-          : ""}
-      </p>
+    <div className="org" data-declared={placedCount > 0}>
+      {/* SAY WHAT THE PICTURE IS, WHERE THE PICTURE IS.
+          Drawn from handoffs, this chart put the CTO under a Product Manager — true as "the PM
+          passed work to the CTO", nonsense as "the CTO reports to the PM". The provenance line
+          existed but read as a caption; an operator sees boxes and lines and concludes
+          hierarchy long before they read prose. So it is a banner now, and it is only softened
+          once somebody has actually declared a structure. */}
+      {placedCount === 0 ? (
+        <p className="org-provenance-banner" data-testid="org-provenance">
+          <strong>This is not a reporting line.</strong>{" "}
+          {chartNow.note || `Derived from ${chartNow.derived_from}.`}
+          {chartNow.root_inferred
+            ? " Everyone here is handed work by someone, so the busiest was drawn at the top."
+            : ""}
+        </p>
+      ) : (
+        <p className="detail" data-testid="org-provenance">
+          Declared by your team. Handoffs BOSS observed are drawn underneath.
+        </p>
+      )}
 
       {/* WHAT THIS CHART IS FOR. Placing a seat is the act that turns a measurement into a
           structure; saying so beats a drag target nobody knows is a drag target. */}
@@ -383,7 +396,7 @@ export function OrgChartArea({ chart, projectId, actor }: {
                     <button type="button" className="org-node-act" disabled={busy}
                             title="Make this a top-level seat"
                             data-testid={`org-top-${n.id}`}
-                            onClick={() => void place(n.id, null)}>top</button>
+                            onClick={() => void place(n.id, null)}>move to top</button>
                     {Object.prototype.hasOwnProperty.call(declared, n.id) ? (
                       <button type="button" className="org-node-act" disabled={busy}
                               title="Hand this seat back to the observed chart"

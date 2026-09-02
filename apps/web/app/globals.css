@@ -7253,12 +7253,22 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 0 0 1px rgba(79,227,193,.18),
               0 8px 24px rgba(0,0,0,.34);
 }
+/* NOT "ROOT". This chart is drawn from who handed work to whom, so the top node is simply the
+   busiest — and labelling it ROOT read as "this agent is the boss", which produced a chart
+   showing the CTO reporting to a Product Manager. The label now says what the position means.
+   A declared chart (org_assignments) overrides this and is labelled differently. */
 .org-node[data-root="true"]::after {
-  content: "ROOT"; position: absolute; top: -9px; left: 15px;
+  content: "MOST HANDOFFS"; position: absolute; top: -9px; left: 15px;
   padding: 1px 7px; border-radius: 999px;
   background: var(--accent); color: var(--accent-ink, #06231D);
   font-size: 8.5px; font-weight: 800; letter-spacing: .1em;
 }
+.org[data-declared="true"] .org-node[data-root="true"]::after { content: "TOP OF CHART"; }
+
+/* An action, not a badge. `text-transform: uppercase` on a one-word button turned "top" into
+   "TOP" on every card, which reads as a status stamp — and a status stamp that says TOP on
+   every seat says nothing at all. */
+.org-node-act { text-transform: none; }
 
 .org-node-name { font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.25; }
 .org-node-role {
@@ -8020,3 +8030,14 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-node[data-phase="failed_on"] .dw-node-btn { border-color: var(--bad, #f85149); opacity: .9; }
 .dw-detail[data-phase="failed_on"] { border-color: var(--bad, #f85149); }
 .dw-step-note[data-tone="bad"] { color: var(--bad, #f85149); }
+
+/* The org chart's provenance, said where it cannot be missed.
+   Boxes joined by lines read as a hierarchy no matter what the caption says, so while the
+   chart is derived from handoffs the statement is a banner rather than a footnote. */
+.org-provenance-banner {
+  margin: 0 0 14px; padding: 9px 12px; border-radius: 8px;
+  font-size: 12px; line-height: 1.45; color: var(--ink, #e6edf3);
+  background: color-mix(in srgb, var(--warn, #d29922) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
+}
+.org-provenance-banner strong { color: var(--warn, #d29922); }
