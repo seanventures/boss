@@ -552,7 +552,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onRunPreview={(buildRunId) =>
             act("Preview", "start_preview", { run_id: buildRunId })}
           onRerun={(run) => act("Re-run", "start", {
-            workflow_key: run.workflow_key, input: run.input ?? {},
+            workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
         />
       ) : tab === "catalogue" ? (
@@ -837,6 +837,28 @@ function NewProjectComposer({ projectId, actor, workflows, onStarted }: {
       {error ? <p className="dw-new-error" data-testid="dw-new-error">{error}</p> : null}
     </section>
   );
+}
+
+/**
+ * The input a RE-RUN should start from.
+ *
+ * "Run this workflow again" copied the previous run's input whole — including the `adopt_*`
+ * keys that tell the runtime "this work already happened, go and watch it". So re-running a
+ * project adopted the same finished build: research recorded as not-run, the old panel and the
+ * old approval adopted, and `build` green in seconds against code written yesterday. That is a
+ * re-observation, not a re-run, and it is the opposite of what somebody pressing it wants.
+ *
+ * The directive, the title, the repository and the deploy target are kept — they are what the
+ * work IS and where it ships. What is dropped is every claim about work that has already
+ * happened, so the new run does its own research, convenes its own panel, and builds.
+ */
+export function inputForRerun(input: Record<string, unknown> | null | undefined) {
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input ?? {})) {
+    if (key.startsWith("adopt_")) continue;
+    next[key] = value;
+  }
+  return next;
 }
 
 /** The four states an operator acts on differently, plus everything. */
@@ -1127,8 +1149,8 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
         </button>
         <span className="detail">
-          Starts a new run of {run.workflow_name} with the same input. The existing run is
-          left as it is.
+          Starts {run.workflow_name} again on the same directive — its own research, its own
+          panel, its own build. The existing run is left as it is.
         </span>
       </div>
     </div>
