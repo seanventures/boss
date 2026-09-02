@@ -517,6 +517,12 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     getParam(resolvedSearchParams?.decision_filter),
   );
   const requestedWorkTask = getParam(resolvedSearchParams?.task);
+  // WHICH DOSSIER, not the shelf of dossiers. The research step links here knowing its
+  // discovery id, but the page kept the open dossier in local state alone, so every link
+  // landed on the list and the operator had to go and find the run they had just clicked.
+  // `run` as well as `discovery`, because that is the name the workflow step already sends.
+  const requestedDiscovery =
+    getParam(resolvedSearchParams?.discovery) ?? getParam(resolvedSearchParams?.run);
   const metatronQuestion = getParam(resolvedSearchParams?.q);
   const metatronTaskId = getParam(resolvedSearchParams?.task_id);
   const metatronDecisionId = getParam(resolvedSearchParams?.decision_id);
@@ -7115,6 +7121,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
             orgId={activeOrgId}
             discoveries={discoveryFeed.items}
             apiReachable={discoveryFeed.apiReachable}
+            initialDiscoveryId={requestedDiscovery}
           />
         </section>
 

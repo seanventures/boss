@@ -184,6 +184,19 @@ function notApplicable(step: RunStep): boolean {
  *  blocked run from last week above the project that started a minute ago, purely because
  *  something touched it more recently — which is how the page came to show an expired run
  *  while a build was in flight. */
+/** "2 Sep 03:42Z" — cut straight from the ISO string rather than through `toLocaleString` or a
+ *  "3 hours ago". Both of those read the clock or the timezone, which differ between the server
+ *  render and the browser one, and React replaces the whole subtree when they disagree. This is
+ *  the same characters everywhere, which is what a timestamp on a row needs to be. */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+export function startedLabel(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso ?? "");
+  if (!m) return "";
+  const month = MONTHS[Number(m[2]) - 1] ?? m[2];
+  return `${Number(m[3])} ${month} ${m[4]}:${m[5]}Z`;
+}
+
 function byLiveness(a: Run, b: Run): number {
   const live = (r: Run) => (LIVE.includes(r.status) ? 0 : 1);
   if (live(a) !== live(b)) return live(a) - live(b);
@@ -979,6 +992,16 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                   <i style={{ width: `${Math.round((run.steps_done / Math.max(1, run.step_count)) * 100)}%` }} />
                 </i>
               </span>
+              {/* WHICH OF THE TWO IS THIS. "Run this workflow again" leaves the earlier run
+                  alone, by design — so the list showed two rows with the same title, the same
+                  "5 of 8" and the same "waiting on release_manager", and nothing an operator
+                  could use to tell which was today's. The start time is the distinguishing
+                  fact, so it is on the row rather than hidden in the expanded detail. */}
+              {run.created_at ? (
+                <span className="detail dw-run-started" data-testid="dw-run-started">
+                  started {startedLabel(run.created_at)}
+                </span>
+              ) : null}
               {run.waiting_on ? (
                 <span className="dw-waiting" data-testid="dw-waiting">
                   waiting on {run.waiting_on}

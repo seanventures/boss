@@ -649,7 +649,36 @@ def execute_step(
         field = _CANONICAL_FIELD.get(awaited["kind"])
         if field:
             result.setdefault(field, awaited["id"])
+        return result
+
+    # AN ASYNC STEP THAT CANNOT BE CORRELATED HAS NOT SUCCEEDED.
+    #
+    # This used to fall through and complete, on the reasoning that parking a step with no id
+    # would hang the run. That reasoning was wrong in the direction that costs the most: the
+    # meeting capability returned its id one level down, no handle was found, and the step
+    # reported success nought seconds after convening a panel that was still arguing. The run
+    # walked on to the spec gate with no PRD behind it.
+    #
+    # A run that stops with a reason can be fixed. A run that claims work happened cannot even
+    # be noticed. Adoption returns earlier, so reaching here means a tool really was invoked.
+    if capability.is_async and str(result.get("status") or "") not in _DONE_STATUSES:
+        result["status"] = "failed"
+        result["error"] = (
+            f"{capability.tool} started work but returned no id to wait on, so this step "
+            f"cannot tell when it finished. Looked for "
+            f"{', '.join(_AWAIT_KINDS[key][1])} in the result"
+            f"{f' and in its {key!r} envelope' if key in _AWAIT_KINDS else ''}."
+        )
     return result
+
+
+#: An async tool reporting that the work is already over. Rare but real — a capability can find
+#: the thing it was asked to start already finished — and it is the one case where an async step
+#: legitimately completes without anything to wait on. Everything else is a defect.
+#:
+#: "running", "accepted", "queued" are deliberately NOT here: those say the work has begun, which
+#: is exactly the state that must be waited on rather than celebrated.
+_DONE_STATUSES: frozenset[str] = frozenset({"completed", "succeeded", "observed", "skipped"})
 
 
 #: What an async capability is waiting on, and where its tool puts the id. The FIRST key that is
@@ -680,18 +709,27 @@ _CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_K
 def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]]:
     """The work this step started, or None when there is nothing to wait for.
 
-    Returning None on a missing id is deliberate: a capability that claims to be async but
-    handed back nothing to correlate cannot be waited on, and parking it would hang the run
-    forever with no way to tell why. It completes as it always did.
+    Looked for one level down as well as at the top, because the tools do not agree on shape:
+    create_discovery returns {"run_id": ...} but request_meeting returns
+    {"meeting": {"run_id": ...}}. Reading only the top level found the discovery and missed the
+    meeting, so a panel that had just been convened was recorded as one that had finished —
+    and the spec gate asked for approval of a PRD that did not exist yet.
+
+    Only the envelope named after the kind or the capability is opened. A blind search for any
+    nested `run_id` would have found request_meeting's `task_id` sibling just as happily, and
+    parked the step against the wrong object.
     """
     spec = _AWAIT_KINDS.get(key)
     if not spec:
         return None
     kind, fields = spec
-    for field in fields:
-        value = output.get(field)
-        if isinstance(value, str) and value.strip():
-            return {"kind": kind, "id": value.strip()}
+    for scope in (output, output.get(kind), output.get(key)):
+        if not isinstance(scope, dict):
+            continue
+        for field in fields:
+            value = scope.get(field)
+            if isinstance(value, str) and value.strip():
+                return {"kind": kind, "id": value.strip()}
     return None
 
 
@@ -1157,7 +1195,7 @@ def _resume_answered_gates(
         if snapshot.get("gate_completes_step", True):
             # The approval was the work. Same direct UPDATE the timeout sweep uses, and for the
             # same reason: this step is leased by nobody, so `complete_step` would refuse it.
-            connection.execute(
+            done = connection.execute(
                 text(
                     """
                     UPDATE workflow_step_runs
@@ -1173,7 +1211,25 @@ def _resume_answered_gates(
                     "output": json.dumps({"approved_by": "person", "outcome": "approved"}),
                     "evidence": json.dumps([{"kind": "approval", "decided_by": "person"}]),
                 },
-            )
+            ).rowcount
+
+            # FOLLOW THE EDGES OUT OF THE STEP WE JUST PASSED.
+            #
+            # `advance_run` alone was not enough, and the way it failed was silent. It looks
+            # only at steps that are still `waiting`; the UPDATE above had just moved this one
+            # to `succeeded`, so it matched nothing, reported no progress, and fell through to
+            # the finish check — which found no active step, marked `build`, `preview` and
+            # `deploy` as `path_not_reached`, and called the run COMPLETED.
+            #
+            # So a person read the PRD, pressed Approve, and BOSS recorded a finished delivery
+            # that had built nothing. `_after_success` is what unlocks successors; every other
+            # path pairs it with the write that succeeds a step, and this one did not.
+            #
+            # Guarded on rowcount so two ticks racing on the same gate cannot advance twice.
+            if done:
+                workflows._after_success(
+                    connection, run["id"], row["step_id"], int(row["iteration"]),
+                )
             workflows.advance_run(connection, project_id, run["id"])
             outcome = "gate_passed"
         else:

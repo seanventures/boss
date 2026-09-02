@@ -129,22 +129,39 @@ function StartDiscovery({ projectId }: { projectId: string }) {
 }
 
 // --------------------------------------------------------------------------- //
-export function DiscoveriesHome({ projectId, orgId, discoveries, apiReachable }: {
+export function DiscoveriesHome({
+  projectId, orgId, discoveries, apiReachable, initialDiscoveryId,
+}: {
   projectId: string;
   orgId?: string;
   discoveries: DiscoveryRun[];
   apiReachable: boolean;
+  /** A dossier named in the URL — `?area=discovery&run=drun_…`, which is what the workflow's
+   *  research step links to. Without this the id in the link was ignored and every "open the
+   *  research" arrived at the list of every discovery the project had ever run. */
+  initialDiscoveryId?: string | null;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialDiscoveryId ?? null);
   const anyLive = discoveries.some((d) => d.status === "running");
   useLiveRefresh(anyLive);
 
   const run = selected ? discoveries.find((d) => d.id === selected) : null;
   if (run) return <DiscoveryDetail run={run} orgId={orgId} onBack={() => setSelected(null)} />;
 
+  // ASKED FOR ONE, GOT THE SHELF. A link naming a dossier that is not in this feed — older
+  // than the window, or another project's — used to fall through to the list with no word of
+  // explanation, which looks exactly like a link that does nothing.
+  const missing = selected && !run ? selected : null;
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <StartDiscovery projectId={projectId} />
+      {missing ? (
+        <div className="detail" data-testid="discovery-not-in-feed">
+          Research run <code>{missing}</code> is not in this project&rsquo;s recent runs — showing
+          all of them instead.
+        </div>
+      ) : null}
       {!apiReachable ? <div className="detail" style={{ color: "#f85149" }}>API unreachable — start the control plane.</div> : null}
       {discoveries.length === 0 ? (
         <div className="detail">No discovery runs yet. Feed an idea above and BOSS will research the market signal behind it.</div>
