@@ -96,131 +96,193 @@ const IDEAS: Idea[] = [
     tag: "Ops", title: "Incident timeline builder", hue: 4, glyph: "clock",
     brief: `Build an incident timeline builder.
 Who it is for: an on-call engineer writing the post-mortem the morning after.
-Paste or upload the alert log and the chat transcript; it lays them on one timeline, marks
-detection, escalation, mitigation and all-clear, and computes time-to-detect and time-to-resolve.
-Editable — the tool proposes the milestones, the human corrects them.
-Exports a markdown post-mortem with the timeline embedded.`,
+What it must do:
+- Take an alert log and a chat transcript and lay them on one timeline.
+- Mark detection, escalation, mitigation and all-clear; compute time-to-detect and time-to-resolve.
+- Let a human correct every milestone the tool proposes.
+- Export a markdown post-mortem with the timeline embedded.
+Done when: a real incident log produces a timeline with all four milestones and both durations, and the exported markdown opens cleanly.
+Storage is one JSON file per incident, so it can live in the repo beside the code.`,
   },
   {
     tag: "Money", title: "Subscription audit", hue: 152, glyph: "chart",
     brief: `Build a subscription audit tool.
 Who it is for: a founder who suspects they are paying for tools nobody opens.
-Upload a card statement CSV; it groups recurring charges by vendor, shows monthly and annual
-cost, flags anything that rose in price, and lets you mark each one keep / cancel / renegotiate.
-Shows the running total of what cancelling the marked ones would save.`,
+What it must do:
+- Import a card statement CSV and group recurring charges by vendor.
+- Show monthly and annual cost, and flag anything whose price rose.
+- Let each one be marked keep, cancel or renegotiate.
+- Show the running total of what cancelling the marked ones would save.
+Done when: a statement with two spellings of one vendor groups into a single row, and the savings total matches the marked rows.
+Vendor matching is fuzzy but reviewable: any grouping can be split by hand.`,
   },
   {
     tag: "Team", title: "Interview scorecard", hue: 268, glyph: "people",
     brief: `Build an interview scorecard app.
-Who it is for: a hiring manager tired of "seemed good?" as feedback.
-Define a role with its competencies; each interviewer scores against them independently and
-cannot see other scores until they submit theirs. Shows the spread, flags where interviewers
-disagree most, and produces one summary per candidate.
-Anti-anchoring is the point: hide the others until you have committed.`,
+Who it is for: a hiring manager tired of vague feedback.
+What it must do:
+- Define a role with its competencies.
+- Let each interviewer score independently, hidden from the others until they submit.
+- Show the spread and flag where interviewers disagree most.
+- Produce one summary per candidate.
+Done when: a second interviewer cannot see the first score before submitting, and the summary shows the spread.
+Hiding the other scores until you commit is the anti-anchoring point of the tool.`,
   },
   {
     tag: "Content", title: "Docs freshness board", hue: 196, glyph: "book",
     brief: `Build a documentation freshness board.
 Who it is for: whoever owns docs nobody trusts any more.
-Point it at a docs folder in a repo. For each page it shows last edited, the code paths it
-mentions, and whether those paths have changed since. Sorts by "most likely to be wrong".
-Mark a page reviewed to reset its clock.`,
+What it must do:
+- Read a docs folder from a repository.
+- For each page show last edited, the code paths it mentions, and whether those have changed since.
+- Sort by most likely to be wrong.
+- Let a page be marked reviewed, which resets its clock.
+Done when: a page whose referenced code changed ranks above one whose did not, and marking it reviewed moves it down.
+Likely-wrong is computed, not a status somebody has to remember to set.`,
   },
   {
     tag: "Sales", title: "Lead triage inbox", hue: 28, glyph: "inbox",
     brief: `Build a lead triage inbox.
-Who it is for: a small team drowning in inbound that is 80% noise.
-Paste a batch of enquiries; it scores each on fit against a profile you define, drafts a first
-reply for the good ones and a polite decline for the rest, and queues them for one-click send.
+Who it is for: a small team drowning in inbound that is mostly noise.
+What it must do:
+- Take a batch of enquiries and score each on fit against a profile you define.
+- Draft a first reply for the good ones and a polite decline for the rest.
+- Queue them for one-click send.
+- Keep the fit profile as editable text.
+Done when: every enquiry gets a score and a draft, and nothing leaves the queue without a click.
 Nothing sends without a human pressing send.`,
   },
   {
     tag: "Ops", title: "Change calendar", hue: 340, glyph: "map",
     brief: `Build a change calendar.
 Who it is for: a team that keeps deploying into someone else's launch.
-A shared calendar of planned changes with owner, blast radius and rollback plan. Warns when two
-changes to the same system land the same day, and supports a freeze window nobody can book over
-without stating a reason.`,
+What it must do:
+- Record planned changes with owner, blast radius and rollback plan.
+- Warn when two changes to the same system land on the same day.
+- Support a freeze window.
+- Show whose change collides with whose.
+Done when: two changes to the same system on one day raise a warning, and a freeze cannot be booked over without a recorded reason.
+Nobody can book over a freeze without stating a reason, and the reason is kept.`,
   },
   {
     tag: "Quality", title: "Bug triage board", hue: 12, glyph: "board",
     brief: `Build a bug triage board.
 Who it is for: whoever runs triage and keeps re-litigating the same tickets.
-Import issues; it clusters near-duplicates, proposes severity from the words used, and shows
-what has been sitting untriaged longest. Every decision is one keystroke, and the board records
-who decided what and when.`,
+What it must do:
+- Import issues and cluster near-duplicates.
+- Propose a severity from the words used.
+- Show what has sat untriaged longest.
+- Record who decided what, and when.
+Done when: near-duplicates appear grouped, no merge happens without confirmation, and every decision has an author and a timestamp.
+Clustering proposes; it never merges two issues without somebody saying so.`,
   },
   {
     tag: "Learning", title: "Onboarding path", hue: 120, glyph: "route",
     brief: `Build an onboarding path builder.
 Who it is for: the person who explains the same system to every new joiner.
-Compose a path of steps — read this, run that, ship a tiny change — with a checkpoint on each.
-New joiners see progress; the author sees where people get stuck, which is the signal that the
-docs are wrong.`,
+What it must do:
+- Compose a path of steps: read this, run that, ship a tiny change.
+- Put a checkpoint on each step.
+- Show new joiners their progress.
+- Show the author where people get stuck.
+Done when: a checkpoint fails when its command fails, and the author can see which step stalls people.
+A checkpoint is a command that runs, not a box somebody ticks.`,
   },
   {
     tag: "Money", title: "Pricing experiment log", hue: 44, glyph: "tag",
     brief: `Build a pricing experiment log.
 Who it is for: a team changing prices and forgetting what they already tried.
-Record each experiment — what changed, for whom, when, expected effect — and the outcome when
-it lands. Prevents re-running a test you already lost, and shows the price history of every plan
-on one line.`,
+What it must do:
+- Record what changed, for whom, when, and the expected effect.
+- Record the outcome when it lands.
+- Warn when an experiment repeats one already run.
+- Show the price history of every plan on one line.
+Done when: a repeat of a past experiment is flagged before it is saved, and each plan shows its price history in order.
+Every entry carries the date the price actually changed, not the date it was decided.`,
   },
   {
     tag: "Ops", title: "Vendor status watch", hue: 210, glyph: "bell",
     brief: `Build a vendor status watcher.
-Who it is for: the engineer who finds out from a customer that Stripe is down.
-Track the status pages of the services you depend on, show current state on one board, and keep
-a history so "was it us or them?" is answerable a week later.
-Notify on state changes only — a watcher that shouts every poll is one people mute.`,
+Who it is for: the engineer who finds out from a customer that a dependency is down.
+What it must do:
+- Track the status pages of the services you depend on.
+- Show current state for all of them on one board.
+- Keep history, so whether it was us or them is answerable a week later.
+- Notify on state changes only.
+Done when: a vendor going down and recovering produces exactly two notifications, and the history survives the vendor editing their page.
+History is stored locally, because a vendor's own status page is edited after the fact.`,
   },
   {
     tag: "Team", title: "Decision log", hue: 288, glyph: "shield",
     brief: `Build a decision log.
 Who it is for: a team that keeps rediscovering why something is the way it is.
-One page per decision: the question, the options considered, what was chosen, who decided, and
-what would make us revisit it. Searchable, and linkable from code comments.
-Short by design — a template nobody fills in is worse than none.`,
+What it must do:
+- One page per decision: the question, the options, what was chosen, who decided.
+- Record what would make us revisit it.
+- Make it searchable and linkable from a code comment.
+- Keep the template short.
+Done when: a decision cannot be saved without a revisit condition, and search finds one by its question.
+A decision with no revisit condition is refused at save: that field is the point.`,
   },
   {
     tag: "Growth", title: "Changelog to email", hue: 172, glyph: "spark",
     brief: `Build a changelog-to-email composer.
-Who it is for: whoever owes customers a "what's new" and never sends it.
-Reads merged pull requests since the last send, groups them into themes, drafts a short customer
--facing email in plain language, and holds it for approval.
-Technical detail goes in a collapsible section; the top is what a customer cares about.`,
+Who it is for: whoever owes customers a what-is-new note and never sends it.
+What it must do:
+- Read merged pull requests since the last send.
+- Group them into themes and draft a short customer-facing email in plain language.
+- Put technical detail in a collapsible section.
+- Hold the draft for approval.
+Done when: the draft covers every PR since the last send, and no email leaves without approval.
+Nothing sends. It drafts and holds; a person presses send.`,
   },
   {
     tag: "Quality", title: "Test coverage trend", hue: 96, glyph: "chart",
     brief: `Build a coverage trend board.
 Who it is for: a team whose coverage number moves and nobody knows why.
-Store coverage per commit, chart it, and attribute each drop to the change that caused it.
-Highlights files that lost coverage while being modified — the honest signal, as opposed to the
-project-wide percentage.`,
+What it must do:
+- Store coverage per commit and chart it.
+- Attribute each drop to the change that caused it.
+- Highlight files that lost coverage while being modified.
+- Show the trend per directory, not only per project.
+Done when: a commit that drops coverage is named as the cause, and per-directory trends differ from the project number.
+Attribution is per file per commit, so a drop points at a change rather than a sprint.`,
   },
   {
     tag: "Ops", title: "Access expiry tracker", hue: 356, glyph: "shield",
     brief: `Build an access expiry tracker.
-Who it is for: whoever grants "temporary" access that is still live a year later.
-Record each grant with an expiry and an owner. Warns before it lapses, lists everything overdue,
-and produces the evidence an auditor asks for.
-Expiry is required — a grant with no end date is the thing this exists to prevent.`,
+Who it is for: whoever grants temporary access that is still live a year later.
+What it must do:
+- Record each grant with an owner and an expiry.
+- Warn before it lapses and list everything overdue.
+- Produce the evidence an auditor asks for.
+- Require an expiry on every grant.
+Done when: a grant cannot be created without an expiry, and everything overdue is visible without navigating.
+The overdue list is the home page: a tracker you have to go looking in is a list.`,
   },
   {
     tag: "Content", title: "Style guide linter", hue: 232, glyph: "book",
     brief: `Build a style guide linter for prose.
 Who it is for: a team whose docs sound like four different companies.
-Define the rules — terms to prefer, phrases to avoid, sentence length, voice — and check pages
-against them. Every finding quotes the sentence and proposes a rewrite; nothing is changed
-without a human accepting it.`,
+What it must do:
+- Define rules: terms to prefer, phrases to avoid, sentence length, voice.
+- Check pages against them and quote the offending sentence.
+- Propose a rewrite for each finding.
+- Change nothing without a human accepting it.
+Done when: each finding quotes its sentence and proposes a rewrite, and no file changes without acceptance.
+Rules live in a file in the repo, so changing the house style is a pull request.`,
   },
   {
     tag: "Team", title: "Rotation fairness board", hue: 64, glyph: "people",
     brief: `Build a rotation fairness board.
 Who it is for: a team where the same two people always take the weekend.
-Import the on-call history and show who covered what, weighted by how unsociable the slot was.
-Proposes the next rotation to even it out, and shows the arithmetic — a fairness tool nobody can
-check is just another opinion.`,
+What it must do:
+- Import on-call history and show who covered what.
+- Weight each slot by how unsociable it was.
+- Propose the next rotation to even it out.
+- Show the arithmetic behind the proposal.
+Done when: the proposed rotation reduces the spread, and the weights behind it are visible and editable.
+Weights are visible and editable: whether a Sunday counts double is a team decision.`,
   },
 ];
 
