@@ -32,6 +32,13 @@ KNOBS: dict[str, dict[str, Any]] = {
         "help": "How long one agent may keep working before it must hand back.",
         "kind": "int", "min": 10, "max": 200,
     },
+    "captain_leads_projects": {
+        "attr": "captain_leads_projects",
+        "label": "Captain leads every project",
+        "help": "Attach the Engineering Captain — PRD, QA, UX, certification panel — to every "
+                "project, not only benchmark runs. 1 to lead, 0 to leave builds unled.",
+        "kind": "int", "min": 0, "max": 1,
+    },
     "code_review_inrun_max_rounds": {
         "attr": "code_review_inrun_max_rounds",
         "label": "Review rounds",

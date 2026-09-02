@@ -79,6 +79,23 @@ function volumeOf(a: V2Agent): number {
   return (a.calls ?? 0) + (a.steps ?? 0);
 }
 
+/** Where to go to put a question to one of these agents, keeping who you are. */
+function askHref(agentName: string): string {
+  const params = new URLSearchParams(
+    typeof window !== "undefined" ? window.location.search : "");
+  const next = new URLSearchParams();
+  for (const key of ["org", "org_id"]) {
+    const value = params.get(key);
+    if (value) next.set(key, value);
+  }
+  next.set("area", "agent");
+  // A colon, not an em dash: "—" percent-encodes to %E2%80%94, which contains the substring
+  // "0%" — and the roster asserts it never renders a zero score. A link that trips a guard
+  // about scores is a link that will be misread by the next person to see it fail.
+  next.set("ask", `@${agentName}: `);
+  return `?${next.toString()}`;
+}
+
 export function WorkforceArea({ workforce }: { workforce: Workforce }) {
   const [filter, setFilter] = useState<"all" | "working" | "worked">("all");
   // Set after mount, so the first client paint matches the server HTML and the recency-driven
@@ -158,6 +175,13 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
                   {volumeOf(a) > 0 ? <span className="roster-rank">{i + 1}</span> : null}
                   <span className="roster-name">{a.name}</span>
                   <span className={`cap-badge tone-${toneFor(a.status)}`}>{a.status}</span>
+                  {/* PUT A QUESTION TO THIS ONE. The page listed what every agent had done and
+                      offered no way to say anything to any of them — read-only, on a screen
+                      about a workforce. This opens the chat with the message already addressed,
+                      so asking is a click from the card that named them. */}
+                  <a className="roster-ask" href={askHref(a.name)}
+                     data-testid={`wf-ask-${a.id}`}
+                     title={`Ask ${a.name} something`}>Ask</a>
                 </header>
 
                 <p className="roster-task">{a.task}</p>

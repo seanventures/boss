@@ -133,6 +133,26 @@ export function AgentChat({ projectId, actor, initialTaskId }: {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [context, setContext] = useState<{ task?: Record<string, unknown>; code_tasks?: CodeTask[] } | null>(null);
   const [input, setInput] = useState("");
+  // ADDRESSED FROM SOMEWHERE ELSE. The Agents page sends the operator here with the message
+  // already opened — "@QA Lead — " — so asking one of them something is a click from the card
+  // that named them, rather than navigating here and retyping who you meant.
+  useEffect(() => {
+    const read = () => {
+      const asked = new URLSearchParams(window.location.search).get("ask");
+      if (!asked) return;
+      setInput((current) => current || asked);
+      // Consumed: a one-shot instruction left in the URL is re-delivered by every later
+      // navigation, which is how a composer ends up refilling itself behind your typing.
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("ask");
+        window.history.replaceState(null, "", url.toString());
+      } catch { /* non-browser — the text is in the box either way */ }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    return () => window.removeEventListener("popstate", read);
+  }, []);
   const [pendingPlan, setPendingPlan] = useState<Record<string, unknown> | null>(null);
   /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
   const [proposed, setProposed] = useState<ProposedAction[]>([]);

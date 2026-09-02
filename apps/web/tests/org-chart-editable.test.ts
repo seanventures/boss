@@ -73,3 +73,56 @@ describe("a chart that cannot be drawn is refused before it is stored", () => {
     expect(SVC).toContain("DELETE FROM org_assignments");
   });
 });
+
+describe("you can say something to an agent", () => {
+  const WF = codeOnly("app/workforce-ui.tsx");
+  const CHAT = codeOnly("app/agent-ui.tsx");
+
+  it("every agent card offers it", () => {
+    // The page listed what every agent had done and offered no way to say anything to any of
+    // them — read-only, on a screen about a workforce.
+    expect(WF).toContain('data-testid={`wf-ask-${a.id}`}');
+    expect(WF).toContain("function askHref");
+  });
+
+  it("opens the chat already addressed", () => {
+    // So asking is a click from the card that named them, not navigating here and retyping
+    // who you meant.
+    expect(WF).toContain('next.set("area", "agent")');
+    expect(WF).toContain("`@${agentName}: `");
+    expect(CHAT).toContain('get("ask")');
+  });
+
+  it("consumes the instruction rather than leaving it in the URL", () => {
+    // A one-shot left in the URL is re-delivered by every later navigation, which is how a
+    // composer ends up refilling itself behind your typing.
+    expect(CHAT).toContain('url.searchParams.delete("ask")');
+  });
+
+  it("keeps who you are when it navigates", () => {
+    expect(WF).toContain('for (const key of ["org", "org_id"])');
+  });
+});
+
+describe("the Engineering Captain leads the work", () => {
+  const CT = codeOnly("../../engine/boss_engine/services/code_task_service.py");
+  const PS = codeOnly("../../engine/boss_engine/services/project_settings.py");
+
+  it("is put on a new project, not only a benchmark run", () => {
+    // The captain existed, appeared on the org chart, and did nothing: the swarm that puts it
+    // in charge was bound only for official runs, so every ordinary project was built by an
+    // implementer with nobody above it.
+    expect(CT).toContain("bind_captain_swarm");
+    expect(CT).toContain("official=False");
+  });
+
+  it("is a knob, because leading a project costs turns", () => {
+    expect(PS).toContain('"captain_leads_projects"');
+    expect(CT).toContain('"captain_leads_projects"');
+  });
+
+  it("never stops a build from happening", () => {
+    // An unled build is better than no build.
+    expect(CT).toContain("could not put a captain on");
+  });
+});

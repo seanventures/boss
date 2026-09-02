@@ -7969,3 +7969,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 1px dashed var(--border, #30363d); color: var(--muted, #8b949e);
 }
 .org-benchchip:hover { color: inherit; border-color: var(--live, #58a6ff); }
+
+/* Asking one of them something, from the card that named them. */
+.roster-ask {
+  margin-left: auto; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  padding: 3px 10px; border-radius: 999px; text-decoration: none;
+  border: 1px solid var(--border, #30363d); color: var(--muted, #8b949e);
+}
+.roster-ask:hover { color: inherit; border-color: var(--live, #58a6ff); }

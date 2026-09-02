@@ -734,6 +734,36 @@ def start_code_task(
                 )
         except Exception as exc:  # noqa: BLE001 — a project must start without an outer run
             logger.warning("could not start the outer workflow run for %s: %s", run_id, exc)
+
+        # AND SOMEBODY LEADS IT.
+        #
+        # The Engineering Captain existed, appeared on the org chart, and did nothing: the
+        # swarm that puts it in charge — PRD, QA, UX, certification panel — was bound only for
+        # official benchmark runs. So every ordinary project was built by an implementer with
+        # nobody above it, and the captain was a name on a chart.
+        #
+        # Behind a knob, because leading a project costs agent turns: a team that wants builds
+        # unled sets captain_leads_projects to 0 and gets exactly today's behaviour.
+        try:
+            from .project_settings import effective as _effective_setting
+
+            if int(_effective_setting(
+                    connection, project_id, getattr(jobs, "settings", None),
+                    "captain_leads_projects") or 0):
+                from .agent_process import bind_captain_swarm
+
+                bind_captain_swarm(
+                    connection,
+                    settings=jobs.settings,
+                    project_id=project_id,
+                    actor="boss",
+                    prd=instructions,
+                    title=f"Captain swarm — {title}"[:200],
+                    attach_run_id=run_id,
+                    official=False,
+                )
+        except Exception as exc:  # noqa: BLE001 — an unled build is better than no build
+            logger.warning("could not put a captain on %s: %s", run_id, exc)
     return run_id
 
 
