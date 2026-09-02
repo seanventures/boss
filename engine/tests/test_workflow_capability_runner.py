@@ -1012,11 +1012,13 @@ def test_a_panel_still_convenes_when_there_was_no_research(eng, project, monkeyp
     assert steps["meeting"]["status"] != "failed", steps["meeting"]["last_error"]
 
 
-def test_research_that_did_not_finish_does_not_sink_the_project(eng, project, monkeypatch):
-    """Research is enrichment: it gives the panel evidence to argue from, and the binding into
-    `meeting` is optional precisely so a run without it still works. Failing the step failed
-    the whole RUN — measured on wfr_9782313e30cf4826a0, whose discovery was cancelled for a
-    reason of its own and took the build down with it before a line of code was written."""
+def test_research_that_died_reads_as_failed_and_the_run_carries_on(eng, project, monkeypatch):
+    """Two facts the step has to hold at once.
+
+    It FAILED — saying "not run" about work that ran and died hides something worth fixing. And
+    it must not sink the run: research is enrichment, the binding into `meeting` is optional,
+    and a cancelled discovery took a whole build down with it before a line of code was
+    written (wfr_9782313e30cf4826a0)."""
     discovery = RecordingTool("create_discovery", {"run_id": "drun_doomed"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([discovery]))
 
@@ -1042,10 +1044,49 @@ def test_research_that_did_not_finish_does_not_sink_the_project(eng, project, mo
                         {"r": run["id"]}).scalar()
         c.execute(text("DELETE FROM discovery_runs WHERE id='drun_doomed'"))
 
-    assert steps["research"]["status"] == "succeeded", steps["research"]["last_error"]
-    assert steps["research"]["output"]["status"] == "not_applicable"
+    assert steps["research"]["output"]["status"] == "failed_continued"
     assert "cancelled" in steps["research"]["output"]["note"]
     assert row != "failed", "a cancelled research killed the run"
+    assert steps["notify"]["status"] != "pending", "the workflow did not carry on"
+
+
+def test_what_the_research_had_reached_still_goes_to_the_panel(eng, project, monkeypatch):
+    """A run that dies partway has usually written its brief and some findings already.
+    Throwing those away wastes the search that WAS done and sends the panel in with nothing —
+    partial evidence argued over beats no evidence."""
+    discovery = RecordingTool("create_discovery", {"run_id": "drun_partial"})
+    meeting = RecordingTool("request_meeting", {"run_id": "mrun_from_partial"})
+    monkeypatch.setattr(runner, "_tool_registry",
+                        lambda: RecordingRegistry([discovery, meeting]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "salvage", [
+            {"id": "research", "kind": "capability",
+             "binding": {"capability": "research", "inputs": {"seed": "x"}},
+             "next": ["meeting"]},
+            {"id": "meeting", "kind": "capability",
+             "binding": {"capability": "meeting",
+                         "inputs": {"directive": "build it",
+                                    "research": {"from_step": "research",
+                                                 "field": "dossier"}}},
+             "next": []},
+        ], "research")
+        run = _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        c.execute(
+            text("INSERT INTO discovery_runs (id, project_id, status, phase, title, state) "
+                 "VALUES ('drun_partial', :p, 'cancelled', 'vet', 'Freshness', "
+                 "CAST(:st AS JSONB)) ON CONFLICT (id) DO UPDATE "
+                 "SET status='cancelled', state=EXCLUDED.state"),
+            {"p": project, "st": '{"brief": "teams check deps monthly at best"}'},
+        )
+        runner.tick(c, Ctx(eng), project_id=project)
+        runner.tick(c, Ctx(eng), project_id=project)
+        c.execute(text("DELETE FROM discovery_runs WHERE id='drun_partial'"))
+
+    assert meeting.calls, "the panel never convened after research died"
+    handed = meeting.calls[0]["args"].get("research") or ""
+    assert "teams check deps monthly" in handed, "what the research HAD found was thrown away"
 
 
 def test_a_build_that_fails_still_stops_the_run(eng, project, monkeypatch):

@@ -175,3 +175,24 @@ describe("the preview step can be acted on", () => {
     expect(DW).toContain("isLoopbackPreviewUrl(v)");
   });
 });
+
+describe("a step that failed while the run went on", () => {
+  const DW = codeOnly("app/delivery-workflows-ui.tsx");
+  const CSS = codeOnly("app/globals.css");
+
+  it("reads as failed, not as 'not run'", () => {
+    // Saying "not run" about work that ran and died hides something worth fixing.
+    expect(DW).toContain("function failedButContinued");
+    expect(DW).toContain("failed — went on");
+    expect(DW).toContain('"dw-step-failed-on"');
+  });
+
+  it("still lets the path continue past it", () => {
+    // It is not a stopped run: the project carried on without it, and the rail should say so.
+    expect(DW).toContain('"failed_on"].includes(previous ?? "")');
+  });
+
+  it("has its own colour rather than borrowing one", () => {
+    expect(CSS).toContain('.dw-node[data-phase="failed_on"]');
+  });
+});

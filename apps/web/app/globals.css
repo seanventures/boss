@@ -8013,3 +8013,10 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 1px solid var(--border, #30363d); color: var(--muted, #8b949e);
 }
 .roster-ask:hover { color: inherit; border-color: var(--live, #58a6ff); }
+
+/* Failed, and the work went on. Not "not run" — that hides something worth fixing — and not a
+   stopped run either, because the project carried on without it. */
+.dw-node[data-phase="failed_on"] .dw-dot { background: var(--bad, #f85149); color: #1a0503; }
+.dw-node[data-phase="failed_on"] .dw-node-btn { border-color: var(--bad, #f85149); opacity: .9; }
+.dw-detail[data-phase="failed_on"] { border-color: var(--bad, #f85149); }
+.dw-step-note[data-tone="bad"] { color: var(--bad, #f85149); }

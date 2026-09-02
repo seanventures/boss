@@ -859,23 +859,36 @@ def resume_awaited(
             done.append({"run_id": run_id, "step_id": step["step_id"],
                          "outcome": "succeeded", "awaited": kind})
         elif status in bad_states and kind == "discovery":
-            # RESEARCH THAT DID NOT FINISH MUST NOT SINK THE PROJECT.
+            # RESEARCH THAT DID NOT FINISH FAILED — AND THE PROJECT CARRIES ON.
             #
-            # Research is enrichment: it gives the panel evidence to argue from, and the
-            # binding into `meeting` is optional precisely so a run without it still works.
-            # Failing the step failed the whole RUN — so a discovery cancelled for a reason of
-            # its own took the build down with it before a line of code was written. Recorded,
-            # with what happened, and the workflow goes on.
+            # Two facts, and the step has to hold both. It FAILED: saying "not run" about work
+            # that ran and died hides a thing worth fixing, and this one has been failing for
+            # reasons of its own. But it must not sink the run — research is enrichment, the
+            # binding into `meeting` is optional, and a cancelled discovery took a whole build
+            # down with it before a line of code was written (wfr_9782313e30cf4826a0).
+            #
+            # AND WHATEVER IT FOUND STILL GOES TO THE PANEL. A run that dies partway has
+            # usually written its brief and some findings already; throwing those away wastes
+            # the search that was actually done and sends the panel in with nothing. Partial
+            # evidence argued over beats no evidence.
+            partial = _terminal_evidence(connection, kind, awaited_id)
+            salvaged = str(partial.get("dossier") or "")
             workflows.force_complete_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],
-                output={**output, "status": "not_applicable",
+                output={**output, **partial,
+                        "status": "failed_continued",
                         "awaited_status": status,
-                        "note": f"research did not finish ({status}) — the panel will argue "
-                                f"from the directive alone."},
+                        "note": (
+                            f"research {status} before it finished"
+                            + (" — the panel gets what it had reached by then."
+                               if salvaged else
+                               " and had produced nothing, so the panel argues from the "
+                               "directive alone.")
+                        )},
             )
             done.append({"run_id": run_id, "step_id": step["step_id"],
-                         "outcome": "not_applicable", "awaited": kind,
-                         "awaited_status": status})
+                         "outcome": "failed_continued", "awaited": kind,
+                         "awaited_status": status, "salvaged": bool(salvaged)})
         elif status in bad_states:
             workflows.force_fail_waiting_step(
                 connection, project_id=project_id, step_run_id=step["id"],

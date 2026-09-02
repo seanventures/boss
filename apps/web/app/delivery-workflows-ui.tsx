@@ -170,6 +170,11 @@ function observedGates(step: RunStep): string | null {
   return gates.length ? gates.join(" · ") : null;
 }
 
+/** A step whose work FAILED and whose run carried on regardless. */
+function failedButContinued(step: RunStep): boolean {
+  return (step.output as { status?: string } | undefined)?.status === "failed_continued";
+}
+
 /** A step the runtime completed by recording that its phase never happened. */
 function notApplicable(step: RunStep): boolean {
   return (step.output as { status?: string } | undefined)?.status === "not_applicable";
@@ -995,7 +1000,12 @@ function hasFindings(step: RunStep): boolean {
   return Array.isArray(f) && f.length > 0;
 }
 
-function phaseOf(step: RunStep): "done" | "now" | "ahead" | "skipped" | "failed" | "findings" {
+function phaseOf(step: RunStep):
+    "done" | "now" | "ahead" | "skipped" | "failed" | "findings" | "failed_on" {
+  // FAILED, AND THE WORK WENT ON. Research that died is not "not run" — that hides something
+  // worth fixing — and it is not a stopped run either, because the project carried on without
+  // it. Its own state, so neither reading is offered.
+  if (failedButContinued(step)) return "failed_on";
   if (notApplicable(step) || step.status === "skipped") return "skipped";
   if (step.status === "failed" || step.status === "deadlettered" || step.status === "cancelled") {
     return "failed";
@@ -1069,7 +1079,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
                 // The connector INTO this step: solid once the work has flowed through it,
                 // animated while it is flowing, dim before.
                 <i className="dw-link" aria-hidden
-                   data-flow={["done", "skipped", "findings"].includes(previous ?? "")
+                   data-flow={["done", "skipped", "findings", "failed_on"].includes(previous ?? "")
                      ? (phase === "now" ? "moving" : "past") : "future"} />
               ) : null}
               <button type="button" className="dw-node-btn"
@@ -1077,6 +1087,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
                       onClick={() => setPicked(step.step_id)}>
                 <span className="dw-dot" aria-hidden>
                   {phase === "done" ? "✓" : phase === "failed" ? "!"
+                    : phase === "failed_on" ? "✕"
                     : phase === "findings" ? "▲"
                     : phase === "skipped" ? "–" : index + 1}
                 </span>
@@ -1229,9 +1240,13 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   return (
     <section className="dw-detail" data-phase={phase} data-testid="dw-detail">
       <header className="dw-detail-head">
-        <span className="dw-badge" data-tone={phase === "skipped" ? "muted" : tone(step.status)}
-              data-testid={phase === "skipped" ? "dw-step-na" : undefined}>
-          {phase === "skipped" ? "not run" : step.status}
+        <span className="dw-badge"
+              data-tone={phase === "skipped" ? "muted"
+                : phase === "failed_on" ? "bad" : tone(step.status)}
+              data-testid={phase === "failed_on" ? "dw-step-failed-on"
+                : phase === "skipped" ? "dw-step-na" : undefined}>
+          {phase === "failed_on" ? "failed — went on"
+            : phase === "skipped" ? "not run" : step.status}
         </span>
         <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
         {stepDuration(step) ? (
@@ -1252,7 +1267,11 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
 
       {capability?.summary ? <p className="dw-detail-what">{capability.summary}</p> : null}
       {step.error ? <p className="dw-step-error" data-testid="dw-step-error">{step.error}</p> : null}
-      {step.output?.note ? <p className="dw-step-note">{String(step.output.note)}</p> : null}
+      {step.output?.note ? (
+        <p className="dw-step-note" data-tone={phase === "failed_on" ? "bad" : undefined}>
+          {String(step.output.note)}
+        </p>
+      ) : null}
       {observedGates(step) ? (
         <p className="dw-step-gates" data-testid="dw-step-gates">{observedGates(step)}</p>
       ) : null}
