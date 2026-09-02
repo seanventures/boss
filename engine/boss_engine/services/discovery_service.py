@@ -94,6 +94,45 @@ def start_discovery(*, project_id: str, title: str, seed: str, context: str,
     return run_id
 
 
+def resume_interrupted(settings: Settings) -> dict:
+    """Restart research whose thread died with the process that owned it.
+
+    `start_discovery` drives the pipeline on a DAEMON THREAD, so a discovery lives inside
+    whichever process started it and dies when that process does. Every API restart — a deploy,
+    a crash, an OOM — silently orphaned every discovery in flight: the row stayed `running`,
+    nothing advanced it, and the Task Shepherd called it abandoned. From the operator's side
+    that is research failing at random.
+
+    Called at startup, beside the orphaned-deployment sweep, which exists for the same reason.
+    Restarting from the beginning is deliberate: a discovery is minutes of web research, and
+    redoing it beats cancelling work somebody is waiting on.
+    """
+    engine = get_engine()
+    resumed: list[str] = []
+    with begin(engine) as c:
+        rows = c.execute(
+            text("SELECT id, project_id, seed, context, state FROM discovery_runs "
+                 "WHERE status = 'running' ORDER BY created_at")
+        ).mappings().all()
+    for row in rows:
+        state = row["state"] if isinstance(row["state"], dict) else {}
+        try:
+            with begin(c2 := get_engine()) as conn:
+                emit_event(conn, row["project_id"], "discovery.resumed", "boss",
+                           "discovery_run", row["id"],
+                           {"reason": "the process running it restarted"})
+            threading.Thread(
+                target=_run_discovery,
+                args=(row["id"], row["project_id"], row["seed"] or "", row["context"] or "",
+                      settings, bool(state.get("deep")), state.get("governance")),
+                daemon=True,
+            ).start()
+            resumed.append(row["id"])
+        except Exception:  # noqa: BLE001 — one unresumable run must not stop the rest
+            continue
+    return {"resumed": len(resumed), "run_ids": resumed[:20]}
+
+
 def list_discovery_runs(connection, project_id: str, limit: int = 50) -> list[dict]:
     rows = connection.execute(
         text("""SELECT id, project_id, status, phase, title, seed, context, state, usage, error,
@@ -156,10 +195,38 @@ def _row_to_dict(r) -> dict:
 # --------------------------------------------------------------------------- #
 #  Pipeline                                                                    #
 # --------------------------------------------------------------------------- #
+def _still_working(run_id: str, engine, stop: threading.Event) -> None:
+    """Touch the row once a minute while the pipeline is alive.
+
+    A discovery has no JOB — it is a thread — so the Task Shepherd cannot ask "is a worker
+    holding this?" the way it can for a code task. All it has is `updated_at`, and its rule is
+    that a run untouched for twenty minutes has been abandoned. The rule is right; the problem
+    is that one research phase can legitimately run longer than that without reaching the next
+    `_phase` call, so the sweep cancelled work that was going perfectly well. That is what
+    "research fails at random" was.
+
+    Only while it is still running: moving a finished run's timestamp makes "when did this end"
+    unanswerable.
+    """
+    while not stop.wait(60):
+        try:
+            with begin(engine) as c:
+                c.execute(
+                    text("UPDATE discovery_runs SET updated_at = now() "
+                         "WHERE id = :id AND status = 'running'"),
+                    {"id": run_id},
+                )
+        except Exception:  # noqa: BLE001 — a missed beat must not kill the research
+            continue
+
+
 def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
                    settings: Settings, deep: bool = False,
                    governance: Optional[dict] = None) -> None:
     engine = get_engine()
+    _hb_stop = threading.Event()
+    threading.Thread(target=_still_working, args=(run_id, engine, _hb_stop),
+                     name=f"drun-hb-{run_id}", daemon=True).start()
     try:
         agent = make_code_agent(settings, engine="claude_code")
         if not hasattr(agent, "run_research"):
@@ -305,6 +372,11 @@ def _run_discovery(run_id: str, project_id: str, seed: str, context: str,
 # --------------------------------------------------------------------------- #
 #  Persistence helpers                                                         #
 # --------------------------------------------------------------------------- #
+    finally:
+        # Stop the beat whatever happened. A heartbeat outliving its pipeline would keep a dead
+        # run looking alive, which is precisely the state the shepherd exists to catch.
+        _hb_stop.set()
+
 def _phase(engine, run_id: str, phase: str) -> None:
     with begin(engine) as c:
         c.execute(text("UPDATE discovery_runs SET phase=:ph, updated_at=now() WHERE id=:id"),

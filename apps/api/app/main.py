@@ -1238,6 +1238,16 @@ async def lifespan(_: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[lifespan] orphaned-deployment sweep skipped: {exc}")
     try:
+        # RESEARCH THAT DIED WITH THE LAST PROCESS. A discovery runs on a daemon thread inside
+        # whichever process started it, so every restart of this one orphaned every discovery
+        # in flight — the row stayed `running`, nothing advanced it, and the Task Shepherd
+        # killed it twenty minutes later. Same failure shape as an orphaned deployment, same
+        # place to deal with it.
+        from .services.discovery_service import resume_interrupted
+        print(f"[lifespan] interrupted discoveries: {resume_interrupted(settings)}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[lifespan] discovery resume skipped: {exc}")
+    try:
         from .services.execution_substrate import effective_substrates
         print(f"[lifespan] execution substrates: {effective_substrates(settings)}")
     except ValueError as exc:
