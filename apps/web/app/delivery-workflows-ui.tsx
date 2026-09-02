@@ -4,6 +4,10 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
+import { operatorPreviewOpenHref } from "../lib/code-tasks";
+
+/** Where the API lives, for the proxy path a preview link resolves to. */
+const PREVIEW_API = process.env.NEXT_PUBLIC_BOSS_API_URL ?? "";
 
 /**
  * Delivery workflows: choose one, watch it run, build your own.
@@ -105,8 +109,9 @@ type RunStep = {
   // the Approvals area.
   decision_id: string | null;
   /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
-   *  The one recorded in `output` was live when the step ran, and previews expire. */
-  live_preview_url?: string | null;
+   *  The one recorded in `output` was live when the step ran, and previews expire. The whole
+   *  record, because turning one into an openable link is a rule the console already owns. */
+  live_preview?: { id: string; status: string; url: string | null } | null;
 };
 
 type Run = {
@@ -714,14 +719,25 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
   // looked only for a flat `preview_url` — so the one link an operator most wants, to the app
   // they just built, was the one that never appeared.
   //
-  // `live_preview_url` wins when the API supplies it: the step recorded the preview that was
-  // live WHEN IT RAN, and previews expire and are replaced, so the recorded one answers
-  // "preview not running (status=expired)" while the app is up on a new URL.
-  const nested = output.preview as { url?: string } | undefined;
-  const preview = str("live_preview_url")
-    || str("preview_url")
-    || (typeof nested?.url === "string" ? nested.url : "");
-  if (preview) out.push({ label: "open the preview", href: preview, external: true });
+  // THE LINK FACTORY WOULD BUILD, not a second attempt at one.
+  //
+  // Three times this was wrong, three different ways: no link at all, then a link to a preview
+  // that had expired, then a link to 127.0.0.1:42543 — where the app really is listening, on
+  // the host, which is not reachable from a browser anywhere else. `operatorPreviewOpenHref`
+  // already encodes the whole rule (refuse expired, refuse loopback, else the API's own
+  // /v1/previews/<id>/web/ proxy) and Factory has used it all along. Using it here is the fix;
+  // writing a fourth version of it would not be.
+  const live = output.live_preview as
+    { id: string; status: string; url: string | null } | undefined;
+  const nested = output.preview as { id?: string; url?: string } | undefined;
+  const record = live ?? (nested?.id
+    ? { id: nested.id, status: "running", url: nested.url ?? null }
+    : null);
+  const href = record ? operatorPreviewOpenHref(record) : null;
+  if (href) {
+    out.push({ label: "open the preview", external: true,
+               href: href.startsWith("http") ? href : `${PREVIEW_API}${href}` });
+  }
   return out;
 }
 
@@ -1156,8 +1172,7 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.
   const links = stepLinks({ ...(step.output || {}),
-                            ...(step.live_preview_url
-                                ? { live_preview_url: step.live_preview_url } : {}) });
+                            ...(step.live_preview ? { live_preview: step.live_preview } : {}) });
   const approval = step.approval as { mode?: string; approver_role?: string };
   const produced = Object.entries(step.output || {})
     .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))

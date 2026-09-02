@@ -20035,7 +20035,7 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     # are replaced. So the workflow offered a dead URL — "preview not running (status=expired)"
     # — while the project page, which looks the preview up fresh, opened the live one. A link
     # that 404s is worse than no link: it says the thing is broken when it is running.
-    live_preview: dict[str, str] = {}
+    live_preview: dict[str, dict] = {}
     task_ids = {
         str(((s["output"] or {}).get("await") or {}).get("id")
             or (s["output"] or {}).get("code_task_run_id") or "")
@@ -20044,13 +20044,21 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     task_ids.discard("")
     if task_ids:
         with begin(engine) as connection:
+            # The whole record, not just its url. `url` is where the app is listening ON THE
+            # HOST — 127.0.0.1:42543 — which is not reachable from a browser anywhere else.
+            # The console already knows how to turn a preview into a link an operator can open
+            # (operatorPreviewOpenHref: reject loopback, else the API's /v1/previews/<id>/web/
+            # proxy). Handing it the record lets it apply that rule instead of a second one.
             for row in connection.execute(
-                text("SELECT DISTINCT ON (run_id) run_id, url FROM app_previews "
-                     "WHERE run_id = ANY(:ids) AND status = 'running' AND url IS NOT NULL "
+                text("SELECT DISTINCT ON (run_id) run_id, id, status, url "
+                     "FROM app_previews "
+                     "WHERE run_id = ANY(:ids) AND status = 'running' "
                      "ORDER BY run_id, created_at DESC"),
                 {"ids": list(task_ids)},
             ).mappings():
-                live_preview[row["run_id"]] = row["url"]
+                live_preview[row["run_id"]] = {
+                    "id": row["id"], "status": row["status"], "url": row["url"],
+                }
 
     out = []
     for run in runs:
@@ -20074,11 +20082,11 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
                 if isinstance(candidate, str) and candidate.startswith("crun_"):
                     own_task = candidate
                     break
-        url = live_preview.get(own_task) if own_task else None
-        if url:
+        preview = live_preview.get(own_task) if own_task else None
+        if preview:
             for step in run_steps:
                 if step.get("capability") == "preview":
-                    step["live_preview_url"] = url
+                    step["live_preview"] = preview
 
         done = sum(1 for s in run_steps if s["status"] in ("succeeded", "skipped"))
         current = next(

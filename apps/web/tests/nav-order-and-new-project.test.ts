@@ -479,10 +479,10 @@ describe("managing runs, not just watching them", () => {
     expect(DW2).toContain('link({ area: "meetings", meeting })');
   });
 
-  it("shows the preview url the tool actually returns", () => {
-    // start_preview nests it under `preview.url`; this looked only for a flat `preview_url`,
-    // so the one link an operator most wants never appeared.
-    expect(DW2).toContain("output.preview as { url?: string }");
+  it("reads the preview the tool recorded as a fallback", () => {
+    // start_preview nests its result under `preview`, and that is what the step carries when
+    // the API has resolved no live one — it still has to become a link the same way.
+    expect(DW2).toContain("output.preview as");
     expect(DW2).toContain("open the preview");
   });
 
@@ -527,11 +527,15 @@ describe("deciding a release, and where it ships", () => {
     expect(CSS3).toContain('.dw-blocked[data-denied="true"]');
   });
 
-  it("links the preview that is running, not the one that has expired", () => {
-    // The step recorded the preview live WHEN IT RAN; previews expire and are replaced, so the
-    // recorded one answers "preview not running (status=expired)".
-    expect(DW3).toContain('str("live_preview_url")');
-    expect(DW3).toContain("live_preview_url?: string | null;");
+  it("builds the preview link the way Factory does, rather than a fourth way", () => {
+    // Three times this was wrong, three different ways: no link at all; a link to a preview
+    // that had expired; a link to 127.0.0.1:42543 — where the app really is listening, on the
+    // host, which no browser elsewhere can reach. operatorPreviewOpenHref already encodes the
+    // whole rule (refuse expired, refuse loopback, else the API's /v1/previews/<id>/web/
+    // proxy). Using it is the fix; writing another version of it is how this kept recurring.
+    expect(DW3).toContain("operatorPreviewOpenHref(record)");
+    expect(DW3).toContain("href.startsWith(\"http\") ? href : `${PREVIEW_API}${href}`");
+    expect(DW3).not.toContain('str("live_preview_url")');
   });
 });
 
