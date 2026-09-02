@@ -162,6 +162,7 @@ from .redaction import redact as _redact_pii
 from .sandbox import (
     CommandResult, DiffSummary, EphemeralSandbox, _shared_tool_caches,
 )
+from .agent_env import agent_environment
 
 # --------------------------------------------------------------------------- #
 # Which agent subprocesses are OURS, and what seat each one occupies.
@@ -682,7 +683,15 @@ class ClaudeCodeAgent:
                     # from scratch on every build. Measured on a real run: ~30 of 150 turns
                     # went on installing dependencies and waiting for a browser download,
                     # including a background install the agent then had to poll with `ps`.
-                    env={**os.environ, **_shared_tool_caches()},
+                    # WHAT THE AGENT CAN SEE IS A DECISION, NOT AN INHERITANCE.
+                    #
+                    # This was `{**os.environ, ...}`: the agent got the control plane's whole
+                    # environment, DATABASE_URL included. On 2026-09-02 its QA step ran the API
+                    # test suite — the job we gave it — and the suite cleared the tables it
+                    # found, which were production's. 204 of them.
+                    #
+                    # Deny by default now. See services/agent_env.py for what survives and why.
+                    env=agent_environment(os.environ, _shared_tool_caches()),
                 )
                 register_seat(child.pid, seat)
                 try:

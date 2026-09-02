@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from ..config import Settings
+from .agent_env import agent_environment
 from .scheduling import low_priority
 
 
@@ -194,7 +195,11 @@ class SandboxValidationAdapter:
             completed = subprocess.run(
                 low_priority(argv),
                 cwd=repo_path,
-                env={**os.environ, "CI": "1"},
+                # THIS RUNS THE PROJECT'S OWN TEST COMMAND. It used to run it with the control
+                # plane's full environment, so `make test` inside a sandbox was pointed at the
+                # production database by default. Same denial list as the agent subprocess —
+                # see services/agent_env.py.
+                env=agent_environment(os.environ, {"CI": "1"}),
                 capture_output=True,
                 text=True,
                 timeout=self.settings.sandbox_validation_timeout_seconds,

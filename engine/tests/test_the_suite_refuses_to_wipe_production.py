@@ -94,17 +94,55 @@ class TestTheOverride:
         assert "MAY_WIPE" in OVERRIDE
 
 
-def test_the_wiping_fixture_goes_through_the_guard():
-    """The guard is worth nothing if the destructive path can skip it."""
-    import inspect
+class TestTheSuiteCannotReachAnotherSchema:
+    """Two independent defences, asserted separately because either alone is a single point.
 
-    from apps.api.tests import conftest
+    1. The guard refuses a database that is not named like a test database.
+    2. Confinement gives the run its own schema, so even an allowed database is only ever
+       touched inside a namespace created for this run and dropped afterwards.
 
-    source = inspect.getsource(conftest.database_url)
-    assert "assert_safe_to_wipe" in source, (
-        "database_url is what the engine fixture — and therefore the DELETE loop — is built "
-        "from. If it stops calling the guard, the suite can wipe production again."
-    )
-    assert "database_url" in inspect.getsource(conftest.engine), (
-        "the engine must be built from the guarded url, not from os.environ directly"
-    )
+    The reset statements themselves are unchanged and still delete unconditionally. That is
+    fine — and only fine — because of (2). If confinement is ever removed, the 2026-09-02
+    failure mode returns exactly as it was.
+    """
+
+    def _conftest_source(self) -> str:
+        from pathlib import Path
+
+        return Path("apps/api/tests/conftest.py").read_text()
+
+    def test_the_guard_runs_before_anything_reads_the_database(self):
+        source = self._conftest_source()
+        assert "_assert_safe_to_wipe(_BASE_DATABASE_URL)" in source
+
+    def test_the_run_is_confined_to_its_own_schema(self):
+        source = self._conftest_source()
+        assert "confine_to_private_schema" in source
+
+    def test_confinement_happens_before_the_application_is_imported(self):
+        """The app builds its own engine from DATABASE_URL at import. Confining after that
+        leaves the app in `public` and the tests in their own schema — which is not just
+        unsafe, it fails 18 tests, which is how this ordering was found."""
+        source = self._conftest_source()
+        assert source.index("confine_to_private_schema(") < source.index(
+            "from apps.api.app.main import app"
+        )
+
+    def test_the_schema_is_dropped_when_the_run_ends(self):
+        from pathlib import Path
+
+        confinement = Path("apps/api/tests/schema_confinement.py").read_text()
+        assert "DROP SCHEMA IF EXISTS" in confinement
+        assert "atexit.register" in confinement, (
+            "the schema is created before any fixture exists and must go away even if "
+            "collection fails"
+        )
+
+    def test_the_search_path_travels_on_the_url(self):
+        """So that engines built later by the application inherit the confinement instead of
+        quietly falling back to public."""
+        from pathlib import Path
+
+        confinement = Path("apps/api/tests/schema_confinement.py").read_text()
+        assert "search_path" in confinement
+        assert 'os.environ["DATABASE_URL"]' in confinement

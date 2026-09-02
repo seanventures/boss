@@ -1,6 +1,30 @@
 import os
+import uuid
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 os.environ.setdefault("BOSS_EDITION", "enterprise_self_hosted")
+
+# CONFINE THIS RUN BEFORE ANYTHING READS DATABASE_URL.
+#
+# The application builds its own engine when `apps.api.app.main` is imported, a few lines
+# below. Anything that rewrites DATABASE_URL in a fixture is already too late: the app would
+# be working in `public` while the tests worked in their own schema, and half the suite fails
+# on data the other half cannot see.
+#
+# So the schema is created here, at import time, and DATABASE_URL is rewritten before the app
+# is imported. From this point on, every engine anyone builds — the suite's, the app's, a
+# service's — lands in a schema that exists only for this run and is dropped when it ends.
+#
+# This is what makes the reset in `clean_tables` safe: it can only ever name tables in here.
+from apps.api.tests.db_guard import assert_safe_to_wipe as _assert_safe_to_wipe  # noqa: E402
+from apps.api.tests.schema_confinement import confine_to_private_schema  # noqa: E402
+
+_BASE_DATABASE_URL = os.environ.get("DATABASE_URL", "")
+if _BASE_DATABASE_URL:
+    _assert_safe_to_wipe(_BASE_DATABASE_URL)
+    _TEST_SCHEMA = confine_to_private_schema(_BASE_DATABASE_URL)
+else:
+    _TEST_SCHEMA = None
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,16 +55,19 @@ api_main.settings.boss_edition = "community"
 
 @pytest.fixture(scope="session")
 def database_url() -> str:
-    # THE SAFETY CATCH. `seeded_database` below DELETEs from ~20 tables, and on 2026-09-02 it
-    # did that to production, because an agent ran this suite inside the deployed container
-    # where DATABASE_URL is prod. Everything that reaches the DELETE is built from this
-    # fixture, so this is the one place the guard has to be.
-    return assert_safe_to_wipe(os.environ["DATABASE_URL"])
+    # Already guarded and confined at import time; returned here for the fixtures that want it.
+    return os.environ["DATABASE_URL"]
 
 
 @pytest.fixture(scope="session")
 def engine(database_url: str):
-    return create_engine(database_url, future=True)
+    """An engine on the schema this run owns. Confinement already happened at import time."""
+    eng = create_engine(database_url, future=True)
+    if _TEST_SCHEMA:
+        from boss_engine.db import ensure_schema
+
+        ensure_schema(eng)
+    return eng
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -65,6 +92,20 @@ def clean_tables(engine):
         # Tolerant deletes for partial schemas in ad-hoc test DBs (only core tables from db/schema.sql exist).
         # Original explicit list preserved (in designed child-to-parent delete order to avoid FK violations);
         # missing tables (commercial/enterprise) are skipped. Enables budget/kpi/concurrent tests + full -k matrix.
+        # THIS ONLY EVER REACHES THIS RUN'S OWN TABLES.
+        #
+        # The list below is unchanged, and on its own it is exactly what destroyed production
+        # on 2026-09-02: an unconditional delete, in whatever schema the suite was pointed at.
+        #
+        # What changed is WHERE it can point. The `engine` fixture creates a private schema for
+        # this run and pins search_path to it, so every name here resolves inside that schema
+        # and is dropped with it afterwards. Production's tables live in `public`; these
+        # statements cannot name them, whatever DATABASE_URL says.
+        #
+        # Truncating the whole schema and re-seeding instead was tried and reverted: it broke
+        # 24 tests and made the suite six times slower, because the baseline these tests expect
+        # is not what a fresh seed produces. Confinement is the property that matters; the
+        # shape of the reset is not worth destabilising the suite for.
         for tbl in [
             "metatron_watch_ticks",
             "metatron_memories",
