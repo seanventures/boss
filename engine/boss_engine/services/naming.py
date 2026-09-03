@@ -18,9 +18,20 @@ import re
 import unicodedata
 
 
+#: A heading that names the DOCUMENT rather than the thing the document is about.
+#:
+#: The trailing group is why this is not a one-liner. The phrase is almost never written bare:
+#: real PRDs are headed "Product Requirements Document (PRD)", and the pipeline's own markdown
+#: arrives as "**Product Requirements Document (PRD)**". Anchoring on `$` right after the
+#: phrase meant neither matched, so the document TYPE became the project name — two workflow
+#: runs in the console called "Product Requirements Document (PRD)", one of them still wearing
+#: its markdown asterisks.
 BOILERPLATE = re.compile(
     r"^(product requirements document|prd|design|spec|specification|overview|summary|"
-    r"web app|version\b.*|introduction|document)\b[\s:–—-]*$", re.I)
+    r"web app|version\b.*|introduction|document)\b"
+    # "(PRD)", "(draft)", "(v2)" — an acronym or qualifier restating the heading.
+    r"(\s*\([^)]{0,24}\))?"
+    r"[\s:–—*_#`-]*$", re.I)
 
 def _unadorn(s: str) -> str:
     """Drop a leading emoji or symbol so the boilerplate test can see the words behind it.
@@ -34,14 +45,22 @@ def _unadorn(s: str) -> str:
 
     In the renderer this is a wrong label. Here it is a wrong identity, written down.
     """
+    adornment = "\u200d\ufe0f\u2022\u00b7*_>#`"   # ZWJ, variation selector, bullets, markdown
+
+    def is_adornment(ch: str) -> bool:
+        return (ch.isspace() or unicodedata.category(ch).startswith("S")
+                or ch in adornment)
+
     i = 0
-    while i < len(s) and (
-        s[i].isspace()
-        or unicodedata.category(s[i]).startswith("S")   # emoji and other symbols
-        or s[i] in "\u200d\ufe0f\u2022\u00b7*_>#"   # ZWJ, variation selector, bullets
-    ):
+    while i < len(s) and is_adornment(s[i]):
         i += 1
-    return s[i:].strip()
+    # AND FROM THE END. Stripping only the front left "**Product Requirements Document (PRD)**"
+    # as "Product Requirements Document (PRD)**" \u2014 close enough to fool the boilerplate check,
+    # and close enough to reach the console as a project name with its markdown still attached.
+    j = len(s)
+    while j > i and is_adornment(s[j - 1]):
+        j -= 1
+    return s[i:j].strip()
 
 
 def _norm(s: str) -> str:
