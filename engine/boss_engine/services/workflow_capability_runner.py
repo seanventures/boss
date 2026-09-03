@@ -1477,7 +1477,31 @@ def tick(
                     actor=run.get("actor") or "workflow",
                     step=spec_step, context=_run_context(connection, run_id),
                 )
-                if output.get("status") == "needs_decision":
+                if output.get("status") == "failed":
+                    # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
+                    #
+                    # The runner failed a step only when execute_step RAISED. A capability that
+                    # returned {"status": "failed", "error": ...} was recorded as succeeded —
+                    # so every guard written as a `return` silently passed.
+                    #
+                    # Observed on five runs at once: the preview gate correctly refused
+                    # ("the preview at http://127.0.0.1:39917 does not answer, so it cannot have
+                    # been reviewed"), the step was marked succeeded, the console showed the
+                    # work as deployed, and Infra showed nothing — because nothing had been
+                    # deployed and nothing said so. That is the exact failure mode the gate was
+                    # written to prevent, reintroduced one layer up.
+                    reason = str(output.get("error") or output.get("note")
+                                 or "the capability reported failure without a reason")
+                    workflows.fail_step(
+                        connection, project_id=project_id, step_run_id=claimed["id"],
+                        worker_id=worker_id, error=reason[:500], retryable=True,
+                    )
+                    performed.append({
+                        "run_id": run_id, "step_id": claimed["step_id"],
+                        "capability": output.get("capability"),
+                        "outcome": "failed", "error": reason,
+                    })
+                elif output.get("status") == "needs_decision":
                     # A finding that is meant to stop the line asks the operator, in place,
                     # rather than deadlettering the run and answering for them.
                     decision_id = _park_for_decision(

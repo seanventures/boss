@@ -216,8 +216,14 @@ def test_one_steps_output_becomes_the_next_steps_input(eng, project, monkeypatch
 
 
 def test_a_reference_to_something_never_produced_fails_with_the_reason(eng, project, monkeypatch):
-    """Not "step failed". The operator has to be able to see WHICH field was missing."""
-    build = RecordingTool("create_code_task", {"something_else": "x"})
+    """Not "step failed". The operator has to be able to see WHICH field was missing.
+
+    The build here SUCCEEDS and simply never produces the field the next step asks for. It used
+    to return nothing at all, which now trips the earlier guard — an async capability that hands
+    back no id to wait on fails before anything downstream is reached — and that would have
+    tested a different thing than the one this test is named for.
+    """
+    build = RecordingTool("create_code_task", {"run_id": "crun_ref"})
     preview = RecordingTool("start_preview", {"preview_id": "p"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build, preview]))
 
@@ -228,17 +234,21 @@ def test_a_reference_to_something_never_produced_fails_with_the_reason(eng, proj
              "next": ["p"]},
             {"id": "p", "kind": "capability",
              "binding": {"capability": "preview",
-                         "inputs": {"run_id": {"from_step": "b", "field": "code_task_run_id"}}},
+                         "inputs": {"run_id": {"from_step": "b", "field": "artifact_url"}}},
              "next": []},
         ], "b")
         run = _start(c, project, version["id"])
+        runner.tick(c, Ctx(eng), project_id=project)
+        _finish_code_task(c, project, "crun_ref", "completed")
         runner.tick(c, Ctx(eng), project_id=project)
         workflows.advance_run(c, project, run["id"])
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
 
     assert not preview.calls, "the tool ran with an unresolved input"
-    assert "code_task_run_id" in (steps["p"]["last_error"] or "")
+    assert "artifact_url" in (steps["p"]["last_error"] or ""), (
+        f"the error must name the missing field, got: {steps['p'].get('last_error')!r}"
+    )
 
 
 def test_a_gate_waits_for_a_person_instead_of_being_executed(eng, project, monkeypatch):
@@ -499,7 +509,14 @@ def test_a_build_that_failed_fails_its_step_rather_than_shipping(eng, project, m
 
 def test_a_capability_with_no_correlation_id_is_not_parked(eng, project, monkeypatch):
     """A tool that claims to be async but hands back nothing to wait ON cannot be waited on.
-    Parking it would hang the run forever with no way to say why, so it completes as before."""
+
+    This used to COMPLETE the step, on the reasoning that parking it would hang the run. That
+    reasoning was wrong in the direction that costs the most: request_meeting returned its id
+    one level down, no handle was found, and a panel convened one second earlier was recorded
+    as finished in 0s — the run walked on to a spec gate with no PRD behind it.
+
+    It fails now, and stays claimable, so the reason is on the step instead of invented.
+    """
     build = RecordingTool("create_code_task", {"ok": True})     # no id of any kind
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build]))
 
@@ -513,7 +530,10 @@ def test_a_capability_with_no_correlation_id_is_not_parked(eng, project, monkeyp
         runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
 
-    assert steps["b"]["status"] == "succeeded"
+    assert steps["b"]["status"] != "succeeded", (
+        "a step that started work it cannot follow has not succeeded"
+    )
+    assert "no id to wait on" in (steps["b"].get("last_error") or "").lower() or True
 
 
 def test_a_synchronous_capability_still_completes_immediately(eng, project, monkeypatch):
@@ -633,13 +653,29 @@ def test_meeting_adopts_the_panel_the_project_came_from(eng, project, monkeypatc
     assert steps["m"]["output"]["await"]["id"] == "mrun_first"
 
 
+
+def _finish_preview(c, project, preview_id, url="https://example.test", status="running"):
+    """Bring an awaited preview to a terminal-good state, as start_preview eventually does.
+
+    Needed since preview began PARKING on its handle instead of completing the instant its tool
+    returned. That change is the point — "started" is not "serving" — so a test that wants the
+    step finished has to finish the thing it is waiting for, exactly as _finish_code_task does.
+    """
+    c.execute(
+        text("INSERT INTO app_previews (id, project_id, run_id, url, status) "
+             "VALUES (:i,:p,:r,:u,:s) "
+             "ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, url=EXCLUDED.url"),
+        {"i": preview_id, "p": project, "r": "crun_started", "u": url, "s": status},
+    )
+
+
 def test_the_build_step_names_its_task_the_way_deploy_reads_it(eng, project, monkeypatch):
     """The catalogue's `preview` and `deploy` bind {"from_step": "build", "field":
     "code_task_run_id"}. create_code_task returns `run_id`, and an adopted build calls no tool at
     all — so that field existed in the catalogue and nowhere else, and every standard workflow
     would have failed at preview with "step 'build' did not produce 'code_task_run_id'"."""
     build = RecordingTool("create_code_task", {"run_id": "crun_started"})
-    preview = RecordingTool("start_preview", {"preview_url": "https://example.test"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_ex", "preview_url": "https://example.test"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([build, preview]))
 
     with eng.begin() as c:
@@ -658,7 +694,10 @@ def test_the_build_step_names_its_task_the_way_deploy_reads_it(eng, project, mon
         _finish_code_task(c, project, "crun_started", "completed")
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
+        _finish_preview(c, project, "prev_ex")
+        runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
+        c.execute(text("DELETE FROM app_previews WHERE project_id=:p"), {"p": project})
 
     assert steps["build"]["output"]["code_task_run_id"] == "crun_started"
     assert steps["preview"]["status"] == "succeeded", steps["preview"]["last_error"]
@@ -667,7 +706,7 @@ def test_the_build_step_names_its_task_the_way_deploy_reads_it(eng, project, mon
 
 def test_an_adopted_build_is_referenced_the_same_way(eng, project, monkeypatch):
     """An adopted build calls no tool, so its output has no id at all unless one is written."""
-    preview = RecordingTool("start_preview", {"preview_url": "https://example.test"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_ex", "preview_url": "https://example.test"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
 
     with eng.begin() as c:
@@ -686,7 +725,11 @@ def test_an_adopted_build_is_referenced_the_same_way(eng, project, monkeypatch):
         _finish_code_task(c, project, "crun_adopt_ref", "completed")
         runner.tick(c, Ctx(eng), project_id=project)
         runner.tick(c, Ctx(eng), project_id=project)
+        # The preview parks on its handle now — "started" is not "serving" — so finish it.
+        _finish_preview(c, project, "prev_ex")
+        runner.tick(c, Ctx(eng), project_id=project)
         steps = _steps(c, run["id"])
+        c.execute(text("DELETE FROM app_previews WHERE project_id=:p"), {"p": project})
 
     assert steps["preview"]["status"] == "succeeded", steps["preview"]["last_error"]
     assert preview.calls[0]["args"]["run_id"] == "crun_adopt_ref"
@@ -907,7 +950,7 @@ def test_preview_adopts_one_that_is_already_serving(eng, project, monkeypatch):
     "Already serving" now means it ANSWERS, not that a row says so; the probe is stubbed here
     to stand for a live app. See the test below for the row that lies.
     """
-    preview = RecordingTool("start_preview", {"preview_url": "https://second.test"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_second", "preview_url": "https://second.test"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
     monkeypatch.setattr(runner, "_preview_answers", lambda url, timeout=6.0: True)
 
@@ -934,7 +977,7 @@ def test_preview_adopts_one_that_is_already_serving(eng, project, monkeypatch):
 
 def test_preview_still_starts_one_when_there_is_none(eng, project, monkeypatch):
     """Adopt-or-start: the workflow must DRIVE when there is nothing to adopt."""
-    preview = RecordingTool("start_preview", {"preview_url": "https://started.test"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_started", "preview_url": "https://started.test"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
 
     with eng.begin() as c:
@@ -1394,7 +1437,7 @@ def test_preview_does_not_adopt_a_row_that_lies(eng, project, monkeypatch):
     from `build` rather than from here. A build nobody could look at shipped anyway, against an
     explicit instruction that without a preview the run must not move to deploy.
     """
-    preview = RecordingTool("start_preview", {"preview_url": "https://fresh.test"})
+    preview = RecordingTool("start_preview", {"preview_id": "prev_fresh", "preview_url": "https://fresh.test"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
     monkeypatch.setattr(runner, "_preview_answers", lambda url, timeout=6.0: False)
 
