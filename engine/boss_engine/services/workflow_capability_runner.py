@@ -752,7 +752,19 @@ def execute_step(
     #
     # A run that stops with a reason can be fixed. A run that claims work happened cannot even
     # be noticed. Adoption returns earlier, so reaching here means a tool really was invoked.
-    if capability.is_async and str(result.get("status") or "") not in _DONE_STATUSES:
+    # ONLY FOR WORK THIS RUNTIME KNOWS HOW TO WAIT ON.
+    #
+    # `key in _AWAIT_KINDS` is not decoration, it is the bug this line already caused once.
+    # `deploy` is declared is_async — it does take a while — but there is no await table for a
+    # deployment, so it has no entry here. The first version indexed _AWAIT_KINDS[key] while
+    # building the error message and raised KeyError('deploy') on every deploy step. That
+    # escaped the handler that releases leases, so five deploy steps sat `leased` for fifteen
+    # hours showing a running timer, and the log read `(non-fatal): 'deploy'`.
+    #
+    # A capability with no await spec cannot be parked against anything, so demanding a handle
+    # from it is asking for something that does not exist.
+    if (capability.is_async and key in _AWAIT_KINDS
+            and str(result.get("status") or "") not in _DONE_STATUSES):
         result["status"] = "failed"
         result["error"] = (
             f"{capability.tool} started work but returned no id to wait on, so this step "
