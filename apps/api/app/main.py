@@ -20576,7 +20576,15 @@ def set_delivery_run_input(run_id: str, payload: dict) -> dict:
     Deliberately an allowlist: a run's input is what its steps were bound against, and letting
     a form overwrite any of it would let somebody redirect a build after the fact.
     """
-    ALLOWED = {"target_id", "environment"}
+    # `title` is on the list because a run can end up misnamed and there was no way to correct
+    # it. Two runs reached the console called "Product Requirements Document (PRD)" — the
+    # naming bug behind that is fixed, but the rows already written kept the bad name for good,
+    # since the title is stamped at creation.
+    #
+    # It is not purely cosmetic: `build` reads `title`, so renaming a run that has not built
+    # yet also renames the work it starts. That is the desired behaviour for a correction and
+    # the reason this is an operator action rather than something the console does silently.
+    ALLOWED = {"target_id", "environment", "title"}
     project_id = str(payload.get("project_id") or "").strip()
     values = payload.get("values") if isinstance(payload.get("values"), dict) else {}
     clean = {k: v for k, v in values.items() if k in ALLOWED and isinstance(v, str) and v.strip()}
