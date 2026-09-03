@@ -1139,11 +1139,25 @@ def _open_gate(
     # gate that defaulted to "proceed" would be a gate in name only.
     # An existing decision the subject named — the panel's own PRD approval — is used as this
     # gate rather than a new one raised beside it.
+    # ONE RUN, ONE DECISION. THIS QUESTION MUST NOT COLLIDE.
+    #
+    # create_blocking_decision deduplicates on (project_id, question, task_id) while pending —
+    # right for a repeated alert, because a repeat is evidence the same cause is ongoing.
+    # Catastrophic for a release gate: the question was "Ship it: standard_product_delivery",
+    # identical for every run of that workflow, so five runs across five different apps
+    # attached to ONE decision row. Approving one of them released all five deploys at the
+    # same second, which the operator caught — they approved a single release and watched five
+    # start.
+    #
+    # The run id makes it unique, and the title makes the Approvals page readable: an approver
+    # is being asked about a specific piece of work, not about a workflow in the abstract.
+    subject_name = str((run.get("input") or {}).get("title")
+                       or run.get("workflow_key") or "workflow").strip()[:80]
     decision_id = subject.get("decision_id") or create_blocking_decision(
         connection,
         project_id,
         run.get("task_id"),
-        f"{subject['label']}: {run.get('workflow_key') or 'workflow'}",
+        f"{subject['label']}: {subject_name} · run {run['id'][-8:]}",
         {
             "capability": subject["key"],
             "step_id": step_row["step_id"],
