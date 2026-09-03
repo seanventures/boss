@@ -543,11 +543,26 @@ export default function ConsoleShell({
   // Kept as one constant so the shell and the panel cannot drift on the spelling.
   const DOCK_GENERAL = "general";
   const [dockedRun, setDockedRun] = useState<string | null>(null);
+  // A PREFILL ONLY THE DOCK CONSUMES. `?ask=` is read by whichever AgentChat sees it first,
+  // and the BOSS Agent area is mounted permanently — so a starter clicked in Infra was eaten
+  // by an instance nobody was looking at and the dock opened with an empty box. This param is
+  // read here and handed down as a prop, so there is exactly one consumer.
+  const [dockAsk, setDockAsk] = useState<string>("");
   useEffect(() => {
     const read = () => {
       // The run id is the whole handoff now. It goes to the server as `external_ref`, which
       // resolves it into the system prompt — the console no longer ships a context blob.
-      setDockedRun(new URLSearchParams(window.location.search).get("agent"));
+      const params = new URLSearchParams(window.location.search);
+      setDockedRun(params.get("agent"));
+      const asked = params.get("dock_ask");
+      if (asked) {
+        setDockAsk(asked);
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("dock_ask");
+          window.history.replaceState(null, "", url.toString());
+        } catch { /* non-browser */ }
+      }
     };
     read();
     window.addEventListener("popstate", read);
@@ -990,7 +1005,10 @@ export default function ConsoleShell({
                   looking for a run that does not exist. */}
               <AgentChat projectId={scope.projectId ?? scope.project}
                          actor={scope.actorId ?? scope.actor}
-                         initialTaskId={dockedRun === DOCK_GENERAL ? undefined : dockedRun} />
+                         initialTaskId={dockedRun === DOCK_GENERAL ? undefined : dockedRun}
+                         initialMessage={dockAsk || undefined}
+                         roleName={dockedRun === DOCK_GENERAL ? "the Deployment Manager" : undefined}
+                         key={dockAsk} />
             </div>
           </aside>
         ) : null}

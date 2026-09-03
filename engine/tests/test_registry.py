@@ -18,6 +18,10 @@ _EXPECTED_TOOLS: set[str] = {
     # to answer "is 2.29.2.202 healthy" or "where would this ship" — so the Deployment
     # Manager role had nothing to read. Read-only: the governed path still does the deploy.
     "list_deployment_hosts", "describe_deployment_host", "list_deployments",
+    # A shell on a registered host. Two gates, not one: BOSS_AGENT_HOST_SHELL must be on, and
+    # the model cannot call it directly — it proposes, the operator clicks, and only the
+    # accept-action path supplies the confirmation the tool requires.
+    "run_on_host",
     "redeploy", "preflight_deployment_target",
 
     "cancel_code_task",
@@ -89,11 +93,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 56, (
+    assert len(reg.names()) == 57, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
     assert len(read) == 36
-    assert len(write) == 20
+    assert len(write) == 21
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",

@@ -626,6 +626,17 @@ class Settings(BaseSettings):
     # --- Coding agent (clone -> edit -> build -> test -> fix -> PR) -----------
     # Feature flag for the durable `code.task` pipeline.
     enable_code_task: bool = Field(default=False, alias="BOSS_ENABLE_CODE_TASK")
+
+    # --- Host shell for the console agent ------------------------------------
+    # Lets the BOSS agent run ARBITRARY commands on a registered deployment host, not just the
+    # read-only verbs `inspect_host` allows. This is a real shell on a real machine: it can
+    # delete containers, edit files and take the box down.
+    #
+    # Off by default, and the default is the whole point. An operator who wants their agent to
+    # have this on their own infrastructure turns it on deliberately; nobody inherits it by
+    # upgrading. Every command is written to the event stream with the actor who caused it, so
+    # "who ran that" always has an answer.
+    agent_host_shell: bool = Field(default=False, alias="BOSS_AGENT_HOST_SHELL")
     # When true, code tasks run through the governed coding pipeline (role-separated
     # stages: qa authors tests -> SE implements -> adversarial review -> fail-closed
     # QualityGate) instead of a single agent. See docs/product/GOVERNED_CODING_PIPELINE.md.

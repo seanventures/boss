@@ -8,11 +8,15 @@
  * hosts were registered, preflighted and invisible: an operator could see that
  * `hetzner-ci-01` was verified and had no way to ask it anything about that machine.
  *
- * WHAT IT CAN AND CANNOT DO, stated on the panel rather than discovered by asking.
- * It reads: hosts and their preflight results, what is deployed where, deployment history.
- * It does NOT execute on a host. That is the role's own contract — "must not deploy directly",
- * "must escalate staging deploy, production deploy, rollback execution" — and it is the line
- * that keeps a chat message from becoming an unreviewed change on a live machine.
+ * WHAT IT CAN DO, stated on the panel rather than discovered by asking.
+ * It reads hosts, preflight results, what is deployed where, and deployment history. It can
+ * also run commands on a host — and never on its own initiative: `run_on_host` refuses a
+ * model's direct call and tells it to propose, so the command arrives as a button showing the
+ * exact host and the exact command, and nothing happens until the operator clicks.
+ *
+ * That is the distinction the operator drew after an autonomous agent destroyed the database:
+ * an agent working WITH a person can be trusted with real power, because the person is the
+ * gate. An agent acting alone is a different thing entirely.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -28,15 +32,19 @@ type Host = {
   last_preflight?: { ready?: boolean; problems?: string[]; findings?: string[] } | null;
 };
 
-/** Questions worth asking on arrival, so the box is not a blank prompt. */
+/** Questions worth asking on arrival, so the box is not a blank prompt.
+ *
+ *  No "@Deployment Manager —" prefix any more: the dock says whose conversation this is, and
+ *  addressing the role inside the message as well made the operator's first sentence read like
+ *  it was written by the console. */
 const STARTERS = (host?: Host) => [
   host
-    ? `@Deployment Manager — is ${host.name} (${host.address}) healthy right now, and what is deployed on it?`
-    : "@Deployment Manager — what hosts can we deploy onto, and are they healthy?",
-  "@Deployment Manager — what shipped most recently, and did it pass its health check?",
+    ? `Is ${host.name} (${host.address}) healthy right now, and what is deployed on it?`
+    : "What hosts can we deploy onto, and are they healthy?",
+  "What shipped most recently, and did it pass its health check?",
   host
-    ? `@Deployment Manager — what would it take to deploy this project onto ${host.name}?`
-    : "@Deployment Manager — what would it take to deploy this project?",
+    ? `What would it take to deploy this project onto ${host.name}?`
+    : "What would it take to deploy this project?",
 ];
 
 export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
@@ -62,7 +70,11 @@ export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
     return () => { live = false; };
   }, [projectId]);
 
-  // OPEN THE DOCK, DO NOT BECOME ONE.
+  // OPEN THE DOCK, DO NOT BECOME ONE — and hand the question over as `dock_ask`.
+  //
+  // `?ask=` looked like the right handoff and silently lost: it is consumed by whichever
+  // AgentChat reads it first, and the BOSS Agent area stays mounted, so the starter was
+  // swallowed by an instance off-screen and the dock opened with an empty composer.
   //
   // This panel first embedded the whole chat inline — its own thread sidebar, its own hero —
   // which swallowed the Infra area to ask one question about a host. The console already has
@@ -72,7 +84,7 @@ export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
     try {
       const url = new URL(window.location.href);
       url.searchParams.set("agent", "general");
-      url.searchParams.set("ask", question);
+      url.searchParams.set("dock_ask", question);
       window.history.replaceState(null, "", url.toString());
       window.dispatchEvent(new PopStateEvent("popstate"));
     } catch { /* non-browser */ }
@@ -113,23 +125,23 @@ export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
       {/* THE LIMIT, SAID UP FRONT. An operator who believes this can restart a service will
           phrase a request as an instruction and read the reply as confirmation. */}
       <p className="dm-scope detail" data-testid="dm-scope">
-        Reads hosts, health and deployment history, and recommends. It does not run commands on
-        a host: deploys, rollbacks and anything touching production go through the governed
-        deploy path with an approval, which is what its role forbids it from bypassing.
+        Reads hosts, health and deployment history. It can also run commands on a host — but
+        never on its own: it proposes the exact command as a button, and nothing touches the
+        machine until you click it.
       </p>
 
       <div className="dm-starters">
         {STARTERS(verified[0] ?? hosts[0]).map((q) => (
           <button type="button" className="cap-btn" key={q} onClick={() => ask(q)}
                   data-testid="dm-starter">
-            {q.replace("@Deployment Manager — ", "")}
+            {q}
           </button>
         ))}
       </div>
 
       <div className="dm-starters">
         <button type="button" className="cap-btn" data-testid="dm-open-dock"
-                onClick={() => ask("@Deployment Manager — ")}>
+                onClick={() => ask("")}>
           Open the Deployment Manager
         </button>
       </div>

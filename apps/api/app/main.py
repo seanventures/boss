@@ -10617,9 +10617,19 @@ def run_agent_action(payload: AgentActionRunRequest, request: Request) -> AgentA
         require_project_actor(connection, payload.project_id, payload.actor, "agent_chat")
 
     ctx = EngineContext(settings=settings, engine=engine)
+    # THIS IS THE ACK, AND ONLY THIS PATH CAN GIVE IT.
+    #
+    # Some tools change a machine rather than a row — `run_on_host` opens a shell on a
+    # registered host. Those refuse to run from a model's own tool call and require this
+    # marker, which is set here and nowhere else: reaching this line means an operator was
+    # shown the exact tool and the exact arguments and pressed the button.
+    #
+    # The distinction the operator drew after the 2026-09-02 wipe: an agent working WITH a
+    # person is fine; an autonomous one performing a destructive act with nobody watching is
+    # not. This is where that line is enforced.
     result = registry.invoke(
         spec.name, ctx, project_id=payload.project_id, actor=payload.actor,
-        args=dict(payload.args or {}),
+        args={**dict(payload.args or {}), "_operator_confirmed": True},
     )
     with begin(engine) as connection:
         emit_event(connection, payload.project_id, "agent.action_accepted", payload.actor,

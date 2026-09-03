@@ -122,8 +122,17 @@ type ProposedAction = {
   why?: string;
 };
 
-export function AgentChat({ projectId, actor, initialTaskId }: {
+export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName }: {
   projectId: string; actor: string; initialTaskId?: string;
+  /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
+   *
+   *  `?ask=` is consumed by whichever AgentChat reads it first, and the console keeps the BOSS
+   *  Agent area mounted at all times — so a starter clicked in Infra was swallowed by an
+   *  instance nobody was looking at, and the dock opened empty. */
+  initialMessage?: string;
+  /** Whose conversation this is. The dock is not always "BOSS": in Infra you are talking to
+   *  the Deployment Manager, and calling that BOSS hides which role answers for the work. */
+  roleName?: string;
   /** What BOSS already knows about the app this conversation is about. */
 }) {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -132,7 +141,7 @@ export function AgentChat({ projectId, actor, initialTaskId }: {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [context, setContext] = useState<{ task?: Record<string, unknown>; code_tasks?: CodeTask[] } | null>(null);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialMessage ?? "");
   // ADDRESSED FROM SOMEWHERE ELSE. The Agents page sends the operator here with the message
   // already opened — "@QA Lead — " — so asking one of them something is a click from the card
   // that named them, rather than navigating here and retyping who you meant.
@@ -475,7 +484,7 @@ export function AgentChat({ projectId, actor, initialTaskId }: {
           ) : messages.length === 0 ? (
             <div className="agent-chat-empty">
               <div className="agent-empty-mark" aria-hidden>◆</div>
-              <p className="agent-empty-lead">Ask BOSS about this work.</p>
+              <p className="agent-empty-lead">Ask {roleName ?? "BOSS"} about this work.</p>
             </div>
           ) : messages.map((m, i) => (
             <article className={`agent-message ${m.role}`} key={i}>

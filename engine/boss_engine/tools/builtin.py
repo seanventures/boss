@@ -2358,6 +2358,105 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 "stdout": (res.stdout or "")[-6000:], "stderr": (res.stderr or "")[-2000:]}
 
     @reg.tool(
+        "run_on_host",
+        "Run ANY command on a registered deployment host over SSH — restart or delete "
+        "containers, edit files, install packages, inspect anything. This changes the machine. "
+        "Use inspect_host when you only need to look. Requires BOSS_AGENT_HOST_SHELL; without "
+        "it this refuses and only the read-only verbs are available.",
+        _obj({"host": {"type": "string", "description": "host name, id or address"},
+              "command": {"type": "string", "description": "the shell command to run"},
+              "timeout_s": {"type": "integer", "minimum": 5, "maximum": 600, "default": 120}},
+             ["host", "command"]),
+        kind="write",
+    )
+    def run_on_host(ctx, *, project_id, actor, args):
+        """A shell on the operator's own machine, off by default and always recorded.
+
+        `inspect_host` deliberately allows only read-only verbs, and that was the right default
+        — but it is a floor, not a ceiling. An operator who wants their agent to clear a host
+        and rebuild it is asking for something reasonable about hardware they own, and telling
+        them to go and do it by hand is not a security control, it is a missing feature.
+
+        So: the capability exists, it is off unless switched on, and every command lands in the
+        event stream with the actor attached. What makes this survivable is not a filter on the
+        command — a filter on shell input is a promise nobody can keep, which is why
+        `inspect_host` allow-lists verbs instead — it is that the blast radius is one registered
+        host, the switch is deliberate, and the audit trail names who asked.
+        """
+        from ..services.core import emit_event
+        from ..services.deploy_service import (_discard_key_file, _materialise_key, _ssh,
+                                               _ssh_key_file)
+        from ..services.secret_backends import resolve_target_secret
+
+        if not getattr(ctx.settings, "agent_host_shell", False):
+            return {"ok": False,
+                    "error": "host shell is disabled (BOSS_AGENT_HOST_SHELL is not set).",
+                    "note": "inspect_host still works for read-only commands."}
+
+        raw = (args.get("command") or "").strip()
+        if not raw:
+            return {"ok": False, "error": "command is required"}
+
+        # A PERSON PRESSES THE BUTTON. Only /v1/engine/agent/action sets this, and it sets it
+        # after an operator has seen the exact host and the exact command on a button and
+        # clicked it. A model calling this tool directly gets sent back to propose_command,
+        # which is what puts the command in front of the operator in the first place.
+        if not args.get("_operator_confirmed"):
+            return {
+                "ok": False,
+                "requires_confirmation": True,
+                "error": "running a command on a host needs the operator's confirmation.",
+                "do_this": (
+                    "call propose_command with name='run_on_host' and these exact args, plus a "
+                    "label saying what it does and why. The console renders it as a button; "
+                    "nothing runs until the operator clicks it."
+                ),
+                "proposed_args": {"host": args.get("host"), "command": raw},
+            }
+        want = (args.get("host") or "").strip()
+        timeout = int(args.get("timeout_s") or 120)
+
+        with ctx.begin() as c:
+            row = c.execute(_text(
+                "SELECT * FROM deployment_hosts "
+                "WHERE project_id = :p AND (id = :h OR name = :h OR address = :h)"),
+                {"p": project_id, "h": want}).mappings().first()
+            if row is None:
+                return {"ok": False, "error": f"no registered host {want!r} in this project"}
+            host = dict(row)
+            probe = {"secret_refs": ([{"name": "ssh_key",
+                                       "secret_ref_id": host["key_secret_ref"]}]
+                                     if host.get("key_secret_ref") else []),
+                     "host_id": host["id"]}
+            ephemeral = None
+            try:
+                material = resolve_target_secret(c, probe, "ssh_key", ctx.settings)
+                key = ephemeral = (_materialise_key(material) if material
+                                   else _ssh_key_file(ctx.settings))
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"no usable credential for this host: {exc}"[:200]}
+            # Recorded BEFORE it runs. A command that takes the box down must still be
+            # answerable for afterwards, and a receipt written on the way out is not written
+            # when the thing never comes back.
+            emit_event(c, project_id, "host.command", actor, "deployment_host", host["id"],
+                       {"host": host["name"], "address": host["address"], "command": raw})
+
+        try:
+            res = _ssh(key, host["address"], (host.get("ssh_user") or "root"),
+                       int(host.get("ssh_port") or 22), raw, timeout=timeout)
+        finally:
+            if ephemeral:
+                _discard_key_file(ephemeral)
+
+        with ctx.begin() as c:
+            emit_event(c, project_id, "host.command_result", actor,
+                       "deployment_host", host["id"],
+                       {"host": host["name"], "command": raw, "exit_code": res.returncode})
+        return {"ok": res.returncode == 0, "host": host["name"], "command": raw,
+                "exit_code": res.returncode,
+                "stdout": (res.stdout or "")[-8000:], "stderr": (res.stderr or "")[-4000:]}
+
+    @reg.tool(
         "http_probe",
         "GET a URL and report status, timing and a body excerpt. Answers 'is the app "
         "actually up RIGHT NOW' — health samples say what was true when last sampled, "
@@ -2545,6 +2644,9 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "create_discovery",
     "request_meeting",
     # Delivery and environment
+    # A shell on the operator's own host. Gated a second time by BOSS_AGENT_HOST_SHELL, so
+    # admitting it here does not by itself hand anybody a shell.
+    "run_on_host",
     "redeploy",
     "start_preview",
     "stop_preview",
