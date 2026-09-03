@@ -288,6 +288,98 @@ def _register_read_tools(reg: ToolRegistry) -> None:
             "rows": [_json_safe(dict(r)) for r in capped],
         }
 
+    # -----------------------------------------------------------------------
+    # THE MACHINES BOSS DEPLOYS ONTO.
+    #
+    # The chat agent could describe every build and every preview and had no idea what a HOST
+    # was — so "is hetzner-ci-01 healthy?" or "where would this deploy?" were unanswerable, and
+    # the Deployment Manager role existed on paper with nothing to read.
+    #
+    # Read-only, deliberately. The role's own contract says it must not deploy directly and
+    # must escalate staging and production; these tools let it diagnose and recommend, and the
+    # governed deploy path remains the only way anything actually ships.
+    # -----------------------------------------------------------------------
+    @reg.tool(
+        "list_deployment_hosts",
+        "The machines this project can deploy onto: name, address, architecture, status "
+        "(registered/verified/degraded/retired), port budget and when each was last checked. "
+        "Use for 'what hosts do we have', 'is <host> healthy', 'where can this ship'.",
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
+    )
+    def list_deployment_hosts(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        limit = int(args.get("limit") or 25)
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text(
+                    "SELECT id, name, address, ssh_user, ssh_port, arch, status, labels, "
+                    "       port_min, port_max, max_apps, last_preflight_at "
+                    "FROM deployment_hosts WHERE project_id=:p "
+                    "ORDER BY name LIMIT :l"
+                ),
+                {"p": pid, "l": limit},
+            ).mappings().all()
+        return {"project_id": pid, "hosts": [_json_safe(dict(r)) for r in rows]}
+
+    @reg.tool(
+        "describe_deployment_host",
+        "One host in full: its last preflight result — reachable, architecture detected, "
+        "findings and problems — plus the apps currently deployed onto it. Accepts the host "
+        "id, its name, or its IP address. Use before recommending anything be shipped there.",
+        _obj({"host": {"type": "string", "description": "host id, name or address"},
+              "project_id": {"type": "string"}}, ["host"]),
+    )
+    def describe_deployment_host(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        needle = str(args.get("host") or "").strip()
+        if not needle:
+            return {"error": "host is required (id, name or address)"}
+        with ctx.begin() as c:
+            # Matched three ways because an operator says "2.29.2.202" and the console says
+            # "hetzner-ci-01"; forcing them to know the id is a lookup they should not have to do.
+            row = c.execute(
+                _text(
+                    "SELECT * FROM deployment_hosts "
+                    "WHERE project_id=:p AND (id=:n OR name=:n OR address=:n) LIMIT 1"
+                ),
+                {"p": pid, "n": needle},
+            ).mappings().first()
+            if not row:
+                return {"error": f"no host matching {needle!r} in this project"}
+            apps = c.execute(
+                _text(
+                    "SELECT id, name, status, app_port, domain, updated_at "
+                    "FROM deployment_targets WHERE project_id=:p AND host_id=:h "
+                    "ORDER BY updated_at DESC LIMIT 50"
+                ),
+                {"p": pid, "h": row["id"]},
+            ).mappings().all()
+        host = _json_safe(dict(row))
+        # Never hand the model a credential reference it has no use for.
+        host.pop("key_secret_ref", None)
+        return {"host": host, "apps_on_this_host": [_json_safe(dict(a)) for a in apps]}
+
+    @reg.tool(
+        "list_deployments",
+        "Recent deployment runs: app, environment, target, commit, status and when. "
+        "Use for 'what shipped', 'did the last deploy succeed', 'what is on <host> now'.",
+        _obj({"project_id": {"type": "string"}, "limit": _LIMIT}),
+    )
+    def list_deployments(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        limit = int(args.get("limit") or 25)
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text(
+                    "SELECT id, app_name, environment, target_kind, target_ref, commit_ref, "
+                    "       status, deployment_target_id, decision_id, created_at "
+                    "FROM deployment_runs WHERE project_id=:p "
+                    "ORDER BY created_at DESC LIMIT :l"
+                ),
+                {"p": pid, "l": limit},
+            ).mappings().all()
+        return {"project_id": pid, "deployments": [_json_safe(dict(r)) for r in rows]}
+
 
 # ===========================================================================
 # WRITE TOOLS — create workflow tasks

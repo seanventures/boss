@@ -14,6 +14,10 @@ _EXPECTED_TOOLS: set[str] = {
     # its own source, its logs and its hosts, and could not read the one document
     # that says what an app was FOR.
     "read_spec",
+    # The machines BOSS deploys onto. The agent could describe every build and had no way
+    # to answer "is 2.29.2.202 healthy" or "where would this ship" — so the Deployment
+    # Manager role had nothing to read. Read-only: the governed path still does the deploy.
+    "list_deployment_hosts", "describe_deployment_host", "list_deployments",
     "redeploy", "preflight_deployment_target",
 
     "cancel_code_task",
@@ -85,10 +89,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 53, (
+    assert len(reg.names()) == 56, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 33
+    assert len(read) == 36
     assert len(write) == 20
     # the capabilities the user explicitly asked the agent to cover
     for name in (

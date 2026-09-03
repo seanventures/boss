@@ -8041,3 +8041,28 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   border: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, transparent);
 }
 .org-provenance-banner strong { color: var(--warn, #d29922); }
+
+/* Deployment Manager — the hosts it can see, then the conversation. */
+.dm-panel { display: grid; gap: 12px; }
+.dm-hosts { display: grid; gap: 6px; }
+.dm-host {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: 8px;
+  border: 1px solid var(--border, #30363d);
+  background: var(--panel, #0d1117);
+}
+.dm-host-name { font-weight: 650; color: var(--ink, #e6edf3); }
+.dm-badge {
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border, #30363d);
+  color: var(--muted, #8b949e);
+}
+.dm-badge[data-tone="ok"]  { color: var(--ok, #3fb950); border-color: var(--ok, #3fb950); }
+.dm-badge[data-tone="bad"] { color: var(--bad, #f85149); border-color: var(--bad, #f85149); }
+/* The boundary is part of the panel, not a disclaimer at the bottom of a page. */
+.dm-scope {
+  padding: 8px 12px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warn, #d29922) 35%, transparent);
+  background: color-mix(in srgb, var(--warn, #d29922) 10%, transparent);
+}
+.dm-starters { display: flex; gap: 8px; flex-wrap: wrap; }

@@ -186,6 +186,7 @@ import { AssuranceCenter } from "./assurance-ui";
 import { fetchAssuranceFeed } from "../lib/assurance";
 import { fetchDiscoveriesFeed } from "../lib/discoveries";
 import { DiscoveriesHome } from "./discoveries-ui";
+import { DeploymentManagerPanel } from "./deployment-manager-ui";
 import { fetchPipelineData } from "../lib/pipeline-profiles";
 import { PipelineView } from "./pipeline-ui";
 import { fetchSandboxFeed } from "../lib/sandboxes";
@@ -6944,6 +6945,16 @@ export default async function HomePage({ searchParams }: HomePageProps) {
         <section className="panel-stack" data-area="processes" aria-label="Agent processes">
           <AgentProcesses projectId={activeProjectId} actor={activeActorId} />
           <ProcessManager projectId={activeProjectId} actor={activeActorId} />
+        </section>
+
+        <section className="panel-stack" data-area="delivery" aria-label="Deployment Manager">
+          <div className="section-head">
+            <div>
+              <span className="eyebrow">Deployment Manager</span>
+              <h2>Ask the agent that owns hosts, releases and rollback readiness.</h2>
+            </div>
+          </div>
+          <DeploymentManagerPanel projectId={activeProjectId} actor={activeActorId} />
         </section>
 
         <section className="panel-stack" data-area="delivery" aria-label="CI/CD">
