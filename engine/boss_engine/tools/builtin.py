@@ -2358,6 +2358,109 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 "stdout": (res.stdout or "")[-6000:], "stderr": (res.stderr or "")[-2000:]}
 
     @reg.tool(
+        "read_pull_request",
+        "What a pull request actually CONTAINS: state, branch, and the list of files it "
+        "changed, optionally with the diff. Answers 'what did this task really ship' and "
+        "'why does the preview fail to build this'. Accepts a PR number, a PR url, or a code "
+        "task run id — the PR the task opened is looked up for you.",
+        _obj({"pull_request": {"type": "string",
+                               "description": "PR number, PR url, or a crun_ id"},
+              "repo": {"type": "string", "description": "owner/repo; defaults to the target"},
+              "with_diff": {"type": "boolean", "default": False},
+              "project_id": {"type": "string"}},
+             ["pull_request"]),
+    )
+    def read_pull_request(ctx, *, project_id, actor, args):
+        """The agent could describe a task and not see what it shipped.
+
+        A code task reported "completed" with a PR url, its preview failed with "Could not
+        resolve entry module index.html", and the agent had no way to look inside: it has
+        git_history and repo_activity, neither of which reads a pull request. So it could only
+        offer to retry — while the answer was one listing away. The task had been told a Vite
+        scaffold existed and had written a Python service instead; there was no index.html,
+        and the PR's file list said so immediately.
+
+        The operator diagnosed this with `gh pr view`. A tool the operator needs and the agent
+        lacks is the definition of an agent that cannot do its job.
+        """
+        import json as _json
+        import re as _re
+        import urllib.request as _ureq
+
+        pid = args.get("project_id") or project_id
+        raw = str(args.get("pull_request") or "").strip()
+        if not raw:
+            return {"ok": False, "error": "pull_request is required (number, url, or crun_ id)"}
+
+        repo_full = str(args.get("repo") or "").strip()
+        number = ""
+
+        if raw.startswith("crun_"):
+            # Resolve the task's own PR, so "why did crun_x fail to preview" is one call.
+            with ctx.begin() as c:
+                row = c.execute(
+                    _text("SELECT pull_request_url, pull_request_number, repo, owner "
+                          "FROM code_task_runs WHERE id = :r AND project_id = :p"),
+                    {"r": raw, "p": pid}).mappings().first()
+            if not row:
+                return {"ok": False, "error": f"no code task {raw!r} in this project"}
+            if not (row.get("pull_request_url") or row.get("pull_request_number")):
+                return {"ok": False, "error": f"{raw} has not opened a pull request",
+                        "note": "a task with no PR has nothing to read"}
+            number = str(row.get("pull_request_number") or "")
+            if not repo_full and row.get("owner") and row.get("repo"):
+                repo_full = f"{row['owner']}/{row['repo']}"
+            if not number and row.get("pull_request_url"):
+                raw = str(row["pull_request_url"])
+
+        if not number:
+            m = _re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", raw)
+            if m:
+                repo_full = repo_full or f"{m.group(1)}/{m.group(2)}"
+                number = m.group(3)
+            elif raw.isdigit():
+                number = raw
+        if not number:
+            return {"ok": False, "error": f"could not read a PR number out of {raw!r}"}
+
+        if not repo_full:
+            owner = getattr(ctx.settings, "target_github_owner", "") or ""
+            name = getattr(ctx.settings, "target_github_repo", "") or ""
+            repo_full = f"{owner}/{name}" if owner and name else ""
+        if "/" not in repo_full:
+            return {"ok": False, "error": "repo is required as owner/repo"}
+
+        token = getattr(ctx.settings, "github_token", "") or ""
+
+        def get(path: str):
+            req = _ureq.Request(
+                f"https://api.github.com{path}",
+                headers={"Accept": "application/vnd.github+json",
+                         **({"Authorization": f"Bearer {token}"} if token else {})})
+            with _ureq.urlopen(req, timeout=25) as resp:
+                return _json.loads(resp.read().decode() or "{}")
+
+        try:
+            pr = get(f"/repos/{repo_full}/pulls/{number}")
+            files = get(f"/repos/{repo_full}/pulls/{number}/files?per_page=100")
+        except Exception as exc:  # noqa: BLE001 — a dead network is an answer, not a crash
+            return {"ok": False, "error": f"could not read {repo_full}#{number}: {exc}"[:250]}
+
+        listed = [{"path": f.get("filename"), "status": f.get("status"),
+                   "additions": f.get("additions"), "deletions": f.get("deletions"),
+                   **({"patch": (f.get("patch") or "")[:4000]}
+                      if args.get("with_diff") else {})}
+                  for f in (files or [])]
+        return {
+            "repo": repo_full, "number": int(number),
+            "title": pr.get("title"), "state": pr.get("state"),
+            "merged": bool(pr.get("merged_at")), "branch": (pr.get("head") or {}).get("ref"),
+            "additions": pr.get("additions"), "deletions": pr.get("deletions"),
+            "changed_files": pr.get("changed_files"),
+            "files": listed,
+        }
+
+    @reg.tool(
         "run_on_host",
         "Run ANY command on a registered deployment host over SSH — restart or delete "
         "containers, edit files, install packages, inspect anything. This changes the machine. "

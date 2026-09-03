@@ -644,6 +644,25 @@ def _detect_command_in(workdir: Path, changed: Optional[list[str]] = None) -> Op
         deps = {**(payload.get("dependencies") or {}), **(payload.get("devDependencies") or {})}
         is_vite = ("vite" in deps or (workdir / "vite.config.ts").exists()
                    or (workdir / "vite.config.js").exists())
+        # A DEPENDENCY IS NOT AN APPLICATION.
+        #
+        # `vite` in package.json says the toolchain is available, not that anything was built
+        # with it. A task seeded with the full-stack scaffold and then written as a Python
+        # service ships exactly that: the scaffold's package.json, and no index.html anywhere.
+        # `vite build` then fails in 11ms with "Could not resolve entry module index.html",
+        # the preview times out waiting for a port, and the operator is told to retry a task
+        # that completed perfectly well and opened PR #161.
+        #
+        # Vite cannot build without an entry, so if there is no index.html to be found this is
+        # not a Vite app whatever the manifest claims — fall through to the other detectors,
+        # which can find the Python or Node server that IS there.
+        if is_vite and not any((workdir / d / "index.html").is_file() for d in _STATIC_DIRS):
+            logger.info(
+                "preview: package.json declares vite but no index.html exists under %s — "
+                "not treating this as a Vite app",
+                ", ".join(_STATIC_DIRS),
+            )
+            is_vite = False
         # A Vite app: BUILD it and serve the STATIC output — do NOT run the dev server. The dev
         # server emits origin-absolute ES-module imports (/node_modules/.vite/deps, /src, /@vite)
         # that the browser resolves against the API origin root, NOT the /v1/previews/<id>/web
@@ -1994,10 +2013,26 @@ def start_preview_async(engine, settings: Settings, run_id: str, *,
                         {"tid": preview_id, "sid": child})
                     c.execute(text("DELETE FROM app_previews WHERE id=:sid"), {"sid": child})
                 else:
+                    status = res.get("status") or "failed"
+                    error = (res.get("error") or "")[:500] or None
                     c.execute(text(
                         "UPDATE app_previews SET status=:st, error=:e WHERE id=:id"),
-                        {"st": res.get("status") or "failed",
-                         "e": (res.get("error") or "")[:500] or None, "id": preview_id})
+                        {"st": status, "e": error, "id": preview_id})
+                    # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
+                    #
+                    # The exception path below emits app_preview.failed; this one — the
+                    # ordinary return carrying status='failed' — emitted nothing. That is the
+                    # path a build error takes: "port_timeout: app did not serve HTTP within
+                    # timeout … Could not resolve entry module index.html" was written to the
+                    # preview row and to no event, so an operator who went to the Activity log
+                    # to find out why found an empty screen and concluded the error had been
+                    # swallowed. It had — by the log, not by the preview.
+                    if status == "failed":
+                        emit_event(c, project_id, "app_preview.failed", actor, "app_preview",
+                                   preview_id,
+                                   {"run_id": run_id,
+                                    "failure_kind": res.get("failure_kind") or "start_failed",
+                                    "error": error or ""})
         except Exception as exc:  # noqa: BLE001 — the thread must never die silently
             kind = "ambiguous_app" if isinstance(exc, AmbiguousAppError) else (
                 "not_ready" if isinstance(exc, PreviewNotReady) else "start_crashed")

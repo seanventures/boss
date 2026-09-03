@@ -21,6 +21,7 @@ _EXPECTED_TOOLS: set[str] = {
     # A shell on a registered host. Two gates, not one: BOSS_AGENT_HOST_SHELL must be on, and
     # the model cannot call it directly — it proposes, the operator clicks, and only the
     # accept-action path supplies the confirmation the tool requires.
+    "read_pull_request",
     "run_on_host",
     "redeploy", "preflight_deployment_target",
 
@@ -93,10 +94,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 57, (
+    assert len(reg.names()) == 58, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 36
+    assert len(read) == 37
     assert len(write) == 21
     # the capabilities the user explicitly asked the agent to cover
     for name in (

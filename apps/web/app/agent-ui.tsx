@@ -397,12 +397,24 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const acceptAction = useCallback((action: ProposedAction) => {
     startTransition(async () => {
       const r = await runAgentActionAction(projectId, actor, action.tool, action.args, threadId ?? undefined);
-      const ok = r.ok && (r.data as Record<string, unknown> | undefined)?.ok !== false;
+      const payload = (r.data ?? {}) as Record<string, unknown>;
+      const ok = r.ok && payload?.ok !== false;
+      // SHOW WHAT IT DID, NOT JUST THAT IT DID SOMETHING.
+      //
+      // A tick and a label is fine for "cancel a job". For a command on a live host it is not:
+      // after clicking "Delete all containers on hetzner-ci-01" the operator got `✓` and had
+      // no way to see the exit code, the output, or what was actually removed — they had to
+      // ask someone else to check the box. The tool already returns all of it.
+      const body = [
+        typeof payload.exit_code === "number" ? `exit ${payload.exit_code}` : "",
+        String(payload.stdout ?? "").trim(),
+        String(payload.stderr ?? "").trim(),
+      ].filter(Boolean).join("\n").slice(0, 4000);
       const detail = ok
-        ? `✓ ${action.label}`
+        ? `✓ ${action.label}${body ? `\n\n\`\`\`\n${body}\n\`\`\`` : ""}`
         : `⚠ ${action.label} failed: ${
-            (r.data as Record<string, unknown> | undefined)?.error ?? r.error ?? "unknown error"
-          }`;
+            payload?.error ?? r.error ?? "unknown error"
+          }${body ? `\n\n\`\`\`\n${body}\n\`\`\`` : ""}`;
       setRanAction(action.id);
       // Report the outcome in the log. A button that changes nothing visible is a button the
       // operator will press twice.

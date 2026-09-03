@@ -885,6 +885,33 @@ def _test_amend_prompt(criteria, ruling_target: str, rationale: str) -> str:
     )
 
 
+def _already_spawned_followup(engine, parent_run_id: str) -> bool:
+    """Has this parent already produced its follow-up task?
+
+    ONCE PER PARENT, NOT ONCE PER ATTEMPT. The existing guard stops a follow-up spawning its
+    own follow-up, which bounds the DEPTH of the chain and says nothing about its WIDTH. The
+    finalisation path can run more than once for the same run — a lease lost and requeued, a
+    job redelivered, a retry — and each pass spawned another identical task.
+
+    Observed: sixteen copies of "Follow-up: deferred review findings — Build path verification",
+    all cancelled. Two costs, and the second is worse than the first. Model budget, obviously.
+    But `list_code_tasks` returns newest-first, so sixteen duplicates fill the window the chat
+    agent reads, and it told the operator "all recent runs are cancelled and have no pull
+    request" while the completed run carrying PR #161 sat just below the fold. The agent was
+    not wrong about what it could see; it could not see the answer.
+
+    Keyed on the event the spawn already writes, so there is no new state to keep in step.
+    """
+    from .core import has_event
+
+    try:
+        with _transaction(engine) as c:
+            return has_event(c, parent_run_id, "code_task.deferred_findings_task")
+    except Exception:  # noqa: BLE001 — a check that cannot run must not block a shipped PR
+        logger.exception("could not check for an existing follow-up on %s", parent_run_id)
+        return False
+
+
 def _spawn_deferred_findings_task(
     engine, settings, jobs, *, project_id, task_id, spec, base_branch,
     findings: list[dict], parent_run_id: str, parent_title: str,
@@ -3985,7 +4012,8 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
         followup_run_id = None
         if (deferred_findings
                 and getattr(settings, "code_review_followup_tasks", True)
-                and not fctx.get("is_followup")):
+                and not fctx.get("is_followup")
+                and not _already_spawned_followup(engine, run_id)):
             try:
                 followup_run_id = _spawn_deferred_findings_task(
                     engine, settings, jobs, project_id=project_id, task_id=task_id,

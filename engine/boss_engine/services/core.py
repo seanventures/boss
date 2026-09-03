@@ -95,6 +95,25 @@ def emit_event(
     )
 
 
+def has_event(connection: Any, entity_id: str, event_type: str) -> bool:
+    """Has this event already been recorded for this entity?
+
+    Exists so a step that must happen ONCE per entity can ask, without the caller reaching for
+    SQL. The pipeline modules are held to the ports layer — `test_pipeline_hot_paths_have_no_
+    direct_database_imports_or_text_calls` fails the build if they import sqlalchemy or call
+    `text(` — and "have I done this already" is a legitimate question that had no home.
+
+    Written for the deferred-findings follow-up, which was guarded against recursion and not
+    against repetition: sixteen identical tasks, because the finalisation path can run more
+    than once for the same run. The event the spawn already writes is the natural key.
+    """
+    row = connection.execute(
+        sql("SELECT 1 FROM events WHERE entity_id = :e AND kind = :k LIMIT 1"),
+        {"e": entity_id, "k": event_type},
+    ).first()
+    return row is not None
+
+
 def _emit_event_postgres(
     connection: Any,
     project_id: str,
