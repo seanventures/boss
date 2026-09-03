@@ -1321,6 +1321,21 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
         <p className="dw-step-gates" data-testid="dw-step-gates">{observedGates(step)}</p>
       ) : null}
 
+      {/* CHOOSE WHERE IT SHIPS BEFORE IT ASKS TO SHIP.
+          This picker existed only inside the approval block, so it appeared for a few seconds
+          at the gate and not before — and if the run was not sitting at the gate there was no
+          way to set a target at all. The operator reported exactly that: no option on the
+          deploy step to point it at a host. It belongs to the step for its whole life, from
+          the moment you can see the step until it has shipped. */}
+      {step.capability === "deploy"
+        && !["succeeded", "skipped"].includes(step.status)
+        && !needsYou(step) ? (
+        <div className="dw-step-target" data-testid="dw-step-target">
+          <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
+                       onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
+        </div>
+      ) : null}
+
       {/* BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that
           did not exist, a service that was down — had no way back: the run sat stopped and the
           only recourse was to start the whole workflow again and repeat everything before it. */}
@@ -2006,7 +2021,23 @@ function BuilderView({ capabilities, blocks, riskFloor, installed, projectId, bu
   return (
     <div className="dw-builder">
       <aside className="dw-palette" aria-label="Steps you can add">
-        <h4>Steps</h4>
+        {/* THE WAY TO MAKE A STEP, AT THE TOP, WHERE SOMEBODY LOOKING FOR IT WILL LOOK.
+            It was moved next to the "Your steps" sub-heading once already, which is still
+            below fourteen built-in capabilities: on a normal screen you scroll past the whole
+            palette before the control appears, and the operator reported twice that there was
+            no obvious way to add a step. The one below stays — this is the discoverable one. */}
+        <div className="dw-palette-heading-row">
+          <h4 className="dw-palette-heading">Steps</h4>
+          {!defining ? (
+            <button type="button" className="cap-btn primary dw-define" disabled={!!busy}
+                    onClick={() => setDefining(true)} data-testid="dw-define-step-top">
+              + New step
+            </button>
+          ) : null}
+        </div>
+        <p className="detail dw-palette-summary">
+          Click a step to add it, or make one of your own that runs your skill or an MCP tool.
+        </p>
         {capabilities.map((c) => (
           <button key={c.key} type="button" className="dw-palette-item"
                   onClick={() => add(c)} disabled={!!busy}

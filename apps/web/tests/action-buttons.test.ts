@@ -57,8 +57,18 @@ describe("accepting one", () => {
 
   it("reports the outcome in the log", () => {
     // A button that changes nothing visible is a button the operator presses twice.
-    expect(UI).toContain('`✓ ${action.label}`');
+    expect(UI).toContain("✓ ${action.label}");
     expect(UI).toContain("failed:");
+  });
+
+  it("shows what the action actually did, not only that it ran", () => {
+    // A tick and a label is enough for "cancel a job". For a command on a live host it is not:
+    // after clicking "Delete all containers on hetzner-ci-01" the operator saw `✓` and had no
+    // way to know the exit code, the output, or what had been removed — they had to ask
+    // someone else to go and look at the box. The tool already returns all of it.
+    expect(UI).toContain("payload.exit_code");
+    expect(UI).toContain("payload.stdout");
+    expect(UI).toContain("payload.stderr");
   });
 
   it("spends the offer either way", () => {

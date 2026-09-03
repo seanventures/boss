@@ -483,7 +483,81 @@ def _running_preview(
     ).mappings().first()
     if not row:
         return None
+    # A ROW THAT SAYS "running" IS NOT AN APP THAT ANSWERS.
+    #
+    # This adopted on the database's word alone, and app_previews goes stale in every ordinary
+    # way: the container is removed, the host is rebuilt, the sandbox is reaped. The step then
+    # reported success with a URL that served nothing, `deploy` ran next because its inputs come
+    # from `build` rather than from here, and a build nobody could look at shipped anyway —
+    # against an explicit instruction that without a preview the run must not move to deploy.
+    #
+    # Any HTTP answer counts, including a 500: the question is whether something is listening,
+    # not whether the app is bug-free.
+    if not _preview_answers(row["url"]):
+        log.info(
+            "preview %s is marked running but %s does not answer — not adopting it",
+            row["id"], row["url"],
+        )
+        return None
     return {"preview_id": row["id"], "preview_url": row["url"], "adopted": True}
+
+
+def _preview_missing_for_run(
+    connection: Connection, context: dict[str, Any]
+) -> Optional[str]:
+    """Why `deploy` must not run yet, or None.
+
+    Only speaks up when the run HAS a preview step: a workflow with no preview — a hotfix lane,
+    a data migration — is not asking for one and must not be blocked by its absence.
+    """
+    run_id = str((context or {}).get("run_id") or "")
+    if not run_id:
+        return None
+    try:
+        row = connection.execute(
+            text(
+                "SELECT status, output FROM workflow_step_runs "
+                "WHERE workflow_run_id = :r AND step_id = 'preview' "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {"r": run_id},
+        ).mappings().first()
+    except Exception:  # noqa: BLE001 — a check that cannot run must not block a release
+        log.exception("could not read the preview step for run %s", run_id)
+        return None
+    if row is None:
+        return None                       # no preview step in this workflow: nothing to require
+    if row["status"] != "succeeded":
+        return (f"the preview step is '{row['status']}', so there is nothing to look at yet. "
+                "Run the preview, then deploy.")
+    output = row["output"] if isinstance(row["output"], dict) else json.loads(row["output"] or "{}")
+    url = output.get("preview_url") or output.get("url")
+    if not url:
+        return "the preview step finished without a URL, so nothing was previewable."
+    if not _preview_answers(url):
+        return f"the preview at {url} does not answer, so it cannot have been reviewed."
+    return None
+
+
+def _preview_answers(url: Any, timeout: float = 6.0) -> bool:
+    """Does anything reply on this URL right now?
+
+    Deliberately generous: any status code is proof of life, and a timeout or refused
+    connection is proof of the opposite. Errors are answered False rather than raised — a probe
+    that cannot run must not adopt, because adopting is the risky direction.
+    """
+    import urllib.error
+    import urllib.request
+
+    if not isinstance(url, str) or not url.strip().startswith(("http://", "https://")):
+        return False
+    try:
+        with urllib.request.urlopen(url.strip(), timeout=timeout) as resp:
+            return bool(resp.status)
+    except urllib.error.HTTPError:
+        return True          # it answered, and an error page is still something serving
+    except Exception:        # noqa: BLE001 — refused, DNS, timeout: nothing is there
+        return False
 
 
 def execute_step(
@@ -609,6 +683,23 @@ def execute_step(
             "note": f"waiting on the {adopted['kind'].replace('_', ' ')} "
                     f"this project was started with",
         }
+
+    # NO PREVIEW, NO DEPLOY.
+    #
+    # A workflow that has a `preview` step has it for a reason: somebody looks at the thing
+    # before it ships. But `deploy` binds its inputs from `build`, not from `preview`, so the
+    # two steps were only related by running order — and a preview that produced nothing still
+    # let deploy run. The instruction was explicit: without a preview, do not move to deploy.
+    #
+    # Enforced here rather than by binding preview_url into eleven catalogue entries, five of
+    # which have a preview step: a rule written once cannot be forgotten by the next person to
+    # add a workflow.
+    if key == "deploy":
+        missing = _preview_missing_for_run(connection, context)
+        if missing:
+            return {"capability": key, "tool": None, "status": "failed",
+                    "error": missing,
+                    "note": "this workflow previews before it ships; nothing was previewable."}
 
     # ADOPT A PREVIEW THAT IS ALREADY UP. The build pipeline starts a preview itself, so a
     # workflow that called start_preview again would boot a second copy of the same app on a

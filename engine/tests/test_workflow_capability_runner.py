@@ -902,9 +902,14 @@ def _monitor_workflow(c, project, key):
 def test_preview_adopts_one_that_is_already_serving(eng, project, monkeypatch):
     """The build pipeline starts a preview itself. Calling start_preview again boots a SECOND
     copy of the same app on a second port, and tells the operator — who has the first one open
-    in a browser — about a different URL."""
+    in a browser — about a different URL.
+
+    "Already serving" now means it ANSWERS, not that a row says so; the probe is stubbed here
+    to stand for a live app. See the test below for the row that lies.
+    """
     preview = RecordingTool("start_preview", {"preview_url": "https://second.test"})
     monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+    monkeypatch.setattr(runner, "_preview_answers", lambda url, timeout=6.0: True)
 
     with eng.begin() as c:
         c.execute(
@@ -1378,3 +1383,78 @@ def test_an_explicit_binding_is_never_overridden_by_the_run_input(eng, project, 
         runner.tick(c, Ctx(eng), project_id=project)
 
     assert build.calls[0]["args"]["test_commands"] == ["make check"]
+
+
+def test_preview_does_not_adopt_a_row_that_lies(eng, project, monkeypatch):
+    """A row saying 'running' is not an app that answers.
+
+    app_previews goes stale in every ordinary way — the container is removed, the host is
+    rebuilt, the sandbox is reaped. Adopting on the database's word alone reported the step as
+    succeeded with a URL that served nothing, and `deploy` ran next because its inputs come
+    from `build` rather than from here. A build nobody could look at shipped anyway, against an
+    explicit instruction that without a preview the run must not move to deploy.
+    """
+    preview = RecordingTool("start_preview", {"preview_url": "https://fresh.test"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([preview]))
+    monkeypatch.setattr(runner, "_preview_answers", lambda url, timeout=6.0: False)
+
+    with eng.begin() as c:
+        c.execute(
+            text("INSERT INTO app_previews (id, project_id, run_id, url, status) "
+                 "VALUES (:i,:p,:r,'https://dead.test','running') "
+                 "ON CONFLICT (id) DO NOTHING"),
+            {"i": f"prevdead_{project}", "p": project, "r": "crun_dead"},
+        )
+        _, version = _publish(c, project, "prevdead", [
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_dead"}},
+             "next": []},
+        ], "preview")
+        _start(c, project, version["id"], {})
+        runner.tick(c, Ctx(eng), project_id=project)
+        c.execute(text("DELETE FROM app_previews WHERE project_id=:p"), {"p": project})
+
+    assert preview.calls, "a dead preview must be replaced, not adopted"
+
+
+def test_deploy_refuses_when_the_preview_produced_nothing(eng, project, monkeypatch):
+    """The rule the operator asked for: without a preview, do not move to deploy.
+
+    Enforced in the runner rather than by binding preview_url into eleven catalogue entries —
+    a rule written once cannot be forgotten by the next person to add a workflow.
+    """
+    deploy = RecordingTool("deploy_app", {"deployment_id": "dep_1"})
+    monkeypatch.setattr(runner, "_tool_registry", lambda: RecordingRegistry([deploy]))
+
+    with eng.begin() as c:
+        _, version = _publish(c, project, "nopreview", [
+            {"id": "preview", "kind": "capability",
+             "binding": {"capability": "preview", "inputs": {"run_id": "crun_x"}},
+             "next": ["deploy"]},
+            {"id": "deploy", "kind": "capability",
+             "binding": {"capability": "deploy", "inputs": {"run_id": "crun_x"}},
+             "next": []},
+        ], "preview")
+        run = _start(c, project, version["id"], {})
+        # The preview step never produced a URL.
+        c.execute(
+            text("UPDATE workflow_step_runs SET status='succeeded', output='{}'::jsonb "
+                 "WHERE workflow_run_id=:r AND step_id='preview'"),
+            {"r": run["id"]},
+        )
+        problem = runner._preview_missing_for_run(c, {"run_id": run["id"]})
+
+    assert problem and "without a URL" in problem or "nothing was previewable" in (problem or "")
+    assert not deploy.calls
+
+
+def test_a_workflow_without_a_preview_step_is_not_blocked(eng, project):
+    """A hotfix lane or a data migration is not asking for a preview and must not wait for one."""
+    with eng.begin() as c:
+        _, version = _publish(c, project, "nopreviewstep", [
+            {"id": "deploy", "kind": "capability",
+             "binding": {"capability": "deploy", "inputs": {"run_id": "crun_x"}},
+             "next": []},
+        ], "deploy")
+        run = _start(c, project, version["id"], {})
+        assert runner._preview_missing_for_run(c, {"run_id": run["id"]}) is None
