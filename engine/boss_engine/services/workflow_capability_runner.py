@@ -1515,9 +1515,43 @@ def tick(
                     "run_id": run_id, "step_id": claimed["step_id"],
                     "outcome": "failed", "error": str(error),
                 })
+            except Exception as error:  # noqa: BLE001
+                # A CLAIMED STEP MUST NOT BE STRANDED BY A SURPRISE.
+                #
+                # Only CapabilityExecutionError released the lease. Anything else — a KeyError,
+                # a bad row, a library raising something new — escaped to the handler below,
+                # which logs and moves on while the step stays `leased` with nobody serving it.
+                # Five deploy steps sat exactly like that for fifteen hours, showing a running
+                # timer, and the log said `(non-fatal): 'deploy'` — a stringified KeyError,
+                # which names neither the type nor where it came from.
+                #
+                # Failing it retryably is strictly better: the lease is released, the reason is
+                # on the step where the operator is looking, and the runtime can try again.
+                log.exception(
+                    "capability step %s of run %s raised %s",
+                    claimed["step_id"], run_id, type(error).__name__,
+                )
+                workflows.fail_step(
+                    connection, project_id=project_id, step_run_id=claimed["id"],
+                    worker_id=worker_id,
+                    error=f"{type(error).__name__}: {error}"[:500],
+                    retryable=True,
+                )
+                performed.append({
+                    "run_id": run_id, "step_id": claimed["step_id"],
+                    "outcome": "failed", "error": f"{type(error).__name__}: {error}",
+                })
         except Exception as error:                 # noqa: BLE001 - one run must not stop the rest
-            log.warning("capability runner skipped run %s (non-fatal): %s", run_id, error)
-            performed.append({"run_id": run_id, "outcome": "skipped", "error": str(error)})
+            # The TYPE, always. `(non-fatal): 'deploy'` is a KeyError wearing a disguise: it
+            # names neither what went wrong nor where, and it cost a day of guessing.
+            log.warning(
+                "capability runner skipped run %s (non-fatal): %s: %s",
+                run_id, type(error).__name__, error,
+            )
+            performed.append({
+                "run_id": run_id, "outcome": "skipped",
+                "error": f"{type(error).__name__}: {error}",
+            })
 
     return {"project_id": project_id, "performed": performed, "count": len(performed)}
 
