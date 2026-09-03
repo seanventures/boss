@@ -62,6 +62,26 @@ def _argv_safe(prompt: str) -> str:
     return cleaned
 
 
+#: How long a code agent may say NOTHING before it is treated as stalled.
+#:
+#: Generous on purpose: a big install or a long model turn can be quiet for a while, and killing
+#: real work is worse than waiting. But an agent that has emitted nothing for ten minutes is not
+#: working slowly — measured, the stall that prompted this was silent for forty-two.
+#: Set BOSS_CODE_AGENT_IDLE_TIMEOUT_SECONDS=0 to disable and go back to the run timeout alone.
+_IDLE_TIMEOUT_ENV = "BOSS_CODE_AGENT_IDLE_TIMEOUT_SECONDS"
+_IDLE_TIMEOUT_DEFAULT = 600
+
+
+def _idle_timeout_seconds() -> float:
+    raw = (os.environ.get(_IDLE_TIMEOUT_ENV) or "").strip()
+    if not raw:
+        return float(_IDLE_TIMEOUT_DEFAULT)
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return float(_IDLE_TIMEOUT_DEFAULT)
+
+
 def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     """Read a child's stdout/stderr as they arrive, returning the full text of each.
 
@@ -76,10 +96,14 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     """
     out_lines: list[str] = []
     err_chunks: list[str] = []
+    #: When the child last said anything. A stalled agent is ALIVE and SILENT, which the
+    #: overall timeout cannot distinguish from slow work — see the wait loop below.
+    last_output_at = [time.monotonic()]
 
     def _pump(stream, sink, live: bool) -> None:
         try:
             for line in iter(stream.readline, ""):
+                last_output_at[0] = time.monotonic()
                 sink.append(line)
                 if live and on_line is not None:
                     try:
@@ -115,8 +139,51 @@ def _drain(child, *, timeout: Optional[float], on_line=None) -> tuple[str, str]:
     ]
     for t in threads:
         t.start()
+    # A STALLED AGENT IS ALIVE AND SILENT, AND NOTHING WAS WATCHING FOR THAT.
+    #
+    # `child.wait(timeout=...)` asks one question — has it finished — and the answer is "no"
+    # whether the agent is thinking hard or has wedged. Measured on a real run: the QA agent
+    # emitted `turn.tool_call.Read` at 05:08:01 and then nothing at all until the job's lease
+    # was reclaimed at 05:50:22. Forty-two minutes of dead air inside a seventy-minute build,
+    # and the only thing that eventually reacted was a lease expiring — the operator watched
+    # this happen repeatedly and reported it long before anyone measured it.
+    #
+    # The stream is the liveness signal. It is already being read line by line for the live
+    # transcript, so "has it said anything recently" costs one timestamp. A silent child is
+    # killed and surfaced as a timeout, which the pipeline already knows how to retry —
+    # minutes, not the better part of an hour.
+    idle_limit = _idle_timeout_seconds()
     try:
-        child.wait(timeout=timeout)
+        if not idle_limit:
+            child.wait(timeout=timeout)
+        else:
+            deadline = (time.monotonic() + timeout) if timeout else None
+            while True:
+                try:
+                    child.wait(timeout=min(15.0, idle_limit))
+                    break
+                except subprocess.TimeoutExpired:
+                    now = time.monotonic()
+                    if deadline and now > deadline:
+                        raise
+                    silent_for = now - last_output_at[0]
+                    if silent_for > idle_limit:
+                        _log.error(
+                            "code agent produced no output for %ds (limit %ds) — killing it as "
+                            "stalled rather than waiting out the run timeout",
+                            int(silent_for), int(idle_limit),
+                        )
+                        child.kill()
+                        # Reap it. Raising straight after kill() leaves a zombie holding its
+                        # pipes, and the seat reaper then finds a pid that is "still there".
+                        try:
+                            child.wait(timeout=10)
+                        except Exception:  # noqa: BLE001 — best effort; we are already failing
+                            pass
+                        raise subprocess.TimeoutExpired(
+                            cmd="claude", timeout=silent_for,
+                            output=f"agent stalled: no output for {int(silent_for)}s",
+                        )
     except subprocess.TimeoutExpired:
         raise
     # The process has exited; its writers are closed, so the readers finish promptly. Bounded
