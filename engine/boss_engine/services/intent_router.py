@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -376,6 +378,47 @@ def _no_button_was_promised(reply: str, proposed: list) -> str:
         "\n\n(No button was attached to this answer, so there is nothing to click. Tell me to "
         "go ahead and I will run the action directly, or ask me why it could not be offered.)"
     )
+
+
+_log = logging.getLogger(__name__)
+
+#: Provider hiccups worth trying again, rather than reporting to a customer as an answer.
+#: Anthropic's 529 is `overloaded_error` — capacity, not a bad request — and the coding
+#: pipeline has always retried it. Kept in the same words as code_agent's list so the two
+#: cannot drift into disagreeing about what "transient" means.
+_TRANSIENT_MARKERS = (
+    "529", "503", "overloaded", "capacity", "bad gateway", "gateway timeout",
+    "connection reset", "connection closed", "connection error", "timed out",
+)
+
+
+def _looks_transient(error: BaseException) -> bool:
+    text = f"{type(error).__name__}: {error}".lower()
+    return any(marker in text for marker in _TRANSIENT_MARKERS)
+
+
+def _with_transient_retry(call, attempts: int = 3, backoff: float = 2.0):
+    """Run `call`, retrying a provider hiccup a couple of times before giving up.
+
+    Short and bounded on purpose: a person is waiting on this turn, so two extra attempts a few
+    seconds apart is the difference between "the provider was busy for a moment" and a dead end
+    the operator has to notice and work around. Anything that does not look transient is raised
+    immediately — retrying a bad request just spends the wait twice.
+    """
+    last: BaseException
+    for attempt in range(attempts):
+        try:
+            return call()
+        except BaseException as exc:  # noqa: BLE001 — re-raised below unless transient
+            last = exc
+            if attempt == attempts - 1 or not _looks_transient(exc):
+                raise
+            _log.warning(
+                "answer attempt %d/%d hit a transient provider error (%s) — retrying in %.0fs",
+                attempt + 1, attempts, type(exc).__name__, backoff * (attempt + 1),
+            )
+            time.sleep(backoff * (attempt + 1))
+    raise last
 
 
 class IntentRouter:
@@ -810,7 +853,15 @@ class IntentRouter:
                     # Tool-grounded answer: the read-only agent may call engine read
                     # tools to fetch real data, then reply. Falls back to a plain
                     # reply if the tool loop yields nothing.
-                    turn = self._answer_agent().chat(
+                    # A 529 IS THE PROVIDER SAYING "NOT NOW", NOT AN ANSWER.
+                    #
+                    # Anthropic returns 529 overloaded_error when its capacity is saturated. The
+                    # coding pipeline has always treated that as transient and retried it
+                    # (code_agent's transient list names "529" explicitly); this path did not,
+                    # so a capacity blip reached the operator as "I could not answer that" and
+                    # they had to notice and ask again. The customer's only interface should not
+                    # hand them a provider's load-shedding as a dead end.
+                    turn = _with_transient_retry(lambda: self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
                         message=latest, history=history, system=system,
                         # FOUR STEPS WAS THE BUG, not a tuning choice.
@@ -842,7 +893,7 @@ class IntentRouter:
                         # app is repaired by writing code. What BOSS does not do is patch its
                         # own engine; that is a different subject, not a withheld permission.
                         allow_writes=True, max_steps=12,
-                    )
+                    ))
                     reply = str(turn.reply or "").strip()
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
                     #
