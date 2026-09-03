@@ -6954,7 +6954,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
               <h2>Ask the agent that owns hosts, releases and rollback readiness.</h2>
             </div>
           </div>
-          <DeploymentManagerPanel projectId={activeProjectId} actor={activeActorId} />
+          <DeploymentManagerPanel projectId={activeProjectId} />
         </section>
 
         <section className="panel-stack" data-area="delivery" aria-label="CI/CD">

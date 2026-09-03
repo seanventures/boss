@@ -8066,3 +8066,5 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   background: color-mix(in srgb, var(--warn, #d29922) 10%, transparent);
 }
 .dm-starters { display: flex; gap: 8px; flex-wrap: wrap; }
+/* The chat is the side dock, not this panel. These only open it. */
+.dm-starters .cap-btn { text-align: left; }

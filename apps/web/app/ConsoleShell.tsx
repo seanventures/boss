@@ -538,6 +538,10 @@ export default function ConsoleShell({
   // The id is a RUN id, which is what makes the conversation unambiguous. AgentChat keys its
   // threads by external_ref, so each app gets its own thread and its own history; asking about
   // BugBox cannot surface ApproveIt's answers.
+  // `?agent=` normally carries a RUN id. This sentinel opens the same dock for a
+  // conversation that is not about a run — asking the Deployment Manager about a host.
+  // Kept as one constant so the shell and the panel cannot drift on the spelling.
+  const DOCK_GENERAL = "general";
   const [dockedRun, setDockedRun] = useState<string | null>(null);
   useEffect(() => {
     const read = () => {
@@ -962,8 +966,16 @@ export default function ConsoleShell({
                  role="separator" aria-orientation="vertical"
                  aria-label="Resize the panel" title="Drag to resize" />
             <div className="bx-dock-head">
-              <span className="eyebrow">Ask BOSS</span>
-              <code className="detail">{dockedRun}</code>
+              {/* A CONVERSATION THAT IS NOT ABOUT A RUN. `?agent=` has always carried a run id,
+                  and the head rendered it as a code. Opening the dock to ask the Deployment
+                  Manager about a HOST has no run to name, so the sentinel gets the role's name
+                  instead of a meaningless token. */}
+              <span className="eyebrow">
+                {dockedRun === DOCK_GENERAL ? "Deployment Manager" : "Ask BOSS"}
+              </span>
+              {dockedRun === DOCK_GENERAL
+                ? <span className="detail">hosts, releases, rollback readiness</span>
+                : <code className="detail">{dockedRun}</code>}
               {/* Icon, not a labelled button. The head is a tight strip already holding the
                   title and the run id, and a text "Close" competed with both while doing the
                   most ordinary thing in the panel. aria-label keeps it announced to screen
@@ -974,9 +986,11 @@ export default function ConsoleShell({
               </button>
             </div>
             <div className="bx-dock-body">
+              {/* The sentinel is not a task: passing it through would send AgentChat
+                  looking for a run that does not exist. */}
               <AgentChat projectId={scope.projectId ?? scope.project}
                          actor={scope.actorId ?? scope.actor}
-                         initialTaskId={dockedRun} />
+                         initialTaskId={dockedRun === DOCK_GENERAL ? undefined : dockedRun} />
             </div>
           </aside>
         ) : null}

@@ -17,7 +17,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { AgentChat } from "./agent-ui";
 
 type Host = {
   id: string;
@@ -40,13 +39,9 @@ const STARTERS = (host?: Host) => [
     : "@Deployment Manager — what would it take to deploy this project?",
 ];
 
-export function DeploymentManagerPanel({ projectId, actor }: {
-  projectId: string;
-  actor: string;
-}) {
+export function DeploymentManagerPanel({ projectId }: { projectId: string }) {
   const [hosts, setHosts] = useState<Host[]>([]);
   const [error, setError] = useState("");
-  const [prefill, setPrefill] = useState("");
 
   useEffect(() => {
     let live = true;
@@ -67,16 +62,20 @@ export function DeploymentManagerPanel({ projectId, actor }: {
     return () => { live = false; };
   }, [projectId]);
 
-  // A starter goes into the composer through the same `?ask=` handoff the Agents page uses,
-  // so there is one way an outside surface addresses this chat rather than two.
+  // OPEN THE DOCK, DO NOT BECOME ONE.
+  //
+  // This panel first embedded the whole chat inline — its own thread sidebar, its own hero —
+  // which swallowed the Infra area to ask one question about a host. The console already has
+  // a side dock for exactly this, driven by `?agent=`; `?ask=` prefills the composer, the same
+  // handoff the Agents page uses. Two params, no new chat surface.
   const ask = useCallback((question: string) => {
     try {
       const url = new URL(window.location.href);
+      url.searchParams.set("agent", "general");
       url.searchParams.set("ask", question);
       window.history.replaceState(null, "", url.toString());
       window.dispatchEvent(new PopStateEvent("popstate"));
     } catch { /* non-browser */ }
-    setPrefill(question);
   }, []);
 
   const verified = hosts.filter((h) => h.status === "verified");
@@ -128,8 +127,11 @@ export function DeploymentManagerPanel({ projectId, actor }: {
         ))}
       </div>
 
-      <div className="dm-chat" key={prefill}>
-        <AgentChat projectId={projectId} actor={actor} />
+      <div className="dm-starters">
+        <button type="button" className="cap-btn" data-testid="dm-open-dock"
+                onClick={() => ask("@Deployment Manager — ")}>
+          Open the Deployment Manager
+        </button>
       </div>
     </div>
   );
