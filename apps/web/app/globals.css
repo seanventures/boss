@@ -8068,3 +8068,21 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dm-starters { display: flex; gap: 8px; flex-wrap: wrap; }
 /* The chat is the side dock, not this panel. These only open it. */
 .dm-starters .cap-btn { text-align: left; }
+
+/* The preview control and its reason.
+   The reason used to be an inline span in a non-wrapping form: a 200-character build error ran
+   out of the card and across the task next to it, so two failures overlapped into one line
+   nobody could read. */
+.preview-form {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  max-width: 100%; min-width: 0;
+}
+.preview-note {
+  flex: 1 1 100%;          /* its own line — a build error is never a few words */
+  min-width: 0;
+  overflow-wrap: anywhere;  /* paths and stack fragments have no spaces to break on */
+  white-space: normal;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+  line-height: 1.4;
+}

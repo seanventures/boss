@@ -891,17 +891,26 @@ function AppPrimaryAction({ run, previewUrl, previewStarting, shipped, running, 
   const failed = !state?.url && lastPreview?.status === "failed" ? lastPreview : null;
 
   return (
-    <form action={action} onClick={(e) => e.stopPropagation()}>
+    // A REASON THAT WRAPS INSIDE ITS OWN CARD.
+    //
+    // These were inline spans in a non-wrapping form, so a 200-character build error ran
+    // straight out of the card and across the task beside it — two failures overlapping into
+    // one unreadable line, which is the state an operator is in precisely when they most need
+    // to read it. The form wraps now, and the reason is a block that breaks anywhere and is
+    // clamped; the full text is on `title` for a hover.
+    <form action={action} onClick={(e) => e.stopPropagation()} className="preview-form">
       <input type="hidden" name="run_id" value={run.id} />
       <SubmitButton className="cap-btn primary" pendingLabel="Starting preview…">
         <PlayCircle size={15} weight="fill" aria-hidden />
         {failed ? " Retry preview" : " Run preview"}
       </SubmitButton>
-      {state?.error ? <span className="detail"> {state.error}</span> : null}
-      {state?.note ? <span className="detail"> {state.note}</span> : null}
+      {state?.error ? <span className="detail preview-note">{state.error}</span> : null}
+      {state?.note ? <span className="detail preview-note">{state.note}</span> : null}
       {failed && !state?.error ? (
-        <span className="detail" data-testid="preview-failed">
-          {" "}Last preview failed{failed.failure_kind ? ` (${failed.failure_kind})` : ""}
+        <span className="detail preview-note" data-testid="preview-failed"
+              title={`Last preview failed${failed.failure_kind ? ` (${failed.failure_kind})` : ""}`
+                     + (failed.error ? `: ${failed.error}` : "")}>
+          Last preview failed{failed.failure_kind ? ` (${failed.failure_kind})` : ""}
           {failed.error ? `: ${failed.error.slice(0, 200)}` : ""}
         </span>
       ) : null}
