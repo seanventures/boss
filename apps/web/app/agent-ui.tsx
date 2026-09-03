@@ -238,7 +238,12 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   }, [projectId, actor]);
 
   const openThreadAndContext = useCallback((id: string, list: Thread[]) => {
-    setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setLoadingThread(true);
+    // Proposals are cleared with everything else. Left behind, an offer from the PREVIOUS
+    // conversation stayed on screen while a different thread loaded — and it stays clickable,
+    // so "delete all containers on hetzner-ci-01" could be pressed from a chat about
+    // something else entirely.
+    setSel(id); setMessages([]); setContext(null); setPendingPlan(null); setProposed([]);
+    setLoadingThread(true);
     const th = threadFor(id, list);
     setThreadId(th?.thread_id ?? null);
     const jobs: Promise<unknown>[] = [];
@@ -361,6 +366,18 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           });
         }
         setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
+        // THE OFFER ARRIVES WITH THE REPLY, AND WAS BEING THROWN AWAY.
+        //
+        // Both thread-LOADING paths set this; the one that matters most — the turn you just
+        // took — did not. So the agent would say "I've offered a button to delete all
+        // containers on hetzner-ci-01", the API really did return the proposal, and the
+        // console rendered nothing. Asked where the button was, the agent could only repeat
+        // that it had offered one. It had.
+        //
+        // The whole confirm-before-acting design routes through `proposed_actions`: dropping
+        // them here does not make anything safer, it makes the action unreachable and the
+        // agent look like it is lying.
+        setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
         refreshThreads();
       } else {
         setMessages((m) => [...m, { role: "assistant", content: "⚠ " + (r.error ?? "request failed") }]);
