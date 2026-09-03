@@ -383,6 +383,16 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // A PREVIEW IS ASKED FOR IN A SECOND AND ARRIVES IN A MINUTE.
+  //
+  // `act` clears `busy` when the POST returns, and start_preview returns "starting" straight
+  // away — so the button flashed "Starting…" for about a second, went back to normal, and the
+  // notice said "Preview — done." while nothing was serving yet. From the operator's side the
+  // click did nothing, which is an invitation to click it again and boot a second copy.
+  //
+  // This holds the build's id from the click until a preview URL actually shows up (or the
+  // wait is plainly too long), and the poll below refreshes so it appears without another click.
+  const [previewStarting, setPreviewStarting] = useState<{ runId: string; at: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
   // Lifted out of the builder so forking can land the operator on the thing they just made.
@@ -484,6 +494,17 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     return () => window.removeEventListener("popstate", read);
   }, []);
 
+  // Poll while a preview is coming up, so the URL appears on its own. Bounded: after three
+  // minutes we stop claiming it is on its way and let the step's own state speak.
+  useEffect(() => {
+    if (!previewStarting) return;
+    const timer = window.setInterval(() => {
+      if (Date.now() - previewStarting.at > 180_000) { setPreviewStarting(null); return; }
+      void load();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [previewStarting, load]);
+
   const act = useCallback(async (label: string, action: string, payload: Record<string, unknown>) => {
     setBusy(label);
     setNotice(null);
@@ -562,8 +583,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onPrepareTarget={(runId, hostId) =>
             act("Prepare target", "prepare_target",
                 { run_id: runId, host_id: hostId, environment: "staging" })}
-          onRunPreview={(buildRunId) =>
-            act("Preview", "start_preview", { run_id: buildRunId })}
+          onRunPreview={(buildRunId) => {
+            setPreviewStarting({ runId: buildRunId, at: Date.now() });
+            // "Starting a preview" — not "done". The old label claimed the work had finished
+            // when only the request had been accepted.
+            return act("Starting a preview", "start_preview", { run_id: buildRunId });
+          }}
+          previewStarting={previewStarting?.runId ?? ""}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
@@ -899,6 +925,7 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                    onRetryStep, onRerun, onSetTarget, onPrepareTarget, onRunPreview,
+                   previewStarting,
                    targets, hosts }: {
   runs: Run[];
   openRun: string | null;
@@ -911,6 +938,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   onSetTarget: (runId: string, targetId: string) => void;
   onPrepareTarget: (runId: string, hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
+  /** The build whose preview was just asked for and has not appeared yet. */
+  previewStarting?: string;
   targets: DeployTarget[];
   hosts: DeployHost[];
 }) {
@@ -1026,7 +1055,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onRerun={() => onRerun(run)} busy={busy}
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
-                        onRunPreview={onRunPreview} />
+                        onRunPreview={onRunPreview}
+                        previewStarting={previewStarting} />
             ) : null}
           </article>
         );
@@ -1079,13 +1109,16 @@ function needsYou(step: RunStep): boolean {
  * doors to the pages where it can be debugged.
  */
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onSetTarget,
-                   onPrepareTarget, onRunPreview, busy }: {
+                   onPrepareTarget, onRunPreview, previewStarting, busy }: {
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
+  previewStarting?: string;
   busy: string | null;
 }) {
+  // Has a preview been asked for on THIS build and not yet appeared? The URL is the finish
+  // line; the POST returning is not.
   // THE BUILD A PREVIEW IS FOR. Read from whichever step produced it rather than a step named
   // "build", because a customer can rename their steps and the canonical field is the contract.
   const buildRunId = (() => {
@@ -1160,6 +1193,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           onPrepareTarget={onPrepareTarget}
           buildRunId={buildRunId}
           onRunPreview={onRunPreview}
+          previewStarting={previewStarting}
           busy={busy}
         />
       ) : null}
@@ -1255,7 +1289,7 @@ function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTar
 
 /** Everything known about one step, in the order an operator asks for it. */
 function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
-                     onPrepareTarget, onRunPreview, buildRunId, busy }: {
+                     onPrepareTarget, onRunPreview, buildRunId, previewStarting, busy }: {
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
   onRetry: () => void; onSetTarget: (targetId: string) => void;
@@ -1263,6 +1297,8 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   /** The code task this run built — what a preview is started FOR. */
   buildRunId: string | null;
   onRunPreview: (buildRunId: string) => void;
+  /** The build whose preview was asked for and has not arrived yet. */
+  previewStarting?: string;
   busy: string | null;
 }) {
   const phase = phaseOf(step);
@@ -1272,6 +1308,9 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
                    ...(step.live_preview ? { live_preview: step.live_preview } : {}) };
   const links = stepLinks(merged);
   const previewHref = links.find((l) => l.label === "open the preview")?.href ?? null;
+  // Asked for on THIS build and not yet serving. The URL is the finish line; a POST returning
+  // is not — which is why the old busy flag cleared a second after the click.
+  const starting = !!previewStarting && previewStarting === buildRunId && !previewHref;
   const approval = step.approval as { mode?: string; approver_role?: string };
   const produced = Object.entries(step.output || {})
     .filter(([k]) => !["capability", "tool", "inputs", "note", "status"].includes(k))
@@ -1384,21 +1423,29 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           the same two controls, on the step whose whole subject is the preview. */}
       {step.capability === "preview" ? (
         <div className="dw-step-decide" data-testid="dw-preview-controls">
+          {/* Pending until the URL arrives: the request was accepted in a second, the app
+              takes a minute. Cleared by the URL showing up, not by the POST returning. */}
           {previewHref ? (
             <a className="cap-btn primary" href={previewHref} target="_blank" rel="noreferrer"
                data-testid="dw-preview-open">Open preview</a>
           ) : null}
           {buildRunId ? (
-            <button type="button" className="cap-btn" disabled={!!busy}
+            <button type="button" className="cap-btn"
+                    disabled={!!busy || starting}
                     data-testid="dw-preview-run" onClick={() => onRunPreview(buildRunId)}>
-              {busy === "Preview" ? "Starting…"
+              {starting ? "Starting…"
                 : previewHref ? "Start a fresh one" : "Run preview"}
             </button>
           ) : null}
-          <span className="detail">
-            {previewHref
-              ? "A live preview of this build, on a URL you can open."
-              : "Nothing is serving this build right now. Starting one takes a few seconds."}
+          <span className="detail" data-testid="dw-preview-hint">
+            {starting
+              // Said for the WHOLE wait, not for the second the POST takes. A preview boots a
+              // container and waits for it to serve; a minute of silence after a click reads
+              // as a click that did nothing.
+              ? "Starting a preview — this takes up to a minute. It will appear here on its own."
+              : previewHref
+                ? "A live preview of this build, on a URL you can open."
+                : "Nothing is serving this build right now. Starting one takes a few seconds."}
           </span>
         </div>
       ) : null}

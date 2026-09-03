@@ -8086,3 +8086,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   overflow: hidden;
   line-height: 1.4;
 }
+
+/* Shown only while the project list is on its way — never once it has arrived. */
+.ct-loading-dot { color: var(--live, #58a6ff); animation: pulse 1.5s infinite; }

@@ -3093,7 +3093,21 @@ export function CodeTasksHome({ projectId, codeTasks, codeTaskTotal, meetings = 
         defaultRepo={lastRepo?.repo}
       />
 
-      {tasks.length === 0 ? (
+      {/* LOADING IS NOT ABSENCE.
+          The list arrives after the page does, and an empty list rendered "No projects yet" —
+          so during initialisation the console actively asserted there was nothing here, then
+          filled in a moment later. The operator asked for an indicator during initialisation
+          only, not a banner that pulses forever.
+
+          `codeTaskTotal` is the server's own count, so the two states are distinguishable
+          without guessing: it says twelve and we are holding none, therefore they are on the
+          way. Once they arrive this disappears and does not come back. */}
+      {tasks.length === 0 && (codeTaskTotal ?? 0) > 0 ? (
+        <p className="detail" data-testid="ct-initialising">
+          <span className="ct-loading-dot" aria-hidden>●</span>{" "}
+          Loading {codeTaskTotal} project{codeTaskTotal === 1 ? "" : "s"}…
+        </p>
+      ) : tasks.length === 0 ? (
         <p className="detail">No projects yet. Start one — the agent clones the repo, edits files, runs your tests, and opens a gated PR.</p>
       ) : tasks.filter((c) => !isInternalRun(c)).length === 0 ? (
         // EVERYTHING IN THE WINDOW WAS HOUSEKEEPING.
