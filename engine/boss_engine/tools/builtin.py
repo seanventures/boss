@@ -2072,14 +2072,25 @@ _MAX_FILE_BYTES = 400_000
 _REPO_CACHE = _os.environ.get("BOSS_REPO_CACHE") or "/tmp/boss-repo-cache"
 
 
-def _repo_root(settings: Any, repo: str) -> tuple[_Optional[str], _Optional[str]]:
-    """The local path for `repo`, cloning it if we do not have it yet.
+def _repo_root(settings: Any, repo: str,
+               ref: _Optional[str] = None) -> tuple[_Optional[str], _Optional[str]]:
+    """The local path for `repo` at `ref`, cloning it if we do not have it yet.
 
     `repo` is "boss" for BOSS's own source, or "owner/name" (or bare "name", which
     resolves against the configured target owner) for a customer's application. The
     honest answer to "why does my app do X" is in the app's code, and until now no
     tool could open it — Ask BOSS could describe BOSS and only guess about the thing
     BOSS had built.
+
+    `ref` EXISTS BECAUSE THE DEFAULT BRANCH IS THE WRONG PLACE TO LOOK. This cloned
+    origin/HEAD, and an app BOSS builds lives on `boss/code/<run_id>` behind an open PR —
+    unmerged, by design, because a human gates the merge. So a search for the app's own code
+    found NOTHING on main, and the agent, having drawn a blank in the only place it could look,
+    reached for container logs and reported that it could not determine the cause. It was
+    looking at an empty repository.
+
+    Each ref is cached in its own directory: checkouts are cheap next to a re-clone, and two
+    questions about two runs must not fight over one working copy.
     """
     name = (repo or "boss").strip()
     if name in ("boss", "self", "platform", ""):
@@ -2091,7 +2102,9 @@ def _repo_root(settings: Any, repo: str) -> tuple[_Optional[str], _Optional[str]
     if not owner or not short:
         return None, f"cannot resolve repo {repo!r} — no owner configured"
 
-    dest = _os.path.join(_REPO_CACHE, f"{owner}__{short}")
+    ref = (ref or "").strip()
+    slug = re.sub(r"[^0-9A-Za-z._-]+", "_", ref)[:80]
+    dest = _os.path.join(_REPO_CACHE, f"{owner}__{short}" + (f"__{slug}" if slug else ""))
     try:
         _os.makedirs(_REPO_CACHE, exist_ok=True)
         from ..services.repo_host import clone_url_for
@@ -2101,20 +2114,120 @@ def _repo_root(settings: Any, repo: str) -> tuple[_Optional[str], _Optional[str]
         if _os.path.isdir(_os.path.join(dest, ".git")):
             # Refresh, but never fail the read because the network is down — a slightly
             # stale checkout answers most questions; no checkout answers none.
-            _subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin"],
+            _subprocess.run(["git", "-C", dest, "fetch", "--depth", "1", "origin"]
+                            + ([ref] if ref else []),
                             capture_output=True, timeout=120)
-            _subprocess.run(["git", "-C", dest, "reset", "--hard", "origin/HEAD"],
+            _subprocess.run(["git", "-C", dest, "reset", "--hard",
+                             "FETCH_HEAD" if ref else "origin/HEAD"],
                             capture_output=True, timeout=60)
         else:
-            out = _subprocess.run(["git", "clone", "--depth", "1", url, dest],
-                                  capture_output=True, text=True, timeout=300)
+            out = _subprocess.run(
+                ["git", "clone", "--depth", "1"] + (["--branch", ref] if ref else [])
+                + [url, dest], capture_output=True, text=True, timeout=300)
             if out.returncode != 0:
-                return None, f"clone failed: {(out.stderr or '')[-200:]}"
+                # A ref that is a SHA, or a tag, cannot be cloned with --branch. Fall back to a
+                # plain clone and fetch it, so "ref" means any ref rather than "branch only".
+                if ref:
+                    plain = _subprocess.run(["git", "clone", "--depth", "1", url, dest],
+                                            capture_output=True, text=True, timeout=300)
+                    if plain.returncode != 0:
+                        return None, f"clone failed: {(plain.stderr or '')[-200:]}"
+                    got = _subprocess.run(["git", "-C", dest, "fetch", "--depth", "1",
+                                           "origin", ref], capture_output=True, text=True,
+                                          timeout=120)
+                    if got.returncode != 0:
+                        return None, (f"no such ref {ref!r} in {owner}/{short} "
+                                      f"({(got.stderr or '').strip()[-160:]})")
+                    _subprocess.run(["git", "-C", dest, "reset", "--hard", "FETCH_HEAD"],
+                                    capture_output=True, timeout=60)
+                else:
+                    return None, f"clone failed: {(out.stderr or '')[-200:]}"
         return dest, None
     except FileNotFoundError:
         return None, "git is not installed in this environment"
     except Exception as exc:  # noqa: BLE001 — a read tool must not raise
         return None, f"{type(exc).__name__}: {exc}"[:200]
+
+
+def _source_for_run(ctx: Any, run_id: str) -> tuple[_Optional[str], _Optional[str],
+                                                    _Optional[str]]:
+    """(repo, ref, error) — WHERE THE CODE FOR THIS RUN ACTUALLY IS.
+
+    An operator says "this error, on run crun_abc". The agent should not have to know that the
+    code is on a branch named after some OTHER run, or that the PR is still open. It has the
+    run id; that must be enough.
+
+    The candidates, in order, are all checked against the remote rather than guessed at:
+      * `boss/code/<run_id>` — the branch a code task normally writes to;
+      * the run's own recorded base branch — a FOLLOW-UP task commits onto the branch of the
+        run it continues, so its code is under the earlier run's name. That case is exactly the
+        one that looks like a bug when you assume the convention;
+      * the repository default, so the answer degrades to "merged code" rather than nothing.
+    """
+    try:
+        with ctx.begin() as connection:
+            row = connection.execute(
+                _text("SELECT spec FROM code_task_runs WHERE id = :id"), {"id": run_id},
+            ).mappings().first()
+    except Exception as exc:  # noqa: BLE001 — a read tool must not raise
+        return None, None, f"{type(exc).__name__}: {exc}"[:200]
+    if row is None:
+        return None, None, f"no code task run {run_id!r}"
+    spec = row["spec"] if isinstance(row["spec"], dict) else {}
+    owner = str(spec.get("owner") or "").strip()
+    short = str(spec.get("repo") or "").strip()
+    if not short:
+        return None, None, f"run {run_id} records no repository"
+    repo = f"{owner}/{short}" if owner else short
+
+    candidates = [f"boss/code/{run_id}", str(spec.get("base_branch") or "").strip()]
+    settings = getattr(ctx, "settings", None)
+    try:
+        from ..services.repo_host import clone_url_for
+
+        url = clone_url_for(getattr(settings, "target_repo_host", "github") or "github",
+                            owner or (getattr(settings, "target_github_owner", "") or ""),
+                            short, getattr(settings, "github_token", "") or "")
+        for candidate in [c for c in candidates if c]:
+            probe = _subprocess.run(["git", "ls-remote", "--heads", url, candidate],
+                                    capture_output=True, text=True, timeout=60)
+            if probe.returncode == 0 and (probe.stdout or "").strip():
+                return repo, candidate, None
+    except Exception:  # noqa: BLE001 — fall through to the default branch
+        pass
+    # Nothing matched: read the default branch and say so, rather than failing the question.
+    return repo, None, None
+
+
+def _deepen(root: str, depth: int = 200) -> None:
+    """Give a shallow checkout enough history to answer a question about the past.
+
+    Best-effort by design: history is an ENRICHMENT of an answer that a stale or shallow
+    checkout can still mostly give, so a failure here must never turn into a failed read.
+    """
+    try:
+        if not _os.path.isfile(_os.path.join(root, ".git", "shallow")):
+            return
+        _subprocess.run(["git", "-C", root, "fetch", f"--depth={depth}"],
+                        capture_output=True, timeout=120)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _resolve_source(ctx: Any, args: dict) -> tuple[str, _Optional[str], _Optional[str]]:
+    """(repo, ref, error) for a source tool's arguments.
+
+    One place, so search_code and read_code cannot disagree about which tree they are on —
+    finding a line in one repo and then reading a different file from another is a worse
+    failure than finding nothing.
+    """
+    run_id = str(args.get("run_id") or "").strip()
+    if run_id:
+        repo, ref, err = _source_for_run(ctx, run_id)
+        if err:
+            return "", None, err
+        return repo or "boss", (args.get("ref") or ref or None), None
+    return (args.get("repo") or "boss"), (args.get("ref") or None), None
 
 
 def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
@@ -2136,10 +2249,22 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "including infra/) or a customer application (repo='owner/name', or a bare repo "
         "name for the configured target). Answers 'where is this implemented', 'what "
         "raises this error', 'why does my app do that'. Returns file:line. Prefer this "
-        "over guessing at behaviour.",
+        "over guessing at behaviour.\n"
+        "TO SEARCH AN APP BOSS BUILT, PASS run_id. Its code sits on an open PR branch, NOT "
+        "on the default branch, so a search without run_id looks at a repo that does not "
+        "contain the app and finds nothing. run_id resolves the repo and the branch for you.\n"
+        "When an operator quotes an error message, search for that literal text FIRST — in "
+        "the app (run_id) AND in repo='boss'. Whichever source contains the string is where "
+        "it is raised, and it is often the platform rather than the app.",
         _obj({"pattern": {"type": "string", "description": "python regex"},
               "repo": {"type": "string",
                        "description": "'boss' for the platform, or 'owner/name' for an app"},
+              "run_id": {"type": "string",
+                         "description": "a code task run (crun_…): search THAT run's code, "
+                                        "on its branch. Overrides repo."},
+              "ref": {"type": "string",
+                      "description": "explicit branch/tag/sha; defaults to the branch for "
+                                     "run_id, else the repo default"},
               "path": {"type": "string", "description": "optional subdir, e.g. engine/"},
               "glob": {"type": "string", "description": "optional filename filter, e.g. *.py"},
               "limit": _LIMIT},
@@ -2152,7 +2277,10 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             rx = re.compile(args["pattern"])
         except re.error as exc:
             return {"ok": False, "error": f"bad regex: {exc}"}
-        root, err = _repo_root(ctx.settings, args.get("repo") or "boss")
+        repo, ref, err = _resolve_source(ctx, args)
+        if err:
+            return {"ok": False, "error": err}
+        root, err = _repo_root(ctx.settings, repo, ref)
         if root is None:
             return {"ok": False, "error": err}
         base = _safe_path(args.get("path") or "", root)
@@ -2179,25 +2307,94 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                                     "line": n, "text": line.rstrip()[:300],
                                 })
                                 if len(hits) >= limit:
-                                    return {"matches": hits, "truncated": True, "root": root}
+                                    return {"matches": hits, "truncated": True, "root": root,
+                                            "repo": repo, "ref": ref or "(default branch)"}
                 except (OSError, UnicodeDecodeError):
                     continue
-        return {"matches": hits, "truncated": False, "root": root}
+        # WHICH SOURCE WAS READ, always. "No matches" means nothing unless you know where it
+        # looked — that ambiguity is what let a search of an empty default branch read as
+        # "this code does not exist".
+        return {"matches": hits, "truncated": False, "root": root,
+                "repo": repo, "ref": ref or "(default branch)"}
+
+    @reg.tool(
+        "list_source",
+        "List the files in a repo — BOSS's platform (repo='boss', default) or an app BOSS "
+        "built (run_id). Answers 'what IS this app' before you guess at filenames. "
+        "search_code needs a pattern and read_code needs an exact path; this is how you find "
+        "out what is there in the first place. Pass run_id for an app: its files are on its "
+        "PR branch, not the default branch.",
+        _obj({"repo": {"type": "string", "description": "'boss', or 'owner/name' for an app"},
+              "run_id": {"type": "string",
+                         "description": "a code task run (crun_…): list THAT run's tree"},
+              "ref": {"type": "string", "description": "explicit branch/tag/sha"},
+              "path": {"type": "string", "description": "optional subdir, e.g. server/"},
+              "glob": {"type": "string", "description": "optional filter, e.g. *.ts"},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 200}}),
+    )
+    def list_source(ctx, *, project_id, actor, args):
+        """WHAT IS IN THIS APP — the question every investigation starts from.
+
+        BOSS could grep a repo and read a named file, and had no way to ask what the repo
+        CONTAINED. So an investigation opened with a guess at a filename, and a wrong guess is
+        indistinguishable from a file that does not exist.
+        """
+        import fnmatch as _fn
+
+        repo, ref, err = _resolve_source(ctx, args)
+        if err:
+            return {"ok": False, "error": err}
+        root, err = _repo_root(ctx.settings, repo, ref)
+        if root is None:
+            return {"ok": False, "error": err}
+        base = _safe_path(args.get("path") or "", root)
+        if base is None or not _os.path.isdir(base):
+            return {"ok": False, "error": f"no such directory: {args.get('path') or '/'}"}
+        glob = args.get("glob")
+        limit = int(args.get("limit") or 200)
+
+        files: list[dict] = []
+        truncated = False
+        for dirpath, dirnames, filenames in _os.walk(base):
+            dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
+            for fname in sorted(filenames):
+                if glob and not _fn.fnmatch(fname, glob):
+                    continue
+                full = _os.path.join(dirpath, fname)
+                try:
+                    size = _os.path.getsize(full)
+                except OSError:
+                    continue
+                files.append({"file": _os.path.relpath(full, root), "bytes": size})
+                if len(files) >= limit:
+                    truncated = True
+                    break
+            if truncated:
+                break
+        return {"repo": repo, "ref": ref or "(default branch)", "root": root,
+                "files": files, "truncated": truncated}
 
     @reg.tool(
         "read_code",
         "Read a file from source — BOSS's platform code (repo='boss', default) or a "
-        "customer app (repo='owner/name'), optionally a line range. Use after "
+        "customer app (repo='owner/name' or run_id), optionally a line range. Use after "
         "search_code to read the actual implementation instead of describing what it "
-        "probably does.",
+        "probably does. Pass the SAME run_id you searched with: an app's code is on its PR "
+        "branch, not on the default branch.",
         _obj({"file": {"type": "string", "description": "path relative to the repo root"},
               "repo": {"type": "string", "description": "'boss', or 'owner/name' for an app"},
+              "run_id": {"type": "string",
+                         "description": "a code task run (crun_…): read THAT run's code"},
+              "ref": {"type": "string", "description": "explicit branch/tag/sha"},
               "start": {"type": "integer", "minimum": 1},
               "end": {"type": "integer", "minimum": 1}},
              ["file"]),
     )
     def read_code(ctx, *, project_id, actor, args):
-        root, err = _repo_root(ctx.settings, args.get("repo") or "boss")
+        repo, ref, err = _resolve_source(ctx, args)
+        if err:
+            return {"ok": False, "error": err}
+        root, err = _repo_root(ctx.settings, repo, ref)
         if root is None:
             return {"ok": False, "error": err}
         path = _safe_path(args["file"], root)
@@ -2597,17 +2794,30 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
         "git_history",
         "Recent commits for a repo or a single file — when something changed, who "
         "changed it, and the message explaining why. Answers 'when did this break' and "
-        "'was this deliberate', which no amount of reading the CURRENT code can.",
+        "'was this deliberate', which no amount of reading the CURRENT code can. "
+        "Pass run_id for an app BOSS built, so the log covers ITS branch rather than a "
+        "default branch that may not contain the app at all.",
         _obj({"repo": {"type": "string", "description": "'boss' (default) or 'owner/name'"},
+              "run_id": {"type": "string",
+                         "description": "a code task run (crun_…): history of THAT run's "
+                                        "branch"},
+              "ref": {"type": "string", "description": "explicit branch/tag/sha"},
               "file": {"type": "string", "description": "optional path to scope the log"},
               "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
               "search": {"type": "string",
                          "description": "optional: commits touching this string"}}),
     )
     def git_history(ctx, *, project_id, actor, args):
-        root, err = _repo_root(ctx.settings, args.get("repo") or "boss")
+        repo, ref, err = _resolve_source(ctx, args)
+        if err:
+            return {"ok": False, "error": err}
+        root, err = _repo_root(ctx.settings, repo, ref)
         if root is None:
             return {"ok": False, "error": err}
+        # A SHALLOW CLONE HAS NO HISTORY TO SHOW. Customer repos are cloned --depth 1, so
+        # `git log` returned exactly one commit — and a one-entry history reads as "nothing
+        # ever changed here", which is the opposite of what this tool is for.
+        _deepen(root)
         cmd = ["git", "-C", root, "log", f"-{int(args.get('limit') or 20)}",
                "--date=short", "--pretty=%h|%ad|%an|%s"]
         if args.get("search"):
@@ -2629,7 +2839,7 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
             if len(parts) == 4:
                 commits.append({"sha": parts[0], "date": parts[1],
                                 "author": parts[2], "subject": parts[3]})
-        return {"repo": args.get("repo") or "boss", "commits": commits}
+        return {"repo": repo, "ref": ref or "(default branch)", "commits": commits}
 
     @reg.tool(
         "get_config",
