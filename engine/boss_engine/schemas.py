@@ -6194,6 +6194,16 @@ class DeploymentTargetSummary(BaseModel):
     provider_account_id: Optional[str] = None
     target_kind: str
     target_ref: str
+    #: WHICH HOST THIS APP IS BOUND TO — absent from this model entirely until now.
+    #:
+    #: `host_id` is the fact everything downstream depends on: the ssh credential resolves
+    #: through it, the host panel counts apps by it, and a deploy without it is refused. It was
+    #: not serialised here, so the console could not show where an app was bound and neither
+    #: could the agent — and reading the field back as `None` was indistinguishable from an app
+    #: that genuinely had no host. That misread cost a diagnosis in this very session: two
+    #: targets looked unbound while the host panel, querying the column directly, listed one of
+    #: them as bound to it.
+    host_id: Optional[str] = None
     domains: list[str]
     required_resources: list[dict[str, Any]]
     # Existing deployment targets record a binding (for example,

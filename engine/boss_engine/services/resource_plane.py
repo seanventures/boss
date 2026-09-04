@@ -2067,8 +2067,9 @@ class ResourcePlaneService:
             text(
                 """
                 SELECT id, project_id, app_name, repo, environment, provider_account_id,
-                       target_kind, target_ref, domains, required_resources, secret_refs,
-                       health_checks, rollback_points, status, created_by, created_at, updated_at
+                       target_kind, target_ref, host_id, domains, required_resources,
+                       secret_refs, health_checks, rollback_points, status, created_by,
+                       created_at, updated_at
                 FROM deployment_targets
                 WHERE project_id = :project_id AND app_name = :app_name AND environment = :environment
                 """
@@ -2105,8 +2106,9 @@ class ResourcePlaneService:
             text(
                 """
                 SELECT id, project_id, app_name, repo, environment, provider_account_id,
-                       target_kind, target_ref, domains, required_resources, secret_refs,
-                       health_checks, rollback_points, status, created_by, created_at, updated_at
+                       target_kind, target_ref, host_id, domains, required_resources,
+                       secret_refs, health_checks, rollback_points, status,
+                       created_by, created_at, updated_at
                 FROM deployment_targets
                 WHERE project_id = :project_id
                 ORDER BY app_name ASC, environment ASC
@@ -4755,8 +4757,9 @@ class ResourcePlaneService:
             text(
                 """
                 SELECT id, project_id, app_name, repo, environment, provider_account_id,
-                       target_kind, target_ref, domains, required_resources, secret_refs,
-                       health_checks, rollback_points, status, created_by, created_at, updated_at
+                       target_kind, target_ref, host_id, domains, required_resources,
+                       secret_refs, health_checks, rollback_points, status, created_by,
+                       created_at, updated_at
                 FROM deployment_targets
                 WHERE id = :deployment_target_id AND project_id = :project_id
                 """
