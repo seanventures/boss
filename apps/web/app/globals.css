@@ -8182,3 +8182,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   font-weight: 600;
 }
 .agent-trail-bad { color: hsl(0 70% 68%); font-weight: 600; }
+
+/* Bind an app to a host, on the step where shipping is decided. Same three fields as the
+   project card: host, the name the container takes, and the port. */
+.dw-bind {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin: 6px 0 2px;
+}
+.dw-bind-msg { flex-basis: 100%; }

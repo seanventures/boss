@@ -1245,8 +1245,11 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
  * Choosing a HOST is the act that was missing. A target is that host plus this app's name, its
  * environment and a free port, and the button that makes one also points the run at it.
  */
-function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTarget }: {
+function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
+                      onSetTarget, onPrepareTarget }: {
   targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
+  /** The code task whose build is being shipped — the app the target binds to. */
+  buildRunId: string;
   busy: string | null;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
 }) {
@@ -1280,23 +1283,8 @@ function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTar
   }
   if (hosts.length) {
     return (
-      <label className="mr-field-label dw-target">
-        Ship to a host
-        <select className="mr-select" data-testid="dw-deploy-host" defaultValue=""
-                disabled={!!busy}
-                onChange={(e) => { if (e.target.value) onPrepareTarget(e.target.value); }}>
-          <option value="">
-            {busy === "Prepare target" ? "Preparing…" : "Choose a host…"}
-          </option>
-          {hosts.map((h) => (
-            <option key={h.id} value={h.id}>{h.name}{h.address ? ` · ${h.address}` : ""}</option>
-          ))}
-        </select>
-        <span className="detail">
-          This app has no target yet. Choosing a host creates one for it — name, environment and
-          a free port — and points this run at it.
-        </span>
-      </label>
+      <BindToHost hosts={hosts} appName={appName} buildRunId={buildRunId} busy={busy}
+                  onPrepareTarget={onPrepareTarget} />
     );
   }
   return (
@@ -1318,6 +1306,87 @@ function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTar
  *  step_id is what the runtime actually carries; the capability prop resolved from the
  *  catalogue is the fallback for a workflow whose author renamed the step.
  */
+/** BIND THIS APP TO A HOST, ON THE STEP WHERE SHIPPING IS DECIDED.
+ *
+ *  Asked for repeatedly, and what shipped each time was less than what was asked for: a bare
+ *  host dropdown that fired on change. That is not a binding, it is a guess — it picks the
+ *  name and the port for you and gives you nothing to confirm. The project card has had the
+ *  real control all along (host · name · port · Set target), and the deploy step, which is
+ *  exactly where an operator is deciding where this build goes, had a lesser version.
+ *
+ *  Same three fields, same explicit button, same endpoint the project card posts to. The
+ *  operator sets the target and THEN approves the release; nothing is chosen on their behalf.
+ */
+function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget }: {
+  hosts: DeployHost[]; appName: string; buildRunId: string; busy: string | null;
+  onPrepareTarget: (hostId: string) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  return (
+    <form
+      className="dw-bind"
+      data-testid="dw-bind-form"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const fd = new FormData(e.currentTarget as HTMLFormElement);
+        const hostId = String(fd.get("host_id") || "");
+        if (!hostId) { setMsg("choose a host first"); return; }
+        setSaving(true); setMsg(null);
+        // WITHOUT A BUILD THERE IS NO APP TO BIND, so fall back to the run-scoped path that
+        // creates the target from the workflow's own title. Both end at the same target row.
+        if (buildRunId) {
+          try {
+            const r = await fetch("/api/app-deploy", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                op: "set-target", actor: "executive_console", run_id: buildRunId,
+                host_id: hostId, app_name: fd.get("app_name"), app_port: fd.get("app_port"),
+              }),
+              cache: "no-store",
+            });
+            const d = await r.json().catch(() => ({}));
+            setMsg(r.ok
+              ? `bound to ${d?.host ?? "the host"} — approve the release below to ship it`
+              : (d?.error ?? `could not set the target (HTTP ${r.status})`));
+          } catch (err) {
+            setMsg(String((err as Error)?.message ?? err));
+          }
+        } else {
+          onPrepareTarget(hostId);
+          setMsg("binding…");
+        }
+        setSaving(false);
+      }}
+    >
+      <span className="detail">App&rsquo;s target:</span>
+      <select name="host_id" className="mr-select" data-testid="dw-deploy-host"
+              aria-label="Host to deploy this app to" defaultValue={hosts[0]?.id ?? ""}>
+        {hosts.map((h) => (
+          <option key={h.id} value={h.id}>
+            {h.name}{h.address ? ` · ${h.address}` : ""}
+          </option>
+        ))}
+      </select>
+      {/* The DISPLAY name and the name a container is created under are not always the same
+          string, and the second is the one a deploy has to live with. */}
+      <input name="app_name" defaultValue={appName} data-testid="dw-deploy-appname"
+             aria-label="App name on the host" style={{ width: 150, fontSize: 12 }} />
+      <input name="app_port" placeholder="port (auto)" data-testid="dw-deploy-port"
+             aria-label="App port — blank lets BOSS pick a free one"
+             style={{ width: 96, fontSize: 12 }} />
+      <button className="cap-btn" type="submit" disabled={saving || !!busy}
+              data-testid="dw-deploy-settarget">
+        {saving ? "Saving…" : "Set target"}
+      </button>
+      {msg ? <span className="detail dw-bind-msg">{msg}</span> : null}
+    </form>
+  );
+}
+
 /** The hosts an operator can actually ship to, out of whatever the endpoint answered.
  *
  *  `hosts`, not `items`. GET /v1/deployment-hosts answers {"hosts": [...]} while the TARGETS
@@ -1434,7 +1503,8 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           which is exactly the moment the old condition removed it. */}
       {isDeployStep(step, capability) ? (
         <div className="dw-step-target" data-testid="dw-step-target">
-          <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
+          <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
+                       buildRunId={buildRunId ?? ""} busy={busy}
                        onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
         </div>
       ) : null}

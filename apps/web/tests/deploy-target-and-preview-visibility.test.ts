@@ -7,6 +7,7 @@
  *  somebody to assert the shape.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   verifiedHostsFrom, isDeployStep, isPreviewStep,
 } from "../app/delivery-workflows-ui";
@@ -66,5 +67,34 @@ describe("a step is recognised before it has run", () => {
   it("does not claim unrelated steps", () => {
     expect(isDeployStep(step({ step_id: "build", capability: "build" }))).toBe(false);
     expect(isPreviewStep(step({ step_id: "build", capability: "build" }))).toBe(false);
+  });
+});
+
+
+describe("the deploy step binds an app to a host, not just picks one", () => {
+  // Asked for many times, and what shipped each time was a bare dropdown that fired on
+  // change — which chooses the container name and the port on the operator's behalf and
+  // gives them nothing to confirm. The project card has always had the real control.
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("offers the host, the app name and the port", () => {
+    expect(SOURCE).toContain('data-testid="dw-deploy-host"');
+    expect(SOURCE).toContain('data-testid="dw-deploy-appname"');
+    expect(SOURCE).toContain('data-testid="dw-deploy-port"');
+  });
+
+  it("waits for an explicit Set target rather than acting on change", () => {
+    expect(SOURCE).toContain('data-testid="dw-deploy-settarget"');
+    expect(SOURCE).toContain("Set target");
+  });
+
+  it("posts to the same endpoint the project card uses, so the two cannot drift", () => {
+    expect(SOURCE).toContain('"/api/app-deploy"');
+    expect(SOURCE).toContain('op: "set-target"');
+  });
+
+  it("binds the BUILD, since that is what has an app to place", () => {
+    expect(SOURCE).toContain("buildRunId={buildRunId ?? \"\"}");
   });
 });

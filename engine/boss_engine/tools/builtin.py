@@ -2242,6 +2242,125 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_app_identity_tools(reg: ToolRegistry) -> None:
+    """Find and repair apps that were split into two identities.
+
+    An operator opened the console and saw the same product twice: "Incident Timeline Builder."
+    with 17 attempts and PR #164, and "Incident-Timeline Builder" with 2 attempts, PR #166 and a
+    live deployment. One product, two cards, two PRs, two bills, and the deployed one is not the
+    one carrying most of the work.
+
+    `stable_app_id` hashes `identity_key(name)`, and identity_key was fixed to collapse
+    punctuation precisely so a trailing full stop and a U+2010 hyphen could not fork one app.
+    But app_id is STAMPED AT CREATION and never re-derived, so the fix only helps work started
+    afterwards. Every app split before it stays split for good, and nothing in the product could
+    put it back together — which makes it the customer's problem, permanently, for a bug that
+    was ours.
+    """
+    @reg.tool(
+        "find_split_apps",
+        "Find apps recorded under more than one identity — the same product showing as two "
+        "cards, with its attempts, PRs and spend divided between them. Compares what each "
+        "run's title NORMALISES to, so it catches the splits punctuation caused ('X.' vs "
+        "'X-Y'). Read-only. Use before merge_apps, and whenever a customer says they see "
+        "the same app twice.",
+        _obj({"project_id": {"type": "string"}}),
+    )
+    def find_split_apps(ctx, *, project_id, actor, args):
+        from ..services.naming import identity_key, project_name
+
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text("SELECT id, title, status, pull_request_number, finalize_ctx, created_at "
+                      "FROM code_task_runs WHERE project_id=:p ORDER BY created_at"),
+                {"p": pid},
+            ).mappings().all()
+
+        groups: dict[str, dict] = {}
+        for row in rows:
+            name, _blurb, _label = project_name(row["title"] or "")
+            key = identity_key(name)
+            if not key or name == "Untitled app":
+                continue
+            app_id = ((row["finalize_ctx"] or {}).get("app_id")) or ""
+            g = groups.setdefault(key, {"identity": key, "identities": {}})
+            ident = g["identities"].setdefault(
+                app_id or "(unstamped)",
+                {"app_id": app_id or None, "display_names": [], "runs": 0,
+                 "pull_requests": [], "latest": None},
+            )
+            ident["runs"] += 1
+            if name not in ident["display_names"]:
+                ident["display_names"].append(name)
+            if row["pull_request_number"] and row["pull_request_number"] not in ident["pull_requests"]:
+                ident["pull_requests"].append(row["pull_request_number"])
+            ident["latest"] = row["id"]
+
+        split = []
+        for key, g in groups.items():
+            if len(g["identities"]) < 2:
+                continue
+            idents = sorted(g["identities"].values(), key=lambda i: -i["runs"])
+            split.append({
+                "identity": key,
+                "identities": idents,
+                # The one with the most work behind it is the natural survivor; the caller can
+                # override, because "most runs" is not always "the one that is deployed".
+                "suggested_keep": idents[0]["app_id"],
+            })
+        return {"project_id": pid, "split_apps": split, "count": len(split)}
+
+    @reg.tool(
+        "merge_apps",
+        "Merge apps that are the same product into ONE identity, so the console shows one "
+        "card with the whole lineage instead of two competing ones. Re-stamps app_id on every "
+        "affected run and records what it was, so the merge can be undone. Does not touch "
+        "code, PRs or running deployments — it corrects how BOSS grouped the work.",
+        _obj({"keep_app_id": {"type": "string",
+                              "description": "the identity to keep (from find_split_apps)"},
+              "merge_app_ids": {"type": "array", "items": {"type": "string"},
+                                "description": "identities to fold into it"},
+              "project_id": {"type": "string"}},
+             ["keep_app_id", "merge_app_ids"]),
+        kind="write",
+    )
+    def merge_apps(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        keep = str(args.get("keep_app_id") or "").strip()
+        merge = [str(a).strip() for a in (args.get("merge_app_ids") or []) if str(a).strip()]
+        if not keep or not merge:
+            return {"ok": False, "error": "keep_app_id and at least one merge_app_id required"}
+        if keep in merge:
+            return {"ok": False, "error": "keep_app_id cannot also be in merge_app_ids"}
+
+        moved = []
+        with ctx.begin() as c:
+            for app_id in merge:
+                rows = c.execute(
+                    _text("SELECT id FROM code_task_runs "
+                          "WHERE project_id=:p AND finalize_ctx->>'app_id' = :a"),
+                    {"p": pid, "a": app_id},
+                ).mappings().all()
+                if not rows:
+                    continue
+                # `merged_from_app_id` is the undo. A grouping change with no record of what it
+                # was before is a grouping change nobody can argue with afterwards.
+                c.execute(
+                    _text("UPDATE code_task_runs SET finalize_ctx = "
+                          "COALESCE(finalize_ctx,'{}'::jsonb) || CAST(:v AS JSONB), "
+                          "updated_at=now() "
+                          "WHERE project_id=:p AND finalize_ctx->>'app_id' = :a"),
+                    {"p": pid, "a": app_id,
+                     "v": json.dumps({"app_id": keep, "merged_from_app_id": app_id,
+                                      "merged_by": actor})},
+                )
+                moved.append({"app_id": app_id, "runs": len(rows)})
+        return {"ok": True, "kept": keep, "merged": moved,
+                "runs_moved": sum(m["runs"] for m in moved),
+                "note": "the console groups by app_id, so these now show as one app"}
+
+
 def _register_investigation_tools(reg: ToolRegistry) -> None:
     @reg.tool(
         "search_code",
@@ -2893,6 +3012,7 @@ def build_default_registry() -> ToolRegistry:
     reg = ToolRegistry()
     _register_read_tools(reg)
     _register_investigation_tools(reg)
+    _register_app_identity_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
@@ -2952,6 +3072,11 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "extend_code_task",
     "steer_code_task",
     "cancel_code_task",
+    # Repairing how work is GROUPED. One product recorded under two identities shows as two
+    # cards with the attempts, PRs and spend divided between them — a bug of ours that the
+    # customer otherwise keeps for good, since app_id is stamped at creation and never
+    # re-derived. Reversible: merge_apps records what each identity was.
+    "merge_apps",
     # Writing the fix. A customer's bug is repaired with code.
     "create_code_task",
     "create_discovery",
