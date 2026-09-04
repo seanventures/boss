@@ -1693,14 +1693,37 @@ def _inject_shim(html: bytes, prefix: str) -> bytes:
         return html
 
 
-# Headers the sample app is allowed to see. Never forward BOSS control-plane
-# secrets (Authorization / X-Boss-Api-Key) into the tenant process.
-_PREVIEW_FORWARD_HEADER_NAMES = (
-    "x-acting-user-id",
-    "accept",
-    "x-requested-with",
-    "x-csrf-token",
-)
+# HEADERS THE PREVIEWED APP MUST NOT SEE. Everything else is forwarded.
+#
+# This was an ALLOWLIST of four names, and it broke every app that invented a header of its
+# own. The first casualty was ApproveIt's X-Acting-User-Id, which was fixed by appending it to
+# the list — the second was an app whose client sends X-Request-ID as an idempotency key on
+# POST /api/verifications. Its server, correctly, refuses a request without one:
+#
+#     ❌ X-Request-ID header is required
+#
+# The app was right and its client did send the header. The PROXY removed it. An operator sees
+# an app BOSS built failing in a preview BOSS serves, with an error that blames the app.
+#
+# An allowlist cannot work here. BOSS does not know what the apps it writes will invent, and
+# adding a name per app means every new app is broken until somebody notices. The real
+# requirement is narrow and knowable in advance — do not hand the tenant process BOSS's own
+# credentials, and do not forward headers that describe THIS hop rather than the request. So
+# the rule is inverted: forward everything except those.
+#
+# Authorization and X-Boss-Api-Key are the control-plane secrets. Cookie is denied for the
+# same reason and it matters more than it looks: previews are served from the API's own origin,
+# so the browser attaches BOSS's cookies to preview requests, and forwarding them would hand a
+# tenant app the operator's session.
+_PREVIEW_BLOCKED_HEADER_NAMES = frozenset({
+    # BOSS credentials. Never.
+    "authorization", "proxy-authorization", "cookie",
+    "x-boss-api-key", "x-ops-token", "x-api-key",
+    # This hop, not the request. Forwarding them corrupts the upstream request: the app would
+    # be told the wrong Host and a Content-Length that no longer matches the body we send.
+    "host", "content-length", "connection", "keep-alive", "proxy-connection",
+    "transfer-encoding", "te", "trailer", "upgrade", "expect",
+})
 
 
 def forwarded_preview_headers(
@@ -1708,19 +1731,20 @@ def forwarded_preview_headers(
     *,
     content_type: Optional[str] = None,
 ) -> dict[str, str]:
-    """Allowlist of hop headers a preview app may receive.
+    """The incoming headers a preview app may receive: everything not explicitly blocked.
 
-    ApproveIt requires ``X-Acting-User-Id``. The gateway used to drop every
-    incoming header except Content-Type, so /api/requests always 401'd even
-    when the SPA (or an operator probe) sent the acting user.
+    See _PREVIEW_BLOCKED_HEADER_NAMES for why this is a denylist. In short: an allowlist has to
+    be extended for every header an app invents, and until it is, the app fails in the preview
+    with an error that reads as the app's fault.
     """
     out: dict[str, str] = {}
     for key, value in (incoming or {}).items():
         if value is None:
             continue
         name = str(key).strip()
-        if name.lower() in _PREVIEW_FORWARD_HEADER_NAMES:
-            out[name] = str(value)
+        if not name or name.lower() in _PREVIEW_BLOCKED_HEADER_NAMES:
+            continue
+        out[name] = str(value)
     if content_type and "content-type" not in {k.lower() for k in out}:
         out["Content-Type"] = content_type
     return out

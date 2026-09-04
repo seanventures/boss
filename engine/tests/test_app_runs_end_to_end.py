@@ -288,3 +288,41 @@ def test_preview_proxy_forwards_acting_user_and_strips_boss_secrets():
     assert "authorization" not in lowered
     assert "x-boss-api-key" not in lowered
     assert "cookie" not in lowered
+
+
+def test_the_proxy_forwards_a_header_the_app_invented():
+    """THE BUG BEHIND "❌ X-Request-ID header is required".
+
+    An app BOSS built uses X-Request-ID as an idempotency key and its server refuses a POST
+    without one. Its client DID send it. The proxy forwarded a hardcoded allowlist of four
+    names, dropped it, and the operator saw an app BOSS wrote failing in a preview BOSS serves,
+    with an error that blamed the app.
+
+    BOSS cannot enumerate in advance the headers the apps it writes will invent, so no
+    allowlist can be right. This is the whole point of the denylist: a header nobody has ever
+    heard of goes through.
+    """
+    got = forwarded_preview_headers(
+        {"X-Request-ID": "req-42", "X-Some-App-Specific-Thing": "yes",
+         "Authorization": "Bearer boss-control-plane-secret"},
+        content_type="application/json",
+    )
+    lowered = {k.lower(): v for k, v in got.items()}
+    assert lowered["x-request-id"] == "req-42"
+    assert lowered["x-some-app-specific-thing"] == "yes"
+    assert "authorization" not in lowered, "a new header must not cost us the secret boundary"
+
+
+def test_hop_headers_describing_this_connection_are_not_forwarded():
+    """Content-Length and Host describe OUR hop; passing them corrupts the upstream request.
+
+    The body sent upstream is not necessarily byte-identical, and the app must resolve its own
+    Host — a stale one breaks redirects and any host-based routing inside the app.
+    """
+    got = forwarded_preview_headers(
+        {"Host": "boss-api.local.sean.network", "Content-Length": "99999",
+         "Connection": "keep-alive", "Transfer-Encoding": "chunked",
+         "X-Request-ID": "req-1"},
+    )
+    lowered = {k.lower() for k in got}
+    assert lowered == {"x-request-id"}
