@@ -108,7 +108,7 @@ def has_event(connection: Any, entity_id: str, event_type: str) -> bool:
     than once for the same run. The event the spawn already writes is the natural key.
     """
     row = connection.execute(
-        sql("SELECT 1 FROM events WHERE entity_id = :e AND kind = :k LIMIT 1"),
+        sql("SELECT 1 FROM events WHERE entity_id = :e AND event_type = :k LIMIT 1"),
         {"e": entity_id, "k": event_type},
     ).first()
     return row is not None
