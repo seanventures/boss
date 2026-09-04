@@ -17,6 +17,36 @@ import { API_URL, authHeaders } from "../../../lib/client";
  */
 export const dynamic = "force-dynamic";
 
+/**
+ * The target list. THIS DID NOT EXIST, and its absence broke a different feature entirely.
+ *
+ * The route implemented only DELETE, so the workflow view's `GET /api/deployment-targets`
+ * answered 405 — and because both loads sat in one async function whose targets branch ended
+ * `if (!res.ok) return;`, that non-ok reply exited the function before the HOSTS fetch ran.
+ * The deploy step then reported "this project has no verified host" about a host that was
+ * verified and ready. One missing handler, and the symptom appeared somewhere else entirely.
+ */
+export async function GET(req: Request) {
+  const projectId = new URL(req.url).searchParams.get("project_id")?.trim();
+  if (!projectId) {
+    return NextResponse.json({ error: "missing project_id" }, { status: 400 });
+  }
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/deployment-targets?project_id=${encodeURIComponent(projectId)}`,
+      { headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) {
+      return NextResponse.json({ error: `HTTP ${r.status}` }, { status: r.status });
+    }
+    return NextResponse.json(await r.json());
+  } catch (e) {
+    return NextResponse.json(
+      { error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+
+
 export async function DELETE(req: Request) {
   const targetId = new URL(req.url).searchParams.get("target_id")?.trim();
   if (!targetId) {
