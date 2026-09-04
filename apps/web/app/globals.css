@@ -8204,3 +8204,6 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* Ask the agent about the step you are looking at. */
 .dw-step-ask { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+
+/* The address of the thing that was just shipped. */
+.dw-step-live { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }

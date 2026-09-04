@@ -261,3 +261,33 @@ class TestTheAgentIsToldWhereToLook:
         prompt = self._prompt()
         assert "SOMETHING IN BETWEEN REMOVED IT" in prompt
         assert "Blaming the customer's app for a platform bug" in prompt
+
+
+class TestItDoesNotInventToolOutput:
+    """An invented result is worse than no result, because it gets acted on.
+
+    Asked to curl a URL on a deployment host, `inspect_host` refused — its command set is
+    read-only — and the reply reported "connection refused" as though the command had run. The
+    app was answering 200 at that moment. The next question, asked with the right tool
+    (`http_probe`), returned 200 in 235ms.
+
+    Nothing structural stops a model doing this, but the rule can at least be stated, and it
+    names the tool that would have answered the question properly.
+    """
+
+    def _prompt(self) -> str:
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        return inspect.getsource(intent_router)
+
+    def test_it_is_told_not_to_report_commands_it_did_not_run(self):
+        assert "NEVER REPORT THE OUTPUT OF A COMMAND YOU DID NOT RUN" in self._prompt()
+
+    def test_it_is_pointed_at_the_tool_that_does_http_checks(self):
+        prompt = self._prompt()
+        assert "http_probe is the tool for it" in prompt
+
+    def test_it_is_told_to_say_which_tool_refused(self):
+        assert "say which tool refused" in self._prompt()

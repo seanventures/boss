@@ -157,3 +157,43 @@ describe("the agent is reachable from the step", () => {
     expect(SOURCE).toContain('data-testid="dw-ask-boss"');
   });
 });
+
+describe("a succeeded deploy shows the app, not an old failure", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("does not dress a succeeded step's history as a current problem", () => {
+    // A Deploy marked SUCCEEDED, whose app was answering 200, displayed "no preview is
+    // running for this app right now … Start a fresh preview, then deploy" in red — an
+    // instruction to redo work that was already done.
+    expect(SOURCE).toContain('step.error && step.status !== "succeeded"');
+    expect(SOURCE).toContain('step.status === "succeeded" ? "Earlier: " : ""');
+  });
+
+  it("links to the app once it has actually shipped", () => {
+    expect(SOURCE).toContain('data-testid="dw-open-app"');
+    expect(SOURCE).toContain("const liveAppUrl");
+  });
+
+  it("links only on success, and only from the bound target", () => {
+    // Linking on anything less would repeat the mistake this view keeps making: reporting a
+    // state the system is not in.
+    expect(SOURCE).toContain('step.status !== "succeeded") return ""');
+    expect(SOURCE).toContain("shippedTo?.domains");
+  });
+});
+
+describe("a step's output shows what it says, not which keys it has", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("renders scalars as key=value", () => {
+    // A deploy's result showed as "{health, status, applied}" under a heading reading DETAIL:
+    // three facts exist and none of what they say.
+    expect(SOURCE).toContain("scalars.join(\" · \")");
+  });
+
+  it("keeps the key list only when there is nothing short to say", () => {
+    expect(SOURCE).toContain("return keys.length ? `{${keys.slice(0, 3).join(\", \")}}` : \"{}\"");
+  });
+});

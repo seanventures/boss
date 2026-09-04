@@ -305,6 +305,19 @@ function summarise(value: unknown): string {
     // to click, and it is buried one level down often enough to be worth looking for.
     const useful = keys.find((k) => /(^|_)(id|url)$/.test(k));
     if (useful) return String((value as Record<string, unknown>)[useful]).slice(0, 60);
+    // THE CONTENT, NOT THE SHAPE. This printed the KEY NAMES — a deploy's result showed as
+    // "{health, status, applied}" under a heading reading DETAIL, which tells an operator
+    // that three facts exist and none of what they say. Scalars are what fit on a line, so
+    // show those as key=value and keep the key list only for an object made entirely of
+    // nested objects, where there is genuinely nothing short to say.
+    const scalars = keys
+      .filter((k) => {
+        const v = (value as Record<string, unknown>)[k];
+        return v !== null && v !== undefined && typeof v !== "object";
+      })
+      .slice(0, 3)
+      .map((k) => `${k}=${String((value as Record<string, unknown>)[k]).slice(0, 24)}`);
+    if (scalars.length) return scalars.join(" · ").slice(0, 90);
     return keys.length ? `{${keys.slice(0, 3).join(", ")}}` : "{}";
   }
   return String(value).slice(0, 60);
@@ -942,7 +955,14 @@ export function inputForRerun(input: Record<string, unknown> | null | undefined)
 /** The four states an operator acts on differently, plus everything. */
 /** Somewhere this project can ship to. Offered at the release gate so "deploy" is a choice
  *  about WHERE, not just whether. */
-type DeployTarget = { id: string; app_name: string; environment: string; status?: string };
+type DeployTarget = {
+  id: string; app_name: string; environment: string; status?: string;
+  /** "host:port" for each address the deployer published. The app's actual URL lives here —
+   *  a deploy step that cannot reach this can report success and still show no way in. */
+  domains?: string[];
+  /** The machine it is bound to. Absent means unbound, which is why a deploy would refuse. */
+  host_id?: string | null;
+};
 
 /** A machine this project can ship to. Choosing one is what MAKES a target: `deploy_app`
  *  refuses without an active target and never creates infrastructure itself, so a project
@@ -1512,6 +1532,25 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   const phase = phaseOf(step);
   // The sentence this step is actually showing the operator — its failure, or the note the
   // capability recorded. It is what makes the opening question specific instead of "help".
+  // THE ADDRESS OF THE THING THAT WAS JUST SHIPPED.
+  //
+  // Only on a deploy that SUCCEEDED, and only from the target this run is actually bound to —
+  // `domains` holds "host:port", which is what the deployer published. Linking on anything
+  // less than success would repeat the mistake this view keeps making: reporting a state the
+  // system is not in.
+  const shippedTo = (() => {
+    const id = typeof runInput.target_id === "string" ? runInput.target_id : "";
+    const byId = targets.find((t) => t.id === id);
+    if (byId) return byId;
+    const name = typeof runInput.title === "string" ? runInput.title : "";
+    return targets.find((t) => t.app_name === name);
+  })();
+  const liveAppUrl = (() => {
+    if (!isDeployStep(step, capability) || step.status !== "succeeded") return "";
+    const domain = (shippedTo?.domains ?? []).find((d: string) => !!d);
+    if (!domain) return "";
+    return /^https?:\/\//.test(domain) ? domain : `http://${domain}`;
+  })();
   const askNote = String(
     step.error || (step.output || {}).note || (step.output || {}).error || "",
   ).slice(0, 400);
@@ -1563,10 +1602,32 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
       </header>
 
       {capability?.summary ? <p className="dw-detail-what">{capability.summary}</p> : null}
-      {step.error ? <p className="dw-step-error" data-testid="dw-step-error">{step.error}</p> : null}
+      {/* A STEP THAT SUCCEEDED IS NOT SHOWING YOU A FAILURE.
+          `note` is written by whichever attempt last wrote one, and a step that was refused
+          and then went on to succeed keeps the refusal. So a Deploy marked SUCCEEDED, whose
+          app was up and answering 200, displayed "no preview is running for this app right
+          now … Start a fresh preview, then deploy" in red — an instruction to redo work that
+          had already been done. On a succeeded step the note is history: kept, because it
+          explains the delay, but not dressed as a problem you still have. */}
+      {step.error && step.status !== "succeeded" ? (
+        <p className="dw-step-error" data-testid="dw-step-error">{step.error}</p>
+      ) : null}
       {step.output?.note ? (
-        <p className="dw-step-note" data-tone={phase === "failed_on" ? "bad" : undefined}>
-          {String(step.output.note)}
+        <p className="dw-step-note"
+           data-tone={phase === "failed_on" && step.status !== "succeeded" ? "bad" : undefined}
+           data-testid="dw-step-note">
+          {step.status === "succeeded" ? "Earlier: " : ""}{String(step.output.note)}
+        </p>
+      ) : null}
+
+      {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the
+          step said everything except that: the target it shipped to, the run id, the health
+          key names — and no link. The address is on the target it is bound to. */}
+      {liveAppUrl ? (
+        <p className="dw-step-live" data-testid="dw-step-live">
+          <a className="cap-btn primary" href={liveAppUrl} target="_blank" rel="noreferrer"
+             data-testid="dw-open-app">Open the app ↗</a>
+          <span className="detail">{liveAppUrl} — shipped and answering.</span>
         </p>
       ) : null}
       {observedGates(step) ? (
