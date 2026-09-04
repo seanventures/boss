@@ -8131,19 +8131,8 @@ a.sp-node:hover .sp-label { color: var(--ink); }
       hsl(var(--idea-hue) 60% 26%), hsl(calc(var(--idea-hue) + 24) 55% 14%));
 }
 
-/* The photograph. Above the drawing, tinted with the idea's hue so sixteen unrelated photos
-   still read as one gallery rather than a contact sheet. */
-.askboss-idea-photo {
-  position: absolute; inset: 0; z-index: 2;
-  width: 100%; height: 100%; object-fit: cover;
-  opacity: .62;
-  filter: saturate(1.05) contrast(1.02);
-  mix-blend-mode: luminosity;    /* keeps the card's colour, takes the photo's shape */
-}
-.askboss-idea:hover .askboss-idea-photo { opacity: .78; }
-
-/* The mockup sits above the colour and below the wash — and below the photo, so it is what
-   shows when the photo cannot be fetched. */
+/* The mockup sits above the colour and below the wash. It is the whole picture now: the
+   photograph layer that used to cover it was arbitrary stock scenery and was removed. */
 .askboss-idea-shot {
   position: absolute; inset: 0; width: 100%; height: 100%;
   display: block; z-index: 1; opacity: .92;

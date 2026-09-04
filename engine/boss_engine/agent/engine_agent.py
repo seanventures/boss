@@ -108,6 +108,51 @@ def _propose_label(tool: str, args: dict) -> str:
         return "Convene a PRD panel"
     return tool.replace("_", " ")
 
+def _report_from_trace(trace: list[dict]) -> str:
+    """What BOSS established, when the model would not write it up.
+
+    Reached only when every attempt to get prose failed. The alternative that shipped was an
+    empty string, which the router rendered as "I could not answer that: the model returned an
+    empty answer" — telling an operator nothing, while the trace held the reads that answered
+    their question. A list of what was looked up and how it came back is worse than a written
+    answer and far better than silence, and it is verifiable in a way prose is not.
+    """
+    if not trace:
+        return (
+            "The model returned nothing for this turn and I had gathered no evidence yet, so "
+            "I have nothing to report. That is a provider fault on my side, not a limit on "
+            "what BOSS knows — asking again usually works."
+        )
+    lines = [
+        "The model would not write up an answer for this turn, so here is what I actually "
+        "checked and what came back. This is a fault on my side; ask again and you should get "
+        "a written answer.",
+        "",
+    ]
+    for step in trace[:12]:
+        result = step.get("result") or {}
+        ok = result.get("ok", True)
+        detail = ""
+        # The fields worth a line: what failed, or how much was found.
+        if not ok:
+            detail = str(result.get("error") or result.get("detail") or "failed")[:160]
+        else:
+            for key in ("count", "status", "state", "summary", "note", "title"):
+                if result.get(key) not in (None, ""):
+                    detail = f"{key}={str(result[key])[:120]}"
+                    break
+            if not detail:
+                for key, value in result.items():
+                    if isinstance(value, list):
+                        detail = f"{key}: {len(value)} item(s)"
+                        break
+        lines.append(f"- {'✓' if ok else '✗'} {step.get('tool')}"
+                     + (f" — {detail}" if detail else ""))
+    if len(trace) > 12:
+        lines.append(f"- …and {len(trace) - 12} further tool call(s).")
+    return "\n".join(lines)
+
+
 class EngineAgent:
     def __init__(self, ctx: Any, registry: Optional[ToolRegistry] = None):
         self.ctx = ctx
@@ -145,6 +190,8 @@ class EngineAgent:
         pending: list[dict] = []
         final_text = ""
         steps = 0
+        #: Completions that came back with neither text nor a tool call. Two are tolerated.
+        empty_completions = 0
 
         # A TURN MUST NEVER END WITHOUT AN ANSWER.
         #
@@ -181,6 +228,31 @@ class EngineAgent:
             tool_calls = None if last else msg.get("tool_calls")
             if not tool_calls:
                 final_text = msg.get("content") or ""
+                if final_text.strip():
+                    break
+                # AN EMPTY COMPLETION IS NOT AN ANSWER, AND `break` MADE IT ONE.
+                #
+                # No tool calls and no text ended the loop with final_text = "" — and because
+                # `break` skips a for/else, the reserved answer step and the fallback below
+                # were both bypassed. Every tool result gathered on the way was discarded and
+                # the operator was told "I could not answer that: the model returned an empty
+                # answer" about a question BOSS had already done the work to answer.
+                #
+                # An empty completion is a provider hiccup, the same class of fault as a 529,
+                # and it is retried like one: press the model to answer, up to twice, before
+                # giving up. `continue` rather than `break`, so the reserved final step still
+                # gets its chance.
+                empty_completions += 1
+                if empty_completions <= 2 and not last:
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your last message was empty. Answer the question now in plain "
+                            "text, using what you have already established. Do not call any "
+                            "more tools and do not apologise."
+                        ),
+                    })
+                    continue
                 break
 
             for tc in tool_calls:
@@ -209,6 +281,15 @@ class EngineAgent:
                 "That is a provider fault, not a limit on what BOSS knows — the same question "
                 "asked again will usually work."
             )
+
+        # LAST LINE OF DEFENCE: A TURN NEVER RETURNS AN EMPTY REPLY.
+        #
+        # Every path above tries to produce text, and the one that did not is the one that
+        # reached an operator. If the model would not write a sentence, BOSS reports what it
+        # DID — which is real, checkable evidence and is very often the answer — instead of
+        # handing the router an empty string to turn into "I could not answer that".
+        if not final_text.strip():
+            final_text = _report_from_trace(trace)
 
         return AgentTurn(reply=final_text, trace=trace, pending_writes=pending, steps=steps)
 

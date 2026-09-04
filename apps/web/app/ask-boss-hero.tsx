@@ -89,23 +89,21 @@ type GlyphId = keyof typeof GLYPHS;
  *  White at low opacity over the hue, so one set of shapes works on every colour.
  */
 
-/** A real photograph for a card, chosen deterministically from the idea's title.
+/*  NO STOCK PHOTOGRAPHY. Removed deliberately, and it is not coming back without a source of
+ *  TOPICAL images.
  *
- *  The operator asked for images three times and got, in order: an icon, a gradient wash, and a
- *  drawn mockup. None of them is a photograph. This is.
+ *  Cards had a seeded Picsum photograph over the drawing. Picsum serves an ARBITRARY photo per
+ *  seed — so "Docs freshness board" got an iceberg, "Lead triage inbox" got a mountain range
+ *  and "Change calendar" got a suspension bridge at sunset. Stable per idea, and meaningless:
+ *  a gallery of holiday scenery on a page about software you are about to build. It reads as
+ *  decoration applied without looking at it, because that is exactly what it was.
  *
- *  Picsum rather than an Unsplash keyword search because the latter needs an API key and a
- *  server round-trip; a seeded Picsum URL is a real photo, the same one every time for a given
- *  idea, with no key and no backend.
- *
- *  The mockup stays underneath. This console is reachable only over the tailnet, so the photo
- *  WILL fail sometimes — when it does the drawing shows through instead of a broken image,
- *  which is the whole reason the drawing was worth building.
+ *  The tools this imitates do not use stock photos either. They show the THING — a small
+ *  rendering of the app's own interface. That is what MOCKUPS below draws: a board for a
+ *  board, rows for an inbox, a chart for a report. It is topical by construction, needs no
+ *  API key, no network, and cannot arrive as a picnic.
  */
-function photoFor(title: string): string {
-  const seed = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  return `https://picsum.photos/seed/${seed}/640/256`;
-}
+
 
 const MOCKUPS: Record<string, (k: string) => React.ReactElement> = {
   /** Rows with avatars: inbox, triage, directory, feed. */
@@ -1004,12 +1002,6 @@ export function AskBossHero({
                         <circle cx="44" cy="19" r="2.5" fill="#fff" fillOpacity=".14" />
                         {MOCKUPS[MOCKUP_FOR[i.glyph] ?? "list"](i.title)}
                       </svg>
-                      {/* The photograph, over the drawing. If it does not load — offline, CDN
-                          down, tailnet only — it removes itself and the drawing below is what
-                          you see, rather than a broken-image icon. */}
-                      <img className="askboss-idea-photo" src={photoFor(i.title)} alt=""
-                           loading="lazy" decoding="async"
-                           onError={(e) => { e.currentTarget.style.display = "none"; }} />
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
