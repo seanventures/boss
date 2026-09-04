@@ -523,7 +523,13 @@ class ProviderCostRecord:
 #:
 #: Longer than any real deploy (the connector's own build+ship path is minutes) and short
 #: enough that a crashed deployer does not block the next attempt for a working day.
-_SURFACE_LEASE_SECONDS = 3600
+#:
+#: Twenty minutes, not an hour. The first version of this was 3600, which is defensible as a
+#: safety margin and awful to live with: after a failed deploy the operator is locked out of
+#: their own target for the rest of the hour, staring at "owned by another deployer" with
+#: nothing to do about it. The margin over a real deploy is what matters, not the absolute
+#: number, and 20 minutes is several times the longest build-and-ship observed.
+_SURFACE_LEASE_SECONDS = 1200
 
 
 class ResourcePlaneService:
