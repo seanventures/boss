@@ -7959,14 +7959,14 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-idea-art {
   display: grid; place-items: center;
   width: 40px; height: 40px; margin-bottom: 8px; border-radius: 11px;
-  color: hsl(var(--idea-hue) 82% 72%);
+  color: var(--idea-accent, #6ea8ff);
   background:
     radial-gradient(120% 120% at 20% 0%,
-      hsl(var(--idea-hue) 78% 58% / .30) 0%,
-      hsl(var(--idea-hue) 78% 40% / .10) 60%,
+      hsl(220 40% 20% / .55) 0%,
+      hsl(220 40% 14% / .25) 60%,
       transparent 100%),
     color-mix(in srgb, var(--panel, #0d1117) 70%, transparent);
-  border: 1px solid hsl(var(--idea-hue) 60% 55% / .32);
+  border: 1px solid hsl(220 28% 38% / .45);
 }
 .askboss-idea-art svg { width: 21px; height: 21px; }
 /* A wash of the same hue behind the card, so the whole tile belongs to its subject
@@ -7974,11 +7974,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-idea::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(160deg,
-    hsl(var(--idea-hue, 210) 70% 55% / .10) 0%, transparent 55%);
+    hsl(220 40% 30% / .18) 0%, transparent 55%);
   opacity: .9; transition: opacity .18s ease;
 }
 .askboss-idea:hover::before { opacity: 1; }
-.askboss-idea:hover .askboss-idea-art { border-color: hsl(var(--idea-hue) 70% 62% / .6); }
+.askboss-idea:hover .askboss-idea-art { border-color: var(--idea-accent, #6ea8ff); }
 .askboss-idea > * { position: relative; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8109,7 +8109,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-idea-cover {
   position: relative;
   display: block;
-  height: 128px;
+  /* THE COVER IS THE SHAPE OF THE PICTURE, so nothing is cropped.
+     A fixed 128px height against a 320x128 viewBox meant the art was `slice`d to whatever
+     width the card happened to be — about 13% off each side — which cut the primary button in
+     half and clipped the sidebar. Matching the ratio makes slice and meet identical. */
+  aspect-ratio: 320 / 128;
+  height: auto;
   /* WIDTH, EXPLICITLY. The card is a flex COLUMN and this is a flex item whose only child is
      absolutely positioned — so it has no content to size from and collapsed to ZERO width.
      128px tall by 0px wide paints nothing, which is why the first two attempts shipped as an
@@ -8122,13 +8127,13 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   margin: -14px -14px 12px;
   border-radius: 12px 12px 0 0;
   overflow: hidden;
-  background:
-    radial-gradient(120% 95% at 15% 0%,
-      hsl(var(--idea-hue) 85% 60% / .85), transparent 62%),
-    radial-gradient(95% 80% at 95% 10%,
-      hsl(calc(var(--idea-hue) + 52) 88% 58% / .65), transparent 66%),
-    linear-gradient(160deg,
-      hsl(var(--idea-hue) 60% 26%), hsl(calc(var(--idea-hue) + 24) 55% 14%));
+  /* A FRAME FOR A SCREENSHOT, not a coloured field.
+     This was two saturated radial gradients plus a diagonal, one random hue per card. Sixteen
+     unrelated colours in a row is what made the strip read as arbitrary, and the wireframe
+     drawn on top at 6% opacity had nothing to hold an edge against. The art is opaque now and
+     fills the whole cover, so all this has to do is provide the border radius and a seat. */
+  background: #111726;
+  border-bottom: 1px solid hsl(220 25% 30% / .55);
 }
 
 /* The mockup sits above the colour and below the wash. It is the whole picture now: the
@@ -8139,39 +8144,13 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .askboss-idea:hover .askboss-idea-shot { opacity: 1; }
 
-/* The texture. Five geometries so a row reads as a set, not one image recoloured. */
-.askboss-idea-cover::before {
-  content: ""; position: absolute; inset: 0; opacity: .55;
-}
-.askboss-idea-cover[data-art="0"]::before {
-  background-image: radial-gradient(hsl(0 0% 100% / .22) 1px, transparent 1.5px);
-  background-size: 12px 12px;
-}
-.askboss-idea-cover[data-art="1"]::before {
-  background-image: repeating-linear-gradient(58deg,
-    hsl(0 0% 100% / .16) 0 1.5px, transparent 1.5px 12px);
-}
-.askboss-idea-cover[data-art="2"]::before {
-  background-image:
-    repeating-radial-gradient(circle at 80% 82%,
-      hsl(0 0% 100% / .16) 0 1.5px, transparent 1.5px 15px);
-}
-.askboss-idea-cover[data-art="3"]::before {
-  background-image: repeating-linear-gradient(
-    to right, hsl(0 0% 100% / .16) 0 2px, transparent 2px 20px);
-  mask-image: linear-gradient(to top, #000, transparent 90%);
-}
-.askboss-idea-cover[data-art="4"]::before {
-  background-image:
-    conic-gradient(from 200deg at 28% 115%,
-      hsl(0 0% 100% / .26), transparent 40%, hsl(0 0% 100% / .16) 68%, transparent);
-}
-
 /* Just enough wash to seat the text below it. The first version faded the whole
    image into the panel colour by 46% and left a flat rectangle. */
 .askboss-idea-cover::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 48%; z-index: 3;
-  background: linear-gradient(to top, var(--panel, #0d1117), transparent);
+  /* A HINT, NOT A CURTAIN. This faded the bottom 48% of the image into the panel colour —
+     half the screenshot, gone, to seat text that sits below the cover anyway. */
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; z-index: 3;
+  background: linear-gradient(to top, hsl(220 30% 7% / .55), transparent);
 }
 
 /* The glyph, as a mark ON the art. No backdrop-filter: it is the most likely
@@ -8180,13 +8159,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   position: absolute; left: 14px; bottom: 10px; z-index: 4;
   display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; border-radius: 10px;
-  color: hsl(var(--idea-hue) 95% 92%);
-  background: hsl(var(--idea-hue) 55% 12% / .78);
-  border: 1px solid hsl(var(--idea-hue) 80% 70% / .55);
+  color: var(--idea-accent, #6ea8ff);
+  background: hsl(220 40% 8% / .88);
+  border: 1px solid hsl(220 30% 40% / .6);
 }
 .askboss-idea-mark svg { width: 18px; height: 18px; }
-.askboss-idea:hover .askboss-idea-cover::before { opacity: .75; }
-.askboss-idea:hover .askboss-idea-mark { border-color: hsl(var(--idea-hue) 90% 78% / .9); }
+.askboss-idea:hover .askboss-idea-mark { border-color: var(--idea-accent, #6ea8ff); }
 
 /* WHAT BOSS READ. Evidence under an answer, collapsed until somebody doubts it. */
 .agent-trail { margin: 6px 0 10px; }

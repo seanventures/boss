@@ -110,12 +110,38 @@ describe("the starter shelf", () => {
     }
   });
 
-  it("gives every card a mark and a hue", () => {
-    // Sixteen identical grey cards is a list pretending to be a gallery.
+  it("gives every card a mark and an accent from ONE palette", () => {
+    // Sixteen identical grey cards is a list pretending to be a gallery — but sixteen cards
+    // each on its own random hue is worse, and that is what shipped: hue values of 4, 152,
+    // 268, 196, 28, 340 and 12, points scattered around the colour circle with nothing tying
+    // them together. A row of them read as arbitrary because it WAS arbitrary. The accent is
+    // now drawn from a fixed short palette, so the strip reads as one product.
     expect(HERO).toContain("const GLYPHS");
-    expect(HERO).toContain('className="askboss-idea-art"');
-    expect(CSS_I).toContain(".askboss-idea-art {");
-    expect(CSS_I).toContain("hsl(var(--idea-hue)");
+    // `askboss-idea-mark`, not `askboss-idea-art`: the latter was an earlier design's icon
+    // tile, and only this test still referred to it — which is the failure mode of a test that
+    // greps source. It passed for months while asserting a class the component had stopped
+    // rendering.
+    expect(HERO).toContain('className="askboss-idea-mark"');
+    expect(CSS_I).toContain(".askboss-idea-mark {");
+    expect(HERO).toContain("const ACCENTS");
+    expect(HERO).not.toMatch(/hue: \d+/);
+    expect(CSS_I).not.toContain("--idea-hue");
+  });
+
+  it("draws the app, not a coloured rectangle", () => {
+    // Three versions of this shipped as decoration: a gradient wash, then a wash with a
+    // texture, then a random stock PHOTOGRAPH — an iceberg over "Docs freshness board". A
+    // starter card should show what the thing would look like, which means a screenshot of a
+    // user interface: window chrome, a sidebar, a header, and content laid out to match the
+    // idea. Opaque surfaces, because the previous drawing was white at 6% opacity over a
+    // saturated gradient and had no edge to hold.
+    expect(HERO).toContain("const MOCKUPS");
+    expect(HERO).toContain("const UI = {");
+    expect(HERO).toMatch(/fill=\{UI\.(panel|row|chrome)\}/);
+    // And it is DRAWN, never fetched: this console is tailnet-only, so a card built on a CDN
+    // is a broken image the day the CDN is unreachable.
+    expect(HERO).not.toContain("picsum");
+    expect(HERO).not.toMatch(/<img[^>]+https?:/);
   });
 
   it("draws the mark inline rather than fetching it", () => {

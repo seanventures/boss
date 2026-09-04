@@ -17,6 +17,7 @@
  * no purely ornamental motion, and all of it collapses under prefers-reduced-motion.
  */
 
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 
 import { Markdown } from "./markdown";
@@ -66,7 +67,6 @@ type Idea = {
   tag: string; title: string; brief: string;
   /** Hue for the card's thumbnail. A wall of identical grey cards is a list pretending to be a
    *  gallery — colour is what makes sixteen of them scannable rather than readable. */
-  hue: number;
   /** Which glyph the thumbnail draws. Inline SVG, not an image URL: the console must render
    *  with no network beyond its own origin, and a broken <img> is worse than no picture. */
   glyph: GlyphId;
@@ -105,76 +105,157 @@ type GlyphId = keyof typeof GLYPHS;
  */
 
 
-const MOCKUPS: Record<string, (k: string) => React.ReactElement> = {
-  /** Rows with avatars: inbox, triage, directory, feed. */
-  list: (k) => (
+/** The palette. FOUR TONES THAT BELONG TOGETHER, not a hue wheel.
+ *
+ *  Cards carried ` 152, 268, 196, 28, 340, 12` — points scattered at random around the
+ *  colour circle, one per card. Sixteen unrelated colours next to each other is why a row of
+ *  them read as arbitrary: nothing said these were one product. A template gallery wants the
+ *  opposite — one surface, one language, an accent that varies just enough to tell cards
+ *  apart. So the surface is fixed and only the accent moves, across four cool tones drawn from
+ *  the console's own palette.
+ */
+const ACCENTS = ["#6ea8ff", "#4fd1c5", "#a78bfa", "#38bdf8"] as const;
+
+/** The screenshot's surfaces. Solid, opaque, with real contrast between them.
+ *
+ *  The previous art was white at 6–14% opacity over a saturated gradient — a ghost wireframe
+ *  with no edges, which is what made it look like weather rather than a screen. A UI is opaque
+ *  panels with light text on them, so these are opaque panels with light text on them.
+ */
+const UI = {
+  chrome: "#161c2e",   // the window frame
+  panel: "#1d2438",    // a surface inside the window
+  row: "#273049",      // a row/card on that surface
+  line: "#3a4460",     // hairlines, dividers, inactive dots
+  text: "#6b7794",     // a line of body text
+  bright: "#9fb0d0",   // a heading
+} as const;
+
+/** The accent for one card. Stable per title, so a card keeps its colour between renders,
+ *  and spread evenly across the four tones instead of picked per idea by hand. */
+function accentFor(title: string): string {
+  let h = 0;
+  for (const ch of title) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return ACCENTS[h % ACCENTS.length];
+}
+
+/** A line of "text": a rounded bar, the way every UI mock draws one. */
+function Line({ x, y, w, h = 4, c = UI.text, o = 1 }: {
+  x: number; y: number; w: number; h?: number; c?: string; o?: number;
+}) {
+  return <rect x={x} y={y} width={w} height={h} rx={h / 2} fill={c} opacity={o} />;
+}
+
+/** The app's own interface, in miniature — the thing a starter card should show.
+ *
+ *  Each of these is a small SCREENSHOT: a sidebar, a header, and content laid out the way the
+ *  idea implies. An inbox is rows with avatars and a status pill; a board is columns of cards;
+ *  an audit is a chart with an axis; a rotation is a month grid; an incident is a timeline.
+ *  The accent appears two or three times at most — the selected item, the primary button, one
+ *  data point — which is how real interfaces use colour and why this reads as a product
+ *  instead of as decoration.
+ */
+const MOCKUPS: Record<string, (k: string, accent: string) => ReactElement> = {
+  /** Rows with avatars and a status: inbox, triage, directory, review queue. */
+  list: (k, accent) => (
     <g key={k}>
       {[0, 1, 2, 3].map((i) => (
-        <g key={i} transform={`translate(0 ${i * 22})`}>
-          <rect x="14" y="30" width="292" height="16" rx="4" fill="#fff" opacity=".10" />
-          <circle cx="26" cy="38" r="5" fill="#fff" opacity=".28" />
-          <rect x="38" y="34" width={92 - i * 14} height="4" rx="2" fill="#fff" opacity=".34" />
-          <rect x="38" y="41" width={150 - i * 20} height="3" rx="1.5" fill="#fff" opacity=".16" />
+        <g key={i} transform={`translate(0 ${i * 19})`}>
+          <rect x="78" y="34" width="222" height="16" rx="4" fill={UI.row}
+                opacity={i === 0 ? 1 : 0.72} />
+          <circle cx="90" cy="42" r="4.5" fill={i === 0 ? accent : UI.line} />
+          <Line x={101} y={38} w={78 - i * 12} c={i === 0 ? UI.bright : UI.text} />
+          <Line x={101} y={45} w={120 - i * 16} h={3} o={0.55} />
+          <rect x={272} y={38} width="18" height="8" rx="4"
+                fill={i === 0 ? accent : UI.line} opacity={i === 0 ? 0.9 : 0.7} />
         </g>
       ))}
     </g>
   ),
+
   /** Columns of cards: kanban, triage board, pipeline. */
-  board: (k) => (
+  board: (k, accent) => (
     <g key={k}>
       {[0, 1, 2].map((c) => (
-        <g key={c} transform={`translate(${14 + c * 100} 0)`}>
-          <rect x="0" y="26" width="88" height="88" rx="6" fill="#fff" opacity=".08" />
-          <rect x="8" y="34" width={40 - c * 6} height="4" rx="2" fill="#fff" opacity=".30" />
+        <g key={c} transform={`translate(${80 + c * 76} 0)`}>
+          <Line x={2} y={32} w={30 - c * 4} h={3} c={UI.bright} o={0.8} />
+          <rect x="0" y="40" width="68" height="70" rx="5" fill={UI.panel} />
           {[0, 1, 2].map((r) => (
-            <rect key={r} x="8" y={46 + r * 20} width="72" height="15" rx="4"
-                  fill="#fff" opacity={r + c === 0 ? ".26" : ".14"} />
+            <g key={r} transform={`translate(0 ${r * 21})`}>
+              <rect x="5" y="46" width="58" height="16" rx="4" fill={UI.row}
+                    opacity={r === 2 && c === 2 ? 0 : 1} />
+              {r === 2 && c === 2 ? null : (
+                <>
+                  <rect x="9" y="50" width="4" height="4" rx="1"
+                        fill={c === 0 && r === 0 ? accent : UI.line} />
+                  <Line x={17} y={51} w={38 - r * 8} h={3} o={0.7} />
+                </>
+              )}
+            </g>
           ))}
         </g>
       ))}
     </g>
   ),
-  /** Bars and a trend line: audits, spend, coverage, metrics. */
-  chart: (k) => (
+
+  /** Bars with an axis and one highlighted column: audits, spend, coverage. */
+  chart: (k, accent) => (
     <g key={k}>
-      <line x1="14" y1="104" x2="306" y2="104" stroke="#fff" strokeOpacity=".22" strokeWidth="1" />
-      {[38, 62, 44, 78, 56, 92, 70].map((h, i) => (
-        <rect key={i} x={22 + i * 40} width="22" y={104 - h} height={h} rx="3"
-              fill="#fff" opacity={i === 5 ? ".42" : ".18"} />
+      <rect x="78" y="30" width="222" height="82" rx="5" fill={UI.panel} />
+      {[0, 1, 2].map((i) => (
+        <line key={i} x1="90" y1={48 + i * 20} x2="290" y2={48 + i * 20}
+              stroke={UI.line} strokeWidth="1" opacity=".55" />
       ))}
-      <polyline fill="none" stroke="#fff" strokeOpacity=".55" strokeWidth="2"
-                strokeLinecap="round" strokeLinejoin="round"
-                points="33,66 73,42 113,60 153,26 193,48 233,12 273,34" />
+      {[26, 40, 31, 52, 38, 60, 45].map((h, i) => (
+        <rect key={i} x={94 + i * 28} width="15" y={104 - h} height={h} rx="2.5"
+              fill={i === 5 ? accent : UI.row} />
+      ))}
+      <line x1="88" y1="106" x2="292" y2="106" stroke={UI.line} strokeWidth="1.5" />
     </g>
   ),
-  /** A month grid with a few days marked: calendars, schedules, rotations. */
-  calendar: (k) => (
+
+  /** A month grid with a couple of days marked: rotations, schedules, calendars. */
+  calendar: (k, accent) => (
     <g key={k}>
-      <rect x="14" y="24" width="292" height="90" rx="6" fill="#fff" opacity=".07" />
-      {[0, 1, 2, 3].map((r) => [0, 1, 2, 3, 4, 5, 6].map((c) => (
-        <rect key={`${r}-${c}`} x={22 + c * 41} y={32 + r * 20} width="33" height="14" rx="3"
-              fill="#fff" opacity={(r === 1 && c === 2) || (r === 2 && c === 5) ? ".40" : ".13"} />
-      )))}
+      <rect x="78" y="30" width="222" height="82" rx="5" fill={UI.panel} />
+      {[0, 1, 2, 3, 4, 5, 6].map((c) => (
+        <Line key={c} x={90 + c * 29} y={38} w={9} h={3} c={UI.line} />
+      ))}
+      {[0, 1, 2].map((r) => [0, 1, 2, 3, 4, 5, 6].map((c) => {
+        const on = (r === 0 && c === 3) || (r === 1 && c === 5) || (r === 2 && c === 1);
+        return (
+          <rect key={`${r}-${c}`} x={88 + c * 29} y={48 + r * 20} width="23" height="15"
+                rx="3" fill={on ? accent : UI.row} opacity={on ? 0.92 : 1} />
+        );
+      }))}
     </g>
   ),
-  /** A line of milestones: incident timelines, onboarding paths, releases. */
-  timeline: (k) => (
+
+  /** Milestones on a line, with one open: incidents, releases, onboarding. */
+  timeline: (k, accent) => (
     <g key={k}>
-      <line x1="20" y1="70" x2="300" y2="70" stroke="#fff" strokeOpacity=".28" strokeWidth="2"
+      <rect x="78" y="30" width="222" height="82" rx="5" fill={UI.panel} />
+      <line x1="94" y1="71" x2="288" y2="71" stroke={UI.line} strokeWidth="2"
             strokeLinecap="round" />
-      {[0, 1, 2, 3].map((i) => (
-        <g key={i} transform={`translate(${34 + i * 76} 0)`}>
-          <circle cx="0" cy="70" r={i === 1 ? "8" : "5"} fill="#fff"
-                  opacity={i === 1 ? ".55" : ".30"} />
-          <rect x="-22" y={i % 2 ? 84 : 44} width="44" height="4" rx="2" fill="#fff" opacity=".22" />
-          <rect x="-22" y={i % 2 ? 92 : 52} width="30" height="3" rx="1.5" fill="#fff" opacity=".13" />
-        </g>
-      ))}
+      <line x1="94" y1="71" x2="196" y2="71" stroke={accent} strokeWidth="2"
+            strokeLinecap="round" />
+      {[0, 1, 2, 3].map((i) => {
+        const done = i <= 1;
+        return (
+          <g key={i} transform={`translate(${100 + i * 62} 0)`}>
+            <circle cx="0" cy="71" r={i === 1 ? 6 : 4.5}
+                    fill={done ? accent : UI.row}
+                    stroke={i === 1 ? "#0d1220" : "none"} strokeWidth="2" />
+            <Line x={-20} y={i % 2 ? 84 : 50} w={40} h={3.5}
+                  c={i === 1 ? UI.bright : UI.text} o={i === 1 ? 1 : 0.7} />
+            <Line x={-20} y={i % 2 ? 91 : 57} w={26} h={3} o={0.45} />
+          </g>
+        );
+      })}
     </g>
   ),
 };
 
-/** Which mockup suits an idea, from the glyph it already carries. */
 const MOCKUP_FOR: Record<string, keyof typeof MOCKUPS> = {
   inbox: "list", people: "list", book: "list", shield: "list",
   board: "board", tag: "board", route: "timeline", clock: "timeline",
@@ -198,7 +279,7 @@ const GLYPHS = {
 
 const IDEAS: Idea[] = [
   {
-    tag: "Ops", title: "Incident timeline builder", hue: 4, glyph: "clock",
+    tag: "Ops", title: "Incident timeline builder", glyph: "clock",
     brief: `Build an incident timeline builder.
 Who it is for: an on-call engineer writing the post-mortem the morning after.
 What it must do:
@@ -210,7 +291,7 @@ Done when: a real incident log produces a timeline with all four milestones and 
 Storage is one JSON file per incident, so it can live in the repo beside the code.`,
   },
   {
-    tag: "Money", title: "Subscription audit", hue: 152, glyph: "chart",
+    tag: "Money", title: "Subscription audit", glyph: "chart",
     brief: `Build a subscription audit tool.
 Who it is for: a founder who suspects they are paying for tools nobody opens.
 What it must do:
@@ -222,7 +303,7 @@ Done when: a statement with two spellings of one vendor groups into a single row
 Vendor matching is fuzzy but reviewable: any grouping can be split by hand.`,
   },
   {
-    tag: "Team", title: "Interview scorecard", hue: 268, glyph: "people",
+    tag: "Team", title: "Interview scorecard", glyph: "people",
     brief: `Build an interview scorecard app.
 Who it is for: a hiring manager tired of vague feedback.
 What it must do:
@@ -234,7 +315,7 @@ Done when: a second interviewer cannot see the first score before submitting, an
 Hiding the other scores until you commit is the anti-anchoring point of the tool.`,
   },
   {
-    tag: "Content", title: "Docs freshness board", hue: 196, glyph: "book",
+    tag: "Content", title: "Docs freshness board", glyph: "book",
     brief: `Build a documentation freshness board.
 Who it is for: whoever owns docs nobody trusts any more.
 What it must do:
@@ -246,7 +327,7 @@ Done when: a page whose referenced code changed ranks above one whose did not, a
 Likely-wrong is computed, not a status somebody has to remember to set.`,
   },
   {
-    tag: "Sales", title: "Lead triage inbox", hue: 28, glyph: "inbox",
+    tag: "Sales", title: "Lead triage inbox", glyph: "inbox",
     brief: `Build a lead triage inbox.
 Who it is for: a small team drowning in inbound that is mostly noise.
 What it must do:
@@ -258,7 +339,7 @@ Done when: every enquiry gets a score and a draft, and nothing leaves the queue 
 Nothing sends without a human pressing send.`,
   },
   {
-    tag: "Ops", title: "Change calendar", hue: 340, glyph: "map",
+    tag: "Ops", title: "Change calendar", glyph: "map",
     brief: `Build a change calendar.
 Who it is for: a team that keeps deploying into someone else's launch.
 What it must do:
@@ -270,7 +351,7 @@ Done when: two changes to the same system on one day raise a warning, and a free
 Nobody can book over a freeze without stating a reason, and the reason is kept.`,
   },
   {
-    tag: "Quality", title: "Bug triage board", hue: 12, glyph: "board",
+    tag: "Quality", title: "Bug triage board", glyph: "board",
     brief: `Build a bug triage board.
 Who it is for: whoever runs triage and keeps re-litigating the same tickets.
 What it must do:
@@ -282,7 +363,7 @@ Done when: near-duplicates appear grouped, no merge happens without confirmation
 Clustering proposes; it never merges two issues without somebody saying so.`,
   },
   {
-    tag: "Learning", title: "Onboarding path", hue: 120, glyph: "route",
+    tag: "Learning", title: "Onboarding path", glyph: "route",
     brief: `Build an onboarding path builder.
 Who it is for: the person who explains the same system to every new joiner.
 What it must do:
@@ -294,7 +375,7 @@ Done when: a checkpoint fails when its command fails, and the author can see whi
 A checkpoint is a command that runs, not a box somebody ticks.`,
   },
   {
-    tag: "Money", title: "Pricing experiment log", hue: 44, glyph: "tag",
+    tag: "Money", title: "Pricing experiment log", glyph: "tag",
     brief: `Build a pricing experiment log.
 Who it is for: a team changing prices and forgetting what they already tried.
 What it must do:
@@ -306,7 +387,7 @@ Done when: a repeat of a past experiment is flagged before it is saved, and each
 Every entry carries the date the price actually changed, not the date it was decided.`,
   },
   {
-    tag: "Ops", title: "Vendor status watch", hue: 210, glyph: "bell",
+    tag: "Ops", title: "Vendor status watch", glyph: "bell",
     brief: `Build a vendor status watcher.
 Who it is for: the engineer who finds out from a customer that a dependency is down.
 What it must do:
@@ -318,7 +399,7 @@ Done when: a vendor going down and recovering produces exactly two notifications
 History is stored locally, because a vendor's own status page is edited after the fact.`,
   },
   {
-    tag: "Team", title: "Decision log", hue: 288, glyph: "shield",
+    tag: "Team", title: "Decision log", glyph: "shield",
     brief: `Build a decision log.
 Who it is for: a team that keeps rediscovering why something is the way it is.
 What it must do:
@@ -330,7 +411,7 @@ Done when: a decision cannot be saved without a revisit condition, and search fi
 A decision with no revisit condition is refused at save: that field is the point.`,
   },
   {
-    tag: "Growth", title: "Changelog to email", hue: 172, glyph: "spark",
+    tag: "Growth", title: "Changelog to email", glyph: "spark",
     brief: `Build a changelog-to-email composer.
 Who it is for: whoever owes customers a what-is-new note and never sends it.
 What it must do:
@@ -342,7 +423,7 @@ Done when: the draft covers every PR since the last send, and no email leaves wi
 Nothing sends. It drafts and holds; a person presses send.`,
   },
   {
-    tag: "Quality", title: "Test coverage trend", hue: 96, glyph: "chart",
+    tag: "Quality", title: "Test coverage trend", glyph: "chart",
     brief: `Build a coverage trend board.
 Who it is for: a team whose coverage number moves and nobody knows why.
 What it must do:
@@ -354,7 +435,7 @@ Done when: a commit that drops coverage is named as the cause, and per-directory
 Attribution is per file per commit, so a drop points at a change rather than a sprint.`,
   },
   {
-    tag: "Ops", title: "Access expiry tracker", hue: 356, glyph: "shield",
+    tag: "Ops", title: "Access expiry tracker", glyph: "shield",
     brief: `Build an access expiry tracker.
 Who it is for: whoever grants temporary access that is still live a year later.
 What it must do:
@@ -366,7 +447,7 @@ Done when: a grant cannot be created without an expiry, and everything overdue i
 The overdue list is the home page: a tracker you have to go looking in is a list.`,
   },
   {
-    tag: "Content", title: "Style guide linter", hue: 232, glyph: "book",
+    tag: "Content", title: "Style guide linter", glyph: "book",
     brief: `Build a style guide linter for prose.
 Who it is for: a team whose docs sound like four different companies.
 What it must do:
@@ -378,7 +459,7 @@ Done when: each finding quotes its sentence and proposes a rewrite, and no file 
 Rules live in a file in the repo, so changing the house style is a pull request.`,
   },
   {
-    tag: "Team", title: "Rotation fairness board", hue: 64, glyph: "people",
+    tag: "Team", title: "Rotation fairness board", glyph: "people",
     brief: `Build a rotation fairness board.
 Who it is for: a team where the same two people always take the weekend.
 What it must do:
@@ -973,7 +1054,7 @@ export function AskBossHero({
                     key={i.title}
                     type="button"
                     className="askboss-idea"
-                    style={{ ["--idea-hue" as string]: String(i.hue) }}
+                    style={{ ["--idea-accent" as string]: accentFor(i.title) }}
                     onClick={() => draftIdea(i)}
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
@@ -987,20 +1068,39 @@ export function AskBossHero({
                         DRAWN, NOT FETCHED. This console is reachable only over the tailnet, so
                         a card built on a CDN is a broken image the day the CDN is unreachable.
                         SVG costs no request, cannot 404, and is the same every time. */}
-                    <span className="askboss-idea-cover" aria-hidden
-                          data-art={IDEAS.indexOf(i) % 5}
-                          style={{ ["--idea-hue" as string]: String(i.hue) }}>
+                    <span className="askboss-idea-cover" aria-hidden>
                       {/* The app, in miniature. Window chrome and a layout that matches what
                           the idea is — an inbox looks like rows, a board looks like columns —
                           so the card previews the thing rather than tinting a rectangle. */}
                       <svg className="askboss-idea-shot" viewBox="0 0 320 128"
                            preserveAspectRatio="xMidYMid slice">
-                        <rect x="14" y="10" width="292" height="106" rx="8"
-                              fill="#fff" fillOpacity=".06" />
-                        <circle cx="26" cy="19" r="2.5" fill="#fff" fillOpacity=".30" />
-                        <circle cx="35" cy="19" r="2.5" fill="#fff" fillOpacity=".20" />
-                        <circle cx="44" cy="19" r="2.5" fill="#fff" fillOpacity=".14" />
-                        {MOCKUPS[MOCKUP_FOR[i.glyph] ?? "list"](i.title)}
+                        {/* THE WINDOW. Opaque panels with real edges — the previous version
+                            drew white at 6% over a saturated gradient, which has no edges and
+                            is why it read as weather rather than as a screen. */}
+                        <rect x="0" y="0" width="320" height="128" fill={UI.chrome} />
+                        {/* A sidebar, because every app of this kind has one, and it is what
+                            makes 320x128 read as a WINDOW rather than as a texture. */}
+                        <rect x="0" y="0" width="66" height="128" fill="#111726" />
+                        <circle cx="16" cy="16" r="4" fill={accentFor(i.title)} />
+                        <Line x={25} y={14} w={26} h={4} c={UI.bright} o={0.9} />
+                        {[0, 1, 2, 3, 4].map((n) => (
+                          <g key={n}>
+                            <rect x="10" y={34 + n * 16} width="46" height="11" rx="3"
+                                  fill={n === 1 ? UI.row : "transparent"} />
+                            <rect x="14" y={38 + n * 16} width="4" height="4" rx="1"
+                                  fill={n === 1 ? accentFor(i.title) : UI.line} />
+                            <Line x={22} y={38.5 + n * 16} w={28 - (n % 3) * 5} h={3}
+                                  c={n === 1 ? UI.bright : UI.text} o={n === 1 ? 1 : 0.7} />
+                          </g>
+                        ))}
+                        {/* The content pane's header: a title and one primary button. The
+                            accent appears here and on exactly one thing below — sparingly, the
+                            way a real interface uses colour. */}
+                        <Line x={78} y={13} w={64} h={5} c={UI.bright} o={0.95} />
+                        <rect x="258" y="10" width="42" height="12" rx="6"
+                              fill={accentFor(i.title)} opacity=".92" />
+                        <Line x={266} y={15} w={26} h={3} c="#0d1220" o={0.55} />
+                        {MOCKUPS[MOCKUP_FOR[i.glyph] ?? "list"](i.title, accentFor(i.title))}
                       </svg>
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
