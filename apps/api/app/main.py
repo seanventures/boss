@@ -20619,6 +20619,66 @@ def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
             })
             created = True
 
+        # BIND IT TO THE HOST. THIS IS THE WHOLE POINT OF CHOOSING ONE.
+        #
+        # Neither branch did. The insert set `target_ref` and `domains` and left `host_id`
+        # NULL, and the "idempotent" reuse branch returned an existing row completely
+        # untouched. Three consequences, all of which an operator reported:
+        #
+        #   * EVERY DEPLOY WAS BLOCKED. `secret_ref_for` resolves a target's ssh_key through
+        #     `host_id` — that is the fleet's "one key per host" promise — so with it NULL the
+        #     preflight said "no ssh_key bound to this target and no global ssh key
+        #     configured" while the host sat VERIFIED two panels away.
+        #   * The host card said "0 apps · Nothing points here yet" forever, because what
+        #     points at a host IS host_id.
+        #   * Choosing a host in the release gate appeared to do NOTHING, because for an app
+        #     whose target already existed — the normal case, since the target is created
+        #     when the app is registered — the reuse branch wrote nothing at all.
+        #
+        # Idempotent still means "pressing twice is not an error". It does not mean "the
+        # second press does nothing": re-binding is exactly how an operator MOVES an app to a
+        # different host, and refusing that silently is worse than refusing it loudly.
+        #
+        # `target_ref` and `domains` are re-derived from the host too, so a rebound target
+        # cannot keep pointing its address at the machine it used to live on.
+        rebind = {"i": target_id, "h": host_id,
+                  "ref": f"{host['ssh_user'] or 'root'}@{host['address']}:"
+                         f"{host['ssh_port'] or 22}"}
+        connection.execute(text(
+            "UPDATE deployment_targets SET host_id=:h, target_ref=:ref, updated_at=now() "
+            "WHERE id=:i"), rebind)
+        # A port on THIS host. Kept if it already names this address, re-issued if the target
+        # is moving, so two apps on one host cannot be handed the same port.
+        current = connection.execute(
+            text("SELECT domains FROM deployment_targets WHERE id=:i"), {"i": target_id},
+        ).scalar()
+        addr = str(host["address"] or "")
+        has_here = any(str(d).startswith(f"{addr}:") for d in (current or []))
+        if not has_here:
+            taken = set()
+            for row in connection.execute(
+                text("SELECT id, domains FROM deployment_targets "
+                     "WHERE project_id=:p AND host_id=:h"),
+                {"p": project_id, "h": host_id},
+            ).mappings():
+                if row["id"] == target_id:
+                    continue
+                for domain in (row["domains"] or []):
+                    _, _, taken_port = str(domain).rpartition(":")
+                    if taken_port.isdigit():
+                        taken.add(int(taken_port))
+            low = int(host["port_min"] or 3000)
+            high = int(host["port_max"] or (low + 200))
+            free = next((n for n in range(low, high + 1) if n not in taken), None)
+            if free is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"host '{host['name']}' has no free port between {low} and {high}.")
+            connection.execute(
+                text("UPDATE deployment_targets SET domains=CAST(:d AS JSONB), updated_at=now() "
+                     "WHERE id=:i"),
+                {"d": json.dumps([f"{addr}:{free}"]), "i": target_id})
+
         # AND POINT THE RUN AT IT. `deploy` reads target_id and environment as optional inputs,
         # filled from the run's own input — so this is the same mechanism, not a new one.
         connection.execute(
@@ -20628,11 +20688,11 @@ def prepare_delivery_deploy_target(run_id: str, payload: dict) -> dict:
              "r": run_id, "p": project_id},
         )
         target = connection.execute(
-            text("SELECT id, app_name, environment, target_ref, domains FROM deployment_targets "
-                 "WHERE id=:i"), {"i": target_id},
+            text("SELECT id, app_name, environment, target_ref, domains, host_id "
+                 "FROM deployment_targets WHERE id=:i"), {"i": target_id},
         ).mappings().first()
     return {"run_id": run_id, "created": created, "host": host["name"],
-            "target": dict(target)}
+            "bound_to_host": host_id, "target": dict(target)}
 
 
 @app.post("/v1/delivery-workflows/runs/{run_id}/input")

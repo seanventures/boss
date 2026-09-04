@@ -809,6 +809,20 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
 _CANONICAL_FIELD: dict[str, str] = {kind: fields[0] for kind, fields in _AWAIT_KINDS.values()}
 
 
+#: Statuses that mean THE WORK DID NOT HAPPEN, however politely the capability says so.
+#:
+#: The runner failed a step only on "failed". `deploy` returns {"status": "blocked",
+#: "problems": [...]} when its preflight refuses — and blocked fell through to SUCCEEDED. A
+#: workflow therefore showed Deploy ✓ succeeded 0s, and marched on to monitoring, for a
+#: deployment that never ran: the Infra panel two clicks away showed the same release BLOCKED,
+#: and the app's URL answered nothing. Asked which screen was right, the honest answer was
+#: neither — Infra was right about the deployment and the workflow was lying about it.
+#:
+#: A step that reports it did not do the thing must not be recorded as having done it. What
+#: happens next is a policy question; claiming success is not an answer to it.
+_DID_NOT_SHIP = frozenset({"failed", "blocked", "refused", "error"})
+
+
 def _awaited_handle(key: str, output: dict[str, Any]) -> Optional[dict[str, Any]]:
     """The work this step started, or None when there is nothing to wait for.
 
@@ -1477,7 +1491,7 @@ def tick(
                     actor=run.get("actor") or "workflow",
                     step=spec_step, context=_run_context(connection, run_id),
                 )
-                if output.get("status") == "failed":
+                if str(output.get("status") or "") in _DID_NOT_SHIP:
                     # A FAILURE THAT IS RETURNED IS STILL A FAILURE.
                     #
                     # The runner failed a step only when execute_step RAISED. A capability that
@@ -1490,7 +1504,20 @@ def tick(
                     # work as deployed, and Infra showed nothing — because nothing had been
                     # deployed and nothing said so. That is the exact failure mode the gate was
                     # written to prevent, reintroduced one layer up.
-                    reason = str(output.get("error") or output.get("note")
+                    # `problems` is where the deploy connector puts the ACTUAL cause, and it
+                    # was going nowhere: the step rendered the dict's shape — literally
+                    # "{status, problems}" — as its detail, so the one sentence that explains
+                    # the failure ("no ssh_key bound to this target and no global ssh key
+                    # configured") never reached the person who had to act on it.
+                    problems = output.get("problems")
+                    if isinstance(problems, (list, tuple)) and problems:
+                        detail = "; ".join(
+                            str(p.get("detail") or p.get("message") or p.get("reason") or p)
+                            if isinstance(p, dict) else str(p)
+                            for p in problems)
+                    else:
+                        detail = ""
+                    reason = str(output.get("error") or detail or output.get("note")
                                  or "the capability reported failure without a reason")
                     workflows.fail_step(
                         connection, project_id=project_id, step_run_id=claimed["id"],

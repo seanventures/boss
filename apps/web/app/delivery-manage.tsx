@@ -31,7 +31,7 @@ import {
 } from "./actions";
 import {
   adoptHostKeyAction, generateHostKeyAction, installHostKeyAction,
-  attachTargetToHostAction, listDeploymentHostsAction, provisionHostAction,
+  listDeploymentHostsAction, provisionHostAction,
   registerDeploymentHostAction,
   retireHostAction,
   verifyDeploymentHostAction,
@@ -1444,44 +1444,22 @@ export function FleetPanel({ projectId, targets = [] }: {
                     )}
                   </div>
 
-                  {/* THE LINK. A verified host with no app is a machine nobody deploys to, and
-                      the question "which app runs here?" arrives the moment onboarding ends —
-                      so it is answered here rather than on another screen. */}
-                  {(() => {
-                    const free = targets.filter((t) => !t.host_id);
-                    if (!free.length) {
-                      return (
-                        <span className="detail">
-                          {targets.length
-                            ? "Every app is already pointed at a host."
-                            : "No apps registered yet — add one below to deploy here."}
-                        </span>
-                      );
-                    }
-                    return (
-                      <form style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const fd = new FormData(e.currentTarget as HTMLFormElement);
-                          fd.set("host_id", h.id);
-                          void run(() => attachTargetToHostAction(null, fd));
-                        }}>
-                        <label className="detail" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                          Deploy here:
-                          <select name="target_id" aria-label="App to deploy to this host">
-                            {free.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.app_name} ({t.environment})
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <button className="cap-btn" type="submit" disabled={busy}>
-                          Set as target
-                        </button>
-                      </form>
-                    );
-                  })()}
+                  {/* WHICH APPS RUN HERE — and nothing about CHOOSING them.
+                      This panel had an "Deploy here: [app] [Set as target]" form, and an
+                      operator asked the obvious question: this section registers HOSTS, why is
+                      it binding apps? They were right, and it was here for a bad reason — the
+                      release gate's host picker did not actually bind (it created the target
+                      and left host_id NULL), so this was the only control that worked. With
+                      the gate fixed, binding belongs where the operator is deciding to ship:
+                      on the deploy step, and on the app's own card. Two controls for one
+                      relationship, in two places, is how a host ends up disagreeing with the
+                      app about where it lives. */}
+                  {h.app_count ? null : (
+                    <span className="detail">
+                      Apps are pointed at a host when you deploy them — choose this host on the
+                      deploy step, or on the app under “Apps and where they deploy”.
+                    </span>
+                  )}
 
                   <div>
                     <ActionButton busy={busy} label="Re-verify" busyLabel="Connecting…"
