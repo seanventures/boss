@@ -2483,6 +2483,10 @@ class ResourcePlaneService:
             # running re-acquires under its own dedupe key, and one that died lets go on its
             # own instead of needing a human with database access.
             expires_at=now_utc() + timedelta(seconds=_SURFACE_LEASE_SECONDS),
+            # And reclaim one abandoned BEFORE leases existed. Those rows have expires_at
+            # NULL, so they are active forever and no API can release them — without this the
+            # fix above would only protect targets that had not already been wedged.
+            stale_after=timedelta(seconds=_SURFACE_LEASE_SECONDS),
         )
         if not ownership_result["allowed"]:
             return self._record_blocked_deployment_run(

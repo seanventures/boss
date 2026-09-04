@@ -36,3 +36,31 @@ class TestTheClaimIsALease:
     def test_the_lease_is_not_effectively_forever(self):
         """The whole point is that a dead deployer lets go without a human intervening."""
         assert resource_plane._SURFACE_LEASE_SECONDS <= 6 * 3600
+
+
+class TestAnAbandonedClaimCanBeReclaimed:
+    """The lease alone would only protect targets that were not ALREADY wedged.
+
+    Claims written before leases existed have expires_at NULL, which acquire_surface reads as
+    active forever — and there is no relinquish path anywhere in the service or the API. So a
+    target wedged yesterday would stay wedged after the fix, which is not a fix.
+    """
+
+    def test_the_deployment_claim_declares_when_a_claim_is_stale(self):
+        source = inspect.getsource(resource_plane)
+        acquire = source[source.index("surface_key = f\"deployment_target:"):]
+        acquire = acquire[:acquire.index("if not ownership_result")]
+        assert "stale_after=" in acquire
+
+    def test_acquire_surface_understands_staleness(self):
+        from boss_engine.services import assurance
+
+        sig = inspect.signature(assurance.AssuranceService.acquire_surface)
+        assert "stale_after" in sig.parameters
+
+    def test_a_caller_that_passes_nothing_keeps_the_old_behaviour(self):
+        """Long-lived surfaces must not start expiring because deployments needed a lease."""
+        from boss_engine.services import assurance
+
+        sig = inspect.signature(assurance.AssuranceService.acquire_surface)
+        assert sig.parameters["stale_after"].default is None

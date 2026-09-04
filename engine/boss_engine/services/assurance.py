@@ -1946,7 +1946,16 @@ class AssuranceService:
         dedupe_key: str,
         actor: str,
         expires_at: Optional[datetime] = None,
+        stale_after: Optional[timedelta] = None,
     ) -> dict[str, Any]:
+    # `stale_after` LETS A CALLER RECLAIM A SURFACE ITS OWNER ABANDONED.
+    #
+    # A claim written before leases existed has expires_at NULL and is therefore active
+    # forever. There is no relinquish path in this service or in the API — none — so a
+    # deployment that died holding a surface blocked that target permanently, and the only
+    # remedy was editing the database. Callers whose work is bounded (a deploy is minutes)
+    # pass the age past which a claim cannot still be live. Long-lived surfaces pass nothing
+    # and are unaffected.
         surface_key = _required_text(surface_key, "surface_key")
         environment = _required_text(environment, "environment")
         existing_transition = (
@@ -1985,10 +1994,19 @@ class AssuranceService:
             .mappings()
             .first()
         )
+        acquired_at = current["acquired_at"] if current else None
+        over_age = bool(
+            stale_after is not None
+            and current is not None
+            and current["expires_at"] is None
+            and acquired_at is not None
+            and acquired_at < now_utc() - stale_after
+        )
         if (
             current
             and current["status"] == "active"
             and (current["expires_at"] is None or current["expires_at"] > now_utc())
+            and not over_age
         ):
             if current["owner_ref"] != owner_ref:
                 decision_id = create_blocking_decision(
