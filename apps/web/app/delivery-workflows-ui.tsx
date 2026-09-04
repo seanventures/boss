@@ -1288,6 +1288,22 @@ function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTar
 }
 
 /** Everything known about one step, in the order an operator asks for it. */
+/** Is this the deploy step?
+ *
+ *  `step.capability` IS NULL on the wire — the runs endpoint does not populate it — so
+ *  `step.capability === "deploy"` was false every time, and the target picker never rendered
+ *  in ANY of the three versions shipped. Three fixes to a control whose only real problem was
+ *  that its condition could not be true.
+ *
+ *  step_id is what the runtime actually carries; the capability prop resolved from the
+ *  catalogue is the fallback for a workflow whose author renamed the step.
+ */
+function isDeployStep(step: RunStep, capability?: Capability): boolean {
+  return step.step_id === "deploy" || step.capability === "deploy"
+    || capability?.key === "deploy";
+}
+
+
 function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
                      onPrepareTarget, onRunPreview, buildRunId, previewStarting, busy }: {
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
@@ -1375,7 +1391,7 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           Binding an app to a host is not a thing you do only while a step is pending: after a
           failed or wrongly-"succeeded" deploy you need to set the target and run it again,
           which is exactly the moment the old condition removed it. */}
-      {step.capability === "deploy" ? (
+      {isDeployStep(step, capability) ? (
         <div className="dw-step-target" data-testid="dw-step-target">
           <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
                        onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
