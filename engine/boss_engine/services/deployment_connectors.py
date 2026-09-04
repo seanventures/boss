@@ -724,7 +724,10 @@ class SSHContainerConnector:
             target = self._ensure_port(engine, settings, target, _c)
 
         source = self._source_for(target, settings, run_id, ref)
+        # The target's own declaration, passed ALWAYS — not only when there is no run. See
+        # deploy_ssh: reading it from `source` alone meant the ordinary case ignored it.
         result = deploy_ssh(engine, settings, run_id, host=host, user=user, ssh_port=port,
+                            app_entry=_app_entry(target),
                             app_port=_app_port(target), name=target.get("app_name"), ref=ref,
                             key_material=key_material, source=source)
         result["connector"] = self.kind

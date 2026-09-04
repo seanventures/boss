@@ -674,7 +674,8 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
 def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str = "root",
                ssh_port: int = 22, app_port: int = 8080, name: Optional[str] = None,
                ref: Optional[str] = None, key_material: Optional[str] = None,
-               source: Optional[dict] = None) -> dict:
+               source: Optional[dict] = None,
+               app_entry: Optional[str] = None) -> dict:
     """Actuate the deploy plan on a real host: build dist -> transfer -> nginx -> health-gate.
     On transfer/docker/health failure after staging, ROLL BACK to the previous build (Phase 3).
     Gated behind the outward-action flag + an SSH key; NEVER touches a host otherwise."""
@@ -730,11 +731,25 @@ def deploy_ssh(engine, settings: Settings, run_id: str, *, host: str, user: str 
         #
         # Both forms are supplied: the literal entry (matches the .py rule) and an index.html
         # under it (matches the static-directory rule). Whichever is real, one matches.
-        entry_hint = (source or {}).get("app_entry")
+        # AN OPERATOR WHO NAMES THE APP OUTRANKS ANYTHING WE INFER.
+        #
+        # `app_entry` was read from `source`, and `source` is only built when there is NO code
+        # task run — so for the ordinary case, a run deploying its own build, a target that had
+        # explicitly declared its app was ignored and the deploy failed with "cannot tell which
+        # app to deploy" anyway. The operator answered the question and was not listened to.
+        #
+        # It also has to win over the lineage, not merely fill in for it. The lineage can be
+        # incomplete in ways nobody can fix after the fact: this repo's HookWatch run recorded
+        # its files under a root_run_id whose row no longer exists, so the file signal resolved
+        # to nothing while eight unrelated sample apps sat in the same repository.
+        entry_hint = app_entry or (source or {}).get("app_entry")
         changed = lineage_impl_files(engine, run) if run is not None else None
-        if run is None and entry_hint:
-            e = str(entry_hint).strip().rstrip("/")
-            changed = [e, f"{e}/index.html"]
+        if entry_hint:
+            e = str(entry_hint).strip().rstrip("/") or "."
+            # Both forms, as before: the literal entry matches the .py rule, the index.html
+            # under it matches the static-directory rule. "." means the repository root.
+            hint = [e, f"{e}/index.html" if e != "." else "index.html"]
+            changed = hint + [c for c in (changed or []) if c not in hint]
         work, mode, entry, sha = _build_dist(settings, owner, repo, branch,     # 1 build
                                              changed=changed, ref=ref)
         # The SHA that was actually checked out, captured inside _build_dist while the clone
