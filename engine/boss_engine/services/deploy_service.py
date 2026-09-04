@@ -631,7 +631,11 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
         # The tree is right here, so the question is answerable: if the files this app is
         # known by are absent from the checkout, that is the fault, and no amount of declaring
         # `app_entry` will help.
-        wanted = [c for c in (changed or []) if c and not c.startswith("-")]
+        # "." IS NOT EVIDENCE. The repository root always exists, so including it made the
+        # probe pass for every root-level app and print the misleading message anyway —
+        # verified against the live failure, which is the only reason this was caught.
+        wanted = [c for c in (changed or [])
+                  if c and c not in (".", "./") and not c.startswith("-")]
         present = [c for c in wanted if (work / c).exists()]
         where = ref or branch or "the default branch"
         if wanted and not present:

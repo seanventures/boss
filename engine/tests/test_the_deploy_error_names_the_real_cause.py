@@ -64,3 +64,20 @@ class TestTheMessageDistinguishesTheTwoFailures:
         than deploying nothing."""
         body = self._source()
         assert body.count("raise RuntimeError(") == 2
+
+
+class TestTheProbeCannotPassTrivially:
+    """A check that always passes is worse than no check: it prints the wrong message with
+    added confidence.
+
+    The first version tested every hinted path for existence, including "." — the repository
+    root, which exists in every checkout. So for an app declared at the root (the case that
+    prompted all of this) the probe passed, the code concluded the app WAS present, and the
+    misleading "cannot tell which app this task built" printed exactly as before. Caught only
+    by running the real deploy again and reading the message.
+    """
+
+    def test_the_repository_root_is_not_treated_as_evidence(self):
+        src = inspect.getsource(deploy_service)
+        body = src[src.index("except AmbiguousAppError"):][:2600]
+        assert 'c not in (".", "./")' in body
