@@ -361,7 +361,19 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [hosts, setHosts] = useState<DeployHost[]>([]);
   useEffect(() => {
     let alive = true;
-    (async () => {
+    // TWO INDEPENDENT LOADS, AND THEY MUST STAY INDEPENDENT.
+    //
+    // These were two try/catch blocks in ONE async function, each ending `if (!res.ok) return;`
+    // — and `return` does not skip the rest of a block, it leaves the whole function. So when
+    // /api/deployment-targets answered 503, the hosts fetch NEVER RAN. `hosts` stayed empty,
+    // and the deploy step told the operator "this project has no verified host. Add one under
+    // Infra and Models" while Infra showed hetzner-ci-01 VERIFIED and READY TO DEPLOY. They
+    // reported it perhaps ten times; every fix went to the message, the picker and the wire
+    // format, and the request that would have populated it was never being made.
+    //
+    // Separate functions, started separately: one endpoint being down cannot silence the
+    // other. The catch blocks always intended this; the early `return` quietly undid it.
+    const loadTargets = async () => {
       try {
         const res = await fetch(
           `/api/deployment-targets?project_id=${encodeURIComponent(projectId)}`,
@@ -371,6 +383,8 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         if (alive) setTargets((body.items ?? []).filter(
           (t: DeployTarget) => (t.status ?? "active") === "active"));
       } catch { /* the gate still works; it just cannot offer a target */ }
+    };
+    const loadHosts = async () => {
       try {
         const res = await fetch(
           `/api/deployment-hosts?project_id=${encodeURIComponent(projectId)}`,
@@ -379,7 +393,9 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         const body = await res.json();
         if (alive) setHosts(verifiedHostsFrom(body));
       } catch { /* no hosts offered; the operator can still deny */ }
-    })();
+    };
+    void loadTargets();
+    void loadHosts();
     return () => { alive = false; };
   }, [projectId]);
   // Loading, failed and empty are three different things. A screen that renders nothing while
