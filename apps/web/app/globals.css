@@ -8110,6 +8110,15 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   position: relative;
   display: block;
   height: 128px;
+  /* WIDTH, EXPLICITLY. The card is a flex COLUMN and this is a flex item whose only child is
+     absolutely positioned — so it has no content to size from and collapsed to ZERO width.
+     128px tall by 0px wide paints nothing, which is why the first two attempts shipped as an
+     empty band above the text and looked worse than the icon they replaced.
+     calc(100% + 28px) covers the content box plus the two 14px negative margins, and does not
+     depend on the parent's align-items. */
+  width: calc(100% + 28px);
+  align-self: stretch;
+  flex: 0 0 auto;
   margin: -14px -14px 12px;
   border-radius: 12px 12px 0 0;
   overflow: hidden;
