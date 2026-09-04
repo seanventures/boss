@@ -884,10 +884,13 @@ export function AskBossHero({
                         sixteen broken images. Gradients cost nothing, cannot 404, and stay
                         deterministic: the same idea always looks the same. */}
                     <span className="askboss-idea-cover" aria-hidden
-                          style={{
-                            ["--idea-hue" as string]: String(i.hue),
-                            ["--idea-art" as string]: String(IDEAS.indexOf(i) % 5),
-                          }}>
+                          // data-art, NOT a custom property matched with [style*=].
+                          // React sets custom properties through the CSSOM, so the serialised
+                          // attribute reads "--idea-art: 0" WITH A SPACE — every
+                          // [style*="--idea-art:0"] rule matched nothing and the cards shipped
+                          // with the base wash and no texture at all.
+                          data-art={IDEAS.indexOf(i) % 5}
+                          style={{ ["--idea-hue" as string]: String(i.hue) }}>
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">

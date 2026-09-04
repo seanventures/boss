@@ -8094,86 +8094,79 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    Starter-idea cover art.
 
    A 40px glyph over three lines of text left most of each card empty, so sixteen
-   of them read as a list pretending to be a gallery. This fills the space with
-   something deliberate.
+   of them read as a list pretending to be a gallery.
 
    DRAWN, NOT FETCHED. Stock imagery would put a third-party CDN in the path of a
-   console that is reachable only over the tailnet — the day it is unreachable is
-   the day the gallery becomes sixteen broken images. These are gradients: they
-   cannot 404, they cost no request, and the same idea always looks the same.
+   console reachable only over the tailnet — the day it is unreachable is the day
+   the gallery becomes sixteen broken images. Gradients cannot 404, cost no
+   request, and the same idea always looks the same.
 
-   Five compositions, picked by --idea-art from the card's index, so neighbouring
-   cards never share a shape. Hue comes from the idea itself, so the art and the
-   tag chip already agree.
+   Keyed off data-art, NOT [style*="--idea-art:N"]: React writes custom properties
+   through the CSSOM, so the serialised attribute carries a SPACE ("--idea-art: 0")
+   and every one of those selectors silently matched nothing. The first version of
+   this shipped as a flat tint for exactly that reason.
    --------------------------------------------------------------------------- */
 .askboss-idea-cover {
   position: relative;
   display: block;
-  height: 132px;
-  margin: -14px -14px 12px;          /* bleed to the card's edges */
+  height: 128px;
+  margin: -14px -14px 12px;
   border-radius: 12px 12px 0 0;
   overflow: hidden;
   background:
-    radial-gradient(120% 90% at 18% 8%,
-      hsl(var(--idea-hue) 78% 62% / .55), transparent 60%),
-    radial-gradient(90% 70% at 92% 12%,
-      hsl(calc(var(--idea-hue) + 46) 82% 58% / .38), transparent 62%),
-    linear-gradient(155deg,
-      hsl(var(--idea-hue) 46% 22% / .95), hsl(var(--idea-hue) 38% 12% / .95));
+    radial-gradient(120% 95% at 15% 0%,
+      hsl(var(--idea-hue) 85% 60% / .85), transparent 62%),
+    radial-gradient(95% 80% at 95% 10%,
+      hsl(calc(var(--idea-hue) + 52) 88% 58% / .65), transparent 66%),
+    linear-gradient(160deg,
+      hsl(var(--idea-hue) 60% 26%), hsl(calc(var(--idea-hue) + 24) 55% 14%));
 }
 
-/* The pattern layer. Each composition is a different geometry, so a row of cards
-   reads as a set rather than one image recoloured five times. */
+/* The texture. Five geometries so a row reads as a set, not one image recoloured. */
 .askboss-idea-cover::before {
-  content: ""; position: absolute; inset: 0; opacity: .5;
+  content: ""; position: absolute; inset: 0; opacity: .55;
 }
-.askboss-idea-cover[style*="--idea-art:0"]::before {
-  background-image: radial-gradient(hsl(0 0% 100% / .16) 1px, transparent 1.4px);
-  background-size: 13px 13px;
+.askboss-idea-cover[data-art="0"]::before {
+  background-image: radial-gradient(hsl(0 0% 100% / .22) 1px, transparent 1.5px);
+  background-size: 12px 12px;
 }
-.askboss-idea-cover[style*="--idea-art:1"]::before {
+.askboss-idea-cover[data-art="1"]::before {
   background-image: repeating-linear-gradient(58deg,
-    hsl(0 0% 100% / .10) 0 1.5px, transparent 1.5px 13px);
+    hsl(0 0% 100% / .16) 0 1.5px, transparent 1.5px 12px);
 }
-.askboss-idea-cover[style*="--idea-art:2"]::before {
+.askboss-idea-cover[data-art="2"]::before {
   background-image:
-    radial-gradient(60% 60% at 78% 78%, hsl(0 0% 100% / .16), transparent 70%),
-    repeating-radial-gradient(circle at 78% 78%,
-      hsl(0 0% 100% / .10) 0 1.5px, transparent 1.5px 17px);
+    repeating-radial-gradient(circle at 80% 82%,
+      hsl(0 0% 100% / .16) 0 1.5px, transparent 1.5px 15px);
 }
-.askboss-idea-cover[style*="--idea-art:3"]::before {
+.askboss-idea-cover[data-art="3"]::before {
   background-image: repeating-linear-gradient(
-    to right, hsl(0 0% 100% / .11) 0 2px, transparent 2px 22px);
-  mask-image: linear-gradient(to top, #000, transparent 85%);
+    to right, hsl(0 0% 100% / .16) 0 2px, transparent 2px 20px);
+  mask-image: linear-gradient(to top, #000, transparent 90%);
 }
-.askboss-idea-cover[style*="--idea-art:4"]::before {
+.askboss-idea-cover[data-art="4"]::before {
   background-image:
-    conic-gradient(from 210deg at 30% 110%,
-      hsl(0 0% 100% / .16), transparent 42%, hsl(0 0% 100% / .10) 70%, transparent);
+    conic-gradient(from 200deg at 28% 115%,
+      hsl(0 0% 100% / .26), transparent 40%, hsl(0 0% 100% / .16) 68%, transparent);
 }
 
-/* A wash at the bottom so the title never fights the art for contrast. */
+/* Just enough wash to seat the text below it. The first version faded the whole
+   image into the panel colour by 46% and left a flat rectangle. */
 .askboss-idea-cover::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(to top,
-    var(--panel, #0d1117) 2%, hsl(var(--idea-hue) 40% 10% / .18) 46%, transparent 72%);
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 42%;
+  background: linear-gradient(to top, var(--panel, #0d1117), transparent);
 }
 
-/* The glyph stays — as a mark ON the art, not a substitute for it. */
+/* The glyph, as a mark ON the art. No backdrop-filter: it is the most likely
+   reason the mark did not paint at all in the first version. */
 .askboss-idea-mark {
-  position: absolute; left: 14px; bottom: 12px; z-index: 1;
+  position: absolute; left: 14px; bottom: 10px; z-index: 2;
   display: inline-flex; align-items: center; justify-content: center;
   width: 34px; height: 34px; border-radius: 10px;
-  color: hsl(var(--idea-hue) 92% 88%);
-  background: hsl(var(--idea-hue) 60% 14% / .55);
-  border: 1px solid hsl(var(--idea-hue) 70% 62% / .45);
-  backdrop-filter: blur(3px);
+  color: hsl(var(--idea-hue) 95% 92%);
+  background: hsl(var(--idea-hue) 55% 12% / .78);
+  border: 1px solid hsl(var(--idea-hue) 80% 70% / .55);
 }
 .askboss-idea-mark svg { width: 18px; height: 18px; }
-.askboss-idea:hover .askboss-idea-cover::before { opacity: .68; }
-.askboss-idea:hover .askboss-idea-mark { border-color: hsl(var(--idea-hue) 80% 70% / .8); }
-
-/* Motion is a nicety, never a requirement. */
-@media (prefers-reduced-motion: reduce) {
-  .askboss-idea-cover::before, .askboss-idea-mark { transition: none; }
-}
+.askboss-idea:hover .askboss-idea-cover::before { opacity: .75; }
+.askboss-idea:hover .askboss-idea-mark { border-color: hsl(var(--idea-hue) 90% 78% / .9); }
