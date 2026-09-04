@@ -620,8 +620,30 @@ def _build_dist(settings: Settings, owner: str, repo: str, branch: str,
     except AmbiguousAppError as exc:
         # Fail closed, exactly as the preview does. Deploying the wrong app to a real host is
         # worse than deploying nothing, and worse here than in preview: it is publicly served.
+        #
+        # BUT SAY WHICH FAILURE THIS IS. "cannot tell which app this task built" describes one
+        # cause — several apps, no signal — and was printed for a completely different one:
+        # the app IS NOT IN THE TREE BEING DEPLOYED. HookWatch lives on its open PR branch,
+        # the deploy checked out `main`, and the "candidates" were eight unrelated sample apps
+        # that happen to exist on main. Four separate investigations went into binding, keys,
+        # surface ownership and app_entry before anybody read `commit_ref` and saw `main`.
+        #
+        # The tree is right here, so the question is answerable: if the files this app is
+        # known by are absent from the checkout, that is the fault, and no amount of declaring
+        # `app_entry` will help.
+        wanted = [c for c in (changed or []) if c and not c.startswith("-")]
+        present = [c for c in wanted if (work / c).exists()]
+        where = ref or branch or "the default branch"
+        if wanted and not present:
+            raise RuntimeError(
+                f"this app is not in {where}. None of the files it is known by "
+                f"({', '.join(wanted[:4])}{'…' if len(wanted) > 4 else ''}) exist in that "
+                f"checkout, so there is nothing here to deploy — what the resolver found "
+                f"instead belongs to other apps in the repository ({exc}). "
+                f"Deploy the branch the app was built on, or merge it into {where} first."
+            ) from exc
         raise RuntimeError(
-            f"cannot tell which app to deploy — candidates: {exc}. "
+            f"cannot tell which app to deploy from {where} — candidates: {exc}. "
             "Have the task build a single app, or set boss.preview.command.") from exc
 
     if kind == "py":
