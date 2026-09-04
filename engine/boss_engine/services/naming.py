@@ -143,6 +143,22 @@ def project_name(text: str) -> tuple[str, str, str]:
     return name[:42] or "Untitled app", blurb[:70], label
 
 
+def identity_key(name: str) -> str:
+    """What makes two names THE SAME APP, for identity and for duplicate refusal.
+
+    `casefold()` alone treated punctuation as meaning. The console showed "Incident Timeline
+    Builder." and "Incident-Timeline Builder" as two projects with two PRs and two bills,
+    because a trailing full stop and a hyphen produced different hashes — and the duplicate
+    guard, which compares the same way, did not refuse the second build either. One product,
+    built twice, displayed twice.
+
+    So punctuation and spacing are collapsed: letters and digits in order, single-spaced. The
+    DISPLAY name keeps whatever it had; only identity is normalised.
+    """
+    folded = re.sub(r"[^0-9a-z]+", " ", (name or "").casefold())
+    return " ".join(folded.split())
+
+
 def stable_app_id(project_id: str, repo: str, title: str) -> str:
     """The identity of the APP, decided when the run is created rather than inferred later.
 
@@ -170,9 +186,13 @@ def stable_app_id(project_id: str, repo: str, title: str) -> str:
     name, _blurb, _label = project_name(title or "")
     if not name or name == "Untitled app":
         return ""
+    key = identity_key(name)
+    if not key:
+        return ""
     material = "\u241f".join([
         str(project_id or "").strip(),
         str(repo or "").strip().casefold(),
-        name.casefold(),
+        # NOT name.casefold(): punctuation is not identity. See identity_key.
+        key,
     ])
     return "app_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:20]

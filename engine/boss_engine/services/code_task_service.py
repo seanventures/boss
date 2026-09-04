@@ -299,9 +299,16 @@ def active_same_app(connection, project_id: str, repo: str, title: str) -> Optio
     else:
         rows = _in_flight_via_port(project_id, repo=repo)
 
+    # SAME RULE AS IDENTITY. Comparing with casefold() alone treated punctuation as meaning,
+    # so "Incident Timeline Builder." and "Incident-Timeline Builder" were different apps to
+    # this guard — it did not refuse the second build, and the console then showed the one
+    # product as two projects with two PRs and two bills. A definition good enough to group a
+    # card has to be the definition that blocks the duplicate.
+    from .naming import identity_key
+
     for row in rows:
         other, _b, _l = project_name(str(row["title"] or ""))
-        if other.casefold() == wanted.casefold():
+        if identity_key(other) and identity_key(other) == identity_key(wanted):
             return row["id"]
     return None
 

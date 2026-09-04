@@ -8089,3 +8089,91 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* Shown only while the project list is on its way — never once it has arrived. */
 .ct-loading-dot { color: var(--live, #58a6ff); animation: pulse 1.5s infinite; }
+
+/* ---------------------------------------------------------------------------
+   Starter-idea cover art.
+
+   A 40px glyph over three lines of text left most of each card empty, so sixteen
+   of them read as a list pretending to be a gallery. This fills the space with
+   something deliberate.
+
+   DRAWN, NOT FETCHED. Stock imagery would put a third-party CDN in the path of a
+   console that is reachable only over the tailnet — the day it is unreachable is
+   the day the gallery becomes sixteen broken images. These are gradients: they
+   cannot 404, they cost no request, and the same idea always looks the same.
+
+   Five compositions, picked by --idea-art from the card's index, so neighbouring
+   cards never share a shape. Hue comes from the idea itself, so the art and the
+   tag chip already agree.
+   --------------------------------------------------------------------------- */
+.askboss-idea-cover {
+  position: relative;
+  display: block;
+  height: 132px;
+  margin: -14px -14px 12px;          /* bleed to the card's edges */
+  border-radius: 12px 12px 0 0;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 18% 8%,
+      hsl(var(--idea-hue) 78% 62% / .55), transparent 60%),
+    radial-gradient(90% 70% at 92% 12%,
+      hsl(calc(var(--idea-hue) + 46) 82% 58% / .38), transparent 62%),
+    linear-gradient(155deg,
+      hsl(var(--idea-hue) 46% 22% / .95), hsl(var(--idea-hue) 38% 12% / .95));
+}
+
+/* The pattern layer. Each composition is a different geometry, so a row of cards
+   reads as a set rather than one image recoloured five times. */
+.askboss-idea-cover::before {
+  content: ""; position: absolute; inset: 0; opacity: .5;
+}
+.askboss-idea-cover[style*="--idea-art:0"]::before {
+  background-image: radial-gradient(hsl(0 0% 100% / .16) 1px, transparent 1.4px);
+  background-size: 13px 13px;
+}
+.askboss-idea-cover[style*="--idea-art:1"]::before {
+  background-image: repeating-linear-gradient(58deg,
+    hsl(0 0% 100% / .10) 0 1.5px, transparent 1.5px 13px);
+}
+.askboss-idea-cover[style*="--idea-art:2"]::before {
+  background-image:
+    radial-gradient(60% 60% at 78% 78%, hsl(0 0% 100% / .16), transparent 70%),
+    repeating-radial-gradient(circle at 78% 78%,
+      hsl(0 0% 100% / .10) 0 1.5px, transparent 1.5px 17px);
+}
+.askboss-idea-cover[style*="--idea-art:3"]::before {
+  background-image: repeating-linear-gradient(
+    to right, hsl(0 0% 100% / .11) 0 2px, transparent 2px 22px);
+  mask-image: linear-gradient(to top, #000, transparent 85%);
+}
+.askboss-idea-cover[style*="--idea-art:4"]::before {
+  background-image:
+    conic-gradient(from 210deg at 30% 110%,
+      hsl(0 0% 100% / .16), transparent 42%, hsl(0 0% 100% / .10) 70%, transparent);
+}
+
+/* A wash at the bottom so the title never fights the art for contrast. */
+.askboss-idea-cover::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(to top,
+    var(--panel, #0d1117) 2%, hsl(var(--idea-hue) 40% 10% / .18) 46%, transparent 72%);
+}
+
+/* The glyph stays — as a mark ON the art, not a substitute for it. */
+.askboss-idea-mark {
+  position: absolute; left: 14px; bottom: 12px; z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 10px;
+  color: hsl(var(--idea-hue) 92% 88%);
+  background: hsl(var(--idea-hue) 60% 14% / .55);
+  border: 1px solid hsl(var(--idea-hue) 70% 62% / .45);
+  backdrop-filter: blur(3px);
+}
+.askboss-idea-mark svg { width: 18px; height: 18px; }
+.askboss-idea:hover .askboss-idea-cover::before { opacity: .68; }
+.askboss-idea:hover .askboss-idea-mark { border-color: hsl(var(--idea-hue) 80% 70% / .8); }
+
+/* Motion is a nicety, never a requirement. */
+@media (prefers-reduced-motion: reduce) {
+  .askboss-idea-cover::before, .askboss-idea-mark { transition: none; }
+}

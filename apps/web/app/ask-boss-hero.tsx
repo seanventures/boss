@@ -872,14 +872,28 @@ export function AskBossHero({
                     onClick={() => draftIdea(i)}
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
-                    {/* A LOOK, NOT JUST A LABEL. Sixteen identical grey cards is a list
-                        pretending to be a gallery; colour and a mark make them scannable. */}
-                    <span className="askboss-idea-art" aria-hidden
-                          style={{ ["--idea-hue" as string]: String(i.hue) }}>
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                           strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                        <path d={GLYPHS[i.glyph]} />
-                      </svg>
+                    {/* ARTWORK, NOT AN ICON IN A BOX.
+                        A 40px glyph above three lines of text left most of the card empty, so
+                        sixteen cards read as a list pretending to be a gallery. This is a
+                        generated cover: layered gradients keyed to the idea's own hue, with a
+                        pattern chosen from its index so neighbours never look alike.
+
+                        DRAWN, NOT FETCHED. Stock photography would mean every card depending on
+                        a third-party CDN — and this console is reachable only over the tailnet,
+                        so the day that CDN is unreachable is the day the gallery becomes
+                        sixteen broken images. Gradients cost nothing, cannot 404, and stay
+                        deterministic: the same idea always looks the same. */}
+                    <span className="askboss-idea-cover" aria-hidden
+                          style={{
+                            ["--idea-hue" as string]: String(i.hue),
+                            ["--idea-art" as string]: String(IDEAS.indexOf(i) % 5),
+                          }}>
+                      <span className="askboss-idea-mark">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                          <path d={GLYPHS[i.glyph]} />
+                        </svg>
+                      </span>
                     </span>
                     <span className="askboss-idea-tag">{i.tag}</span>
                     <span className="askboss-idea-title">{i.title}</span>
