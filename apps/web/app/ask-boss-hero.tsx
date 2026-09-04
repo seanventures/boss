@@ -76,6 +76,94 @@ type GlyphId = keyof typeof GLYPHS;
 
 /** Small, flat marks — a suggestion of the domain, not an illustration of it. Each is a single
  *  path on a 24-box so they sit at the same optical weight. */
+
+/** A miniature of the app the idea describes — an inbox, a board, a chart, a calendar, a
+ *  timeline — drawn over the card's colour.
+ *
+ *  A gradient wash is not an image. The operator asked for imagery and got coloured
+ *  rectangles twice; what a starter card wants to show is what the thing would LOOK like, so
+ *  these are little UI mockups: window chrome, rows, columns, bars, milestones.
+ *
+ *  Drawn, not fetched, for the same reason as before — this console is reachable only over the
+ *  tailnet, and a card that depends on a CDN is a broken image the day the CDN is unreachable.
+ *  White at low opacity over the hue, so one set of shapes works on every colour.
+ */
+const MOCKUPS: Record<string, (k: string) => React.ReactElement> = {
+  /** Rows with avatars: inbox, triage, directory, feed. */
+  list: (k) => (
+    <g key={k}>
+      {[0, 1, 2, 3].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 22})`}>
+          <rect x="14" y="30" width="292" height="16" rx="4" fill="#fff" opacity=".10" />
+          <circle cx="26" cy="38" r="5" fill="#fff" opacity=".28" />
+          <rect x="38" y="34" width={92 - i * 14} height="4" rx="2" fill="#fff" opacity=".34" />
+          <rect x="38" y="41" width={150 - i * 20} height="3" rx="1.5" fill="#fff" opacity=".16" />
+        </g>
+      ))}
+    </g>
+  ),
+  /** Columns of cards: kanban, triage board, pipeline. */
+  board: (k) => (
+    <g key={k}>
+      {[0, 1, 2].map((c) => (
+        <g key={c} transform={`translate(${14 + c * 100} 0)`}>
+          <rect x="0" y="26" width="88" height="88" rx="6" fill="#fff" opacity=".08" />
+          <rect x="8" y="34" width={40 - c * 6} height="4" rx="2" fill="#fff" opacity=".30" />
+          {[0, 1, 2].map((r) => (
+            <rect key={r} x="8" y={46 + r * 20} width="72" height="15" rx="4"
+                  fill="#fff" opacity={r + c === 0 ? ".26" : ".14"} />
+          ))}
+        </g>
+      ))}
+    </g>
+  ),
+  /** Bars and a trend line: audits, spend, coverage, metrics. */
+  chart: (k) => (
+    <g key={k}>
+      <line x1="14" y1="104" x2="306" y2="104" stroke="#fff" strokeOpacity=".22" strokeWidth="1" />
+      {[38, 62, 44, 78, 56, 92, 70].map((h, i) => (
+        <rect key={i} x={22 + i * 40} width="22" y={104 - h} height={h} rx="3"
+              fill="#fff" opacity={i === 5 ? ".42" : ".18"} />
+      ))}
+      <polyline fill="none" stroke="#fff" strokeOpacity=".55" strokeWidth="2"
+                strokeLinecap="round" strokeLinejoin="round"
+                points="33,66 73,42 113,60 153,26 193,48 233,12 273,34" />
+    </g>
+  ),
+  /** A month grid with a few days marked: calendars, schedules, rotations. */
+  calendar: (k) => (
+    <g key={k}>
+      <rect x="14" y="24" width="292" height="90" rx="6" fill="#fff" opacity=".07" />
+      {[0, 1, 2, 3].map((r) => [0, 1, 2, 3, 4, 5, 6].map((c) => (
+        <rect key={`${r}-${c}`} x={22 + c * 41} y={32 + r * 20} width="33" height="14" rx="3"
+              fill="#fff" opacity={(r === 1 && c === 2) || (r === 2 && c === 5) ? ".40" : ".13"} />
+      )))}
+    </g>
+  ),
+  /** A line of milestones: incident timelines, onboarding paths, releases. */
+  timeline: (k) => (
+    <g key={k}>
+      <line x1="20" y1="70" x2="300" y2="70" stroke="#fff" strokeOpacity=".28" strokeWidth="2"
+            strokeLinecap="round" />
+      {[0, 1, 2, 3].map((i) => (
+        <g key={i} transform={`translate(${34 + i * 76} 0)`}>
+          <circle cx="0" cy="70" r={i === 1 ? "8" : "5"} fill="#fff"
+                  opacity={i === 1 ? ".55" : ".30"} />
+          <rect x="-22" y={i % 2 ? 84 : 44} width="44" height="4" rx="2" fill="#fff" opacity=".22" />
+          <rect x="-22" y={i % 2 ? 92 : 52} width="30" height="3" rx="1.5" fill="#fff" opacity=".13" />
+        </g>
+      ))}
+    </g>
+  ),
+};
+
+/** Which mockup suits an idea, from the glyph it already carries. */
+const MOCKUP_FOR: Record<string, keyof typeof MOCKUPS> = {
+  inbox: "list", people: "list", book: "list", shield: "list",
+  board: "board", tag: "board", route: "timeline", clock: "timeline",
+  spark: "timeline", chart: "chart", bell: "chart", map: "calendar",
+};
+
 const GLYPHS = {
   board: "M3 5h18v14H3zM9 5v14M15 5v14",
   chart: "M4 20V10M10 20V4M16 20v-7M22 20H2",
@@ -872,25 +960,31 @@ export function AskBossHero({
                     onClick={() => draftIdea(i)}
                     data-testid={`askboss-idea-${i.tag.toLowerCase()}`}
                   >
-                    {/* ARTWORK, NOT AN ICON IN A BOX.
-                        A 40px glyph above three lines of text left most of the card empty, so
-                        sixteen cards read as a list pretending to be a gallery. This is a
-                        generated cover: layered gradients keyed to the idea's own hue, with a
-                        pattern chosen from its index so neighbours never look alike.
+                    {/* AN IMAGE, NOT A COLOURED RECTANGLE.
+                        Two versions shipped a gradient wash and the operator said, correctly,
+                        that a wash is not an image. A starter card should show what the thing
+                        would LOOK like, so this is a miniature of the app: window chrome and a
+                        layout matching the idea — an inbox is rows, a triage board is columns,
+                        an audit is bars, a rotation is a calendar, an incident is a timeline.
 
-                        DRAWN, NOT FETCHED. Stock photography would mean every card depending on
-                        a third-party CDN — and this console is reachable only over the tailnet,
-                        so the day that CDN is unreachable is the day the gallery becomes
-                        sixteen broken images. Gradients cost nothing, cannot 404, and stay
-                        deterministic: the same idea always looks the same. */}
+                        DRAWN, NOT FETCHED. This console is reachable only over the tailnet, so
+                        a card built on a CDN is a broken image the day the CDN is unreachable.
+                        SVG costs no request, cannot 404, and is the same every time. */}
                     <span className="askboss-idea-cover" aria-hidden
-                          // data-art, NOT a custom property matched with [style*=].
-                          // React sets custom properties through the CSSOM, so the serialised
-                          // attribute reads "--idea-art: 0" WITH A SPACE — every
-                          // [style*="--idea-art:0"] rule matched nothing and the cards shipped
-                          // with the base wash and no texture at all.
                           data-art={IDEAS.indexOf(i) % 5}
                           style={{ ["--idea-hue" as string]: String(i.hue) }}>
+                      {/* The app, in miniature. Window chrome and a layout that matches what
+                          the idea is — an inbox looks like rows, a board looks like columns —
+                          so the card previews the thing rather than tinting a rectangle. */}
+                      <svg className="askboss-idea-shot" viewBox="0 0 320 128"
+                           preserveAspectRatio="xMidYMid slice">
+                        <rect x="14" y="10" width="292" height="106" rx="8"
+                              fill="#fff" fillOpacity=".06" />
+                        <circle cx="26" cy="19" r="2.5" fill="#fff" fillOpacity=".30" />
+                        <circle cx="35" cy="19" r="2.5" fill="#fff" fillOpacity=".20" />
+                        <circle cx="44" cy="19" r="2.5" fill="#fff" fillOpacity=".14" />
+                        {MOCKUPS[MOCKUP_FOR[i.glyph] ?? "list"](i.title)}
+                      </svg>
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
