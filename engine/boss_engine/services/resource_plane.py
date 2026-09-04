@@ -519,6 +519,13 @@ class ProviderCostRecord:
     external_resource_external_id: Optional[str] = None
 
 
+#: How long one deployment may hold a surface before the claim lapses.
+#:
+#: Longer than any real deploy (the connector's own build+ship path is minutes) and short
+#: enough that a crashed deployer does not block the next attempt for a working day.
+_SURFACE_LEASE_SECONDS = 3600
+
+
 class ResourcePlaneService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -2464,6 +2471,18 @@ class ResourcePlaneService:
             reason="Deployment planning requires one fenced surface owner.",
             dedupe_key=f"deployment-surface:{target['id']}:{actor}",
             actor=actor,
+            # A LEASE, NOT A DEED. Deployment surfaces were claimed with no expiry, so a
+            # deployment that FAILED kept the surface for good: the failed run never
+            # relinquished it, and every later attempt by anybody else was refused with
+            # "Deployment surface is owned by another deployer" — forever, on a target whose
+            # last deploy had blocked minutes after being created. One failure permanently
+            # disabled deployment for that app.
+            #
+            # The claim exists to stop two deployers writing to one surface AT THE SAME TIME.
+            # That is a bounded hazard, so it gets a bounded lease: a deploy that is still
+            # running re-acquires under its own dedupe key, and one that died lets go on its
+            # own instead of needing a human with database access.
+            expires_at=now_utc() + timedelta(seconds=_SURFACE_LEASE_SECONDS),
         )
         if not ownership_result["allowed"]:
             return self._record_blocked_deployment_run(
