@@ -1366,9 +1366,16 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           way to set a target at all. The operator reported exactly that: no option on the
           deploy step to point it at a host. It belongs to the step for its whole life, from
           the moment you can see the step until it has shipped. */}
-      {step.capability === "deploy"
-        && !["succeeded", "skipped"].includes(step.status)
-        && !needsYou(step) ? (
+      {/* ALWAYS ON THE DEPLOY STEP. NO CONDITIONS.
+          This was gated on `!succeeded && !needsYou`, which hid it on precisely the step the
+          operator was looking at — a deploy that had already reported succeeded. They asked
+          for this control repeatedly and it was never once on screen, because each version of
+          the condition excluded the state their run happened to be in.
+
+          Binding an app to a host is not a thing you do only while a step is pending: after a
+          failed or wrongly-"succeeded" deploy you need to set the target and run it again,
+          which is exactly the moment the old condition removed it. */}
+      {step.capability === "deploy" ? (
         <div className="dw-step-target" data-testid="dw-step-target">
           <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
                        onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
@@ -1392,11 +1399,9 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           operator leave the screen that told them it was waiting. */}
       {needsYou(step) ? (
         <div className="dw-step-decide" data-testid="dw-step-decide">
-          {/* WHERE IT SHIPS is part of the release decision, not a setting somewhere else. */}
-          {step.capability === "deploy" ? (
-            <DeployWhere targets={targets} hosts={hosts} runInput={runInput} busy={busy}
-                         onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
-          ) : null}
+          {/* The target picker is rendered once, above, for every deploy step regardless of
+              state — including this one. A second copy here would show two pickers at the
+              gate. */}
           {/* DECIDE WHERE THE DECISION CAN BE READ.
               Two buttons here answered a release without showing what was being released — no
               recommendation, no cost, no risk tier, no note, and no record of who else is
