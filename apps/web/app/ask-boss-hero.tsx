@@ -88,6 +88,25 @@ type GlyphId = keyof typeof GLYPHS;
  *  tailnet, and a card that depends on a CDN is a broken image the day the CDN is unreachable.
  *  White at low opacity over the hue, so one set of shapes works on every colour.
  */
+
+/** A real photograph for a card, chosen deterministically from the idea's title.
+ *
+ *  The operator asked for images three times and got, in order: an icon, a gradient wash, and a
+ *  drawn mockup. None of them is a photograph. This is.
+ *
+ *  Picsum rather than an Unsplash keyword search because the latter needs an API key and a
+ *  server round-trip; a seeded Picsum URL is a real photo, the same one every time for a given
+ *  idea, with no key and no backend.
+ *
+ *  The mockup stays underneath. This console is reachable only over the tailnet, so the photo
+ *  WILL fail sometimes — when it does the drawing shows through instead of a broken image,
+ *  which is the whole reason the drawing was worth building.
+ */
+function photoFor(title: string): string {
+  const seed = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `https://picsum.photos/seed/${seed}/640/256`;
+}
+
 const MOCKUPS: Record<string, (k: string) => React.ReactElement> = {
   /** Rows with avatars: inbox, triage, directory, feed. */
   list: (k) => (
@@ -985,6 +1004,12 @@ export function AskBossHero({
                         <circle cx="44" cy="19" r="2.5" fill="#fff" fillOpacity=".14" />
                         {MOCKUPS[MOCKUP_FOR[i.glyph] ?? "list"](i.title)}
                       </svg>
+                      {/* The photograph, over the drawing. If it does not load — offline, CDN
+                          down, tailnet only — it removes itself and the drawing below is what
+                          you see, rather than a broken-image icon. */}
+                      <img className="askboss-idea-photo" src={photoFor(i.title)} alt=""
+                           loading="lazy" decoding="async"
+                           onError={(e) => { e.currentTarget.style.display = "none"; }} />
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
