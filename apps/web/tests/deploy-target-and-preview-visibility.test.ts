@@ -98,3 +98,62 @@ describe("the deploy step binds an app to a host, not just picks one", () => {
     expect(SOURCE).toContain("buildRunId={buildRunId ?? \"\"}");
   });
 });
+
+describe("an action always says it is running", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("keeps the busy flag set through the reload, not just the request", () => {
+    // `setBusy(null)` ran BEFORE `load()`, so every action ended with the button snapping back
+    // to normal while the console spent seconds re-fetching with nothing on screen. From the
+    // operator's side that is a click that did nothing.
+    expect(SOURCE).toContain("if (result.ok) await load();");
+    expect(SOURCE).toMatch(/finally\s*\{[^}]*setBusy\(null\)/);
+  });
+
+  it("shows one indicator that every action gets for free", () => {
+    expect(SOURCE).toContain('data-testid="dw-working"');
+    expect(SOURCE).toContain('role="status"');
+  });
+
+  it("refreshes the view once a binding lands", () => {
+    // The write succeeded and the step went on showing the same empty form.
+    expect(SOURCE).toContain("if (r.ok) onBound();");
+  });
+});
+
+describe("re-running does not duplicate a live workflow", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("refuses while the run is still going", () => {
+    // Pressed on a mid-flight run it starts a SECOND run on the same directive: two workflows
+    // for one project, both at step 6.
+    expect(SOURCE).toContain("ACTIVE_RUN_STATES");
+    expect(SOURCE).toContain('data-testid="dw-rerun-blocked"');
+  });
+
+  it("points at the control that actually retries", () => {
+    expect(SOURCE).toMatch(/Try … again|Try \{capability/);
+  });
+
+  it("still allows a re-run once the run has stopped", () => {
+    expect(SOURCE).toContain('data-testid="dw-rerun"');
+  });
+});
+
+describe("the agent is reachable from the step", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("opens the console's existing dock rather than a second chat surface", () => {
+    expect(SOURCE).toContain("askBossAbout");
+    expect(SOURCE).toContain('url.searchParams.set("agent"');
+    expect(SOURCE).toContain('url.searchParams.set("dock_ask"');
+  });
+
+  it("opens with this step's own words, not an empty box", () => {
+    expect(SOURCE).toContain("const askNote");
+    expect(SOURCE).toContain('data-testid="dw-ask-boss"');
+  });
+});

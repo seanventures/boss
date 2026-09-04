@@ -8190,3 +8190,17 @@ a.sp-node:hover .sp-label { color: var(--ink); }
   margin: 6px 0 2px;
 }
 .dw-bind-msg { flex-basis: 100%; }
+
+/* THE ACTION IS STILL RUNNING. Shown for as long as `busy` is set — which now includes the
+   reload after the request, the part that used to happen with nothing on screen. */
+.dw-working { color: var(--ink); }
+.dw-spin {
+  width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%;
+  border: 2px solid hsl(215 30% 45% / .45); border-top-color: var(--accent, #6ea8ff);
+  animation: dw-spin 0.7s linear infinite;
+}
+@keyframes dw-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .dw-spin { animation: none; } }
+
+/* Ask the agent about the step you are looking at. */
+.dw-step-ask { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }

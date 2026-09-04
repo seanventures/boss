@@ -531,12 +531,67 @@ def _preview_missing_for_run(
         return (f"the preview step is '{row['status']}', so there is nothing to look at yet. "
                 "Run the preview, then deploy.")
     output = row["output"] if isinstance(row["output"], dict) else json.loads(row["output"] or "{}")
+    # IS A PREVIEW SERVING RIGHT NOW — not "does the URL we wrote down still answer".
+    #
+    # The recorded `preview_url` is a loopback address on the API host, captured when the step
+    # ran. Previews expire and are replaced, so that string goes stale by design: an operator
+    # with the app open and working in another tab was told "the preview at
+    # http://127.0.0.1:43383 does not answer, so it cannot have been reviewed", and the
+    # release was held on the strength of a dead port number.
+    #
+    # `app_previews` holds the live fact. Ask it first, and about the app rather than this one
+    # build — a later build of the same app serving a preview is still a preview somebody can
+    # review, which is the same boundary the console's preview LINK already uses.
+    live = _live_preview_for_run(connection, run_id)
+    if live:
+        return None
     url = output.get("preview_url") or output.get("url")
     if not url:
         return "the preview step finished without a URL, so nothing was previewable."
     if not _preview_answers(url):
-        return f"the preview at {url} does not answer, so it cannot have been reviewed."
+        return ("no preview is running for this app right now, so it cannot have been "
+                f"reviewed (the one this step started, {url}, has gone). Start a fresh "
+                "preview, then deploy.")
     return None
+
+
+def _live_preview_for_run(connection: Connection, run_id: str) -> Optional[str]:
+    """The id of a preview RUNNING NOW for this workflow's app, or None.
+
+    Matched through the code task the run built, widened to every build sharing that app's
+    identity — `finalize_ctx->>'app_id'`, which hashes the project in, so it can never reach
+    another project's app.
+    """
+    try:
+        task = connection.execute(
+            text("SELECT COALESCE("
+                 "  (SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r),"
+                 "  (SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+                 "     WHERE workflow_run_id = :r AND output ? 'code_task_run_id' "
+                 "     ORDER BY created_at DESC LIMIT 1)"
+                 ") AS task_id"),
+            {"r": run_id},
+        ).scalar()
+        if not task:
+            return None
+        return connection.execute(
+            text("""
+                SELECT p.id FROM app_previews p
+                WHERE p.status = 'running'
+                  AND (p.run_id = :t
+                       OR p.run_id IN (
+                            SELECT c.id FROM code_task_runs c
+                            WHERE NULLIF(c.finalize_ctx->>'app_id', '') = (
+                                SELECT NULLIF(finalize_ctx->>'app_id', '')
+                                FROM code_task_runs WHERE id = :t)
+                              AND NULLIF(c.finalize_ctx->>'app_id', '') IS NOT NULL))
+                ORDER BY p.created_at DESC LIMIT 1
+            """),
+            {"t": task},
+        ).scalar()
+    except Exception:  # noqa: BLE001 — a check that cannot run must not block a release
+        log.exception("could not read live previews for run %s", run_id)
+        return None
 
 
 def _preview_answers(url: Any, timeout: float = 6.0) -> bool:

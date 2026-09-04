@@ -528,13 +528,21 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const act = useCallback(async (label: string, action: string, payload: Record<string, unknown>) => {
     setBusy(label);
     setNotice(null);
-    const result = await post(action, { project_id: projectId, actor, ...payload });
-    setBusy(null);
-    // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
-    // always requires a person" is the whole value of the validation.
-    setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
-    if (result.ok) await load();
-    return result;
+    try {
+      const result = await post(action, { project_id: projectId, actor, ...payload });
+      // The engine's own sentence, not "something went wrong". "step 'd' is risk tier 2 and
+      // always requires a person" is the whole value of the validation.
+      setNotice(result.ok ? `${label} — done.` : `${label} — ${result.error}`);
+      // RELOAD WHILE STILL BUSY. `busy` was cleared BEFORE this, so every action ended the
+      // same way: the button snapped back to its normal label and the console then spent
+      // seconds re-fetching with nothing on screen to say so. From the operator's side that
+      // is a click that did nothing — reported as "I clicked and there's no indicator".
+      if (result.ok) await load();
+      return result;
+    } finally {
+      // In a finally so a throw cannot leave the console stuck showing "Advancing…" forever.
+      setBusy(null);
+    }
   }, [projectId, actor, load]);
 
   if (state === "loading") {
@@ -562,7 +570,17 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
         ))}
       </div>
 
-      {notice ? <p className="dw-notice" data-testid="dw-notice">{notice}</p> : null}
+      {/* WHAT IS HAPPENING RIGHT NOW. Per-button labels are easy to forget on the next
+          button added, and they say nothing during the reload that follows the request. This
+          is one indicator every action gets for free, for as long as the action is running. */}
+      {busy ? (
+        <p className="dw-notice dw-working" data-testid="dw-working" role="status" aria-live="polite">
+          <span className="dw-spin" aria-hidden />
+          {busy}… <span className="detail">working — the list refreshes when it finishes</span>
+        </p>
+      ) : notice ? (
+        <p className="dw-notice" data-testid="dw-notice">{notice}</p>
+      ) : null}
 
       {tab === "running" ? (
         <NewProjectComposer
@@ -610,6 +628,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
             return act("Starting a preview", "start_preview", { run_id: buildRunId });
           }}
           previewStarting={previewStarting?.runId ?? ""}
+          onBound={load}
           onRerun={(run) => act("Re-run", "start", {
             workflow_key: run.workflow_key, input: inputForRerun(run.input),
           })}
@@ -945,6 +964,7 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                    onRetryStep, onRerun, onSetTarget, onPrepareTarget, onRunPreview,
+                   onBound,
                    previewStarting,
                    targets, hosts }: {
   runs: Run[];
@@ -958,6 +978,8 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
   onSetTarget: (runId: string, targetId: string) => void;
   onPrepareTarget: (runId: string, hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
+  /** Re-read the runs — used after a binding lands so the step shows it. */
+  onBound: () => void;
   /** The build whose preview was just asked for and has not appeared yet. */
   previewStarting?: string;
   targets: DeployTarget[];
@@ -1076,6 +1098,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onSetTarget={(targetId) => onSetTarget(run.id, targetId)}
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
                         onRunPreview={onRunPreview}
+                        onBound={onBound}
                         previewStarting={previewStarting} />
             ) : null}
           </article>
@@ -1129,11 +1152,13 @@ function needsYou(step: RunStep): boolean {
  * doors to the pages where it can be debugged.
  */
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onSetTarget,
-                   onPrepareTarget, onRunPreview, previewStarting, busy }: {
+                   onPrepareTarget, onRunPreview, onBound, previewStarting, busy }: {
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
   onRunPreview: (buildRunId: string) => void;
+  /** Re-read the runs — used after a binding lands so the step shows it. */
+  onBound: () => void;
   previewStarting?: string;
   busy: string | null;
 }) {
@@ -1213,6 +1238,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           onPrepareTarget={onPrepareTarget}
           buildRunId={buildRunId}
           onRunPreview={onRunPreview}
+          onBound={onBound}
           previewStarting={previewStarting}
           busy={busy}
         />
@@ -1220,15 +1246,38 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
       {/* START IT AGAIN, FROM THE TOP. A run that failed early had no way back except
           retyping the directive into the New project form — the workflow, the title and the
           instructions are all right here. */}
+      {/* NOT WHILE IT IS STILL GOING.
+          This button was offered on every run, including one mid-flight, and it does exactly
+          what it says: starts a SECOND run on the same directive. An operator whose deploy
+          step was stuck pressed it expecting a retry and got a duplicate — two workflows for
+          one project, both running, both at step 6, one of them titled from the raw directive
+          and the other from the cleaned name, so they did not even look like the same thing.
+          Re-running is for a run that has STOPPED; a step that needs another go has "Try …
+          again", which reruns that step and keeps everything before it. */}
       <div className="dw-run-actions">
-        <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
-                data-testid="dw-rerun">
-          {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
-        </button>
-        <span className="detail">
-          Starts {run.workflow_name} again on the same directive — its own research, its own
-          panel, its own build. The existing run is left as it is.
-        </span>
+        {ACTIVE_RUN_STATES.has(run.status) ? (
+          <>
+            <button type="button" className="cap-btn" disabled data-testid="dw-rerun-blocked">
+              Run this workflow again
+            </button>
+            <span className="detail">
+              This run is still {run.status}. Starting it again would make a second workflow
+              for the same project, not retry this one — use “Try … again” on the step that
+              needs another go, or cancel this run first.
+            </span>
+          </>
+        ) : (
+          <>
+            <button type="button" className="cap-btn" onClick={onRerun} disabled={!!busy}
+                    data-testid="dw-rerun">
+              {busy === "Re-run" ? "Starting…" : "Run this workflow again"}
+            </button>
+            <span className="detail">
+              Starts {run.workflow_name} again on the same directive — its own research, its
+              own panel, its own build. The existing run is left as it is.
+            </span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1246,12 +1295,13 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
  * environment and a free port, and the button that makes one also points the run at it.
  */
 function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
-                      onSetTarget, onPrepareTarget }: {
+                      onSetTarget, onPrepareTarget, onBound }: {
   targets: DeployTarget[]; hosts: DeployHost[]; runInput: Record<string, unknown>;
   /** The code task whose build is being shipped — the app the target binds to. */
   buildRunId: string;
   busy: string | null;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
+  onBound: () => void;
 }) {
   const chosenId = typeof runInput.target_id === "string" ? runInput.target_id : "";
   const chosen = targets.find((t) => t.id === chosenId);
@@ -1284,7 +1334,7 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
   if (hosts.length) {
     return (
       <BindToHost hosts={hosts} appName={appName} buildRunId={buildRunId} busy={busy}
-                  onPrepareTarget={onPrepareTarget} />
+                  onPrepareTarget={onPrepareTarget} onBound={onBound} />
     );
   }
   return (
@@ -1306,6 +1356,30 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
  *  step_id is what the runtime actually carries; the capability prop resolved from the
  *  catalogue is the fallback for a workflow whose author renamed the step.
  */
+//: A run that has not finished. Re-running one of these produces a duplicate workflow rather
+//: than a retry, which is exactly what an operator hit: two runs for one project, both live.
+const ACTIVE_RUN_STATES = new Set(["running", "waiting", "ready", "leased", "queued", "paused"]);
+
+/** Open the console's side dock with a question already typed.
+ *
+ *  An operator reading a step that refuses to ship should not have to copy the error, find the
+ *  Agents area and retype the context. The dock already exists at the shell level and is
+ *  driven by two search params — this is the same handoff the Infra panel uses, so the
+ *  workflow view gains the agent without growing a second chat surface of its own.
+ *
+ *  `agent` carries the RUN, so the conversation resolves what it is about server-side rather
+ *  than the console shipping a context blob.
+ */
+function askBossAbout(runRef: string, question: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", runRef || "general");
+    url.searchParams.set("dock_ask", question);
+    window.history.replaceState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
+}
+
 /** BIND THIS APP TO A HOST, ON THE STEP WHERE SHIPPING IS DECIDED.
  *
  *  Asked for repeatedly, and what shipped each time was less than what was asked for: a bare
@@ -1317,9 +1391,11 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
  *  Same three fields, same explicit button, same endpoint the project card posts to. The
  *  operator sets the target and THEN approves the release; nothing is chosen on their behalf.
  */
-function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget }: {
+function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget, onBound }: {
   hosts: DeployHost[]; appName: string; buildRunId: string; busy: string | null;
   onPrepareTarget: (hostId: string) => void;
+  /** Re-read the runs once the binding lands, so the step SHOWS what it is bound to. */
+  onBound: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -1352,6 +1428,9 @@ function BindToHost({ hosts, appName, buildRunId, busy, onPrepareTarget }: {
             setMsg(r.ok
               ? `bound to ${d?.host ?? "the host"} — approve the release below to ship it`
               : (d?.error ?? `could not set the target (HTTP ${r.status})`));
+            // WITHOUT THIS THE SCREEN DOES NOT MOVE. The write succeeded and the step went on
+            // showing the same empty form, which reads exactly like a button that did nothing.
+            if (r.ok) onBound();
           } catch (err) {
             setMsg(String((err as Error)?.message ?? err));
           }
@@ -1415,7 +1494,8 @@ export function isDeployStep(step: RunStep, capability?: Capability): boolean {
 
 
 function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
-                     onPrepareTarget, onRunPreview, buildRunId, previewStarting, busy }: {
+                     onPrepareTarget, onRunPreview, onBound, buildRunId,
+                     previewStarting, busy }: {
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
   onRetry: () => void; onSetTarget: (targetId: string) => void;
@@ -1423,11 +1503,18 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
   /** The code task this run built — what a preview is started FOR. */
   buildRunId: string | null;
   onRunPreview: (buildRunId: string) => void;
+  /** Re-read the runs — used after a binding lands so the step shows it. */
+  onBound: () => void;
   /** The build whose preview was asked for and has not arrived yet. */
   previewStarting?: string;
   busy: string | null;
 }) {
   const phase = phaseOf(step);
+  // The sentence this step is actually showing the operator — its failure, or the note the
+  // capability recorded. It is what makes the opening question specific instead of "help".
+  const askNote = String(
+    step.error || (step.output || {}).note || (step.output || {}).error || "",
+  ).slice(0, 400);
   // The live preview is resolved per-step by the API and lives ON the step, not in the output
   // the runtime recorded — merged here so the link builder sees one object.
   const merged = { ...(step.output || {}),
@@ -1505,9 +1592,30 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
         <div className="dw-step-target" data-testid="dw-step-target">
           <DeployWhere targets={targets} hosts={hosts} runInput={runInput}
                        buildRunId={buildRunId ?? ""} busy={busy}
-                       onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget} />
+                       onSetTarget={onSetTarget} onPrepareTarget={onPrepareTarget}
+                       onBound={onBound} />
         </div>
       ) : null}
+
+      {/* ASK ABOUT THIS STEP, WITHOUT LEAVING IT.
+          A step that will not ship states its reason and then leaves the operator to act on
+          it alone. The dock can read the run, the code, the host and the logs — so the
+          question it opens with is this step's own words, not a blank box. */}
+      <div className="dw-step-ask">
+        <button type="button" className="cap-btn" data-testid="dw-ask-boss"
+                onClick={() => askBossAbout(
+                  buildRunId || "",
+                  `On the ${capability?.label ?? step.step_id} step`
+                  + ` (status ${step.status})`
+                  + (askNote ? `, BOSS says: "${askNote}"` : "")
+                  + ". Why is it in this state, and what is the fix? Check the app's code and"
+                  + " the host before answering.")}>
+          Ask BOSS about this step
+        </button>
+        <span className="detail">
+          Opens the side dock with this step&rsquo;s state and message already filled in.
+        </span>
+      </div>
 
       {/* BACK IN THE QUEUE. A step that failed for a reason since dealt with — a target that
           did not exist, a service that was down — had no way back: the run sat stopped and the
