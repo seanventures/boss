@@ -114,6 +114,9 @@ export function stripAppFacts(content: string): string {
 }
 
 /** An action BOSS is offering. `tool` + `args` are executed verbatim on click. */
+/** One tool BOSS called while answering. The evidence behind the paragraph. */
+type ToolCall = { tool?: string; args?: Record<string, unknown>; ok?: boolean };
+
 type ProposedAction = {
   id: string;
   tool: string;
@@ -165,6 +168,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   const [pendingPlan, setPendingPlan] = useState<Record<string, unknown> | null>(null);
   /** Actions BOSS is OFFERING. Nothing here has run; a click is what executes it. */
   const [proposed, setProposed] = useState<ProposedAction[]>([]);
+  const [trail, setTrail] = useState<ToolCall[]>([]);
   const [ranAction, setRanAction] = useState<string | null>(null);
   /**
    * Prompts about THIS app, handed over by the screen that opened the dock.
@@ -378,6 +382,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         // them here does not make anything safer, it makes the action unreachable and the
         // agent look like it is lying.
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
+        // WHAT THE ANSWER IS BASED ON. See ReadTrail: a confident paragraph with nothing
+        // behind it is exactly what makes an operator distrust the whole thing.
+        setTrail(Array.isArray(d.tool_calls) ? (d.tool_calls as ToolCall[]) : []);
         refreshThreads();
       } else {
         setMessages((m) => [...m, { role: "assistant", content: "⚠ " + (r.error ?? "request failed") }]);
@@ -567,6 +574,39 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
             </article>
           ) : null}
         </div>
+
+        {/* WHAT THE ANSWER IS BASED ON.
+            BOSS would read a dozen files to diagnose a bug and then show a paragraph with
+            nothing behind it — `actions` stays empty because a read changes nothing. The
+            operator's only options were to believe it or redo the work by hand. Collapsed by
+            default: it is evidence, not narrative, and it should be there when you doubt the
+            answer without shouting over it when you do not. */}
+        {trail.length > 0 ? (
+          <details className="agent-trail" data-testid="agent-trail">
+            <summary className="detail">
+              {`What BOSS read for this answer — ${trail.length} lookup${trail.length === 1 ? "" : "s"}`}
+            </summary>
+            <ul className="agent-trail-list">
+              {trail.map((call, i) => {
+                const args = call.args || {};
+                // The arguments worth showing: what it searched for and where it looked. The
+                // ref matters most — a search of the wrong branch is the failure this whole
+                // trail exists to make visible.
+                const detail = ["pattern", "file", "run_id", "repo", "ref", "service", "url"]
+                  .filter((k) => args[k] !== undefined && args[k] !== "")
+                  .map((k) => `${k}=${String(args[k]).slice(0, 60)}`)
+                  .join("  ");
+                return (
+                  <li key={i} className="agent-trail-item">
+                    <code>{call.tool}</code>
+                    {call.ok === false ? <span className="agent-trail-bad"> failed</span> : null}
+                    {detail ? <span className="detail"> {detail}</span> : null}
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+        ) : null}
 
         {/* OFFERS, NOT DEEDS. Each is a tool + arguments BOSS chose but did not run; the click
             is what executes it, verbatim, with no model in between. Cheapest first, because

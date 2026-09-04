@@ -1202,6 +1202,13 @@ class AgentChatResponse(BaseModel):
     #: Offers awaiting a click. Distinct from `actions`, which already happened.
     proposed_actions: list[ProposedAction] = Field(default_factory=list)
     messages: list[AgentMessageSummary] = Field(default_factory=list)
+    #: WHAT BOSS READ TO ANSWER. Every tool call the turn made, in order.
+    #:
+    #: `actions` carries only things that CHANGED something, so a turn that investigated a bug
+    #: across a dozen files reported an empty list and the operator saw a confident paragraph
+    #: with nothing behind it. An answer that names its sources can be checked; one that does
+    #: not has to be taken on trust, and BOSS has not earned that.
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class MeetingProposeRequest(BaseModel):

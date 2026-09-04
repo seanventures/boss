@@ -207,3 +207,57 @@ class TestNoSourceToolIsBlind:
         for marker in ('"ref": ref or "(default branch)"',):
             assert source.count(marker) >= 3, (
                 "every source tool must report the ref it actually read")
+
+
+class TestTheAnswerCanBeChecked:
+    """An answer nobody can verify is worth very little, however good it sounds.
+
+    BOSS investigated a bug across an app's source and returned a confident paragraph with
+    `actions: []` — because `actions` records only things that CHANGED, and a read changes
+    nothing. The operator had no way to see which files were opened, so the only options were
+    to believe it or to redo the work by hand. The read trail closes that.
+    """
+
+    def test_the_response_carries_the_read_trail(self):
+        from boss_engine.schemas import AgentChatResponse
+
+        assert "tool_calls" in AgentChatResponse.model_fields, (
+            "a turn that reads a dozen files must be able to say so")
+
+    def test_the_service_passes_the_trail_through(self):
+        """It was collected by the router and dropped at the service boundary."""
+        import inspect
+
+        from boss_engine.services import agent_service
+
+        source = inspect.getsource(agent_service)
+        assert '"tool_calls": getattr(turn, "tool_calls", [])' in source
+
+
+class TestTheAgentIsToldWhereToLook:
+    """Prompt rules are weak, but a rule that is DELETED is weaker still.
+
+    Both of these encode a wrong answer that was actually given: searching a branch without the
+    app on it, and blaming a customer's app for a header BOSS's own proxy stripped.
+    """
+
+    def _prompt(self) -> str:
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        return inspect.getsource(intent_router)
+
+    def test_it_is_told_that_app_code_is_on_the_pr_branch(self):
+        assert "PR BRANCH" in self._prompt()
+
+    def test_it_is_told_to_search_a_quoted_error_first(self):
+        prompt = self._prompt()
+        assert "QUOTES AN ERROR MESSAGE" in prompt
+        assert "repo='boss'" in prompt
+
+    def test_it_is_told_the_platform_sits_between_browser_and_app(self):
+        """The specific reasoning failure: client sends it, server misses it, app blamed."""
+        prompt = self._prompt()
+        assert "SOMETHING IN BETWEEN REMOVED IT" in prompt
+        assert "Blaming the customer's app for a platform bug" in prompt

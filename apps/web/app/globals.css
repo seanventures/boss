@@ -8187,3 +8187,20 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .askboss-idea-mark svg { width: 18px; height: 18px; }
 .askboss-idea:hover .askboss-idea-cover::before { opacity: .75; }
 .askboss-idea:hover .askboss-idea-mark { border-color: hsl(var(--idea-hue) 90% 78% / .9); }
+
+/* WHAT BOSS READ. Evidence under an answer, collapsed until somebody doubts it. */
+.agent-trail { margin: 6px 0 10px; }
+.agent-trail > summary {
+  cursor: pointer; list-style: revert; padding: 2px 0;
+}
+.agent-trail-list {
+  margin: 6px 0 0; padding: 8px 10px; list-style: none;
+  border-left: 2px solid hsl(215 30% 40% / .5);
+  display: grid; gap: 4px;
+  font-size: 12px; line-height: 1.5;
+  overflow-x: auto;                 /* a long pattern must not widen the dock */
+}
+.agent-trail-item code {
+  font-weight: 600;
+}
+.agent-trail-bad { color: hsl(0 70% 68%); font-weight: 600; }

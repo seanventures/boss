@@ -361,6 +361,9 @@ class AgentService:
             "pending_confirmation": pending,
             # Offers the operator can accept with one click. Nothing here has run yet.
             "proposed_actions": getattr(turn, "proposed_actions", []) or [],
+            # The read trail. Collected by the router already and dropped here, which is why
+            # the console could never show what an answer was based on.
+            "tool_calls": getattr(turn, "tool_calls", []) or [],
             "messages": [*messages, assistant],
         }
 
