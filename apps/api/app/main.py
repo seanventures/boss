@@ -20064,12 +20064,30 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     # whose entire subject is sequence. The version's spec is the authority on order, and the
     # run already carries the exact version it started on.
     spec_order: dict[str, dict[str, int]] = {}
+    # WHAT A STEP DOES, FROM THE SPEC THAT DEFINES IT.
+    #
+    # `capability` was read out of the step's OUTPUT, and a capability handler has no reason to
+    # echo its own name into its result — so nearly every step reached the console as
+    # `capability: null`. Two operator-visible failures came from that one miss: the deploy
+    # step showed no host picker (the picker keys off the capability), and the preview step
+    # never received its live preview (attached by matching capability == "preview"), so it
+    # said "Nothing is serving this build right now" while the preview was up and serving.
+    # The spec is the authority — `steps[].binding.capability` — and the run records the exact
+    # version it started on. Output stays a fallback and never overrides the spec.
+    spec_capability: dict[str, dict[str, str]] = {}
     for run in runs:
         spec = run["spec"] if isinstance(run["spec"], dict) else {}
         spec_order[run["id"]] = {
             str(step.get("id")): index
             for index, step in enumerate(spec.get("steps") or [])
         }
+        capabilities: dict[str, str] = {}
+        for step in spec.get("steps") or []:
+            binding = step.get("binding") if isinstance(step.get("binding"), dict) else {}
+            name = binding.get("capability") or step.get("capability") or step.get("uses")
+            if isinstance(name, str) and name:
+                capabilities[str(step.get("id"))] = name
+        spec_capability[run["id"]] = capabilities
 
     by_run: dict[str, list] = {r: [] for r in ids}
     for step in steps:
@@ -20078,7 +20096,11 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "step_id": step["step_id"],
             "kind": step["step_kind"],
             "status": step["status"],
-            "capability": (step["output"] or {}).get("capability"),
+            "capability": (
+                spec_capability.get(step["workflow_run_id"], {}).get(step["step_id"])
+                or (snapshot.get("binding") or {}).get("capability")
+                or (step["output"] or {}).get("capability")
+            ),
             "output": step["output"] or {},
             "evidence": step["evidence"] or [],
             "error": step["last_error"],
@@ -20107,20 +20129,55 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
     task_ids.discard("")
     if task_ids:
         with begin(engine) as connection:
+            # SAME APP, NOT JUST SAME BUILD.
+            #
+            # Restricting this to the step's OWN code-task run was right about the danger —
+            # linking to a different app's preview is a serious lie — and wrong about the
+            # boundary. An app gets built more than once; previews expire on the old build
+            # while the newest build serves a live one. So the workflow said "Nothing is
+            # serving this build right now. Starting one takes a few seconds." about an app
+            # the operator was looking at IN ANOTHER TAB, running and serving.
+            #
+            # `finalize_ctx->>'app_id'` is the identity `stable_app_id` writes at creation, and
+            # it already hashes the project in, so a sibling can never be another project's
+            # app. The run's own preview still wins when it has one; a sibling is the fallback,
+            # and the record says which, so the console can be honest about what it opened.
+            #
             # The whole record, not just its url. `url` is where the app is listening ON THE
             # HOST — 127.0.0.1:42543 — which is not reachable from a browser anywhere else.
             # The console already knows how to turn a preview into a link an operator can open
             # (operatorPreviewOpenHref: reject loopback, else the API's /v1/previews/<id>/web/
             # proxy). Handing it the record lets it apply that rule instead of a second one.
             for row in connection.execute(
-                text("SELECT DISTINCT ON (run_id) run_id, id, status, url "
-                     "FROM app_previews "
-                     "WHERE run_id = ANY(:ids) AND status = 'running' "
-                     "ORDER BY run_id, created_at DESC"),
+                text("""
+                    WITH wanted AS (
+                        SELECT id AS run_id, NULLIF(finalize_ctx->>'app_id', '') AS app_id
+                        FROM code_task_runs
+                        WHERE id = ANY(:ids)
+                    ),
+                    candidate AS (
+                        SELECT w.run_id, c.id AS build_id
+                        FROM wanted w
+                        JOIN code_task_runs c
+                          ON c.id = w.run_id
+                          OR (w.app_id IS NOT NULL
+                              AND NULLIF(c.finalize_ctx->>'app_id', '') = w.app_id)
+                    )
+                    SELECT DISTINCT ON (k.run_id)
+                           k.run_id, k.build_id, p.id, p.status, p.url
+                    FROM candidate k
+                    JOIN app_previews p ON p.run_id = k.build_id
+                    WHERE p.status = 'running'
+                    ORDER BY k.run_id, (k.build_id = k.run_id) DESC, p.created_at DESC
+                """),
                 {"ids": list(task_ids)},
             ).mappings():
                 live_preview[row["run_id"]] = {
                     "id": row["id"], "status": row["status"], "url": row["url"],
+                    "build_id": row["build_id"],
+                    # False means: this is a live preview of the same app, from a later build.
+                    # The operator should be told that rather than left to assume.
+                    "same_build": row["build_id"] == row["run_id"],
                 }
 
     out = []
@@ -20148,7 +20205,10 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
         preview = live_preview.get(own_task) if own_task else None
         if preview:
             for step in run_steps:
-                if step.get("capability") == "preview":
+                # Either fact identifies the preview step. Matching on capability ALONE is what
+                # left the link unattached while capability was null; step_id is the operator's
+                # own name for it and costs nothing to check.
+                if step.get("capability") == "preview" or step.get("step_id") == "preview":
                     step["live_preview"] = preview
 
         done = sum(1 for s in run_steps if s["status"] in ("succeeded", "skipped"))

@@ -111,7 +111,12 @@ type RunStep = {
   /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
    *  The one recorded in `output` was live when the step ran, and previews expire. The whole
    *  record, because turning one into an openable link is a rule the console already owns. */
-  live_preview?: { id: string; status: string; url: string | null } | null;
+  live_preview?: {
+    id: string; status: string; url: string | null;
+    /** The build actually serving it, and whether that is THIS step's build. A live preview
+     *  of a later build of the same app is worth linking to — but only if we say so. */
+    build_id?: string; same_build?: boolean;
+  } | null;
 };
 
 type Run = {
@@ -372,7 +377,13 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           { cache: "no-store" });
         if (!res.ok) return;
         const body = await res.json();
-        if (alive) setHosts((body.items ?? []).filter(
+        // `hosts`, not `items`. GET /v1/deployment-hosts answers {"hosts": [...]} while the
+        // TARGETS endpoint answers {"items": [...]} — reading the wrong key here silently
+        // produced an empty list, so the deploy step told the operator "this project has no
+        // verified host. Add one under Infra and Models" while Infra showed hetzner-ci-01
+        // VERIFIED and READY TO DEPLOY. `items` is kept as a fallback in case the shape is
+        // ever unified.
+        if (alive) setHosts(((body.hosts ?? body.items ?? []) as DeployHost[]).filter(
           (h: DeployHost) => ["verified", "ready", "active"].includes(h.status ?? "")));
       } catch { /* no hosts offered; the operator can still deny */ }
     })();
@@ -1298,6 +1309,12 @@ function DeployWhere({ targets, hosts, runInput, busy, onSetTarget, onPrepareTar
  *  step_id is what the runtime actually carries; the capability prop resolved from the
  *  catalogue is the fallback for a workflow whose author renamed the step.
  */
+// Same lesson as isDeployStep: `capability` is not always on the wire, and gating the ONLY
+// preview controls on it alone left a step titled "Preview" with no way to run one.
+function isPreviewStep(step: RunStep): boolean {
+  return step.step_id === "preview" || step.capability === "preview";
+}
+
 function isDeployStep(step: RunStep, capability?: Capability): boolean {
   return step.step_id === "deploy" || step.capability === "deploy"
     || capability?.key === "deploy";
@@ -1442,7 +1459,7 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
           to do anything: no button to start one, and — once the recorded preview expired — no
           link either. Factory has had "Open preview" and a way to start one all along; this is
           the same two controls, on the step whose whole subject is the preview. */}
-      {step.capability === "preview" ? (
+      {isPreviewStep(step) ? (
         <div className="dw-step-decide" data-testid="dw-preview-controls">
           {/* Pending until the URL arrives: the request was accepted in a second, the app
               takes a minute. Cleared by the URL showing up, not by the POST returning. */}
@@ -1465,7 +1482,10 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
               // as a click that did nothing.
               ? "Starting a preview — this takes up to a minute. It will appear here on its own."
               : previewHref
-                ? "A live preview of this build, on a URL you can open."
+                ? (step.live_preview && step.live_preview.same_build === false
+                    ? "This build has no preview running. The link opens a live preview of the "
+                      + "same app from a later build — start a fresh one to preview THIS build."
+                    : "A live preview of this build, on a URL you can open.")
                 : "Nothing is serving this build right now. Starting one takes a few seconds."}
           </span>
         </div>
