@@ -8055,12 +8055,35 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .org-benchchip:hover { color: inherit; border-color: var(--live, #58a6ff); }
 
 /* Asking one of them something, from the card that named them. */
+/* A BUTTON WITH NO BACKGROUND IS A WHITE BUTTON.
+   This declared a border and a colour and nothing else, so it fell through to the browser's
+   default control chrome — a pale grey pill with grey text, sitting on a near-black card. It
+   read as a disabled control from another application, which is the opposite of the one thing
+   it is there to do: invite you to say something to this agent.
+
+   Tinted with the accent rather than filled with it. Every card carries one, so a solid button
+   twelve times over would compete with the agent names and the status badges for a screen whose
+   subject is the workforce, not its buttons. Filling in on hover is what says "pressable". */
 .roster-ask {
-  margin-left: auto; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-  padding: 3px 10px; border-radius: 999px; text-decoration: none;
-  border: 1px solid var(--border, #30363d); color: var(--muted, #8b949e);
+  margin-left: auto; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; padding: 4px 12px; border-radius: 999px; text-decoration: none;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--accent-text, #2EC5C5) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-text, #2EC5C5) 38%, transparent);
+  color: var(--accent-text, #2EC5C5);
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
 }
-.roster-ask:hover { color: inherit; border-color: var(--live, #58a6ff); }
+.roster-ask:hover {
+  background: color-mix(in srgb, var(--accent-text, #2EC5C5) 22%, transparent);
+  border-color: var(--accent-text, #2EC5C5);
+  color: var(--ink, #E6EDF3);
+}
+.roster-ask:active { background: color-mix(in srgb, var(--accent-text, #2EC5C5) 30%, transparent); }
+/* Keyboard users get the same affordance as the mouse, and a ring that is visible on a dark
+   card — the default outline is a thin black line here, which is no outline at all. */
+.roster-ask:focus-visible {
+  outline: 2px solid var(--accent-text, #2EC5C5); outline-offset: 2px;
+}
 
 /* Failed, and the work went on. Not "not run" — that hides something worth fixing — and not a
    stopped run either, because the project carried on without it. */
