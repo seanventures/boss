@@ -8207,3 +8207,7 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* The address of the thing that was just shipped. */
 .dw-step-live { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+
+/* Ship this build to its bound target, from the step whose job is shipping. */
+.dw-ship { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.dw-ship-msg { flex-basis: 100%; }

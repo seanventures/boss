@@ -197,3 +197,37 @@ describe("a step's output shows what it says, not which keys it has", () => {
     expect(SOURCE).toContain("return keys.length ? `{${keys.slice(0, 3).join(\", \")}}` : \"{}\"");
   });
 });
+
+describe("a bound app can actually be shipped from the deploy step", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("offers Deploy now once a target is bound", () => {
+    // A deploy step marked SUCCEEDED whose own detail read status=blocked, on an app
+    // answering "not found", with no control anywhere to try again. Setting the target says
+    // WHERE it would go; nothing said GO.
+    expect(SOURCE).toContain('data-testid="dw-ship-now"');
+    expect(SOURCE).toContain("Deploy now");
+  });
+
+  it("uses the console's existing deploy op rather than a new path", () => {
+    expect(SOURCE).toContain('op: "deploy"');
+  });
+
+  it("waits for the outcome instead of reporting acceptance", () => {
+    // "Started" is what lets a deploy that then fails leave a step claiming success.
+    expect(SOURCE).toContain('"succeeded", "failed", "blocked", "rolled_back"');
+    expect(SOURCE).toContain("shipped — the link above opens it");
+  });
+
+  it("matches the deployment it started, not merely the newest row", () => {
+    // This app already has older deployment runs; reading "the newest" would report a
+    // blocked deploy from yesterday as the outcome of this click.
+    expect(SOURCE).toContain("const startedId");
+    expect(SOURCE).toContain("list.find((x) => x.id === startedId)");
+  });
+
+  it("reads the shape run-deployments actually returns", () => {
+    expect(SOURCE).toContain("body?.runs?.[buildRunId]?.deployments");
+  });
+});

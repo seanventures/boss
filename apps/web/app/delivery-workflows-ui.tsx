@@ -612,6 +612,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       ) : null}
       {tab === "running" ? (
         <RunsView
+          projectId={projectId}
           runs={runs} openRun={openRun} setOpenRun={setOpenRun} busy={busy}
           capabilities={capabilities} targets={targets} hosts={hosts}
           // SAY WHAT IT DID. "Advance now" reported success while advancing nothing — a run
@@ -984,9 +985,10 @@ const BUCKET_LABEL: Record<Bucket | "all", string> = {
 
 function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                    onRetryStep, onRerun, onSetTarget, onPrepareTarget, onRunPreview,
-                   onBound,
+                   onBound, projectId,
                    previewStarting,
                    targets, hosts }: {
+  projectId: string;
   runs: Run[];
   openRun: string | null;
   setOpenRun: (id: string | null) => void;
@@ -1119,6 +1121,7 @@ function RunsView({ runs, openRun, setOpenRun, onAdvance, busy, capabilities,
                         onPrepareTarget={(hostId) => onPrepareTarget(run.id, hostId)}
                         onRunPreview={onRunPreview}
                         onBound={onBound}
+                        projectId={projectId}
                         previewStarting={previewStarting} />
             ) : null}
           </article>
@@ -1172,7 +1175,9 @@ function needsYou(step: RunStep): boolean {
  * doors to the pages where it can be debugged.
  */
 function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onSetTarget,
-                   onPrepareTarget, onRunPreview, onBound, previewStarting, busy }: {
+                   onPrepareTarget, onRunPreview, onBound, projectId,
+                   previewStarting, busy }: {
+  projectId: string;
   run: Run; capabilities: Capability[]; targets: DeployTarget[]; hosts: DeployHost[];
   onRetryStep: (stepId: string) => void; onRerun: () => void;
   onSetTarget: (targetId: string) => void; onPrepareTarget: (hostId: string) => void;
@@ -1259,6 +1264,7 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
           buildRunId={buildRunId}
           onRunPreview={onRunPreview}
           onBound={onBound}
+          projectId={projectId}
           previewStarting={previewStarting}
           busy={busy}
         />
@@ -1379,6 +1385,99 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
 //: A run that has not finished. Re-running one of these produces a duplicate workflow rather
 //: than a retry, which is exactly what an operator hit: two runs for one project, both live.
 const ACTIVE_RUN_STATES = new Set(["running", "waiting", "ready", "leased", "queued", "paused"]);
+
+/** SHIP IT, FROM THE STEP WHOSE JOB IS SHIPPING.
+ *
+ *  A deploy step marked SUCCEEDED whose own detail read `status=blocked`, on an app that
+ *  answers "not found" — and no control anywhere to try again. The operator set the target
+ *  repeatedly, which was never the problem: binding says WHERE it would go, and nothing said
+ *  GO. The gate only appears while a run is waiting at it, so once the step had been recorded
+ *  as done there was no way to ship at all, from any screen.
+ *
+ *  The console already had this plumbing — the `deploy` op posts to /v1/deployments — and the
+ *  workflow view simply never offered it.
+ *
+ *  It reports the OUTCOME, not the acceptance. "Started" is what the previous generation of
+ *  this button would have said, and a deploy that starts and then fails is exactly how a step
+ *  ends up claiming success over a blocked release.
+ */
+function ShipNow({ projectId, buildRunId, target, appName, onDone }: {
+  projectId: string; buildRunId: string; target: DeployTarget; appName: string;
+  onDone: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "shipping" | "done">("idle");
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const ship = useCallback(async () => {
+    setState("shipping");
+    setMsg("shipping — building, transferring, then health-checking…");
+    try {
+      const r = await fetch("/api/app-deploy", {
+        method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
+        body: JSON.stringify({
+          op: "deploy", project_id: projectId, run_id: buildRunId,
+          target_id: target.id, environment: target.environment,
+          actor: "executive_console",
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setState("idle");
+        setMsg(d?.error ?? `could not start the deploy (HTTP ${r.status})`);
+        return;
+      }
+      // WAIT FOR THE ANSWER, AND FOR THE RIGHT DEPLOY. A deploy takes tens of seconds;
+      // reporting "started" and stopping is how an operator ends up staring at a card that
+      // never changes. The id that was just created is matched exactly — this app already has
+      // older deployment runs against it, and reading "the newest row" would have reported a
+      // blocked deploy from yesterday as the outcome of this click.
+      const startedId = String(d?.deployment_run_id ?? d?.id ?? "");
+      for (let i = 0; i < 40; i += 1) {
+        await new Promise((done) => setTimeout(done, 3000));
+        const poll = await fetch(
+          `/api/run-deployments?run_ids=${encodeURIComponent(buildRunId)}`
+          + `&app_names=${encodeURIComponent(appName)}`, { cache: "no-store" });
+        const body = await poll.json().catch(() => ({}));
+        const list = (body?.runs?.[buildRunId]?.deployments ?? []) as Array<{
+          id?: string; status?: string; failure_reason?: string; started_at?: string;
+        }>;
+        const row = (startedId && list.find((x) => x.id === startedId))
+          // No id came back: fall back to the most recently STARTED, which is this one.
+          || [...list].sort((a, b) =>
+            String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0];
+        const status = String(row?.status ?? "");
+        if (["succeeded", "failed", "blocked", "rolled_back"].includes(status)) {
+          setState("done");
+          setMsg(status === "succeeded"
+            ? "shipped — the link above opens it"
+            : `${status}: ${row?.failure_reason ?? "no reason recorded"}`);
+          onDone();
+          return;
+        }
+      }
+      setState("idle");
+      setMsg("still going after two minutes — leaving it running; refresh to see where it got to");
+      onDone();
+    } catch (e) {
+      setState("idle");
+      setMsg(String((e as Error)?.message ?? e));
+    }
+  }, [projectId, buildRunId, target, appName, onDone]);
+
+  return (
+    <div className="dw-ship" data-testid="dw-ship">
+      <button type="button" className="cap-btn primary" disabled={state === "shipping"}
+              onClick={ship} data-testid="dw-ship-now">
+        {state === "shipping" ? "Shipping…" : "Deploy now"}
+      </button>
+      <span className="detail">
+        Ships this build to <b>{target.app_name}</b> · {target.environment}
+        {target.domains?.[0] ? ` (${target.domains[0]})` : ""}.
+      </span>
+      {msg ? <span className="detail dw-ship-msg" data-testid="dw-ship-msg">{msg}</span> : null}
+    </div>
+  );
+}
 
 /** Open the console's side dock with a question already typed.
  *
@@ -1514,8 +1613,9 @@ export function isDeployStep(step: RunStep, capability?: Capability): boolean {
 
 
 function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSetTarget,
-                     onPrepareTarget, onRunPreview, onBound, buildRunId,
+                     onPrepareTarget, onRunPreview, onBound, projectId, buildRunId,
                      previewStarting, busy }: {
+  projectId: string;
   step: RunStep; capability?: Capability; targets: DeployTarget[]; hosts: DeployHost[];
   runInput: Record<string, unknown>;
   onRetry: () => void; onSetTarget: (targetId: string) => void;
@@ -1623,6 +1723,12 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
       {/* WHERE THE THING IS. The point of a deploy is an address somebody can open, and the
           step said everything except that: the target it shipped to, the run id, the health
           key names — and no link. The address is on the target it is bound to. */}
+      {isDeployStep(step, capability) && shippedTo && buildRunId ? (
+        <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
+                 appName={typeof runInput.title === "string" ? runInput.title : shippedTo.app_name}
+                 onDone={onBound} />
+      ) : null}
+
       {liveAppUrl ? (
         <p className="dw-step-live" data-testid="dw-step-live">
           <a className="cap-btn primary" href={liveAppUrl} target="_blank" rel="noreferrer"
