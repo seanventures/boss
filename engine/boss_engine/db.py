@@ -129,7 +129,124 @@ def database_is_reachable(engine: Engine) -> bool:
         return False
 
 
+def split_statements(sql: str) -> list[str]:
+    """Split a schema script into statements, respecting strings and $$ bodies.
+
+    A naive split on ';' cuts `DO $$ BEGIN ... END $$;` in half and turns a working script into
+    a pile of syntax errors, so quoting state is tracked: single quotes, double quotes, line
+    and block comments, and dollar-quoted bodies with their tags ($$ and $tag$).
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(sql)
+    quote = ""          # "'", '"', or the active dollar tag like "$$" / "$body$"
+    while i < n:
+        ch = sql[i]
+        if quote:
+            if quote in ("'", '"'):
+                if ch == quote:
+                    quote = ""
+                buf.append(ch)
+                i += 1
+                continue
+            if sql.startswith(quote, i):     # closing dollar tag
+                buf.append(quote)
+                i += len(quote)
+                quote = ""
+                continue
+            buf.append(ch)
+            i += 1
+            continue
+        if sql.startswith("--", i):
+            end = sql.find("\n", i)
+            end = n if end == -1 else end
+            buf.append(sql[i:end])
+            i = end
+            continue
+        if sql.startswith("/*", i):
+            end = sql.find("*/", i)
+            end = n if end == -1 else end + 2
+            buf.append(sql[i:end])
+            i = end
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "$":
+            m = re.match(r"\$[A-Za-z_]\w*\$|\$\$", sql[i:])
+            if m:
+                quote = m.group(0)
+                buf.append(quote)
+                i += len(quote)
+                continue
+        if ch == ";":
+            stmt = "".join(buf).strip()
+            if stmt:
+                out.append(stmt)
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = "".join(buf).strip()
+    if tail:
+        out.append(tail)
+    return out
+
+
+def _record_schema_apply(raw_connection, total: int, failures: list[str]) -> None:
+    """Leave the result of this apply where a person can read it.
+
+    "Did the schema actually migrate?" was answerable only by opening the API container's
+    stdout, which nobody on this project can do. So it went unanswered, and a missing table
+    presented as a feature returning nothing. One row per boot, queryable through the same
+    console as everything else.
+
+    Created here rather than in schema.sql: the whole point is to survive the script failing.
+    """
+    try:
+        with raw_connection.cursor() as cursor:
+            cursor.execute(
+                "CREATE TABLE IF NOT EXISTS schema_apply_runs ("
+                " id BIGSERIAL PRIMARY KEY,"
+                " applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),"
+                " statements INT NOT NULL,"
+                " failed INT NOT NULL,"
+                " failures TEXT[] NOT NULL DEFAULT '{}')"
+            )
+            cursor.execute(
+                "INSERT INTO schema_apply_runs (statements, failed, failures) "
+                "VALUES (%s, %s, %s)",
+                (total, len(failures), failures[:50]),
+            )
+            # Keep the last 50 boots: enough to see when a failure first appeared, not enough
+            # to become a table anyone has to think about.
+            cursor.execute(
+                "DELETE FROM schema_apply_runs WHERE id < "
+                "(SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM schema_apply_runs "
+                " ORDER BY id DESC LIMIT 50) recent)"
+            )
+        raw_connection.commit()
+    except Exception as exc:  # noqa: BLE001 — a bookkeeping row must never block a boot
+        raw_connection.rollback()
+        print(f"[ensure_schema] could not record this apply: {exc}")
+
+
 def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
+    """Converge the database to schema.sql. Every deploy runs this; nothing else migrates.
+
+    STATEMENT BY STATEMENT, EACH IN ITS OWN SAVEPOINT — not one `cursor.execute(script)`.
+    Sending the whole file as a single multi-statement makes it a single transaction, so ONE
+    statement that fails against live drift silently discards every statement after it. That is
+    not theoretical: a table added at the end of the file was simply absent in production after
+    a clean deploy, the API's `except` printed a line into a container log nobody can open, and
+    the feature that needed it failed as "no rows" rather than "no table". The apply reported
+    success throughout.
+
+    A failing statement is now isolated and NAMED, and the ones after it still run.
+    """
     resolved = settings or get_settings()
     sql = resolved.schema_path.read_text(encoding="utf-8")
     raw_connection = engine.raw_connection()
@@ -142,12 +259,32 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
         with raw_connection.cursor() as cursor:
             attempted, skipped = _reconcile_columns(cursor, sql)
         raw_connection.commit()
+
+        failures: list[str] = []
+        statements = split_statements(sql)
         with raw_connection.cursor() as cursor:
-            cursor.execute(sql)  # new tables/indexes (IF NOT EXISTS) + explicit ALTERs
+            for stmt in statements:
+                try:
+                    cursor.execute("SAVEPOINT _stmt")
+                    cursor.execute(stmt)
+                    cursor.execute("RELEASE SAVEPOINT _stmt")
+                except Exception as exc:  # noqa: BLE001 — isolate, name it, keep going
+                    cursor.execute("ROLLBACK TO SAVEPOINT _stmt")
+                    head = " ".join(stmt.split())[:120]
+                    failures.append(f"{head} -> {str(exc).strip()[:160]}")
         raw_connection.commit()
+
+        _record_schema_apply(raw_connection, len(statements), failures)
+
+        print(f"[ensure_schema] applied {len(statements) - len(failures)}/{len(statements)} "
+              f"statements")
         if skipped:
             print(f"[ensure_schema] column reconcile: {attempted} checked, "
                   f"{len(skipped)} skipped (non-fatal): {skipped[:8]}")
+        for failure in failures:
+            # Loud, one per line, with the statement AND the database's own message. The
+            # previous version could not tell you which statement broke because it never knew.
+            print(f"[ensure_schema] FAILED: {failure}")
     finally:
         raw_connection.close()
 
