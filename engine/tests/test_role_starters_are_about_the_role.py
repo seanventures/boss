@@ -197,6 +197,36 @@ class TestWhatOnlyThisRoleCouldBeAsked:
         assert not any("Agreed" in s for s in role_starters(conn, "p", "Security"))
 
 
+class TestAPlaceholderIsNotAName:
+    """Observed live. The Security starter came back as "Which ports does New work have open?"
+    with HookWatch and Vendor-Status-Watcher sitting four rows behind it in the same list.
+
+    A run whose brief was never written keeps the catalogue's default title, and it passes every
+    "is this a real app?" check because it IS a real row. This is the worst kind of ungrounded:
+    it sounds specific, so the operator believes there is an app called New work."""
+
+    def test_the_placeholder_title_is_skipped_for_the_real_app_behind_it(self):
+        conn = Conn(role=SECURITY, apps=["New work", "Build HookWatch, a webhook monitor"])
+        assert any("HookWatch" in s for s in role_starters(conn, "p", "Security"))
+        assert not any("New work" in s for s in role_starters(conn, "p", "Security"))
+
+    def test_a_follow_up_run_does_not_supply_the_name(self):
+        """"Follow-up: deferred review findings — HookWatch" names a piece of REWORK. Used as an
+        app name it produces a question addressed to a sentence."""
+        conn = Conn(role=SECURITY,
+                    apps=["Follow-up: deferred review findings — HookWatch",
+                          "Build Vendor Status Watcher"])
+        out = role_starters(conn, "p", "Security")
+        assert any("Vendor" in s for s in out)
+        assert not any("deferred review" in s for s in out)
+
+    def test_a_project_of_nothing_but_placeholders_asks_nothing_about_apps(self):
+        conn = Conn(role=SECURITY, apps=["New work", "Untitled", "sample"])
+        out = role_starters(conn, "p", "Security")
+        assert out
+        assert not any("New work" in s or "Untitled" in s for s in out)
+
+
 class TestItCannotBreakThePanel:
     def test_a_database_that_will_not_answer_still_returns_something(self):
         class Broken(Conn):

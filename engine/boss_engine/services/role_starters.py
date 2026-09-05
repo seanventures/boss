@@ -167,6 +167,38 @@ def _families_for(title: str, lens: str) -> list[dict[str, Any]]:
     return by_title + by_lens
 
 
+#: Names that are not names. A run whose brief was never written keeps the catalogue's default
+#: title, and it sails through every "is this a real app?" check because it IS a real row.
+#:
+#: Observed live: the Security starter came back as "Which ports does New work have open?" —
+#: with HookWatch, Vendor-Status-Watcher and a licence-provisioning flow sitting directly
+#: behind it in the same list. A starter naming a placeholder is worse than a generic one: it
+#: sounds specific, so the operator believes there is an app called New work.
+_NOT_A_NAME = frozenset({
+    "new work", "untitled app", "untitled", "new app", "new project",
+    "describe the work here", "sample", "test", "demo",
+})
+
+#: A follow-up run's title names a piece of REWORK, not an app — "Follow-up: deferred review
+#: findings — HookWatch". The app it refers to has its own row; using this one produces a
+#: question addressed to a sentence.
+_NOT_AN_APP_PREFIXES = ("follow-up:", "follow‐up:", "re-build of", "rebuild of")
+
+
+def _usable_name(title: str) -> Optional[str]:
+    """The display name of the app this run built, or None if the title names no app."""
+    from .naming import project_name
+
+    raw = " ".join(str(title or "").split())
+    low = raw.lower()
+    if any(low.startswith(prefix) for prefix in _NOT_AN_APP_PREFIXES):
+        return None
+    name, _blurb, _label = project_name(raw)
+    if not name or name.strip().lower() in _NOT_A_NAME:
+        return None
+    return name
+
+
 def _recent_app(connection: Connection, project_id: str) -> Optional[str]:
     """An app this project actually built, by display name."""
     try:
@@ -174,16 +206,16 @@ def _recent_app(connection: Connection, project_id: str) -> Optional[str]:
             text("SELECT title FROM code_task_runs "
                  "WHERE project_id = :p AND status = 'completed' "
                  "  AND NULLIF(finalize_ctx->>'app_id', '') IS NOT NULL "
-                 "ORDER BY created_at DESC LIMIT 5"),
+                 # Deep enough that a run of placeholders and follow-ups at the top cannot
+                 # starve the list — the real apps were four rows down when this was found.
+                 "ORDER BY created_at DESC LIMIT 25"),
             {"p": project_id},
         ).scalars().all()
     except Exception:  # noqa: BLE001 — starters are a convenience; never fail a page for them
         return None
-    from .naming import project_name
-
     for title in rows:
-        name, _blurb, _label = project_name(str(title or ""))
-        if name and name != "Untitled app":
+        name = _usable_name(str(title or ""))
+        if name:
             return name
     return None
 
@@ -191,20 +223,21 @@ def _recent_app(connection: Connection, project_id: str) -> Optional[str]:
 def _recent_failure(connection: Connection, project_id: str) -> Optional[str]:
     """The last run that did not ship, named the way the console names it."""
     try:
-        row = connection.execute(
+        rows = connection.execute(
             text("SELECT id, title FROM code_task_runs "
                  "WHERE project_id = :p AND status IN ('failed', 'blocked', 'error') "
-                 "ORDER BY created_at DESC LIMIT 1"),
+                 "ORDER BY created_at DESC LIMIT 10"),
             {"p": project_id},
-        ).mappings().first()
+        ).mappings().all()
     except Exception:  # noqa: BLE001
         return None
-    if row is None:
-        return None
-    from .naming import project_name
-
-    name, _blurb, _label = project_name(str(row["title"] or ""))
-    return name if name and name != "Untitled app" else str(row["id"])
+    for row in rows:
+        name = _usable_name(str(row["title"] or ""))
+        if name:
+            return name
+    # A run id is a poor thing to put in a sentence, but it is REAL — the operator can paste it
+    # into the console and find the failure. A placeholder title cannot be looked up at all.
+    return str(rows[0]["id"]) if rows else None
 
 
 def _last_position(connection: Connection, project_id: str, title: str) -> Optional[str]:
