@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
@@ -434,6 +434,15 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
   const [previewStarting, setPreviewStarting] = useState<{ runId: string; at: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  // ONCE, on the first load that has runs. `useRef` rather than a dependency on `openRun`,
+  // because the list re-polls every few seconds: re-deciding each time would reopen a run the
+  // operator had just closed, which is a page that argues with you.
+  const openedOnce = useRef(false);
+  // START A PROJECT IS THE SMALLER JOB ON THIS PAGE, and it was the whole top of it — a
+  // composer above the fold, pushing what is actually running below it. Collapsed to one line
+  // unless there is nothing to look at yet, in which case an empty page with a closed box is
+  // just a dead end.
+  const [composerOpen, setComposerOpen] = useState(false);
   // Lifted out of the builder so forking can land the operator on the thing they just made.
   const [builderTarget, setBuilderTarget] = useState<string>("");
   // WHAT WAS JUST MADE, so the builder can SAY it was made.
@@ -564,6 +573,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
     }
   }, [projectId, actor, load]);
 
+  // OPEN THE ONE THAT WANTS YOU. A page whose every run is collapsed makes an operator click
+  // to find out whether anything needs them, which is the question the page exists to answer.
+  useEffect(() => {
+    if (openedOnce.current || !runs.length) return;
+    openedOnce.current = true;
+    setOpenRun((current) => current ?? runToOpen(runs));
+  }, [runs]);
+
   if (state === "loading") {
     return <p className="detail" data-testid="dw-loading">Loading delivery workflows…</p>;
   }
@@ -602,14 +619,33 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
       ) : null}
 
       {tab === "running" ? (
-        <NewProjectComposer
-          projectId={projectId} actor={actor} workflows={installed}
-          onStarted={(runId) => {
-            if (runId) setOpenRun(runId);
-            setNotice(runId ? `Started ${runId}.` : "Started.");
-            void load();
-          }}
-        />
+        composerOpen || runs.length === 0 ? (
+          <div className="dw-composer-open">
+            {runs.length ? (
+              <button type="button" className="linklike dw-composer-hide"
+                      data-testid="dw-composer-hide"
+                      onClick={() => setComposerOpen(false)}>Hide</button>
+            ) : null}
+            <NewProjectComposer
+              projectId={projectId} actor={actor} workflows={installed}
+              onStarted={(runId) => {
+                if (runId) setOpenRun(runId);
+                setComposerOpen(false);
+                setNotice(runId ? `Started ${runId}.` : "Started.");
+                void load();
+              }}
+            />
+          </div>
+        ) : (
+          <button type="button" className="dw-composer-trigger" data-testid="dw-composer-open"
+                  onClick={() => setComposerOpen(true)}>
+            <span className="dw-composer-plus" aria-hidden>+</span>
+            Start a project
+            <span className="detail">
+              describe an outcome and BOSS researches, specs, builds and ships it
+            </span>
+          </button>
+        )
       ) : null}
       {tab === "running" && awaited ? (
         <p className="dw-awaiting detail" data-testid="dw-awaiting">
@@ -1164,6 +1200,24 @@ function phaseOf(step: RunStep):
   if (step.status === "succeeded") return hasFindings(step) ? "findings" : "done";
   if (["running", "leased", "ready", "waiting", "queued"].includes(step.status)) return "now";
   return "ahead";
+}
+
+/** The run the page should open on.
+ *
+ *  Not simply the newest. This page answers two questions — "what is happening" and "what
+ *  needs me" — and the second is the one somebody came here for. A run waiting on a decision
+ *  is the only thing on the page that will not move until a person acts, so it opens first
+ *  even when something newer is running.
+ *
+ *  Exported because "which one is the important one" is a rule worth testing, not a detail of
+ *  a render.
+ */
+export function runToOpen(runs: Run[]): string | null {
+  if (!runs.length) return null;
+  const needsMe = runs.find((r) => (r.steps ?? []).some(needsYou));
+  if (needsMe) return needsMe.id;
+  const live = runs.find((r) => ACTIVE_RUN_STATES.has(r.status));
+  return (live ?? runs[0]).id;
 }
 
 /** A step needing a person, right now. The one thing on this page that is an instruction. */

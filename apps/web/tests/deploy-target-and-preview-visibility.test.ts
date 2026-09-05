@@ -269,3 +269,25 @@ describe("the live link follows the deployment, not the step", () => {
     expect(SOURCE).toContain("body?.runs?.[buildRunId]?.deployments");
   });
 });
+
+describe("the page opens on what needs you", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("collapses Start a project behind one line", () => {
+    // It occupied the whole top of the page, pushing what is actually running below the fold.
+    expect(SOURCE).toContain('data-testid="dw-composer-open"');
+    expect(SOURCE).toContain("composerOpen || runs.length === 0");
+  });
+
+  it("still opens the composer when there is nothing else to look at", () => {
+    // An empty page with a closed box is a dead end.
+    expect(SOURCE).toContain("runs.length === 0");
+  });
+
+  it("opens a run automatically, once", () => {
+    // Re-deciding on every poll would reopen a run the operator had just closed.
+    expect(SOURCE).toContain("openedOnce.current");
+    expect(SOURCE).toContain("setOpenRun((current) => current ?? runToOpen(runs))");
+  });
+});
