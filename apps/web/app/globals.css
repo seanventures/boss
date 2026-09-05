@@ -1458,6 +1458,63 @@ h1, h2, h3, h4, h5, h6 {
   100% { transform: translateX(320%); }
 }
 
+/* The background refresh, at the very top edge of the window. Fixed and 2px: it never moves
+   anything, so it can appear and vanish every minute without the page twitching. */
+.bx-refresh-line {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px; z-index: 60;
+  pointer-events: none; overflow: hidden;
+  background: color-mix(in srgb, var(--accent, #2F6FE0) 18%, transparent);
+}
+.bx-refresh-line::after {
+  content: ""; position: absolute; inset: 0; width: 30%;
+  background: linear-gradient(90deg, transparent, var(--accent, #2F6FE0), transparent);
+  animation: bx-loading-sweep 1.15s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still visible, just not moving: a steady line says "busy" without the sweep. */
+  .bx-refresh-line::after { animation: none; width: 100%; opacity: .55; }
+}
+
+/* THE ROUTE-LEVEL SKELETON — what is on screen before the console exists.
+   Six and a half seconds to first byte means every indicator inside the page is unreachable
+   during the wait it exists for. These are the only styles that are on screen for it. */
+.bx-skel {
+  display: block; border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-2, #0F1830) 0%,
+    color-mix(in srgb, var(--surface-3, #16203c) 70%, var(--accent, #2F6FE0) 8%) 45%,
+    var(--surface-2, #0F1830) 90%);
+  background-size: 220% 100%;
+  animation: bx-skel-sweep 1.5s ease-in-out infinite;
+}
+/* A skeleton that pulses forever is a page that has hung. The sweep is the only motion, and it
+   is the same rhythm as the loading bar above it so the screen reads as ONE thing waiting. */
+@keyframes bx-skel-sweep {
+  0%   { background-position: 140% 0; }
+  100% { background-position: -40% 0; }
+}
+.bx-skel-chip { height: 26px; width: 92px; border-radius: 999px; }
+.bx-skel-line { height: 11px; }
+.bx-skel-navitem { height: 30px; width: 100%; border-radius: 8px; }
+.bx-skel-nav { display: grid; gap: 8px; padding: 4px 12px; }
+.bx-content-loading { padding: 22px 28px; }
+.bx-skel-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+.bx-skel-card {
+  display: grid; gap: 10px; padding: 18px 16px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface, #0d1424);
+}
+/* Motion is a signal here, not decoration. For a reader who has asked the OS to stop animating
+   things it becomes seven seconds of noise they cannot turn off — the bar's text and the
+   elapsed count still say everything this needs to say. */
+@media (prefers-reduced-motion: reduce) {
+  .bx-skel { animation: none; }
+}
+
 /* The elapsed count. Tabular figures so the number does not jitter the sentence sideways as
    it ticks — a bar that twitches every second reads as broken rather than busy. */
 .bx-loading-elapsed {

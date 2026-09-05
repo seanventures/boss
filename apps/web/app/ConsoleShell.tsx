@@ -952,6 +952,21 @@ export default function ConsoleShell({
             A background refresh is background. The data is already on screen, so it raises
             none of the questions the first load does; it belongs in the Live chip, which is
             already there and does not move anything. */}
+        {/* A REFRESH IN FLIGHT, AT THE TOP EDGE, WHERE IT CANNOT BE MISSED.
+            The Syncing chip already existed and is easy to miss: it is one small pill among
+            six in a busy header, and it carries `hide-sm` so on a narrow window it is not
+            there at all. "I don't see any indicator" was a fair reading of a screen that was
+            quietly re-fetching fifty feeds.
+            NOT the sticky strip below — that one WAS wired to refreshPending once and became
+            permanent furniture, because a refresh takes about as long as the gap between
+            refreshes. A two-pixel line at the very edge cannot become furniture: it occupies
+            no layout, moves nothing when it appears, and is unmistakably progress rather than
+            content. */}
+        {refreshPending ? (
+          <div className="bx-refresh-line" role="status" aria-live="polite"
+               aria-label="Refreshing data" data-testid="console-refreshing" />
+        ) : null}
+
         {settling ? (
           <div className="bx-loading" role="status" aria-live="polite"
                data-testid="console-loading">
