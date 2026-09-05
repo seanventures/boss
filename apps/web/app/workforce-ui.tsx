@@ -80,28 +80,25 @@ function volumeOf(a: V2Agent): number {
 }
 
 /** Where to go to put a question to one of these agents, keeping who you are. */
-function askHref(agentName: string): string {
-  const params = new URLSearchParams(
-    typeof window !== "undefined" ? window.location.search : "");
-  const next = new URLSearchParams();
-  for (const key of ["org", "org_id"]) {
-    const value = params.get(key);
-    if (value) next.set(key, value);
-  }
-  next.set("area", "agent");
-  // ADDRESSED TO THIS ONE, not merely mentioning it.
-  //
-  // `?ask=@QA Lead: ` typed the name into the GENERAL agent's box — the name was prose in a
-  // prompt, so an operator asking the QA Lead a question got BOSS answering as itself, with no
-  // idea what the QA Lead had ever said or what it is for. `role` makes it an identity the
-  // other end can resolve: the lens it argues from, the rules its agent definition carries,
-  // and the positions it has taken on this project's panels.
-  next.set("role", agentName);
-  // A colon, not an em dash: "—" percent-encodes to %E2%80%94, which contains the substring
-  // "0%" — and the roster asserts it never renders a zero score. A link that trips a guard
-  // about scores is a link that will be misread by the next person to see it fail.
-  next.set("ask", `@${agentName}: `);
-  return `?${next.toString()}`;
+/** Open the console's side dock, addressed to this member of the workforce.
+ *
+ *  This was an <a href> that rebuilt the query string and sent the operator to the Agents
+ *  AREA, so asking one question cost them whatever they were looking at — and the answer came
+ *  from BOSS-in-general anyway, because the name was only prose in a prefilled box.
+ *
+ *  Now it edits the CURRENT url and tells the shell to re-read it: same page, same scroll
+ *  position, panel open on the right with the agent's name in its head. `dock_role` is what
+ *  makes the reply come from that role's lens and its own past arguments.
+ */
+function askAgent(agentName: string): void {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("agent", "general");   // the dock's "not about one run" sentinel
+    url.searchParams.set("dock_role", agentName);
+    url.searchParams.set("dock_ask", `@${agentName}: `);
+    window.history.replaceState(null, "", url.toString());
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  } catch { /* non-browser */ }
 }
 
 export function WorkforceArea({ workforce }: { workforce: Workforce }) {
@@ -187,9 +184,10 @@ export function WorkforceArea({ workforce }: { workforce: Workforce }) {
                       offered no way to say anything to any of them — read-only, on a screen
                       about a workforce. This opens the chat with the message already addressed,
                       so asking is a click from the card that named them. */}
-                  <a className="roster-ask" href={askHref(a.name)}
-                     data-testid={`wf-ask-${a.id}`}
-                     title={`Ask ${a.name} something`}>Ask</a>
+                  <button type="button" className="roster-ask"
+                          onClick={() => askAgent(a.name)}
+                          data-testid={`wf-ask-${a.id}`}
+                          title={`Ask ${a.name} something`}>Ask</button>
                 </header>
 
                 <p className="roster-task">{a.task}</p>

@@ -548,12 +548,19 @@ export default function ConsoleShell({
   // by an instance nobody was looking at and the dock opened with an empty box. This param is
   // read here and handed down as a prop, so there is exactly one consumer.
   const [dockAsk, setDockAsk] = useState<string>("");
+  // WHICH MEMBER OF THE WORKFORCE THE DOCK IS TALKING TO.
+  //
+  // "Ask" on an agent card navigated to the Agents PAGE — leaving whatever the operator was
+  // looking at — to have one question answered. The dock exists for exactly this, and it can
+  // carry an identity as easily as a run id.
+  const [dockRole, setDockRole] = useState<string>("");
   useEffect(() => {
     const read = () => {
       // The run id is the whole handoff now. It goes to the server as `external_ref`, which
       // resolves it into the system prompt — the console no longer ships a context blob.
       const params = new URLSearchParams(window.location.search);
       setDockedRun(params.get("agent"));
+      setDockRole(params.get("dock_role") ?? "");
       const asked = params.get("dock_ask");
       if (asked) {
         setDockAsk(asked);
@@ -985,12 +992,14 @@ export default function ConsoleShell({
                   and the head rendered it as a code. Opening the dock to ask the Deployment
                   Manager about a HOST has no run to name, so the sentinel gets the role's name
                   instead of a meaningless token. */}
-              <span className="eyebrow">
-                {dockedRun === DOCK_GENERAL ? "Deployment Manager" : "Ask BOSS"}
+              <span className="eyebrow" data-testid="bx-dock-who">
+                {dockRole || (dockedRun === DOCK_GENERAL ? "Deployment Manager" : "Ask BOSS")}
               </span>
-              {dockedRun === DOCK_GENERAL
-                ? <span className="detail">hosts, releases, rollback readiness</span>
-                : <code className="detail">{dockedRun}</code>}
+              {dockRole
+                ? <span className="detail">answering from this role&rsquo;s own work here</span>
+                : dockedRun === DOCK_GENERAL
+                  ? <span className="detail">hosts, releases, rollback readiness</span>
+                  : <code className="detail">{dockedRun}</code>}
               {/* Icon, not a labelled button. The head is a tight strip already holding the
                   title and the run id, and a text "Close" competed with both while doing the
                   most ordinary thing in the panel. aria-label keeps it announced to screen
@@ -1007,8 +1016,9 @@ export default function ConsoleShell({
                          actor={scope.actorId ?? scope.actor}
                          initialTaskId={dockedRun === DOCK_GENERAL ? undefined : dockedRun}
                          initialMessage={dockAsk || undefined}
-                         roleName={dockedRun === DOCK_GENERAL ? "the Deployment Manager" : undefined}
-                         key={dockAsk} />
+                         roleName={dockRole
+                           || (dockedRun === DOCK_GENERAL ? "the Deployment Manager" : undefined)}
+                         key={`${dockAsk}|${dockRole}`} />
             </div>
           </aside>
         ) : null}

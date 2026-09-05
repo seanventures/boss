@@ -82,15 +82,23 @@ describe("you can say something to an agent", () => {
     // The page listed what every agent had done and offered no way to say anything to any of
     // them — read-only, on a screen about a workforce.
     expect(WF).toContain('data-testid={`wf-ask-${a.id}`}');
-    expect(WF).toContain("function askHref");
+    expect(WF).toContain("function askAgent");
   });
 
-  it("opens the chat already addressed", () => {
-    // So asking is a click from the card that named them, not navigating here and retyping
-    // who you meant.
-    expect(WF).toContain('next.set("area", "agent")');
+  it("opens the side dock in place rather than leaving the page", () => {
+    // It navigated to the Agents AREA, so asking one question cost the operator whatever they
+    // were looking at. The dock exists for exactly this and can carry an identity as easily
+    // as a run id.
+    expect(WF).toContain('url.searchParams.set("agent", "general")');
+    expect(WF).toContain('url.searchParams.set("dock_role", agentName)');
+    expect(WF).toContain('new PopStateEvent("popstate")');
+  });
+
+  it("addresses the question to that agent, not to BOSS in general", () => {
+    // The name used to be prose in a prefilled box, so the answer came from BOSS itself with
+    // no lens, no remit and no memory of what that role had argued.
     expect(WF).toContain("`@${agentName}: `");
-    expect(CHAT).toContain('get("ask")');
+    expect(CHAT).toContain('fd.set("role", roleName)');
   });
 
   it("consumes the instruction rather than leaving it in the URL", () => {
@@ -99,10 +107,12 @@ describe("you can say something to an agent", () => {
     expect(CHAT).toContain('url.searchParams.delete("ask")');
   });
 
-  it("keeps who you are when it navigates", () => {
-    expect(WF).toContain('for (const key of ["org", "org_id"])');
-  });
-});
+  it("keeps the operator where they were", () => {
+    // No navigation at all now: the url is edited in place, so org/actor/area survive by
+    // construction rather than by being copied across a rebuilt query string.
+    expect(WF).toContain("new URL(window.location.href)");
+    expect(WF).not.toContain("function askHref");
+  });});
 
 describe("the Engineering Captain leads the work", () => {
   const CT = codeOnly("../../engine/boss_engine/services/code_task_service.py");
