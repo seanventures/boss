@@ -114,29 +114,53 @@ type GlyphId = keyof typeof GLYPHS;
  *  apart. So the surface is fixed and only the accent moves, across four cool tones drawn from
  *  the console's own palette.
  */
-const ACCENTS = ["#6ea8ff", "#4fd1c5", "#a78bfa", "#38bdf8"] as const;
-
-/** The screenshot's surfaces. Solid, opaque, with real contrast between them.
+/** THE PALETTE, TAKEN FROM WHAT ACTUALLY WORKED.
  *
- *  The previous art was white at 6–14% opacity over a saturated gradient — a ghost wireframe
- *  with no edges, which is what made it look like weather rather than a screen. A UI is opaque
- *  panels with light text on them, so these are opaque panels with light text on them.
+ *  "Living Colors" — an app BOSS built and the operator liked on sight — has NO image files at
+ *  all. Its look is twelve CSS gradients over four vivid tokens: 330 81% 58%, 262 83% 63%,
+ *  24 95% 58%, 172 66% 42%. Saturation 66–95%, lightness 42–63%, painted across whole sections
+ *  with two big blurred orbs for depth and white content on top.
+ *
+ *  These cards were the opposite: #161c2e / #1d2438 / #273049 — saturation about 25%, lightness
+ *  12–20% — a near-black window covering the whole cover with a few coloured pixels in it. Dark
+ *  UI screenshots, competently drawn and completely flat, which is what "the images are so
+ *  poor" meant and it was right.
+ *
+ *  Same technique here: a three-stop gradient per domain, orbs, and the app's own layout drawn
+ *  in WHITE over it. Not the earlier washed-out attempt — that failed because it used a random
+ *  hue per card, a texture layer, a 48% wash over the bottom half, and shapes at 6–14% opacity
+ *  that could not hold an edge. The colour is coherent per domain and the shapes are opaque.
  */
+const DOMAIN_GRADIENTS: Record<string, [string, string, string]> = {
+  Ops:      ["hsl(330 81% 58%)", "hsl(292 83% 60%)", "hsl(262 83% 63%)"],
+  Money:    ["hsl(24 95% 58%)",  "hsl(38 94% 56%)",  "hsl(330 81% 58%)"],
+  Team:     ["hsl(262 83% 63%)", "hsl(228 87% 62%)", "hsl(199 89% 55%)"],
+  Content:  ["hsl(172 66% 45%)", "hsl(186 78% 48%)", "hsl(199 89% 55%)"],
+  Sales:    ["hsl(24 95% 58%)",  "hsl(348 85% 60%)", "hsl(330 81% 58%)"],
+  Quality:  ["hsl(199 89% 55%)", "hsl(230 85% 62%)", "hsl(262 83% 63%)"],
+  Learning: ["hsl(142 71% 45%)", "hsl(160 70% 44%)", "hsl(172 66% 45%)"],
+  Growth:   ["hsl(330 81% 58%)", "hsl(0 84% 62%)",   "hsl(24 95% 58%)"],
+};
+
+function gradientFor(tag: string): [string, string, string] {
+  return DOMAIN_GRADIENTS[tag] ?? DOMAIN_GRADIENTS.Team;
+}
+
+/** The layout drawn ON the colour. White, at opacities that hold an edge — the previous
+ *  version's 6–14% is why it read as weather rather than as a picture of anything. */
 const UI = {
-  chrome: "#161c2e",   // the window frame
-  panel: "#1d2438",    // a surface inside the window
-  row: "#273049",      // a row/card on that surface
-  line: "#3a4460",     // hairlines, dividers, inactive dots
-  text: "#6b7794",     // a line of body text
-  bright: "#9fb0d0",   // a heading
+  chrome: "rgba(255,255,255,.10)",
+  panel: "rgba(255,255,255,.14)",
+  row: "rgba(255,255,255,.26)",
+  line: "rgba(255,255,255,.34)",
+  text: "rgba(255,255,255,.62)",
+  bright: "rgba(255,255,255,.95)",
 } as const;
 
-/** The accent for one card. Stable per title, so a card keeps its colour between renders,
- *  and spread evenly across the four tones instead of picked per idea by hand. */
-function accentFor(title: string): string {
-  let h = 0;
-  for (const ch of title) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return ACCENTS[h % ACCENTS.length];
+/** The highlight colour on top of a coloured field is white, not another hue — a second
+ *  saturated colour on a saturated ground is mud, which the first attempt proved. */
+function accentFor(_title: string): string {
+  return "rgba(255,255,255,.95)";
 }
 
 /** A line of "text": a rounded bar, the way every UI mock draws one. */
@@ -1320,13 +1344,29 @@ export function AskBossHero({
                           so the card previews the thing rather than tinting a rectangle. */}
                       <svg className="askboss-idea-shot" viewBox="0 0 320 128"
                            preserveAspectRatio="xMidYMid slice">
-                        {/* THE WINDOW. Opaque panels with real edges — the previous version
-                            drew white at 6% over a saturated gradient, which has no edges and
-                            is why it read as weather rather than as a screen. */}
-                        <rect x="0" y="0" width="320" height="128" fill={UI.chrome} />
-                        {/* A sidebar, because every app of this kind has one, and it is what
-                            makes 320x128 read as a WINDOW rather than as a texture. */}
-                        <rect x="0" y="0" width="66" height="128" fill="#111726" />
+                        {/* THE COLOUR FIELD, the way Living Colors does it: a three-stop
+                            gradient across the whole area, then two large blurred orbs for
+                            depth. That app has no image files — this IS how it looks good. */}
+                        <defs>
+                          <linearGradient id={`g-${slugFor(i.title)}`} x1="0" y1="0" x2="1" y2="1">
+                            <stop offset="0%" stopColor={gradientFor(i.tag)[0]} />
+                            <stop offset="52%" stopColor={gradientFor(i.tag)[1]} />
+                            <stop offset="100%" stopColor={gradientFor(i.tag)[2]} />
+                          </linearGradient>
+                          <filter id={`b-${slugFor(i.title)}`} x="-50%" y="-50%"
+                                  width="200%" height="200%">
+                            <feGaussianBlur stdDeviation="18" />
+                          </filter>
+                        </defs>
+                        <rect x="0" y="0" width="320" height="128"
+                              fill={`url(#g-${slugFor(i.title)})`} />
+                        <circle cx="34" cy="10" r="46" fill="rgba(255,255,255,.20)"
+                                filter={`url(#b-${slugFor(i.title)})`} />
+                        <circle cx="300" cy="124" r="52" fill="rgba(255,255,255,.16)"
+                                filter={`url(#b-${slugFor(i.title)})`} />
+                        {/* The sidebar, darkened rather than coloured, so the window still
+                            reads as a window against the field. */}
+                        <rect x="0" y="0" width="66" height="128" fill="rgba(10,14,28,.22)" />
                         <circle cx="16" cy="16" r="4" fill={accentFor(i.title)} />
                         <Line x={25} y={14} w={26} h={4} c={UI.bright} o={0.9} />
                         {[0, 1, 2, 3, 4].map((n) => (
@@ -1351,8 +1391,16 @@ export function AskBossHero({
                       {/* The photograph, if one has been supplied for this idea. It covers the
                           drawing; when the file is absent it removes itself and the drawing is
                           what you see, rather than a broken-image icon. */}
+                      {/* HIDDEN UNTIL IT LOADS, rather than shown until it fails.
+                          `onError` alone leaves a broken-image icon wherever the handler has
+                          not run — in a server render, with JS still loading, or for the
+                          moment before the request 404s. Sixteen broken icons over the
+                          artwork is worse than no photographs at all. Starting hidden means a
+                          missing file is invisible by construction and a present one appears
+                          the instant it decodes. */}
                       <img className="askboss-idea-photo" src={photoFor(i.title)} alt=""
-                           loading="lazy" decoding="async"
+                           loading="lazy" decoding="async" style={{ display: "none" }}
+                           onLoad={(e) => { e.currentTarget.style.display = "block"; }}
                            onError={(e) => { e.currentTarget.style.display = "none"; }} />
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"

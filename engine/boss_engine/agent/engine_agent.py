@@ -309,6 +309,10 @@ class EngineAgent:
     PROPOSE_ONLY = frozenset({
         "create_code_task", "create_discovery", "request_meeting",
         "retry_code_task", "extend_code_task",
+        # EVERY CALL COSTS MONEY. An image is billed per generation, and an agent that decides
+        # on its own that a page "needs a hero image" can spend real money on a hunch. The
+        # operator sees the prompt and the destination and clicks, or does not.
+        "generate_image",
     })
 
     def _run_tool(

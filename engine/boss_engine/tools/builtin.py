@@ -2242,6 +2242,111 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_image_tools(reg: ToolRegistry) -> None:
+    """Make pictures, because the apps BOSS writes need them.
+
+    Every app BOSS ships that wants imagery has had exactly two options: a drawing built out of
+    SVG, or a hotlinked stock photo. The first looks like a wireframe and the second breaks the
+    day the CDN is unreachable — and on a tailnet-only console it is unreachable most days.
+
+    No Claude model can do this: Claude READS images and cannot emit them. So this goes through
+    the OpenAI-compatible endpoint the platform already points at (`OPENAI_BASE_URL`, currently
+    a LiteLLM proxy), which is the same route every other model call takes. If the proxy has no
+    image model configured, the tool says so and repeats the proxy's own message rather than
+    inventing a reason.
+    """
+    @reg.tool(
+        "generate_image",
+        "Generate an image from a description and save it to a file — for an app BOSS is "
+        "building that needs real artwork rather than a drawn placeholder. Costs money per "
+        "image, so it is a write. Returns the path written and the bytes produced. Say what "
+        "the picture should SHOW; the model has no other context.",
+        _obj({"prompt": {"type": "string",
+                         "description": "what the image shows, in a sentence or two"},
+              "path": {"type": "string",
+                       "description": "where to write it, e.g. public/hero.png. Relative paths "
+                                      "land under the image output directory."},
+              "size": {"type": "string",
+                       "description": "1024x1024 (default), 1536x1024, or 1024x1536"},
+              "model": {"type": "string",
+                        "description": "override the image model; defaults to the configured "
+                                       "one"}},
+             ["prompt", "path"]),
+        kind="write",
+    )
+    def generate_image(ctx, *, project_id, actor, args):
+        import base64
+        import urllib.error
+        import urllib.request
+
+        settings = ctx.settings
+        base = str(getattr(settings, "openai_base_url", "") or "").rstrip("/")
+        key = str(getattr(settings, "openai_api_key", "") or "")
+        if not base or not key:
+            return {"ok": False,
+                    "error": "no image provider configured: OPENAI_BASE_URL and "
+                             "OPENAI_API_KEY must both be set"}
+
+        prompt = str(args.get("prompt") or "").strip()
+        if not prompt:
+            return {"ok": False, "error": "prompt is required"}
+        model = str(args.get("model")
+                    or getattr(settings, "image_model", "") or "gpt-image-1")
+        size = str(args.get("size") or "1024x1024")
+
+        rel = str(args.get("path") or "").strip().lstrip("/")
+        if not rel:
+            return {"ok": False, "error": "path is required"}
+        root = _os.environ.get("BOSS_IMAGE_DIR") or _os.path.join(_REPO_CACHE, "images")
+        dest = _safe_path(rel, root)
+        if dest is None:
+            return {"ok": False, "error": "path escapes the image output directory"}
+
+        body = json.dumps({"model": model, "prompt": prompt, "size": size, "n": 1}).encode()
+        request = urllib.request.Request(
+            f"{base}/images/generations", data=body,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # THE PROVIDER'S OWN WORDS. "no image model configured on this proxy" and "billing
+            # limit reached" need completely different actions, and a generic failure hides
+            # which one happened.
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8")[:400]
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "status": exc.code, "model": model,
+                    "error": f"image endpoint refused: {detail or exc.reason}"}
+        except Exception as exc:  # noqa: BLE001 — a tool must not raise
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+
+        item = ((payload.get("data") or [{}])[0]) or {}
+        raw: bytes
+        if item.get("b64_json"):
+            raw = base64.b64decode(item["b64_json"])
+        elif item.get("url"):
+            try:
+                with urllib.request.urlopen(item["url"], timeout=120) as fetched:
+                    raw = fetched.read()
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"image URL could not be fetched: {exc}"[:200]}
+        else:
+            return {"ok": False, "error": "the provider returned neither b64_json nor a url",
+                    "keys": sorted(item.keys())}
+
+        try:
+            _os.makedirs(_os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as handle:
+                handle.write(raw)
+        except OSError as exc:
+            return {"ok": False, "error": f"could not write {rel}: {exc}"[:200]}
+        return {"ok": True, "path": dest, "bytes": len(raw), "model": model, "size": size}
+
+
 def _register_app_identity_tools(reg: ToolRegistry) -> None:
     """Find and repair apps that were split into two identities.
 
@@ -3013,6 +3118,7 @@ def build_default_registry() -> ToolRegistry:
     _register_read_tools(reg)
     _register_investigation_tools(reg)
     _register_app_identity_tools(reg)
+    _register_image_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
@@ -3072,6 +3178,10 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "extend_code_task",
     "steer_code_task",
     "cancel_code_task",
+    # Making the artwork an app needs. Costs money per image, which is why it is a write and
+    # not a read; it is reachable because an app that has to ship with pictures cannot be
+    # finished by describing them.
+    "generate_image",
     # Repairing how work is GROUPED. One product recorded under two identities shows as two
     # cards with the attempts, PRs and spend divided between them — a bug of ours that the
     # customer otherwise keeps for good, since app_id is stamped at creation and never

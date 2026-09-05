@@ -123,7 +123,10 @@ describe("the starter shelf", () => {
     // rendering.
     expect(HERO).toContain('className="askboss-idea-mark"');
     expect(CSS_I).toContain(".askboss-idea-mark {");
-    expect(HERO).toContain("const ACCENTS");
+    // `ACCENTS` became `DOMAIN_GRADIENTS`: the accent per card is now a three-stop gradient
+    // chosen by DOMAIN, not a single tone from a list. Same property being asserted — one
+    // palette, no per-card random hue.
+    expect(HERO).toContain("const DOMAIN_GRADIENTS");
     expect(HERO).not.toMatch(/hue: \d+/);
     expect(CSS_I).not.toContain("--idea-hue");
   });
@@ -160,6 +163,39 @@ describe("the starter shelf", () => {
 describe("the starter strip is a gallery, not one image recoloured", () => {
   const HERO3 = codeOnly("app/ask-boss-hero.tsx");
   const CSS3 = codeOnly("app/globals.css");
+
+  it("paints with saturated colour, the way the app that worked did", () => {
+    // "Living Colors" has NO image files: its look is CSS gradients over four vivid tokens
+    // (330 81% 58%, 262 83% 63%, 24 95% 58%, 172 66% 42%) — saturation 66–95%, lightness
+    // 42–63%. These cards were #161c2e / #1d2438 — saturation ~25%, lightness 12–20% — a
+    // near-black window with a few coloured pixels, which is what "the images are so poor"
+    // meant.
+    expect(HERO3).toContain("DOMAIN_GRADIENTS");
+    const stops = [...HERO3.matchAll(/hsl\((\d+) (\d+)% (\d+)%\)/g)];
+    expect(stops.length).toBeGreaterThan(8);
+    // Every stop vivid: nothing washed out, nothing near-black.
+    for (const [, , sat, light] of stops) {
+      expect(Number(sat)).toBeGreaterThanOrEqual(60);
+      expect(Number(light)).toBeGreaterThanOrEqual(40);
+      expect(Number(light)).toBeLessThanOrEqual(70);
+    }
+  });
+
+  it("draws the layout in white over the colour, at opacities that hold an edge", () => {
+    // The first attempt at colour failed on 6–14% opacity shapes, which read as weather.
+    const opacities = [...HERO3.matchAll(/rgba\(255,255,255,\.(\d+)\)/g)]
+      .map((m) => Number(m[1]));
+    expect(opacities.length).toBeGreaterThan(4);
+    expect(Math.max(...opacities)).toBeGreaterThanOrEqual(90);
+  });
+
+  it("shows a supplied photograph only once it has loaded", () => {
+    // onError alone leaves a broken-image icon wherever the handler has not run — a server
+    // render, or the moment before the request 404s. Sixteen broken icons over the artwork is
+    // worse than no photographs at all.
+    expect(HERO3).toContain('style={{ display: "none" }}');
+    expect(HERO3).toContain('onLoad={(e) => { e.currentTarget.style.display = "block"; }}');
+  });
 
   it("gives every idea its own drawing", () => {
     // The previous set had five layouts mapped BY GLYPH, so seven of the sixteen ideas showed
