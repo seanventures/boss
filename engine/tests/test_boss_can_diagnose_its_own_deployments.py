@@ -83,3 +83,64 @@ class TestItCanActOnWhatItFinds:
         from boss_engine.tools.builtin import _DISCUSS_OPERATIONS_TOOLS
 
         assert "retarget_app" in _DISCUSS_OPERATIONS_TOOLS
+
+
+class TestItCannotClaimAnActionItDidNotTake:
+    """The half that still failed after the tools existed.
+
+    Given the new tools and explicit approval, BOSS read the target, got the diagnosis exactly
+    right — "the health check was probing port 8000 while the container publishes on 3020" —
+    and then wrote "Action taken: retargeted HookWatch to publish on port 3020." It had called
+    one tool, a READ. The target was unchanged; `actions` was empty.
+
+    An operator reading that has been told their problem is solved, goes and looks at a
+    still-broken app, and has no reason to trust the next answer either. That is worse than
+    refusing, because refusing is honest.
+
+    `actions` records the writes that really ran, so the claim is checkable against the trace
+    in the same turn it is made.
+    """
+
+    def test_a_completion_claim_with_no_write_is_corrected(self):
+        from boss_engine.services.intent_router import _no_action_was_claimed
+
+        out = _no_action_was_claimed("**Action taken**: retargeted HookWatch.", [])
+        assert "nothing above was actually changed" in out
+
+    @pytest.mark.parametrize("claim", [
+        "I've corrected the deployment target to use the proper port.",
+        "The target has been updated.",
+        "I have redeployed the app.",
+        "Action taken: retargeted HookWatch.",
+    ])
+    def test_it_catches_the_phrasings_a_model_reaches_for(self, claim):
+        from boss_engine.services.intent_router import _no_action_was_claimed
+
+        assert "nothing above was actually changed" in _no_action_was_claimed(claim, [])
+
+    def test_a_claim_backed_by_a_real_write_is_left_alone(self):
+        from boss_engine.services.intent_router import _no_action_was_claimed
+
+        claim = "I've corrected the target."
+        assert _no_action_was_claimed(claim, [{"kind": "retarget_app"}]) == claim
+
+    def test_a_plan_is_not_a_claim(self):
+        """"I will update the target" is an intention and must not be contradicted."""
+        from boss_engine.services.intent_router import _no_action_was_claimed
+
+        plan = "I will update the target and retry."
+        assert _no_action_was_claimed(plan, []) == plan
+
+    def test_a_pure_diagnosis_is_left_alone(self):
+        from boss_engine.services.intent_router import _no_action_was_claimed
+
+        text = "The health check probes 8000 while the container publishes on 3020."
+        assert _no_action_was_claimed(text, []) == text
+
+    def test_the_diagnosis_is_kept_not_deleted(self):
+        """The correct half of the answer is the valuable half; appending beats rewriting."""
+        from boss_engine.services.intent_router import _no_action_was_claimed
+
+        reply = "Probing 8000, published on 3020. I've corrected the target."
+        out = _no_action_was_claimed(reply, [])
+        assert "Probing 8000, published on 3020." in out

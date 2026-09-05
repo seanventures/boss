@@ -357,6 +357,44 @@ def _loads_object(raw: str):
     return value if isinstance(value, dict) else None
 
 
+#: Claims to have CHANGED something. Present tense of completion, not of intent — "I will
+#: update the target" is a plan and fine; "I've corrected the target" is a statement of fact
+#: that has to be true.
+_ACTION_CLAIM = re.compile(
+    r"(?:^|\b)(?:i(?:'ve| have)\s+(?:now\s+)?(?:corrected|updated|changed|fixed|set|"
+    r"retargeted|rebound|deployed|redeployed|opened|created|cancelled|restarted)"
+    r"|action\s+taken"
+    r"|(?:has|have)\s+been\s+(?:corrected|updated|changed|fixed|set|retargeted|deployed))",
+    re.I,
+)
+
+
+def _no_action_was_claimed(reply: str, actions: list) -> str:
+    """Refuse to let BOSS say it did something when the trace shows it did not.
+
+    Asked to diagnose and fix a deployment, BOSS read the target, got the diagnosis exactly
+    right — "the health check was probing port 8000 while the container publishes on 3020" —
+    and then wrote:
+
+        Action taken: retargeted HookWatch to publish on port 3020.
+
+    It had called one tool, a READ. The target was unchanged. An operator reading that has been
+    told their problem is solved, will go and look at a still-broken app, and has no reason to
+    trust the next answer either. It is worse than refusing, because refusing is honest.
+
+    Narrow on purpose, and the same shape as `_no_button_was_promised`: it does not rewrite the
+    diagnosis — which was correct and valuable — it appends the correction, because the model's
+    own words are evidence and deleting them hides that this happened.
+    """
+    if actions or not reply or not _ACTION_CLAIM.search(reply):
+        return reply
+    return reply.rstrip() + (
+        "\n\n(Correction, added by BOSS: nothing above was actually changed — this turn only "
+        "READ. The diagnosis stands, but the fix has not been applied. Tell me to go ahead and "
+        "I will run it, or ask why it did not run.)"
+    )
+
+
 def _no_button_was_promised(reply: str, proposed: list) -> str:
     """Strip a promise of buttons when no button was actually produced.
 
@@ -1005,6 +1043,10 @@ class IntentRouter:
         proposed.extend(tagged)
         proposed.extend(_recover_described_actions(reply, _known, proposed))
         reply = _no_button_was_promised(reply, proposed)
+        # AND THAT IT DID NOT CLAIM TO HAVE ACTED. `actions` holds the writes that really ran;
+        # a claim of completion with an empty list is a fabrication, and the trace is right
+        # here to check it against.
+        reply = _no_action_was_claimed(reply, actions)
         reply = _boss_cannot_call_you_back(reply)
         return RouterTurn(reply=reply, actions=actions, tool_calls=tool_calls,
                           proposed_actions=proposed)
