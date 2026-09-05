@@ -596,6 +596,19 @@ def start_code_task(
     # A task created BY a workflow step already belongs to that run. Starting another would
     # nest a pipeline inside a step of the pipeline that made it, and each would wait on the
     # other's build.
+    # THE GOVERNING RUN MAY ARRIVE INSIDE `origin`.
+    #
+    # `create_code_task` sets `workflow_run_id` at the top level, because a workflow STEP made
+    # the task. A project born from a panel does not go through that tool: approving the
+    # spec_review gate launches the build directly, and what it can carry is `origin` — the
+    # panel, the decision, and now the run that approval belonged to. Reading both is what makes
+    # the guard cover the path projects are actually started on, rather than only the one a tool
+    # happens to use. Lifted to the top level so everything downstream — the adopt bookkeeping,
+    # the console's "which run governs this" — sees it in the one place it has always looked.
+    if not run_finalize.get("workflow_run_id"):
+        _from_origin = (run_finalize.get("origin") or {}).get("workflow_run_id")
+        if _from_origin:
+            run_finalize["workflow_run_id"] = str(_from_origin)
     _already_governed = bool(run_finalize.get("workflow_run_id"))
     _chose_a_workflow = bool(run_finalize.get("workflow_version_id"))
     _continuation = ("is_followup", "parent_run_id", "deferred_from_run", "qa_benchmark")

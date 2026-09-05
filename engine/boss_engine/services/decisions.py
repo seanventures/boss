@@ -990,6 +990,35 @@ class DecisionService:
         jobs = self.jobs
         origin_ctx = origin
 
+        # THE RUN THAT ALREADY GOVERNS THIS WORK.
+        #
+        # Two workflows for one app, observed: "Interview Scorecard App" ran as
+        # wfr_de0ff (Standard Product Delivery v2, 10 steps) — research, panel, spec approved —
+        # and the approval of its OWN spec_review gate launched the build, which then opened a
+        # SECOND outer run, wfr_666b (v1, 8 steps), that adopted the very code task it had just
+        # created. Both then sat waiting on crun_33a0a77e6ccf4d17b36e, and the operator was
+        # shown two projects where they had started one.
+        #
+        # `start_code_task` guards against exactly this — `_already_governed` — but the guard
+        # reads `finalize_ctx["workflow_run_id"]`, and nothing on the approval path set it. The
+        # tool path (`create_code_task`) passes it; this path, which is how a project born from
+        # a panel actually starts, never has.
+        #
+        # The link was there to be read the whole time: a gate step records its decision in
+        # `workflow_step_runs.decision_id`. One query turns "this approval" into "the run this
+        # approval belongs to".
+        governing_run_id = None
+        try:
+            governing_run_id = connection.execute(
+                text("SELECT workflow_run_id FROM workflow_step_runs "
+                     "WHERE decision_id = :d ORDER BY created_at DESC LIMIT 1"),
+                {"d": row["id"]},
+            ).scalar()
+        except Exception:  # noqa: BLE001 — an unlinked decision still builds, as it always did
+            governing_run_id = None
+        if governing_run_id:
+            origin_ctx = {**(origin_ctx or {}), "workflow_run_id": str(governing_run_id)}
+
         def _launch_build() -> None:
             try:
                 from ..db import get_engine
