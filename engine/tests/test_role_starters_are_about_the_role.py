@@ -168,6 +168,16 @@ class TestItNamesThingsThatExist:
         conn = Conn(role=QA, apps=["Build HookWatch"])            # no failed run
         assert not any("{run}" in s for s in role_starters(conn, "p", "QA / Test"))
 
+    def test_a_failure_with_no_usable_title_is_described_not_pasted(self):
+        """Live, this rendered as "What actually caused crun_734b070b10ce48d6b71f to fail?".
+        Grounded and unreadable — a starter is an invitation, and nobody is invited by a
+        24-character token. The phrase resolves to exactly one run and the role can find it."""
+        conn = Conn(role=QA, apps=["Build HookWatch"],
+                    failure={"id": "crun_734b070b10ce48d6b71f", "title": "New work"})
+        out = role_starters(conn, "p", "QA / Test")
+        assert not any("crun_" in s for s in out)
+        assert any("the last failed run" in s for s in out)
+
     def test_no_placeholder_ever_reaches_the_operator(self):
         for role in (SECURITY, QA, FINANCE, CAPTAIN):
             for s in role_starters(Conn(role=role), "p", role["title"]):

@@ -235,9 +235,12 @@ def _recent_failure(connection: Connection, project_id: str) -> Optional[str]:
         name = _usable_name(str(row["title"] or ""))
         if name:
             return name
-    # A run id is a poor thing to put in a sentence, but it is REAL — the operator can paste it
-    # into the console and find the failure. A placeholder title cannot be looked up at all.
-    return str(rows[0]["id"]) if rows else None
+    # A run with no usable title is still a real failure, so the question stays — but it is
+    # asked by description rather than by id. "What actually caused crun_734b070b10ce48d6b71f
+    # to fail" is grounded and unreadable; a starter is an invitation, and nobody is invited by
+    # a 24-character token. The phrase resolves to exactly one run, and the role has the tools
+    # to find it.
+    return "the last failed run" if rows else None
 
 
 def _last_position(connection: Connection, project_id: str, title: str) -> Optional[str]:
