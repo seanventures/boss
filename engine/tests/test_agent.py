@@ -107,3 +107,43 @@ def test_unknown_tool_is_handled():
     ag = _agent([_tool_call_msg("no_such_tool"), _final_msg("done")], calls)
     turn = ag.chat(project_id="p", actor="u", message="x")
     assert turn.trace[0]["result"]["ok"] is False
+
+
+class _HiccupThenScripted:
+    """First N-1 completions follow the script; one later call is a 529, then the script resumes.
+
+    That is the live shape: the model asked for a write, the write ran, and the NEXT
+    completion — the one that would tell the operator what happened — hit capacity.
+    """
+
+    def __init__(self, scripted, *, fail_on_call: int):
+        self._scripted = list(scripted)
+        self.fail_on_call = fail_on_call
+        self.calls = 0
+
+    def create_chat_completion(self, messages, tools=None, tool_choice="auto"):
+        self.calls += 1
+        if self.calls == self.fail_on_call:
+            raise RuntimeError("529 overloaded_error")
+        return self._scripted.pop(0), {"total_tokens": 0}
+
+
+def test_a_provider_hiccup_after_a_write_does_not_run_the_write_again(monkeypatch):
+    """A 529 is a model blip, not a reason to ship twice.
+
+    The chat path retried the WHOLE turn when Anthropic returned 529. Redeploy, start_preview,
+    write_db and decide all execute directly (allow_writes=True). So: operator says "fix the
+    deployment"; the agent calls redeploy; the reply completion 529s; the turn starts over;
+    redeploy runs again. A redeploy is a new deployment record aimed at the same host.
+
+    Retry the model call. Do not replay the write.
+    """
+    monkeypatch.setattr("boss_engine.agent.transient.time.sleep", lambda _s: None)
+    calls = []
+    scripted = [_tool_call_msg("redeploy", '{"app":"x"}'), _final_msg("Redeployed.")]
+    ag = EngineAgent(ctx=object(), registry=_registry(calls))
+    ag._adapter = _HiccupThenScripted(scripted, fail_on_call=2)
+    turn = ag.chat(project_id="p", actor="u", message="redeploy x", allow_writes=True)
+    assert len(calls) == 1, "a capacity blip must not call redeploy again"
+    assert calls[0]["app"] == "x"
+    assert turn.reply == "Redeployed."

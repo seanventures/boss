@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from boss_engine.services.intent_router import _looks_transient, _with_transient_retry
+from boss_engine.agent.transient import _looks_transient, _with_transient_retry
 
 
 class TestWhatCountsAsAHiccup:
@@ -76,11 +76,14 @@ class TestTheRetry:
         assert _with_transient_retry(lambda: "fast", attempts=3, backoff=99) == "fast"
 
 
-def test_the_chat_path_uses_it():
-    """The wiring, not just the helper: this is the path a customer's question takes."""
+def test_the_model_call_is_retried_not_the_whole_turn():
+    """A 529 retries the completion. Retrying chat() itself would replay writes."""
     import inspect
+    from pathlib import Path
 
-    from boss_engine.services.intent_router import IntentRouter
+    from boss_engine.agent.engine_agent import EngineAgent
 
-    source = inspect.getsource(IntentRouter)
-    assert "_with_transient_retry" in source
+    assert "_with_transient_retry" in inspect.getsource(EngineAgent.chat)
+    import boss_engine.agent.engine_agent as agent_mod
+    router = Path(agent_mod.__file__).resolve().parents[1] / "services" / "intent_router.py"
+    assert "_with_transient_retry(lambda: self._answer_agent().chat" not in router.read_text()

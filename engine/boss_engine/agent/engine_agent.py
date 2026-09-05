@@ -349,8 +349,21 @@ class EngineAgent:
                     )
                 except Exception:  # noqa: BLE001 — never fail a turn to report progress
                     pass
-            msg, _usage = self._adapter_obj().create_chat_completion(
-                messages, tools=(None if last else schemas))
+            # RETRY THE MODEL CALL, NOT THE TURN.
+            #
+            # The chat path used to wrap this whole method in a 529 retry. Redeploy,
+            # start_preview, write_db and decide execute directly when allow_writes is on, so a
+            # capacity blip WHILE COMPOSING THE REPLY restarted the turn and ran the write
+            # again. A redeploy is a new deployment record at the same host; a second
+            # start_preview boots a second copy of the app. A hiccup is not a reason to ship
+            # twice. The model call is the thing that 529'd; that is what gets another try.
+            from .transient import _with_transient_retry
+
+            msg, _usage = _with_transient_retry(
+                lambda: self._adapter_obj().create_chat_completion(
+                    messages, tools=(None if last else schemas)
+                )
+            )
             messages.append(msg["raw"])
             tool_calls = None if last else msg.get("tool_calls")
             if not tool_calls:

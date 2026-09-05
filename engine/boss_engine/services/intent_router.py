@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -1366,44 +1365,6 @@ def _no_button_was_promised(reply: str, proposed: list) -> str:
 
 _log = logging.getLogger(__name__)
 
-#: Provider hiccups worth trying again, rather than reporting to a customer as an answer.
-#: Anthropic's 529 is `overloaded_error` — capacity, not a bad request — and the coding
-#: pipeline has always retried it. Kept in the same words as code_agent's list so the two
-#: cannot drift into disagreeing about what "transient" means.
-_TRANSIENT_MARKERS = (
-    "529", "503", "overloaded", "capacity", "bad gateway", "gateway timeout",
-    "connection reset", "connection closed", "connection error", "timed out",
-)
-
-
-def _looks_transient(error: BaseException) -> bool:
-    text = f"{type(error).__name__}: {error}".lower()
-    return any(marker in text for marker in _TRANSIENT_MARKERS)
-
-
-def _with_transient_retry(call, attempts: int = 3, backoff: float = 2.0):
-    """Run `call`, retrying a provider hiccup a couple of times before giving up.
-
-    Short and bounded on purpose: a person is waiting on this turn, so two extra attempts a few
-    seconds apart is the difference between "the provider was busy for a moment" and a dead end
-    the operator has to notice and work around. Anything that does not look transient is raised
-    immediately — retrying a bad request just spends the wait twice.
-    """
-    last: BaseException
-    for attempt in range(attempts):
-        try:
-            return call()
-        except BaseException as exc:  # noqa: BLE001 — re-raised below unless transient
-            last = exc
-            if attempt == attempts - 1 or not _looks_transient(exc):
-                raise
-            _log.warning(
-                "answer attempt %d/%d hit a transient provider error (%s) — retrying in %.0fs",
-                attempt + 1, attempts, type(exc).__name__, backoff * (attempt + 1),
-            )
-            time.sleep(backoff * (attempt + 1))
-    raise last
-
 
 class IntentRouter:
     """Transport-free intent router and thin tool adapters.
@@ -2057,18 +2018,14 @@ class IntentRouter:
                     # reply if the tool loop yields nothing.
                     # A 529 IS THE PROVIDER SAYING "NOT NOW", NOT AN ANSWER.
                     #
-                    # Anthropic returns 529 overloaded_error when its capacity is saturated. The
-                    # coding pipeline has always treated that as transient and retried it
-                    # (code_agent's transient list names "529" explicitly); this path did not,
-                    # so a capacity blip reached the operator as "I could not answer that" and
-                    # they had to notice and ask again. The customer's only interface should not
-                    # hand them a provider's load-shedding as a dead end.
+                    # EngineAgent retries only the model call. Retrying this entire turn
+                    # could repeat a write that had already succeeded.
                     _looking_only = asked_only_to_look(latest)
                     _report = _progress_reporter(project_id, thread_id)
                     # An investigation posts its findings back into THIS conversation, so the
                     # thread has to travel with the call. The model has no way to know it.
                     self._answer_agent().ambient = {"_thread_id": thread_id}
-                    turn = _with_transient_retry(lambda: self._answer_agent().chat(
+                    turn = self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
                         # The blocks when there is an image, the text otherwise. Everything
                         # else in this method keeps reading `latest`, which is always a string.
@@ -2108,7 +2065,7 @@ class IntentRouter:
                         # away, instead of a fait accompli.
                         allow_writes=not _looking_only, on_step=_report,
                         max_steps=int(getattr(self.settings, "chat_max_steps", 14) or 14),
-                    ))
+                    )
                     reply = str(turn.reply or "").strip()
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
                     #
@@ -2218,7 +2175,7 @@ class IntentRouter:
                         c.get("tool") == "recall_role_experience" for c in tool_calls
                     ):
                         try:
-                            reread = _with_transient_retry(lambda: self._answer_agent().chat(
+                            reread = self._answer_agent().chat(
                                 project_id=project_id, actor=actor,
                                 message=(
                                     f"You answered as {role} without calling "
@@ -2238,7 +2195,7 @@ class IntentRouter:
                                 ),
                                 history=[{"role": "assistant", "content": reply}],
                                 system=system, allow_writes=False, max_steps=4,
-                            ))
+                            )
                         except Exception as exc:  # noqa: BLE001 — the first answer still stands
                             # Visible, not silent: this block referenced a `self.agent`
                             # that never existed, so it failed on EVERY turn and the
@@ -2396,7 +2353,7 @@ class IntentRouter:
                                 "DID, or a propose_action button — never with a plan, and never "
                                 "with a yes/no question.")
                         try:
-                            better = _with_transient_retry(lambda: self._answer_agent().chat(
+                            better = self._answer_agent().chat(
                                 project_id=project_id, actor="orchestrator",
                                 message="\n\n".join(gaps) + (
                                     "\n\nAnswer the operator's original question again, better. "
@@ -2408,7 +2365,7 @@ class IntentRouter:
                                 allow_writes=not _looking_only, on_step=_report,
                                 max_steps=int(getattr(
                                     self.settings, "chat_continuation_steps", 10) or 10),
-                            ))
+                            )
                         except Exception:  # noqa: BLE001 — the first answer still stands
                             better = None
                         for step in (getattr(better, "trace", None) or []):
@@ -2456,7 +2413,7 @@ class IntentRouter:
                     if (reply and not actions and not _looking_only
                             and _ACTION_CLAIM.search(reply)):
                         try:
-                            again = _with_transient_retry(lambda: self._answer_agent().chat(
+                            again = self._answer_agent().chat(
                                 project_id=project_id, actor=actor,
                                 message=(
                                     "You just told the operator you had made a change, and no "
@@ -2467,7 +2424,7 @@ class IntentRouter:
                                 ),
                                 history=[{"role": "assistant", "content": reply}],
                                 system=system, allow_writes=True, max_steps=4,
-                            ))
+                            )
                         except Exception as exc:  # noqa: BLE001 — the first answer still stands
                             # Same dead `self.agent` reference as the grounding re-ask
                             # above: this action-claim reconciler never ran either.
