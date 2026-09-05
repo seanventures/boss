@@ -623,6 +623,7 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             "- Do NOT create the product implementation.\n"
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
+            + _metrics_tests_clause(title, instructions)
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
@@ -636,8 +637,26 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         "- Cover: happy path, the most likely failure, boundary/edge cases, and validation/error paths.\n"
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
+        + _metrics_tests_clause(title, instructions)
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
+
+
+def _metrics_tests_clause(title: str, instructions: str) -> str:
+    """QA's share of the observability standard, for anything that serves traffic.
+
+    The standard told the BUILDER what to expose and said rendering "must be testable". Nothing
+    then tested it, and a standard no stage verifies is a suggestion: three apps reached a host
+    with a monitoring page linking to dashboards for metrics nobody had checked existed.
+
+    Same `applies_to` gate as the standard itself, so a CLI tool or a library is not asked for
+    an endpoint it has no reason to have.
+    """
+    from .platform_standards import METRICS_TEST_REQUIREMENT, applies_to
+
+    if not applies_to(f"{title}\n{instructions}"):
+        return ""
+    return "\n\n" + METRICS_TEST_REQUIREMENT + "\n"
 
 
 def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=False, ui=False, app_root=None):

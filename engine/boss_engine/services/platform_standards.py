@@ -35,8 +35,21 @@ REQUIRED SERIES
 - `app_info{version}` — gauge fixed at 1, carrying build/version as labels
 - `app_uptime_seconds` — gauge
 
-Add domain counters where they answer a real operational question (orders placed, jobs failed).
-Prefer a handful that someone would page on over exhaustive coverage.
+FUNCTIONAL METRICS ARE REQUIRED, NOT OPTIONAL
+Every feature in the acceptance criteria gets at least one metric that shows whether it is
+WORKING, not merely whether the process is up. A dashboard of request counts tells an operator
+the server is alive while the thing the app exists to do is silently failing.
+
+One counter per user-facing outcome, named for the domain action and split by result:
+`verifications_started_total`, `verifications_completed_total{result="success|failure"}`,
+`invites_sent_total{result}`, `imports_rejected_total{reason}`. Where an operation can be slow
+enough to matter, add a duration histogram for it too. Where the app holds a queue or a
+backlog, add a gauge for its depth.
+
+The test is simple: read the acceptance criteria back and ask, for each one, "which series
+would tell me this broke at 3am?" If there is no answer, that feature is not instrumented.
+Prefer a handful somebody would page on over exhaustive coverage — but a feature with NO
+signal is not finished.
 
 ROUTE MUST BE A TEMPLATE, NEVER A PATH
 `/api/quote/AAPL` and `/api/quote/MSFT` must both report `route="/api/quote/:symbol"`. A label
@@ -70,6 +83,36 @@ TESTING
 Rendering must be testable without making HTTP requests: exposition text parses, histogram
 buckets are cumulative and monotonic, `le="+Inf"` equals `_count`, label values with quotes or
 backslashes are escaped, and templated routes collapse to one series.
+""".strip()
+
+
+#: What QA must assert about instrumentation, in the QA stage's own words.
+#:
+#: The observability standard told the BUILDER what to expose and said rendering "must be
+#: testable" — and nothing ever tested it. A standard no stage verifies is a suggestion, and
+#: the evidence is on the host: three apps deployed, none of them scraped, and a monitoring
+#: page linking to dashboards for metrics nobody had checked existed.
+#:
+#: Written as test CASES rather than as a rule, because this text goes to the stage whose only
+#: job is to write tests.
+METRICS_TEST_REQUIREMENT = """
+METRICS TESTS ARE PART OF THE SUITE, NOT AN EXTRA
+BOSS scrapes `GET /metrics` on every app it deploys, so an app that ships without it is
+invisible the moment it is live. Include these cases:
+
+- `/metrics` answers 200 with content-type `text/plain; version=0.0.4`.
+- The four platform series are present: `http_requests_total`, `http_request_duration_seconds`,
+  `app_info`, `app_uptime_seconds`.
+- EVERY feature in the acceptance criteria has at least one domain series, and exercising that
+  feature moves its counter. Assert the delta, not merely that the name appears — a metric that
+  never increments is the same as no metric, and is harder to notice.
+- Route labels are templates: hit the same route with two different path parameters and assert
+  ONE series, not two. This is the failure that takes the metrics backend down rather than the
+  app, so it is worth a test of its own.
+- A scrape does not appear in the app's own request counters.
+
+If the app cannot serve `/metrics` at all, say so plainly in your summary rather than writing
+tests that pass around the gap.
 """.strip()
 
 

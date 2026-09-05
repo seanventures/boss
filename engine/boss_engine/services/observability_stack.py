@@ -368,6 +368,52 @@ networks:
 """
 
 
+def render_docker_run(ports: dict) -> str:
+    """The same three containers, without Compose.
+
+    hetzner-ci-01 has Docker and NO Compose — neither the plugin nor the standalone binary:
+
+        docker compose up -d  ->  unknown shorthand flag: 'd' in -d
+        docker-compose        ->  command not found
+
+    The apps on that host run perfectly well, because app deploys use plain `docker run`. The
+    observability stack was the only thing that assumed Compose, so monitoring could never come
+    up there — and the console went on linking to a Grafana dashboard on a Grafana that did not
+    exist. An operator following that link got a connection refused and no explanation.
+
+    Compose is still tried first: it handles ordering and volumes more tidily where it exists.
+    This is the fallback, expressed in the one primitive every Docker host has.
+    """
+    return "\n".join([
+        # Idempotent: re-running the deploy is how a newly onboarded app gets a dashboard, so
+        # each container is replaced rather than refused as a duplicate name.
+        "docker network create boss-obs 2>/dev/null || true",
+        "docker volume create boss-prometheus-data >/dev/null 2>&1 || true",
+        "docker volume create boss-grafana-data >/dev/null 2>&1 || true",
+        "docker rm -f boss-otel-collector boss-prometheus boss-grafana >/dev/null 2>&1 || true",
+        (f"docker run -d --name boss-otel-collector --restart unless-stopped "
+         f"--network boss-obs --add-host host.docker.internal:host-gateway "
+         f"--label boss.managed=true --label boss.app=observability "
+         f"-v {STACK_DIR}/otel-config.yaml:/etc/otel/config.yaml:ro "
+         f"otel/opentelemetry-collector-contrib:0.114.0 --config=/etc/otel/config.yaml"),
+        (f"docker run -d --name boss-prometheus --restart unless-stopped "
+         f"--network boss-obs --label boss.managed=true --label boss.app=observability "
+         f"-v {STACK_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml:ro "
+         f"-v boss-prometheus-data:/prometheus prom/prometheus:v3.0.1 "
+         f"--config.file=/etc/prometheus/prometheus.yml "
+         f"--storage.tsdb.retention.time=15d"),
+        (f"docker run -d --name boss-grafana --restart unless-stopped "
+         f"--network boss-obs -p {ports['grafana']}:3000 "
+         f"--label boss.managed=true --label boss.app=observability "
+         f"-e GF_AUTH_ANONYMOUS_ENABLED=true -e GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer "
+         f"-e GF_USERS_DEFAULT_THEME=dark "
+         f"-e GF_SECURITY_ADMIN_PASSWORD=\"${{GF_ADMIN_PASSWORD:-boss-admin}}\" "
+         f"-v {STACK_DIR}/grafana/datasources:/etc/grafana/provisioning/datasources:ro "
+         f"-v {STACK_DIR}/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro "
+         f"-v boss-grafana-data:/var/lib/grafana grafana/grafana:11.4.0"),
+    ])
+
+
 def stack_files(targets: list[dict], ports: dict) -> dict[str, str]:
     """Every file the stack needs, keyed by path relative to STACK_DIR."""
     files = {
@@ -447,8 +493,13 @@ def deploy_stack(engine, settings: Settings, *, project_id: str, host_target_id:
             # ran to end-of-file and swallowed the rest of the script.
             marker = f"BOSS_EOF_{i}"
             parts.append(f"cat > {STACK_DIR}/{path} <<'{marker}'\n{content}\n{marker}")
-        parts.append(f"cd {STACK_DIR} && (docker compose up -d 2>&1 || "
-                     f"docker-compose up -d 2>&1)")
+        # Compose if the host has it; plain `docker run` if it does not. Both are attempted
+        # because "no Compose on this box" is a fact about the host, not a failure to report
+        # back — every other BOSS deployment already works there without it.
+        parts.append(
+            f"cd {STACK_DIR} && (docker compose up -d 2>&1 || docker-compose up -d 2>&1 || "
+            f"{{ echo 'BOSS: no docker compose on this host, using docker run'; "
+            f"{render_docker_run(ports)}; }} 2>&1)")
         # Joined with NEWLINES, not "; ". A heredoc's closing marker must be alone on its
         # line; joining with a semicolon put `BOSS_EOF_0; cat > next...` on one line, so the
         # first heredoc swallowed every following file into an 11KB blob and compose failed to
