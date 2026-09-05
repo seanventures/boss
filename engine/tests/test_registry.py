@@ -69,6 +69,8 @@ _EXPECTED_TOOLS: set[str] = {
     "find_split_apps",
     "merge_apps",
     "generate_image",
+    "describe_deployment_target",
+    "retarget_app",
     "read_logs",
     "register_repository",
     "repo_activity",
@@ -98,11 +100,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 62, (
+    assert len(reg.names()) == 64, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 39
-    assert len(write) == 23
+    assert len(read) == 40
+    assert len(write) == 24
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",

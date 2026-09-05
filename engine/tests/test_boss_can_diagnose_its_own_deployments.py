@@ -1,0 +1,85 @@
+"""BOSS diagnosed one deployment four times and fixed nothing. Why is the interesting part.
+
+The operator approved a fix three separate times and got the same paragraph back:
+
+    port 3020 is blocked by a firewall/security group ... let me know which port you'd like
+    to open and I'll update the target and retry.
+
+Three things were true at once, and only the third is about tools:
+
+  1. THE DIAGNOSIS WAS WRONG. The health check probed 2.29.2.202:8000 — the stale port in the
+     target's `domains` — while the container published on 3020. Two facts about different
+     ports, compared as though they were about one. There was no firewall: a sibling app on
+     that host answers on 3010 from outside, and 3020 itself returns 200.
+
+  2. BOSS DID NOT TEST IT. `failure_reason` held a CONCLUSION written by BOSS's own health
+     checker, and BOSS repeated it. It had http_probe the whole time; one call would have
+     disproved the firewall theory.
+
+  3. IT COULD NOT HAVE ACTED ANYWAY. There was no tool to change a target, so "tell me which
+     port and I'll update the target" was an offer BOSS could not honour — which from outside
+     is indistinguishable from refusing to help.
+
+Fixing only (3) would have left it confidently changing the wrong thing. So: the checker no
+longer manufactures the firewall claim, the agent is told a recorded diagnosis is a claim, and
+the contradiction is now something a tool STATES rather than something a model must notice.
+"""
+from __future__ import annotations
+
+import pytest
+
+from boss_engine.tools.builtin import build_default_registry
+
+
+@pytest.fixture
+def tools():
+    return {spec.name: spec for spec in build_default_registry().specs()}
+
+
+class TestItCanSeeTheContradiction:
+    def test_a_tool_reports_where_a_target_disagrees_with_itself(self, tools):
+        assert "describe_deployment_target" in tools
+        assert tools["describe_deployment_target"].kind == "read"
+
+    def test_the_port_mismatch_is_named_and_the_fix_is_named(self, tools):
+        import inspect
+
+        body = inspect.getsource(tools["describe_deployment_target"].handler)
+        assert "THE ADDRESS NAMES THE WRONG PORT" in body
+        # And says what to do, because "mismatch" without a remedy is another dead end.
+        assert "retarget_app(port=" in body
+        assert "not with a firewall rule" in body
+
+    def test_it_also_catches_the_states_that_silently_hide_an_app(self, tools):
+        """Unbound and retired both make an app un-shippable while looking fine."""
+        import inspect
+
+        body = inspect.getsource(tools["describe_deployment_target"].handler)
+        assert "no host bound" in body
+        assert "lists only active" in body
+
+
+class TestItCanActOnWhatItFinds:
+    def test_there_is_a_tool_to_correct_the_binding(self, tools):
+        assert "retarget_app" in tools
+        assert tools["retarget_app"].kind == "write"
+
+    def test_it_writes_both_records_together(self, tools):
+        """`domains` and `app_port` are two spellings of one fact; letting them drift is the
+        entire bug this tool repairs."""
+        import inspect
+
+        body = inspect.getsource(tools["retarget_app"].handler)
+        assert "required_resources = CAST(:r AS JSONB), " in body
+        assert "domains = CAST(:d AS JSONB)" in body
+
+    def test_it_can_revive_a_retired_target(self, tools):
+        import inspect
+
+        assert "activate" in inspect.getsource(tools["retarget_app"].handler)
+
+    def test_it_is_reachable_from_chat(self):
+        """A write BOSS owns but may not call is a tool that does not exist."""
+        from boss_engine.tools.builtin import _DISCUSS_OPERATIONS_TOOLS
+
+        assert "retarget_app" in _DISCUSS_OPERATIONS_TOOLS

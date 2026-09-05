@@ -199,12 +199,24 @@ def _health_url(domain: str, check: dict, app_port: Optional[int] = None) -> str
     which rather than the code guessing.
     """
     scheme = str(check.get("scheme") or "https").lower()
-    # A domain with no port, for an app published on one, checks the host's default port —
-    # which on a shared machine belongs to someone else and answers 200. Belt and braces with
-    # _ensure_port: this catches targets whose domain was set by hand.
+    # THE PORT THE APP WAS ACTUALLY PUBLISHED ON WINS.
+    #
+    # This only filled the port in when the domain had NONE, so a domain carrying a STALE port
+    # silently beat the real one. HookWatch published on 3020 and was health-checked on
+    # 2.29.2.202:8000 — its target's `domains` still held the port issued when the target was
+    # first created. Connection refused, every time, on every redeploy.
+    #
+    # And the failure was diagnosed as a firewall: the checker saw the app answering on
+    # localhost:3020 and the outside probe refused, and concluded the port was blocked. It was
+    # not blocked — a sibling app on this very host answers on 3010 from outside. Nothing was
+    # ever wrong except which port was asked. An operator was told four times to open a
+    # firewall rule that would have changed nothing.
+    #
+    # Restricted to http, as before: an https domain is a real name in front of a proxy, where
+    # the public port is deliberately NOT the container's.
     host_part = str(domain).split("/")[0]
-    if app_port and ":" not in host_part and scheme == "http":
-        domain = f"{host_part}:{app_port}"
+    if app_port and scheme == "http":
+        domain = f"{host_part.split(':')[0]}:{app_port}"
     return f"{scheme}://{domain}{check.get('path', '/')}"
 
 
@@ -734,13 +746,30 @@ class SSHContainerConnector:
         return result
 
     # -- observe ----------------------------------------------------------------
-    def _why_unreachable(self, target: dict, settings: Settings) -> str:
+    def _why_unreachable(self, target: dict, settings: Settings,
+                         probed_url: str = "") -> str:
         """Is the app broken, or just unreachable? Ask the host.
 
         Same symptom, opposite fixes. `curl localhost:PORT` over SSH answers it in one round
         trip: serving locally means the firewall is dropping the port; not serving means the
         container is the problem. Best-effort — a diagnosis that fails must not turn a health
         verdict into an exception.
+
+        FIRST, THOUGH: WAS IT THE SAME PORT?
+        ------------------------------------
+        This compared "the app answers on localhost:3020" against "the external check failed"
+        and concluded a firewall was blocking 3020. The external check had probed 8000 — the
+        stale port in the target's `domains` — so the two facts were about different ports and
+        the inference was invalid. The port was not blocked: a sibling app on the same host
+        answers on 3010 from outside.
+
+        An operator was told four separate times to open a firewall rule that would have
+        changed nothing, because this string is written into failure_reason and the agent then
+        repeats it faithfully. A confident wrong diagnosis is worse than "unreachable": it
+        sends somebody to work on the wrong machine.
+
+        So the two ports are compared before the network is blamed. It is the cheapest check
+        available and it is the one that was missing.
         """
         from .deploy_service import _app_name, _discard_key_file, _materialise_key, _ssh, \
             _ssh_key_file
@@ -748,6 +777,17 @@ class SSHContainerConnector:
         app_port = _app_port(target, default=0)
         if not app_port:
             return ""
+        # The port that was actually asked, out of the URL that actually failed.
+        probed_port = ""
+        host_part = str(probed_url).split("//")[-1].split("/")[0]
+        if ":" in host_part and host_part.rsplit(":", 1)[1].isdigit():
+            probed_port = host_part.rsplit(":", 1)[1]
+        if probed_port and probed_port != str(app_port):
+            return (f"the check asked for port {probed_port} but this app is published on "
+                    f"{app_port} — nothing is listening on {probed_port}, so it refused. This "
+                    f"is a stale address on the target, not a firewall: the target's domain "
+                    f"still names the port it was first given. Correct the target's domain to "
+                    f"port {app_port} and redeploy.")
         user, host, port = _split_ref(target.get("target_ref", ""))
         app = _app_name(target.get("repo") or "", target.get("app_name"))
         ephemeral = None
@@ -828,7 +868,7 @@ class SSHContainerConnector:
                     # Asking the HOST whether the app answers on localhost separates them: a
                     # broken app is the deployment's fault, a blocked port is the firewall's,
                     # and an operator handed only "urlopen error timed out" cannot tell which.
-                    "diagnosis": self._why_unreachable(target, settings),
+                    "diagnosis": self._why_unreachable(target, settings, url),
                 })
                 healthy = False
                 continue

@@ -2242,6 +2242,169 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_deployment_target_tools(reg: ToolRegistry) -> None:
+    """Read an app's address, and correct it — the two things BOSS could not do.
+
+    HookWatch failed its health check four times running. Each time the recorded reason said
+    "port 3020 is blocked by a firewall", each time the operator approved a fix, and each time
+    BOSS answered with the same paragraph. It was not being obtuse: it had NO TOOL TO CHANGE A
+    TARGET. It kept offering "tell me which port and I'll update the target" for an action it
+    could not perform, which is the worst shape a limitation can take — indistinguishable, from
+    the outside, from refusing to help.
+
+    It also had no way to READ the target's binding side by side. The contradiction was two
+    fields apart: `domains` said 2.29.2.202:8000 while `app_port` said 3020. The health check
+    probed the first, the container published on the second, and nothing compared them. There
+    was no firewall; a sibling app on that host answers on its own port from outside.
+
+    So: one tool that lays the binding out and says where it disagrees with itself, and one
+    that fixes it.
+    """
+    @reg.tool(
+        "describe_deployment_target",
+        "Everything about where an app ships: its host, the port the container publishes on, "
+        "the address the health check probes, its status and its credential — AND whether "
+        "those agree. Run this whenever a deployment is 'unreachable' or a health check "
+        "fails: an address that names a different port from the one the app is published on "
+        "fails identically to a blocked firewall, and the fixes are opposite.",
+        _obj({"app_name": {"type": "string", "description": "the app, e.g. HookWatch"},
+              "target_id": {"type": "string", "description": "or the target directly"},
+              "project_id": {"type": "string"}}),
+        kind="read",
+    )
+    def describe_deployment_target(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        where, params = "project_id = :p", {"p": pid}
+        if args.get("target_id"):
+            where += " AND id = :i"
+            params["i"] = str(args["target_id"])
+        elif args.get("app_name"):
+            where += " AND app_name = :a"
+            params["a"] = str(args["app_name"])
+        with ctx.begin() as c:
+            rows = c.execute(_text(
+                "SELECT id, app_name, environment, status, host_id, target_ref, domains, "
+                "required_resources, health_checks, secret_refs "
+                f"FROM deployment_targets WHERE {where} ORDER BY app_name"), params,
+            ).mappings().all()
+            hosts = {r["id"]: dict(r) for r in c.execute(_text(
+                "SELECT id, name, address, status, key_secret_ref FROM deployment_hosts "
+                "WHERE project_id = :p"), {"p": pid}).mappings()}
+
+        out = []
+        for row in rows:
+            resources = row["required_resources"] or []
+            app_port = next((str(r.get("name")) for r in resources
+                             if isinstance(r, dict) and r.get("kind") == "app_port"), "")
+            domains = [str(d) for d in (row["domains"] or [])]
+            domain_port = ""
+            if domains and ":" in domains[0]:
+                tail = domains[0].rsplit(":", 1)[1]
+                domain_port = tail if tail.isdigit() else ""
+            host = hosts.get(row["host_id"]) if row["host_id"] else None
+
+            # THE CONTRADICTIONS, STATED. This is the whole point of the tool: the facts were
+            # always readable and nobody compared them.
+            problems = []
+            if not row["host_id"]:
+                problems.append("no host bound: the ssh credential resolves through host_id, "
+                                "so every deploy will refuse before it connects")
+            if app_port and domain_port and app_port != domain_port:
+                problems.append(
+                    f"THE ADDRESS NAMES THE WRONG PORT: health checks probe {domain_port} "
+                    f"but the container publishes on {app_port}. Nothing listens on "
+                    f"{domain_port}, so the check fails exactly as a blocked port would. "
+                    f"Fix with retarget_app(port={app_port}), not with a firewall rule.")
+            if app_port and not domains:
+                problems.append(f"no address recorded, though the app publishes on {app_port}")
+            if row["status"] != "active":
+                problems.append(f"target is {row['status']}: the console lists only active "
+                                "targets, so this app is invisible and cannot be shipped")
+            out.append({
+                "target_id": row["id"], "app_name": row["app_name"],
+                "environment": row["environment"], "status": row["status"],
+                "host": (host or {}).get("name"), "host_address": (host or {}).get("address"),
+                "publishes_on_port": app_port or None,
+                "health_check_address": domains[0] if domains else None,
+                "agrees_with_itself": not problems,
+                "problems": problems,
+            })
+        return {"project_id": pid, "targets": out,
+                "note": "compare publishes_on_port with health_check_address before blaming "
+                        "the network"}
+
+    @reg.tool(
+        "retarget_app",
+        "Correct where an app is addressed: its port, or the host it is bound to. Use after "
+        "describe_deployment_target reports the address and the published port disagree. "
+        "Changes only the binding — it does not deploy, and it does not touch the app.",
+        _obj({"target_id": {"type": "string"},
+              "port": {"type": "integer",
+                       "description": "the port the container actually publishes on"},
+              "host_id": {"type": "string", "description": "rebind to a different host"},
+              "activate": {"type": "boolean",
+                           "description": "bring a retired target back into service"},
+              "project_id": {"type": "string"}},
+             ["target_id"]),
+        kind="write",
+    )
+    def retarget_app(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        target_id = str(args["target_id"])
+        changed = {}
+        with ctx.begin() as c:
+            row = c.execute(_text(
+                "SELECT id, host_id, domains, required_resources, status FROM "
+                "deployment_targets WHERE id = :i AND project_id = :p"),
+                {"i": target_id, "p": pid}).mappings().first()
+            if row is None:
+                return {"ok": False, "error": f"no target {target_id} in {pid}"}
+
+            host_id = str(args.get("host_id") or row["host_id"] or "")
+            if not host_id:
+                return {"ok": False, "error": "the target has no host and none was given"}
+            host = c.execute(_text(
+                "SELECT id, name, address, ssh_user, ssh_port FROM deployment_hosts "
+                "WHERE id = :h AND project_id = :p"),
+                {"h": host_id, "p": pid}).mappings().first()
+            if host is None:
+                return {"ok": False, "error": f"no host {host_id} in {pid}"}
+
+            if args.get("host_id") and args["host_id"] != row["host_id"]:
+                c.execute(_text(
+                    "UPDATE deployment_targets SET host_id = :h, target_ref = :ref, "
+                    "updated_at = now() WHERE id = :i"),
+                    {"h": host_id, "i": target_id,
+                     "ref": f"{host['ssh_user'] or 'root'}@{host['address']}:"
+                            f"{host['ssh_port'] or 22}"})
+                changed["host"] = host["name"]
+
+            port = args.get("port")
+            if port:
+                resources = [r for r in (row["required_resources"] or [])
+                             if not (isinstance(r, dict) and r.get("kind") == "app_port")]
+                resources.append({"kind": "app_port", "name": str(int(port))})
+                # BOTH RECORDS, IN ONE WRITE. They are two spellings of one fact, and letting
+                # them drift apart is the entire bug this tool exists to repair.
+                c.execute(_text(
+                    "UPDATE deployment_targets SET required_resources = CAST(:r AS JSONB), "
+                    "domains = CAST(:d AS JSONB), updated_at = now() WHERE id = :i"),
+                    {"r": json.dumps(resources),
+                     "d": json.dumps([f"{host['address']}:{int(port)}"]), "i": target_id})
+                changed["port"] = int(port)
+                changed["address"] = f"{host['address']}:{int(port)}"
+
+            if args.get("activate") and row["status"] != "active":
+                c.execute(_text("UPDATE deployment_targets SET status = 'active', "
+                                "updated_at = now() WHERE id = :i"), {"i": target_id})
+                changed["status"] = "active"
+
+        if not changed:
+            return {"ok": True, "changed": {}, "note": "nothing to change"}
+        return {"ok": True, "target_id": target_id, "changed": changed,
+                "note": "the binding is corrected; redeploy to verify it end to end"}
+
+
 def _register_image_tools(reg: ToolRegistry) -> None:
     """Make pictures, because the apps BOSS writes need them.
 
@@ -3119,6 +3282,7 @@ def build_default_registry() -> ToolRegistry:
     _register_investigation_tools(reg)
     _register_app_identity_tools(reg)
     _register_image_tools(reg)
+    _register_deployment_target_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
@@ -3178,6 +3342,11 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     "extend_code_task",
     "steer_code_task",
     "cancel_code_task",
+    # Correcting where an app is addressed. BOSS diagnosed the same deployment four times
+    # and could not act on any of it, because changing a target was not something it could do —
+    # so it offered "tell me which port and I'll update the target" for an action it did not
+    # have. A diagnosis with no matching capability is a loop.
+    "retarget_app",
     # Making the artwork an app needs. Costs money per image, which is why it is a write and
     # not a read; it is reachable because an app that has to ship with pictures cannot be
     # finished by describing them.
