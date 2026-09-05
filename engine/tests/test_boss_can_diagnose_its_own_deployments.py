@@ -144,3 +144,64 @@ class TestItCannotClaimAnActionItDidNotTake:
         reply = "Probing 8000, published on 3020. I've corrected the target."
         out = _no_action_was_claimed(reply, [])
         assert "Probing 8000, published on 3020." in out
+
+
+class TestAClaimBecomesAnAttempt:
+    """Telling the operator the truth is not the same as doing what they asked.
+
+    With the tool in its schema list and explicit approval, BOSS narrated the fix instead of
+    calling anything. The correction note made that visible — and still left the operator to
+    ask a second time for something they had already approved.
+
+    So a completion claim with no write is treated as the intent it plainly is: one more turn,
+    told that nothing ran and to call the tool now.
+    """
+
+    def _router(self) -> str:
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        return inspect.getsource(intent_router)
+
+    def test_a_claim_with_no_action_triggers_another_attempt(self):
+        body = self._router()
+        assert "if reply and not actions and _ACTION_CLAIM.search(reply):" in body
+        assert "Call the tool that performs it NOW" in body
+
+    def test_the_retry_may_write(self):
+        assert "allow_writes=True, max_steps=4," in self._router()
+
+    def test_the_retry_is_told_to_name_a_missing_tool_rather_than_re_describe(self):
+        body = self._router()
+        assert "name the tool you" in body
+        assert "do not describe the change again" in body
+
+
+class TestWhatCountsAsHavingActed:
+    """The list of acting tools drifted, which would have made a genuine fix look like a lie.
+
+    `deploy_app`, `merge_apps` and `retarget_app` were all absent, so a turn that really did
+    retarget an app recorded `actions: []` — the console would show nothing and the honesty
+    guard would call a real fix a fabrication. The registry already knows which tools write.
+    """
+
+    def test_writes_count_as_actions(self):
+        from boss_engine.services.intent_router import _is_acting
+
+        for tool in ("retarget_app", "merge_apps", "deploy_app", "redeploy"):
+            assert _is_acting(tool), tool
+
+    def test_reads_do_not(self):
+        from boss_engine.services.intent_router import _is_acting
+
+        for tool in ("describe_deployment_target", "list_deployments", "search_code"):
+            assert not _is_acting(tool), tool
+
+    def test_a_new_write_needs_no_second_edit(self):
+        """Derived from the registry, so the day a write is added it is already an action."""
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        assert 'spec.kind == "write"' in inspect.getsource(intent_router._acting_tools)

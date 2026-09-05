@@ -35,12 +35,44 @@ from .receipts import ReceiptService
 #: Tools whose use CHANGED something, as opposed to reading. Surfaced to the console as
 #: `actions` so an operator can see what BOSS did to their system without reading prose — and
 #: so "it says it fixed it" is falsifiable.
-_ACTING_TOOLS = frozenset({
+#: Tools whose use counts as BOSS having DONE something, rather than looked at something.
+#:
+#: This was a hand-written list and it drifted, as hand-written lists of a growing set do:
+#: `deploy_app`, `merge_apps` and `retarget_app` were all missing, so a turn that really did
+#: retarget an app recorded `actions: []` — the console showed nothing, and the guard that
+#: checks "did it do what it said" would have called a genuine fix a fabrication.
+#:
+#: The registry already knows: a tool is declared `kind="write"` or it is not. Reading it there
+#: means a new write is an action the day it is added, with nobody having to remember.
+def _is_acting(tool_name: str) -> bool:
+    return tool_name in _acting_tools()
+
+
+def _acting_tools() -> frozenset[str]:
+    global _ACTING_CACHE
+    if _ACTING_CACHE is None:
+        try:
+            from ..tools import build_default_registry
+
+            _ACTING_CACHE = frozenset(
+                spec.name for spec in build_default_registry().specs() if spec.kind == "write")
+        except Exception:  # noqa: BLE001 — never let this break a turn
+            _ACTING_CACHE = _ACTING_FALLBACK
+    return _ACTING_CACHE
+
+
+_ACTING_CACHE: "frozenset[str] | None" = None
+
+#: Only if the registry cannot be read at all.
+_ACTING_FALLBACK = frozenset({
     "redeploy", "retry_code_task", "extend_code_task", "steer_code_task", "cancel_code_task",
     "create_code_task", "create_discovery", "request_meeting", "register_repository",
     "start_preview", "stop_preview", "cancel_job", "set_job_priority", "close_orphaned_runs",
     "link_run_origin", "decide", "waive_gates", "send_feedback", "write_db",
+    "deploy_app", "merge_apps", "retarget_app", "generate_image", "run_on_host",
 })
+
+_ACTING_TOOLS = _ACTING_FALLBACK   # kept for any caller that imports the name directly
 
 
 @dataclass
@@ -983,7 +1015,7 @@ class IntentRouter:
                         tool_calls.append({"tool": step.get("tool"),
                                            "args": step.get("args"),
                                            "ok": bool(result.get("ok", True))})
-                        if step.get("tool") in _ACTING_TOOLS and not result.get("proposed"):
+                        if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                             actions.append({"kind": str(step.get("tool")),
                                             "args": step.get("args"),
                                             "result": result})
@@ -1001,6 +1033,46 @@ class IntentRouter:
                                 "label": result.get("label"),
                                 "why": result.get("why"),
                             })
+                    # IT SAID IT DID IT. MAKE IT DO IT.
+                    #
+                    # Given the tool and explicit approval, BOSS read HookWatch's target, got
+                    # the diagnosis right, and wrote "Action taken: retarget_app — set the
+                    # health-check address to port 3020" without calling anything. The tool was
+                    # in its schema list. It simply narrated the work instead of doing it.
+                    #
+                    # A correction note tells the operator the truth but still leaves them to
+                    # ask again for something they already approved. So the claim is treated as
+                    # the intent it obviously is: one more turn, told plainly that nothing ran
+                    # and that it must call the tool now. If it acts, the operator gets what
+                    # they asked for; if it does not, the correction below still fires and they
+                    # are told, rather than being quietly left with a broken app.
+                    if reply and not actions and _ACTION_CLAIM.search(reply):
+                        try:
+                            again = _with_transient_retry(lambda: self.agent.chat(
+                                project_id=project_id, actor=actor,
+                                message=(
+                                    "You just told the operator you had made a change, and no "
+                                    "tool ran — the trace shows reads only. They have already "
+                                    "approved it. Call the tool that performs it NOW, with "
+                                    "concrete arguments. If you cannot, name the tool you "
+                                    "lack; do not describe the change again."
+                                ),
+                                history=[{"role": "assistant", "content": reply}],
+                                system=system, allow_writes=True, max_steps=4,
+                            ))
+                        except Exception:  # noqa: BLE001 — the first answer still stands
+                            again = None
+                        for step in (getattr(again, "trace", None) or []):
+                            result = step.get("result") or {}
+                            tool_calls.append({"tool": step.get("tool"),
+                                               "args": step.get("args"),
+                                               "ok": bool(result.get("ok", True))})
+                            if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
+                                actions.append({"kind": str(step.get("tool")),
+                                                "args": step.get("args"), "result": result})
+                        if actions and getattr(again, "reply", ""):
+                            reply = f"{reply}\n\n{str(again.reply).strip()}"
+
                     if not reply:
                         failure = "the model returned an empty answer"
                 finally:
