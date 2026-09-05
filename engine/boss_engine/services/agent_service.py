@@ -34,8 +34,6 @@ class AgentService:
         thread_id: Optional[str] = None,
         surface: str = "chat",
         external_ref: Optional[str] = None,
-        #: Answer as this member of the workforce. See _role_identity in intent_router.
-        role: Optional[str] = None,
     ) -> dict[str, Any]:
         if thread_id:
             row = connection.execute(
@@ -269,6 +267,9 @@ class AgentService:
         confirm_plan_id: Optional[str] = None,
         surface: str = "chat",
         external_ref: Optional[str] = None,
+        #: Answer as this member of the workforce, rather than as BOSS in general.
+        #: See _role_identity in intent_router for what it changes.
+        role: Optional[str] = None,
     ) -> dict[str, Any]:
         thread = self.start_or_load_thread(
             connection,
