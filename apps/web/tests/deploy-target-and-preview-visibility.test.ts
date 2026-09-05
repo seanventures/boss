@@ -175,10 +175,11 @@ describe("a succeeded deploy shows the app, not an old failure", () => {
     expect(SOURCE).toContain("const liveAppUrl");
   });
 
-  it("links only on success, and only from the bound target", () => {
-    // Linking on anything less would repeat the mistake this view keeps making: reporting a
-    // state the system is not in.
-    expect(SOURCE).toContain('step.status !== "succeeded") return ""');
+  it("links only on a succeeded DEPLOYMENT, and only from the bound target", () => {
+    // Linking on anything less repeats the mistake this view keeps making: reporting a state
+    // the system is not in. The condition moved from the step's status to the deployment's,
+    // because the step is precisely what cannot be trusted — see the suite below.
+    expect(SOURCE).toContain('lastDeploy?.status !== "succeeded"');
     expect(SOURCE).toContain("shippedTo?.domains");
   });
 });
@@ -248,5 +249,23 @@ describe("a skipped step says why, instead of reading as a fault", () => {
   it("carries the recorded reason", () => {
     expect(SOURCE).toContain("function skipReason");
     expect(SOURCE).toContain("title={skipReason(step)");
+  });
+});
+
+describe("the live link follows the deployment, not the step", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("does not decide 'shipped' from the step's own status", () => {
+    // HookWatch's deploy step reads SUCCEEDED because of a blocked run recorded before
+    // `blocked` stopped counting as success. Trusting it produced "Open the app →
+    // 2.29.2.202:8000" for an address with no container on it.
+    expect(SOURCE).toContain('lastDeploy?.status !== "succeeded"');
+    expect(SOURCE).not.toContain('if (!isDeployStep(step, capability) || step.status !== "succeeded") return ""');
+  });
+
+  it("asks the deployment history for that build", () => {
+    expect(SOURCE).toContain("const [lastDeploy, setLastDeploy]");
+    expect(SOURCE).toContain("body?.runs?.[buildRunId]?.deployments");
   });
 });

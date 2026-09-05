@@ -1667,8 +1667,39 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
     const name = typeof runInput.title === "string" ? runInput.title : "";
     return targets.find((t) => t.app_name === name);
   })();
+  // WHETHER SOMETHING IS ACTUALLY SHIPPED THERE — asked of the deployments, not of the step.
+  //
+  // This first used the step's own status, and the step is exactly what cannot be trusted
+  // here: HookWatch's deploy step reads SUCCEEDED because of a blocked run recorded before
+  // `blocked` stopped counting as success. So the console offered "Open the app →
+  // 2.29.2.202:8000" and "Replaces what is running there" for an address with no container on
+  // it at all. A link to a dead app is the same lie in a new place.
+  const [lastDeploy, setLastDeploy] = useState<{ status: string } | null>(null);
+  useEffect(() => {
+    if (!isDeployStep(step, capability) || !buildRunId) return;
+    let alive = true;
+    const name = typeof runInput.title === "string" ? runInput.title : "";
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/run-deployments?run_ids=${encodeURIComponent(buildRunId)}`
+          + `&app_names=${encodeURIComponent(name)}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const body = await r.json();
+        const list = (body?.runs?.[buildRunId]?.deployments ?? []) as Array<{
+          status?: string; started_at?: string;
+        }>;
+        const newest = [...list].sort((a, b) =>
+          String(b.started_at ?? "").localeCompare(String(a.started_at ?? "")))[0];
+        if (alive && newest) setLastDeploy({ status: String(newest.status ?? "") });
+      } catch { /* no deployment history: the step simply offers to ship */ }
+    })();
+    return () => { alive = false; };
+  }, [buildRunId, step, capability, runInput]);
+
   const liveAppUrl = (() => {
-    if (!isDeployStep(step, capability) || step.status !== "succeeded") return "";
+    if (!isDeployStep(step, capability)) return "";
+    if (lastDeploy?.status !== "succeeded") return "";
     const domain = (shippedTo?.domains ?? []).find((d: string) => !!d);
     if (!domain) return "";
     return /^https?:\/\//.test(domain) ? domain : `http://${domain}`;
