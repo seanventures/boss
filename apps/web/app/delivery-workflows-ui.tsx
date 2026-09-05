@@ -181,6 +181,12 @@ function failedButContinued(step: RunStep): boolean {
 }
 
 /** A step the runtime completed by recording that its phase never happened. */
+/** Why a step did not apply — the sentence the capability recorded when it stood aside. */
+function skipReason(step: RunStep): string {
+  const out = (step.output ?? {}) as { note?: unknown; reason?: unknown };
+  return String(out.note ?? out.reason ?? "").slice(0, 220);
+}
+
 function notApplicable(step: RunStep): boolean {
   return (step.output as { status?: string } | undefined)?.status === "not_applicable";
 }
@@ -1243,8 +1249,20 @@ function StepPath({ run, capabilities, targets, hosts, onRetryStep, onRerun, onS
                 <span className="dw-node-meta">
                   {needsYou(step) ? (
                     <em className="dw-node-you" data-testid="dw-node-you">needs you</em>
-                  ) : phase === "skipped" ? "not run"
-                    : stepDuration(step) || step.status}
+                  ) : phase === "skipped" ? (
+                    // "not run" READS AS A FAULT, and the reason was recorded all along.
+                    //
+                    // Research shows this on most runs and an operator who has watched it run
+                    // for four minutes on another run reasonably reads it as broken. It is
+                    // not: the step returns `status: not_applicable` with a sentence saying
+                    // why — "No research phase — this project was started directly, and the
+                    // build was already running when this workflow began" — and the chain
+                    // threw that sentence away and printed two words that sound like a defect.
+                    <span className="dw-node-skipped" data-testid="dw-node-skipped"
+                          title={skipReason(step) || "this step did not apply to this run"}>
+                      skipped{skipReason(step) ? " ⓘ" : ""}
+                    </span>
+                  ) : stepDuration(step) || step.status}
                 </span>
               </button>
             </li>
@@ -1336,11 +1354,10 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
   const mine = targets.filter((t) => t.app_name === appName);
 
   if (chosen) {
-    return (
-      <p className="dw-target-set" data-testid="dw-deploy-chosen">
-        Ships to <b>{chosen.app_name}</b> · {chosen.environment}
-      </p>
-    );
+    // Deliberately renders nothing: the ship control directly above states the destination
+    // AND its address, and printing "Ships to Vendor-Status-Watcher · staging" underneath it
+    // said the same thing twice in two different wordings.
+    return null;
   }
   if (mine.length) {
     return (
@@ -1401,8 +1418,11 @@ const ACTIVE_RUN_STATES = new Set(["running", "waiting", "ready", "leased", "que
  *  this button would have said, and a deploy that starts and then fails is exactly how a step
  *  ends up claiming success over a blocked release.
  */
-function ShipNow({ projectId, buildRunId, target, appName, onDone }: {
+function ShipNow({ projectId, buildRunId, target, appName, alreadyLive, onDone }: {
   projectId: string; buildRunId: string; target: DeployTarget; appName: string;
+  /** Something is already serving at this target. Then this button REPLACES it, and calling
+   *  that "Deploy now" next to a live "Open the app" link is just wrong. */
+  alreadyLive: boolean;
   onDone: () => void;
 }) {
   const [state, setState] = useState<"idle" | "shipping" | "done">("idle");
@@ -1468,11 +1488,13 @@ function ShipNow({ projectId, buildRunId, target, appName, onDone }: {
     <div className="dw-ship" data-testid="dw-ship">
       <button type="button" className="cap-btn primary" disabled={state === "shipping"}
               onClick={ship} data-testid="dw-ship-now">
-        {state === "shipping" ? "Shipping…" : "Deploy now"}
+        {state === "shipping" ? "Shipping…" : alreadyLive ? "Redeploy" : "Deploy now"}
       </button>
       <span className="detail">
-        Ships this build to <b>{target.app_name}</b> · {target.environment}
-        {target.domains?.[0] ? ` (${target.domains[0]})` : ""}.
+        {alreadyLive
+          ? <>Replaces what is running at {target.domains?.[0] ?? target.app_name} with this build.</>
+          : <>Ships this build to <b>{target.app_name}</b> · {target.environment}
+             {target.domains?.[0] ? ` (${target.domains[0]})` : ""}.</>}
       </span>
       {msg ? <span className="detail dw-ship-msg" data-testid="dw-ship-msg">{msg}</span> : null}
     </div>
@@ -1682,7 +1704,9 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
               data-testid={phase === "failed_on" ? "dw-step-failed-on"
                 : phase === "skipped" ? "dw-step-na" : undefined}>
           {phase === "failed_on" ? "failed — went on"
-            : phase === "skipped" ? "not run" : step.status}
+            // Same wording as the chain node, for the same reason: this step chose to stand
+            // aside and said why. The sentence renders directly below as the note.
+            : phase === "skipped" ? "skipped" : step.status}
         </span>
         <h4>{capability?.label ?? step.capability ?? step.step_id}</h4>
         {stepDuration(step) ? (
@@ -1726,7 +1750,7 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
       {isDeployStep(step, capability) && shippedTo && buildRunId ? (
         <ShipNow projectId={projectId} buildRunId={buildRunId} target={shippedTo}
                  appName={typeof runInput.title === "string" ? runInput.title : shippedTo.app_name}
-                 onDone={onBound} />
+                 alreadyLive={!!liveAppUrl} onDone={onBound} />
       ) : null}
 
       {liveAppUrl ? (

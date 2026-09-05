@@ -273,13 +273,18 @@ describe("which run the workflow page shows first", () => {
 describe("a phase that never happened", () => {
   const DW = codeOnly("app/delivery-workflows-ui.tsx");
 
-  it("reads as not run, not as a success", () => {
+  it("reads as skipped with its reason, not as a success", () => {
     // A project started directly has no research phase and no panel. The runtime records those
     // steps as not applicable rather than commissioning research for something already built —
     // and showing them as plain successes would claim work nobody did.
+    //
+    // The wording moved from "not run" to "skipped" plus the recorded reason. An operator who
+    // had watched Research run for four minutes on another run read "not run" as a defect and
+    // reported it as one; the sentence explaining the skip was in the step the whole time.
     expect(DW).toContain("function notApplicable");
     expect(DW).toContain('"dw-step-na"');
-    expect(DW).toContain('"not run"');
+    expect(DW).toContain("function skipReason");
+    expect(DW).toContain('"dw-node-skipped"');
   });
 
   it("says why", () => {

@@ -231,3 +231,22 @@ describe("a bound app can actually be shipped from the deploy step", () => {
     expect(SOURCE).toContain("body?.runs?.[buildRunId]?.deployments");
   });
 });
+
+describe("a skipped step says why, instead of reading as a fault", () => {
+  const SOURCE = readFileSync(
+    new URL("../app/delivery-workflows-ui.tsx", import.meta.url), "utf8");
+
+  it("does not label a deliberate skip 'not run'", () => {
+    // Research shows this on most runs, and an operator who has watched it run for four
+    // minutes on another run reasonably reads it as broken. It is not: the step returns
+    // status: not_applicable with a sentence saying why, and the chain threw that sentence
+    // away and printed two words that sound like a defect.
+    expect(SOURCE).not.toContain('phase === "skipped" ? "not run"');
+    expect(SOURCE).toContain('data-testid="dw-node-skipped"');
+  });
+
+  it("carries the recorded reason", () => {
+    expect(SOURCE).toContain("function skipReason");
+    expect(SOURCE).toContain("title={skipReason(step)");
+  });
+});

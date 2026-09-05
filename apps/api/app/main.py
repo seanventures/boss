@@ -9145,10 +9145,27 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
         environment = str(payload.get("environment") or "staging")
 
         existing = connection.execute(
-            text("SELECT id, host_id FROM deployment_targets WHERE project_id = :p "
+            text("SELECT id, host_id, status FROM deployment_targets WHERE project_id = :p "
                  "AND app_name = :a AND environment = :e"),
             {"p": run["project_id"], "a": app_name, "e": environment}).mappings().first()
         if existing:
+            # SETTING A TARGET MEANS THE OPERATOR WANTS IT USABLE.
+            #
+            # A RETIRED target was left retired. The console lists only active ones, so the app
+            # vanished from every picker while this endpoint answered "already deploying to
+            # hetzner-ci-01" — the operator pressed Set target repeatedly, was told each time
+            # that it had worked, and nothing appeared anywhere. The deploy step then showed a
+            # SUCCEEDED deploy whose detail read status=blocked, for an app answering "not
+            # found", with no way to ship it.
+            #
+            # Retiring is how you take an app out of service; pointing it at a host again is
+            # how you put it back. Doing the second and silently keeping the first is a state
+            # nobody asked for and nothing surfaces.
+            revived = existing["status"] == "retired"
+            if revived:
+                connection.execute(
+                    text("UPDATE deployment_targets SET status = 'active', updated_at = now() "
+                         "WHERE id = :i"), {"i": existing["id"]})
             # AN UNBOUND TARGET IS THE THING THIS ENDPOINT EXISTS TO BIND.
             #
             # Refusing outright stranded the exact case it was meant to serve: a target created
@@ -9166,13 +9183,17 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
                         text("UPDATE deployment_targets SET auto_deploy = true, "
                              "updated_at = now() WHERE id = :i"), {"i": existing["id"]})
                 return {"target_id": existing["id"], "host_id": host_id,
-                        "adopted_existing_target": True,
+                        "adopted_existing_target": True, "revived": revived,
                         "message": f"Bound the existing {environment} target for {app_name!r} "
-                                   f"to {host['name']!r}."}
+                                   f"to {host['name']!r}."
+                                   + (" It was retired; it is active again." if revived else "")}
             if existing["host_id"] == host_id:
                 return {"target_id": existing["id"], "host_id": host_id,
-                        "already_bound": True,
-                        "message": f"{app_name!r} is already deploying to {host['name']!r}."}
+                        "already_bound": True, "revived": revived,
+                        "message": (f"{app_name!r} is active again on {host['name']!r}."
+                                    if revived
+                                    else f"{app_name!r} is already deploying to "
+                                         f"{host['name']!r}.")}
             raise HTTPException(
                 status_code=409,
                 detail=f"{app_name!r} already has a {environment} target bound to a different "
