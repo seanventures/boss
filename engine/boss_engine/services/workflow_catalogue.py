@@ -102,6 +102,23 @@ CATALOGUE: list[dict[str, Any]] = [
             _step("spec_review", "spec_review", approver_role="product_owner"),
             _step("build", "build", {"title": _in("title"), "instructions": _in("directive")}),
             _step("preview", "preview", {"run_id": _from("build", "code_task_run_id")}),
+            # READINESS BEFORE PRODUCTION, NOT AFTER IT.
+            #
+            # Preview answers "does it do the thing". It says nothing about whether anyone can
+            # RUN the thing: whether a failing feature is visible, whether a bad release can be
+            # undone, whether 3am has a first command. Companies hold that conversation after
+            # launch, and the first on-call night is what discovers the app has no metrics and
+            # no health check. The operations lens named those signals during the panel; this
+            # step holds the built app against what that spec promised and closes the gaps in
+            # code before production, rather than filing them as follow-ups nobody runs.
+            _step("plrr", "plrr", {"run_id": _from("build", "code_task_run_id")}),
+            # AND PREVIEW AGAIN AFTER IT CHANGES CODE.
+            #
+            # PLRR writes code. Deploying straight after it would ship something nobody looked
+            # at, which voids the gate the earlier preview exists to be. The second preview is
+            # cheap — the app is already built — and it is what keeps "a person saw this" true.
+            _step("preview_final", "preview",
+                  {"run_id": _from("build", "code_task_run_id")}),
             _step("deploy", "deploy", {"run_id": _from("build", "code_task_run_id")},
                   approver_role="release_manager"),
             _step("monitor", "monitor"),

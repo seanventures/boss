@@ -186,6 +186,19 @@ CAPABILITIES: dict[str, Capability] = {
             is_gate=True,
         ),
         _cap(
+            key="plrr",
+            label="Production launch readiness",
+            summary="Review the built app against the operability the spec promised, and "
+                    "close the gaps before it ships.",
+            tool=None,
+            risk_tier=1,
+            required_inputs=("run_id",),
+            optional_inputs=("directive",),
+            produces=("findings", "gaps_closed", "code_task_run_id"),
+            typical_minutes=12,
+            is_async=True,
+        ),
+        _cap(
             key="deploy",
             label="Deploy",
             summary="Ship the built app to a bound target.",

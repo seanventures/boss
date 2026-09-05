@@ -502,6 +502,97 @@ def _running_preview(
     return {"preview_id": row["id"], "preview_url": row["url"], "adopted": True}
 
 
+def _plrr_brief(connection: Connection, project_id: str, context: dict[str, Any]) -> str:
+    """The instructions a readiness repair is given, built from THIS run's own spec.
+
+    Deliberately not a generic checklist. The operations lens in the panel names the signals
+    for the features in the spec, so the review's job is to hold the built app against what
+    that spec promised — not against a list of things somebody thought were good practice.
+    """
+    run_id = str((context or {}).get("run_id") or "")
+    directive, criteria = "", []
+    try:
+        row = connection.execute(
+            text("SELECT input FROM workflow_runs WHERE id = :r"), {"r": run_id},
+        ).mappings().first()
+        if row:
+            data = row["input"] or {}
+            directive = str(data.get("directive") or data.get("title") or "")
+            criteria = list(data.get("acceptance_criteria") or [])
+    except Exception:  # noqa: BLE001 — a brief that cannot read the run still has a job
+        log.exception("plrr could not read the run's input for %s", run_id)
+
+    wanted = "\n".join(f"- {c}" for c in criteria) or "- (none recorded on the run)"
+    return (
+        "PRODUCTION LAUNCH READINESS REVIEW (PLRR)\n\n"
+        "This app has been built and previewed. It is NOT going to production until it can be "
+        "operated. Your job is to close that gap in code — not to write a report.\n\n"
+        f"WHAT IT WAS ASKED TO DO:\n{directive[:1500]}\n\n"
+        f"ACCEPTANCE CRITERIA:\n{wanted}\n\n"
+        "GO THROUGH EACH OF THESE AND FIX WHAT IS MISSING:\n"
+        "1. SIGNAL PER FEATURE. For every acceptance criterion above, is there a metric that "
+        "   shows it working and one that shows it failing? Name them after the domain action "
+        "   and split by result. A feature with no signal is not production-ready.\n"
+        "2. /metrics. Present, Prometheus text format, with http_requests_total, "
+        "   http_request_duration_seconds, app_info and app_uptime_seconds. Route labels "
+        "   TEMPLATED — two path parameters must collapse to one series.\n"
+        "3. HEALTH AND READINESS. An endpoint that answers whether the app can serve, distinct "
+        "   from whether the process is alive. It must not report healthy while a dependency it "
+        "   needs is down.\n"
+        "4. FAILURE BEHAVIOUR. What happens when a dependency is unavailable, input is "
+        "   malformed, or the disk is full? An unhandled 500 with no log line is a night "
+        "   somebody loses.\n"
+        "5. DIAGNOSABILITY. When this misbehaves at 3am, what is the first command? If the "
+        "   answer is 'read the source', add the log lines or the endpoint that answers it.\n"
+        "6. ROLLBACK. Can this release be undone without data loss? If a migration is "
+        "   one-way, say so in the README where somebody will find it.\n\n"
+        "RULES\n"
+        "- Change code and tests. Every gap you close gets a test that fails without the fix.\n"
+        "- Do NOT weaken or delete existing tests to make anything pass.\n"
+        "- If a gap cannot be closed in code, say which one and why, in one line.\n"
+        "- End with a list of the gaps you closed and the ones you did not."
+    )
+
+
+def _plrr_step(ctx, connection: Connection, project_id: str, actor: str,
+               context: dict[str, Any]) -> dict[str, Any]:
+    """Review readiness, and start the work that closes what is missing.
+
+    Sits between preview and deploy on purpose. Preview answers "does it do the thing"; this
+    answers "can anyone run it once it is real". Companies usually hold that conversation after
+    launch, which is why the first on-call night is the one that discovers the app has no
+    metrics, no health check and no way back.
+
+    Returns `awaiting` on a code task when there is work to do, so the workflow waits for the
+    repair exactly as it waits for the build.
+    """
+    run_id = str((context or {}).get("run_id") or "")
+    build_run = ""
+    try:
+        build_run = str(connection.execute(
+            text("SELECT COALESCE("
+                 "  (SELECT input->>'adopt_code_task_run_id' FROM workflow_runs WHERE id = :r),"
+                 "  (SELECT output->>'code_task_run_id' FROM workflow_step_runs "
+                 "     WHERE workflow_run_id = :r AND output ? 'code_task_run_id' "
+                 "     ORDER BY created_at DESC LIMIT 1)) AS build"),
+            {"r": run_id}).scalar() or "")
+    except Exception:  # noqa: BLE001
+        log.exception("plrr could not resolve the build for %s", run_id)
+
+    if not build_run:
+        # Nothing was built in this run, so there is nothing to hold against the spec. Saying so
+        # beats inventing a verdict — and beats blocking a workflow that never built anything.
+        return {"capability": "plrr", "status": "not_applicable",
+                "note": "no build in this run, so there is nothing to review for readiness."}
+
+    started = _invoke_tool(ctx, "extend_code_task", project_id, actor, {
+        "run_id": build_run,
+        "instructions": _plrr_brief(connection, project_id, context),
+        "title": "Production launch readiness",
+    })
+    return {"capability": "plrr", "tool": "extend_code_task", **started}
+
+
 def _preview_missing_for_run(
     connection: Connection, context: dict[str, Any]
 ) -> Optional[str]:
@@ -770,6 +861,11 @@ def execute_step(
 
     # A BUILD THIS RUN STARTS BELONGS TO THIS RUN. Without saying so, start_code_task would
     # open a second workflow run for the task, nesting a pipeline inside the step that made it.
+    if key == "plrr":
+        # Has no single tool: it reads the run's own spec, then starts the repair that closes
+        # what the app is missing. Handled before _invoke_tool for that reason.
+        return _plrr_step(ctx, connection, project_id, actor, context)
+
     if key == "build":
         inputs = {**inputs, "workflow_run_id": str(context.get("run_id") or "")}
 
@@ -850,6 +946,10 @@ _AWAIT_KINDS: dict[str, tuple[str, tuple[str, ...]]] = {
     # with nothing anybody could look at. "Without a preview, do not move to deploy" is the
     # whole reason this step sits where it does.
     "preview": ("preview", ("preview_id", "id")),
+    # PLRR closes the gaps it finds by WRITING CODE, so when it finds any it hands back a code
+    # task and waits for it exactly as `build` does. A review that only files findings leaves
+    # the operator to do the work the review exists to prevent.
+    "plrr": ("code_task", ("code_task_run_id", "run_id", "id")),
 }
 
 

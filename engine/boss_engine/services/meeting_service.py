@@ -105,6 +105,20 @@ ROLE_CATALOG: dict[str, dict] = {
             "exposure, and the controls required before this can be trusted in production."
         ),
     },
+    "operations": {
+        "key": "operations", "title": "Operations / Deployment Manager",
+        "lens": (
+            "running this thing at 3am. Operability is designed here, not bolted on after "
+            "launch: for EVERY feature in the spec, name the signal that shows it working and "
+            "the signal that shows it broken — a feature with no signal is not finished. "
+            "Cover: the metrics and their names, what a dashboard should show at a glance, "
+            "health and readiness checks, the deployment strategy and how a bad release is "
+            "rolled back, what the first diagnostic step is when it misbehaves, and who is "
+            "paged. Be concrete: 'verifications_completed_total{result}' beats 'add "
+            "monitoring'. Say plainly which failures would be INVISIBLE with what is proposed "
+            "so far — those are the gaps that cost a night's sleep later."
+        ),
+    },
     "data": {
         "key": "data", "title": "Data / Analytics",
         "lens": (
@@ -113,7 +127,19 @@ ROLE_CATALOG: dict[str, dict] = {
         ),
     },
 }
-DEFAULT_ROLE_KEYS = ["product_manager", "engineer", "ux_designer", "privacy_safety"]
+# OPERATIONS SITS IN THE DEFAULT PANEL.
+#
+# Operability was a thing the platform demanded of the BUILD — expose /metrics, these series —
+# and never a thing the DESIGN discussed. So the spec described features and the operational
+# requirements arrived, if at all, as a paragraph the builder was told to obey. The result is
+# on a host right now: three shipped apps, no metrics, and dashboards for data nobody had
+# thought about at design time.
+#
+# Companies usually hold the operations conversation after the features work. Holding it during
+# design is the point: the metric that proves a feature works is a property OF that feature,
+# and it is far cheaper to name while the feature is still being argued about.
+DEFAULT_ROLE_KEYS = ["product_manager", "engineer", "ux_designer", "privacy_safety",
+                     "operations"]
 FACILITATOR_TITLE = "Facilitator / Chief of Staff"
 MEETING_TYPES = ("prd_panel", "standup", "go_no_go")
 DEFAULT_MEETING_TYPE = "prd_panel"
