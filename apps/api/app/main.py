@@ -10694,6 +10694,20 @@ def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7
         }
 
 
+@app.get("/v1/agent/role-starters")
+def agent_role_starters_endpoint(project_id: str, role: str):
+    """Questions worth asking THIS role, grounded in what it has actually seen here.
+
+    Every chat surface offered the same three status prompts, including the one that had just
+    said you were talking to the Engineering Captain. Those are dashboard questions; a named
+    expert's value is its lens and its record, so the starters come from both.
+    """
+    from boss_engine.services.role_starters import role_starters
+
+    with begin(engine) as connection:
+        return {"role": role, "starters": role_starters(connection, project_id, role)}
+
+
 @app.get("/v1/agent/threads/{thread_id}/messages")
 def get_agent_thread_messages_endpoint(thread_id: str, project_id: str, actor: str):
     """Full message history for one chat thread (to restore a conversation)."""

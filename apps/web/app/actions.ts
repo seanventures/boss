@@ -224,6 +224,12 @@ export async function askBossAction(
     confirm_plan_id: String(formData.get("confirm_plan_id") ?? "").trim() || undefined,
     surface: "chat",
     external_ref: String(formData.get("external_ref") ?? "").trim() || undefined,
+    // WHO IS BEING ASKED. The dock has set this on every turn since roles were addressable and
+    // it was dropped here, so the whole role-addressed path — read this role's own record,
+    // answer from its lens — never once reached the API from the console. The banner said
+    // "Engineering Captain" and BOSS-in-general answered, which is the exact failure the role
+    // work existed to remove.
+    role: String(formData.get("role") ?? "").trim() || undefined,
   });
 }
 
@@ -246,6 +252,7 @@ export async function agentChatAction(
     // Scope the turn to a task: external_ref = task_id -> the backend find-or-creates ONE thread
     // per task (agent_service.start_or_load_thread), so a task's chat stays with that task.
     external_ref: String(formData.get("external_ref") ?? "").trim() || undefined,
+    role: String(formData.get("role") ?? "").trim() || undefined,
   });
   revalidatePath("/");
   return result;
@@ -281,6 +288,13 @@ export async function loadAgentWorkspaceAction(projectId: string, actor: string)
     tasks: (td?.tasks ?? td?.items ?? []) as unknown[],
     threads: (thd?.threads ?? []) as unknown[],
   } };
+}
+
+/** Questions worth asking THIS role, from the server, grounded in its own record here. */
+export async function loadRoleStartersAction(projectId: string, role: string): Promise<ActionResult> {
+  return getJsonReturn(
+    `/v1/agent/role-starters?project_id=${encodeURIComponent(projectId)}` +
+    `&role=${encodeURIComponent(role)}`);
 }
 
 export async function loadThreadMessagesAction(threadId: string, projectId: string, actor: string): Promise<ActionResult> {

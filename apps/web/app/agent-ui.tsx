@@ -7,6 +7,7 @@ import { Markdown } from "./markdown";
 import {
   askBossAction,
   loadAgentWorkspaceAction,
+  loadRoleStartersAction,
   loadTaskContextAction,
   loadThreadMessagesAction,
   runAgentActionAction,
@@ -138,6 +139,20 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   roleName?: string;
   /** What BOSS already knows about the app this conversation is about. */
 }) {
+  /**
+   * ONE DURABLE CONVERSATION PER ROLE.
+   *
+   * Asking the Engineering Captain something, closing the dock and asking again started a NEW
+   * thread every time: a role chat had no scope key, so it fell into the general bucket with a
+   * null thread id and nothing to find its way back to. You could not refer to what you had
+   * just been told, and the role could not either.
+   *
+   * `external_ref` is the backend's find-or-create key (one thread per project + surface +
+   * ref), which is how a TASK's chat stays with that task. A role gets the same treatment under
+   * its own namespace, so re-opening the dock resumes the conversation instead of starting a
+   * stranger.
+   */
+  const roleRef = roleName ? `role:${roleName}` : "";
   const [tasks, setTasks] = useState<Task[]>([]);
   const [threads, setThreads] = useState<Thread[]>([]);
   const [sel, setSel] = useState<string>(initialTaskId || GENERAL);   // GENERAL or a task_id
@@ -270,17 +285,62 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   }, [projectId, actor, threadFor]);
 
   // Load the workspace (tasks + threads, last 10 days) on mount, then open the initial selection.
+  //
+  // ON MOUNT, NOT ON FIRST MESSAGE. The history has to be on screen when the panel opens: an
+  // operator who cannot see what they were told last time re-asks it, and a role that cannot
+  // see it answers as if the conversation never happened. The window is the thread list's own —
+  // the last week — so a conversation resumes for as long as it is plausibly still yours, and
+  // anything older opens fresh rather than silently reviving a month-old argument.
   useEffect(() => {
     let alive = true;
+    // A role chat resumes even before the workspace list lands: it is the common case in the
+    // dock, and waiting on the task list to paint a role's history makes the panel flash empty.
+    if (roleRef) setLoadingThread(true);
     loadAgentWorkspaceAction(projectId, actor).then((r) => {
-      if (!alive || !r.ok || !r.data) return;
+      if (!alive || !r.ok || !r.data) { if (alive) setLoadingThread(false); return; }
       const ts = ((r.data as Record<string, unknown>).tasks as Task[]) ?? [];
       const ths = ((r.data as Record<string, unknown>).threads as Thread[]) ?? [];
       setTasks(ts); setThreads(ths);
+      const mine = roleRef ? ths.find((t) => (t.external_ref ?? null) === roleRef) : undefined;
+      if (mine?.thread_id) {
+        setThreadId(mine.thread_id);
+        loadThreadMessagesAction(mine.thread_id, projectId, actor).then((m) => {
+          if (!alive) return;
+          if (m.ok && m.data) {
+            const d = m.data as Record<string, unknown>;
+            setMessages((d.messages as Msg[]) ?? []);
+            setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
+            setProposed(Array.isArray(d.proposed_actions)
+              ? (d.proposed_actions as ProposedAction[]) : []);
+          }
+        }).finally(() => { if (alive) setLoadingThread(false); });
+        return;
+      }
+      if (roleRef) { setLoadingThread(false); return; }   // this role has no history yet
       openThreadAndContext(initialTaskId || GENERAL, ths);
     });
     return () => { alive = false; };
-  }, [projectId, actor, initialTaskId, openThreadAndContext]);
+  }, [projectId, actor, initialTaskId, roleRef, openThreadAndContext]);
+
+  // WHAT TO ASK *THIS* ROLE.
+  //
+  // Every surface offered the same three: "What changed today?", "Which runs failed and why?",
+  // "What is this run waiting on?" — under a banner announcing the Engineering Captain. Those
+  // are questions for a dashboard, and a dashboard is what a named expert is not. The server
+  // builds them from the role's lens AND its own record here, so they name real apps, this
+  // project's last failure, and positions this role actually took.
+  useEffect(() => {
+    if (!roleName) return;
+    let alive = true;
+    loadRoleStartersAction(projectId, roleName).then((r) => {
+      if (!alive || !r.ok || !r.data) return;
+      const list = (r.data as Record<string, unknown>).starters;
+      if (Array.isArray(list) && list.length && list.every((x) => typeof x === "string")) {
+        setSuggestions(list as string[]);
+      }
+    });
+    return () => { alive = false; };
+  }, [projectId, roleName]);
 
   const refreshThreads = useCallback(() => {
     loadAgentWorkspaceAction(projectId, actor).then((w) => {
@@ -322,6 +382,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     fd.set("message", typed);
     if (threadId) fd.set("thread_id", threadId);
     if (sel !== GENERAL) fd.set("external_ref", sel);   // scope the turn to this task
+    else if (roleRef) fd.set("external_ref", roleRef);  // ...or to this role's own thread
     startTransition(async () => {
       // Bound the WAIT, not the work. If the server has not answered by STALL we stop pretending
       // it is imminent and say so in the transcript; whatever the turn did still stands, and
@@ -393,7 +454,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
         setMessages((m) => [...m, { role: "assistant", content: "⚠ " + (r.error ?? "request failed") }]);
       }
     });
-  }, [projectId, actor, threadId, sel, refreshThreads]);
+  }, [projectId, actor, threadId, sel, roleRef, roleName, refreshThreads]);
 
   const send = useCallback(() => {
     const msg = input.trim();
@@ -454,9 +515,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
 
   return (
-    <div className="agent-chat-shell" style={{ display: "grid", gridTemplateColumns: "clamp(220px,24%,300px) 1fr", gap: 14, minHeight: 540 }}>
+    /* LAYOUT LIVES IN CSS, NOT IN INLINE STYLES.
+       The grid, the rail width and the log's height were inline, so the dock could only fight
+       them with `!important` — and the one that could not be overridden at all was the log's
+       `max-height: 52vh`. In a tall panel the transcript stopped at half the viewport and the
+       composer sat wherever the content happened to end, with the rest of the panel empty
+       below it. A chat's input belongs at the bottom of whatever box it is in, and the
+       transcript takes the slack; that is a rule about the shape, not about a pixel count. */
+    <div className="agent-chat-shell" data-role={roleName ? "yes" : undefined}>
       {/* RAIL — General + one entry per task (💬 if it already has a conversation) */}
-      <aside style={{ borderRight: "1px solid var(--border)", paddingRight: 12, overflowY: "auto", maxHeight: "72vh" }}>
+      <aside className="agent-chat-rail">
         {/* SESSIONS, NOT TASKS.
             The task rail is gone: every task card now has its own Ask BOSS panel, which is the
             right place for task-scoped work and carries the app context with it. Listing tasks
@@ -487,13 +555,31 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       </aside>
 
       {/* MAIN — context header + scoped history + input */}
-      <section style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+      <section className="agent-chat-main">
         {sel === GENERAL ? (
+          /* A ROLE CHAT IS NOT "BOSS AGENT". The panel announced the Engineering Captain in its
+             header and then, one line down, "BOSS Agent — What do you want to do?" with a
+             description of the general assistant. Two identities in one column reads as a
+             template that nobody adapted, which is what it was. */
           <div className="agent-chat-intro">
-            <span className="eyebrow">BOSS Agent</span>
-            <h2>{threadId ? sessionTitle(threads.find((t) => t.thread_id === threadId) ?? { thread_id: threadId })
-                          : "What do you want to do?"}</h2>
-            {threadId ? null : (
+            <span className="eyebrow">{roleName ?? "BOSS Agent"}</span>
+            <h2>{threadId
+                   ? (roleName
+                        ? `Continuing with ${roleName}`
+                        : sessionTitle(threads.find((t) => t.thread_id === threadId)
+                                       ?? { thread_id: threadId }))
+                   : roleName
+                     ? `Ask ${roleName}`
+                     : "What do you want to do?"}</h2>
+            {threadId ? (
+              roleName ? (
+                <p className="detail">Picking up where you left off — this conversation is kept
+                   for a week.</p>
+              ) : null
+            ) : roleName ? (
+              <p>Answering from this role&rsquo;s own lens and what it has actually argued on
+                 this project — not from the general assistant.</p>
+            ) : (
               <p>Ask anything, or tell BOSS to do it — code, research, a meeting, a PRD, a
                  deployment. Work on one app from its card in Factory, where the app context
                  comes with it.</p>
@@ -517,7 +603,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           </div>
         )}
 
-        <div className="agent-chat-log" aria-live="polite" aria-label="Agent conversation" style={{ flex: 1, overflowY: "auto", minHeight: 260 }}>
+        <div className="agent-chat-log" aria-live="polite" aria-label="Agent conversation">
           {loadingThread ? (
             <p className="detail">Loading conversation…</p>
           ) : messages.length === 0 ? (
