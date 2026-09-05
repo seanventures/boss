@@ -290,6 +290,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
 
   const runTurn = useCallback((fd: FormData) => {
     fd.set("project_id", projectId); fd.set("actor", actor);
+    // Every turn, not just the first: the operator asked a named member of the workforce, and
+    // the second question is still addressed to them.
+    if (roleName) fd.set("role", roleName);
     // TELL IT WHICH APP.
     //
     // The agent has tools that can read a run, its repo, its preview and its deployment — and

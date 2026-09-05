@@ -1147,6 +1147,13 @@ class AgentChatRequest(BaseModel):
     project_id: str
     actor: str = "executive_console"
     thread_id: Optional[str] = None
+    #: WHICH MEMBER OF THE WORKFORCE IS BEING ASKED.
+    #:
+    #: The Agents page put "@QA Lead: " in the general agent's box, so the name was prose in a
+    #: prompt and the answer came from BOSS-in-general — no lens, no remit, no memory of what
+    #: that role had argued. A role key or title here makes the question addressed rather than
+    #: merely annotated.
+    role: Optional[str] = None
     message: str = ""
     confirm_plan_id: Optional[str] = None
     surface: Literal["chat", "github"] = "chat"

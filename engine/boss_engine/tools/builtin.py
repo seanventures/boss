@@ -2242,6 +2242,132 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_role_experience_tools(reg: ToolRegistry) -> None:
+    """What a role has actually argued, on this project, in its own words.
+
+    The Agents page listed a workforce and "Ask" opened the GENERAL agent with "@QA Lead: "
+    typed into the box — the name was prose in a prompt, not an identity. So an operator asking
+    the QA Lead a question got BOSS, answering as itself, with no idea what the QA Lead had
+    ever said.
+
+    The experience is already recorded and nobody reads it back. `meeting_runs.state` holds
+    each round as an object KEYED BY ROLE TITLE:
+
+        {"round1": {"UX Designer": "…the whole argument…", "Engineer / Architect": "…"}}
+
+    So every position every role took, on every panel, in full prose, attributed. That is what
+    makes "advice from the experience it built here" a retrieval problem rather than a claim,
+    and it is why this is a read tool over existing data instead of a new capture mechanism
+    nobody would remember to write to.
+    """
+    @reg.tool(
+        "recall_role_experience",
+        "What a role has argued on THIS project's past panels, in its own words — the "
+        "positions it took, on which brief, and when. Use it before answering as a role: an "
+        "SME's value is the specifics it has seen, and a generic answer from a named expert "
+        "is worse than no expert. Also useful for 'what has our QA lead been worried about'.",
+        _obj({"role": {"type": "string",
+                       "description": "role title or key, e.g. 'QA / Test' or 'qa'"},
+              "limit": _LIMIT,
+              "project_id": {"type": "string"}},
+             ["role"]),
+        kind="read",
+    )
+    def recall_role_experience(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        wanted = str(args.get("role") or "").strip()
+        limit = int(args.get("limit") or 12)
+        if not wanted:
+            return {"ok": False, "error": "role is required"}
+
+        with ctx.begin() as c:
+            # Titles are what the rounds are keyed by; a key like "qa" has to be resolved to
+            # "QA / Test" first or nothing matches.
+            titles = [r["title"] for r in c.execute(
+                _text("SELECT title FROM meeting_roles WHERE project_id = :p "
+                      "AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w))"),
+                {"p": pid, "w": wanted}).mappings()]
+            if not titles:
+                titles = [wanted]
+            rows = c.execute(
+                _text("SELECT id, directive, state, created_at FROM meeting_runs "
+                      "WHERE project_id = :p AND state != '{}'::jsonb "
+                      "ORDER BY created_at DESC LIMIT 200"),
+                {"p": pid}).mappings().all()
+
+        seen = []
+        for row in rows:
+            state = row["state"] if isinstance(row["state"], dict) else {}
+            for round_name in ("round1", "round2", "synthesis"):
+                block = state.get(round_name)
+                if not isinstance(block, dict):
+                    continue
+                for title in titles:
+                    said = block.get(title)
+                    if not isinstance(said, str) or not said.strip():
+                        continue
+                    seen.append({
+                        "meeting_run_id": row["id"],
+                        "brief": str(row["directive"] or "")[:160],
+                        "round": round_name,
+                        "when": row["created_at"].isoformat() if row["created_at"] else None,
+                        # Enough to be specific, not so much that a dozen of them flood the
+                        # context this is meant to inform.
+                        "said": said.strip()[:1200],
+                    })
+                    if len(seen) >= limit:
+                        break
+                if len(seen) >= limit:
+                    break
+            if len(seen) >= limit:
+                break
+
+        return {"project_id": pid, "role": wanted, "matched_titles": titles,
+                "contributions": seen, "count": len(seen),
+                "note": ("nothing recorded for this role yet — answer from expertise and say "
+                         "it is not from experience on this project"
+                         if not seen else "these are this role's own past words")}
+
+    @reg.tool(
+        "describe_role",
+        "Who a role is on this project: the lens it argues from, and the rules and skills its "
+        "agent definition carries. Read this before answering as a role, so the answer comes "
+        "from that role's actual remit rather than a guess at what the title implies.",
+        _obj({"role": {"type": "string"}, "project_id": {"type": "string"}}, ["role"]),
+        kind="read",
+    )
+    def describe_role(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        wanted = str(args.get("role") or "").strip()
+        with ctx.begin() as c:
+            row = c.execute(
+                _text("SELECT role_key, title, lens, risk_tier FROM meeting_roles "
+                      "WHERE project_id = :p "
+                      "AND (lower(role_key) = lower(:w) OR lower(title) = lower(:w)) LIMIT 1"),
+                {"p": pid, "w": wanted}).mappings().first()
+            if row is None:
+                return {"ok": False, "error": f"no role {wanted!r} on {pid}"}
+            # The agent DEFINITION, when one has been published for this role: its prompts,
+            # rules and requested skills are the SME's remit, and they live apart from the
+            # panel lens so an operator can extend one without editing the other.
+            version = c.execute(
+                _text("SELECT v.prompts, v.rules, v.requested_skills, v.requested_integrations "
+                      "FROM agent_versions v "
+                      "JOIN agent_definitions d ON d.active_version_id = v.id "
+                      "WHERE d.project_id = :p AND lower(v.role_key) = lower(:k) LIMIT 1"),
+                {"p": pid, "k": row["role_key"]}).mappings().first()
+        out = {"role_key": row["role_key"], "title": row["title"], "lens": row["lens"],
+               "risk_tier": row["risk_tier"], "has_agent_definition": version is not None}
+        if version is not None:
+            out.update({
+                "rules": version["rules"] or [],
+                "skills": version["requested_skills"] or [],
+                "integrations": version["requested_integrations"] or [],
+                "prompts": version["prompts"] or {},
+            })
+        return out
+
+
 def _register_deployment_target_tools(reg: ToolRegistry) -> None:
     """Read an app's address, and correct it — the two things BOSS could not do.
 
@@ -3283,6 +3409,7 @@ def build_default_registry() -> ToolRegistry:
     _register_app_identity_tools(reg)
     _register_image_tools(reg)
     _register_deployment_target_tools(reg)
+    _register_role_experience_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)

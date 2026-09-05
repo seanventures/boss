@@ -89,6 +89,14 @@ function askHref(agentName: string): string {
     if (value) next.set(key, value);
   }
   next.set("area", "agent");
+  // ADDRESSED TO THIS ONE, not merely mentioning it.
+  //
+  // `?ask=@QA Lead: ` typed the name into the GENERAL agent's box — the name was prose in a
+  // prompt, so an operator asking the QA Lead a question got BOSS answering as itself, with no
+  // idea what the QA Lead had ever said or what it is for. `role` makes it an identity the
+  // other end can resolve: the lens it argues from, the rules its agent definition carries,
+  // and the positions it has taken on this project's panels.
+  next.set("role", agentName);
   // A colon, not an em dash: "—" percent-encodes to %E2%80%94, which contains the substring
   // "0%" — and the roster asserts it never renders a zero score. A link that trips a guard
   // about scores is a link that will be misread by the next person to see it fail.

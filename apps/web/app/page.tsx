@@ -518,6 +518,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     getParam(resolvedSearchParams?.decision_filter),
   );
   const requestedWorkTask = getParam(resolvedSearchParams?.task);
+  // WHO THE OPERATOR CLICKED "ASK" ON. Without this the Agents area answers as BOSS in
+  // general, however specific the name on the card was.
+  const requestedRole = getParam(resolvedSearchParams?.role);
   // WHICH DOSSIER, not the shelf of dossiers. The research step links here knowing its
   // discovery id, but the page kept the open dossier in local state alone, so every link
   // landed on the list and the operator had to go and find the run they had just clicked.
@@ -924,7 +927,9 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     >
       <div className="frame">
         <section className="panel-stack" data-area="agent" aria-label="BOSS conversational agent">
-          <AgentChat projectId={activeProjectId} actor={activeActorId} initialTaskId={requestedWorkTask || undefined} />
+          <AgentChat projectId={activeProjectId} actor={activeActorId}
+                     initialTaskId={requestedWorkTask || undefined}
+                     roleName={requestedRole || undefined} />
         </section>
         <section className="panel-stack" data-area="metatron" aria-label="Metatron captain">
           <MetatronCaptain

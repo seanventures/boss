@@ -34,6 +34,8 @@ class AgentService:
         thread_id: Optional[str] = None,
         surface: str = "chat",
         external_ref: Optional[str] = None,
+        #: Answer as this member of the workforce. See _role_identity in intent_router.
+        role: Optional[str] = None,
     ) -> dict[str, Any]:
         if thread_id:
             row = connection.execute(
@@ -298,6 +300,7 @@ class AgentService:
             # A task-scoped thread carries its task_id -> the router builds ON that task's existing
             # app branch (extend the PR) instead of a fresh build on main.
             external_ref=thread.get("external_ref"),
+            role=role,
         )
         assistant = self.append_message(
             connection,

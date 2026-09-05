@@ -427,6 +427,39 @@ def _no_action_was_claimed(reply: str, actions: list) -> str:
     )
 
 
+def _role_identity(role: Optional[str]) -> str:
+    """Answer as a named member of the workforce, from what that member has actually done.
+
+    The Agents page's "Ask" put "@QA Lead: " into the general agent's box. The name was prose
+    in a prompt, so the reply came from BOSS-in-general: no lens, no remit, and no memory of
+    anything that role had argued. An operator asking their QA lead a question got a generic
+    answer wearing a name badge, which is worse than no expert at all — it looks like expertise.
+
+    The material for a real answer is already recorded. `meeting_roles` holds the lens each
+    role argues from, `agent_versions` holds the rules and skills its definition carries, and
+    `meeting_runs.state` holds every position every role has taken on this project's panels,
+    keyed by role title, in full. So this does not ask the model to invent a persona: it tells
+    it to go and read who it is and what it has said, with the tools to do both.
+    """
+    if not role:
+        return ""
+    return (
+        "\n\n=== YOU ARE ANSWERING AS A NAMED MEMBER OF THIS WORKFORCE ===\n"
+        f"The operator is asking {role}, not BOSS in general.\n"
+        f"FIRST call describe_role(role=\"{role}\") to read the lens that role argues from and "
+        "the rules and skills its agent definition carries. Then call "
+        f"recall_role_experience(role=\"{role}\") to read what it has actually argued on this "
+        "project's panels, in its own words.\n"
+        "Answer from THAT: the specifics this role has seen here, referring to the briefs and "
+        "positions by name. An SME's whole value is what it has lived through — a generic "
+        "answer from a named expert is worse than no expert, because it reads as authority.\n"
+        "If nothing is recorded for this role yet, say so plainly and answer from the lens and "
+        "rules instead. Do not imply experience you cannot point at.\n"
+        "Stay in role: give the view that role is in the room to give, and name where you "
+        "disagree with what the rest of the panel decided."
+    )
+
+
 def _no_button_was_promised(reply: str, proposed: list) -> str:
     """Strip a promise of buttons when no button was actually produced.
 
@@ -542,6 +575,8 @@ class IntentRouter:
         confirm_plan_id: Optional[str] = None,
         pending_plan_id: Optional[str] = None,
         external_ref: Optional[str] = None,
+        #: Answer AS this member of the workforce, rather than as BOSS-in-general.
+        role: Optional[str] = None,
     ) -> RouterTurn:
         latest = str(messages[-1].get("content") or "").strip() if messages else ""
         if confirm_plan_id:
@@ -565,7 +600,8 @@ class IntentRouter:
             # must not swallow every message: a user has to be able to ask things).
             if bool(re.match(r"^\s*(how|what|why|when|where|who|which|explain|tell me|show me)\b", low)) or (
                     latest.strip().endswith("?") and not re.match(r"^\s*(can|could|would|will|please)\b", low)):
-                return self._answer(connection, project_id, messages, external_ref=external_ref)
+                return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                role=role)
             # Any other new instruction REVISES the plan to reflect it (re-propose). This also unjams a
             # thread whose plan was already handled another way — the user just steers with a message.
             row = connection.execute(
@@ -632,7 +668,8 @@ class IntentRouter:
         # from the tool-calling agent. The agent is the same one that answers every question in
         # this console today; if a model is configured at all, it is available.
         if self.settings.openai_api_key or self.settings.azure_openai_key:
-            return self._answer(connection, project_id, messages, external_ref=external_ref)
+            return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                role=role)
 
         # No model available — fall back to keywords rather than doing nothing.
         name, arguments = self._deterministic_intent(latest)
@@ -640,7 +677,8 @@ class IntentRouter:
             # DISCUSS BY DEFAULT: an unclassified message is a question / discussion, NOT a build
             # order. Answer it conversationally and DON'T spawn a task (that spawned junk tasks for
             # every greeting, question, or test string). Work starts only on an explicit intent.
-            return self._answer(connection, project_id, messages, external_ref=external_ref)
+            return self._answer(connection, project_id, messages, external_ref=external_ref,
+                                role=role)
 
         capability_id = {
             "create_code_task": "code_task",
@@ -705,7 +743,8 @@ class IntentRouter:
         )
 
     def _answer(self, connection, project_id: str, messages: list,
-                *, external_ref: Optional[str] = None) -> RouterTurn:
+                *, external_ref: Optional[str] = None,
+                role: Optional[str] = None) -> RouterTurn:
         """Conversational answer — DISCUSS/answer without creating any task. Grounded in the recent
         thread (a task-scoped thread carries that task's history), gated on the model budget. Only an
         explicit build intent (handled in route_turn) actuates work."""
@@ -737,7 +776,8 @@ class IntentRouter:
             "until you have searched for the words they pasted.\n"
             "  App code lives on the run's PR BRANCH, not on the default branch, so pass "
             "run_id — without it you are searching a repository that does not contain the "
-            "app, and an empty result means nothing.\n"            "  A PREVIEW IS SERVED THROUGH BOSS, so the request the app receives is NOT the "
+            "app, and an empty result means nothing.\n"
+            "  A PREVIEW IS SERVED THROUGH BOSS, so the request the app receives is NOT the "
             "request the browser sent. BOSS proxies it, rewrites HTML paths, and filters "
             "headers. When a client demonstrably sends something and the server says it is "
             "missing, SOMETHING IN BETWEEN REMOVED IT — and in a preview, BOSS is what is in "
@@ -912,6 +952,7 @@ class IntentRouter:
             "If they clearly want you to BUILD or CHANGE something, briefly say what you'd do "
             "and that you'll start once they confirm (e.g. 'build it' / 'go') — do NOT claim "
             "you already started anything, and do NOT invent facts."
+            + _role_identity(role)
         )
         # WHICH APP THIS CONVERSATION IS ABOUT — in the SYSTEM prompt, not in their message.
         #

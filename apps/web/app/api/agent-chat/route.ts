@@ -42,6 +42,9 @@ export async function POST(req: Request) {
         actor,
         message,
         surface: "chat",
+        // WHO IS BEING ASKED. Without it the reply comes from BOSS-in-general even when the
+        // operator clicked "Ask" on a named member of the workforce.
+        role: String(body.role ?? "").trim() || undefined,
         thread_id: String(body.thread_id ?? "").trim() || undefined,
         // Scopes the turn to one agent, so a conversation with the CTO stays with the CTO
         // rather than joining one shared thread.
