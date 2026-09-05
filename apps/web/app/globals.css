@@ -7979,7 +7979,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 .askboss-idea:hover::before { opacity: 1; }
 .askboss-idea:hover .askboss-idea-art { border-color: var(--idea-accent, #6ea8ff); }
-.askboss-idea > * { position: relative; }
+/* Lift the card's own children above its ::before texture — EXCEPT the hover peek.
+   `> *` clobbered `.askboss-idea-peek { position: absolute }`, which put 150px of
+   invisible, zero-opacity text back into the layout of every card. That is the empty
+   two-thirds an operator kept seeing under every title, and it was text nobody could
+   read taking up the space. */
+.askboss-idea > *:not(.askboss-idea-peek) { position: relative; }
 
 @media (prefers-reduced-motion: reduce) {
   .askboss-idea::before { transition: none; }

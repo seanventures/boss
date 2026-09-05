@@ -156,3 +156,31 @@ describe("the starter shelf", () => {
     expect(HERO).toContain("onClick={() => draftIdea(i)}");
   });
 });
+
+describe("the starter strip is a gallery, not one image recoloured", () => {
+  const HERO3 = codeOnly("app/ask-boss-hero.tsx");
+  const CSS3 = codeOnly("app/globals.css");
+
+  it("gives every idea its own drawing", () => {
+    // The previous set had five layouts mapped BY GLYPH, so seven of the sixteen ideas showed
+    // the identical rows-with-avatars picture and three more shared a second one: three
+    // adjacent cards differing only in accent colour.
+    const ideas = [...HERO3.matchAll(/title: "([^"]+)", glyph:/g)].map((m) => m[1]);
+    const mapped = [...HERO3.matchAll(/^\s+"([^"]+)": "(\w+)",$/gm)]
+      .filter(([, key]) => ideas.includes(key));
+    expect(mapped.length).toBe(ideas.length);
+    const layouts = new Set(mapped.map(([, , layout]) => layout));
+    expect(layouts.size).toBe(ideas.length);
+  });
+
+  it("maps by title, since mapping by glyph is what collapsed them", () => {
+    expect(HERO3).toContain("MOCKUP_FOR[i.title]");
+  });
+
+  it("does not force the hover peek into the layout", () => {
+    // `.askboss-idea > * { position: relative }` overrode the peek's absolute positioning and
+    // put 150px of invisible, zero-opacity text into every card — the empty two-thirds under
+    // every title.
+    expect(CSS3).toContain(".askboss-idea > *:not(.askboss-idea-peek)");
+  });
+});

@@ -155,112 +155,338 @@ function Line({ x, y, w, h = 4, c = UI.text, o = 1 }: {
  *  data point — which is how real interfaces use colour and why this reads as a product
  *  instead of as decoration.
  */
-const MOCKUPS: Record<string, (k: string, accent: string) => ReactElement> = {
-  /** Rows with avatars and a status: inbox, triage, directory, review queue. */
-  list: (k, accent) => (
+/** A panel inside the window — the surface content sits on. */
+function Panel({ x = 78, y = 30, w = 222, h = 82 }: {
+  x?: number; y?: number; w?: number; h?: number;
+}) {
+  return <rect x={x} y={y} width={w} height={h} rx="5" fill={UI.panel} />;
+}
+
+/** A row/card on a panel. */
+function Row({ x, y, w, h = 16, c = UI.row, o = 1 }: {
+  x: number; y: number; w: number; h?: number; c?: string; o?: number;
+}) {
+  return <rect x={x} y={y} width={w} height={h} rx="3.5" fill={c} opacity={o} />;
+}
+
+/** SIXTEEN IDEAS, SIXTEEN DRAWINGS.
+ *
+ *  The previous set had five, and mapped them by GLYPH — so seven of the sixteen ideas showed
+ *  the identical rows-with-avatars picture and three more shared a second one. On screen that
+ *  is three adjacent cards that differ only in accent colour, which is not a gallery: it is one
+ *  image recoloured, and an operator said so.
+ *
+ *  Each idea now gets a layout that belongs to IT — a scorecard has criteria and ratings, a
+ *  freshness board has age bars with stale rows in warning colour, a linter has underlined
+ *  code, a rota has people against weeks. Two cards next to each other cannot look alike
+ *  because no two draw the same thing.
+ */
+const MOCKUPS: Record<string, (k: string, a: string) => ReactElement> = {
+  /** Milestones on a line: incidents, releases. */
+  timeline: (k, a) => (
     <g key={k}>
+      <Panel />
+      <line x1="94" y1="71" x2="288" y2="71" stroke={UI.line} strokeWidth="2" strokeLinecap="round" />
+      <line x1="94" y1="71" x2="196" y2="71" stroke={a} strokeWidth="2" strokeLinecap="round" />
       {[0, 1, 2, 3].map((i) => (
-        <g key={i} transform={`translate(0 ${i * 19})`}>
-          <rect x="78" y="34" width="222" height="16" rx="4" fill={UI.row}
-                opacity={i === 0 ? 1 : 0.72} />
-          <circle cx="90" cy="42" r="4.5" fill={i === 0 ? accent : UI.line} />
-          <Line x={101} y={38} w={78 - i * 12} c={i === 0 ? UI.bright : UI.text} />
-          <Line x={101} y={45} w={120 - i * 16} h={3} o={0.55} />
-          <rect x={272} y={38} width="18" height="8" rx="4"
-                fill={i === 0 ? accent : UI.line} opacity={i === 0 ? 0.9 : 0.7} />
+        <g key={i} transform={`translate(${100 + i * 62} 0)`}>
+          <circle cx="0" cy="71" r={i === 1 ? 6 : 4.5} fill={i <= 1 ? a : UI.row} />
+          <Line x={-20} y={i % 2 ? 84 : 50} w={40} h={3.5} c={i === 1 ? UI.bright : UI.text} />
+          <Line x={-20} y={i % 2 ? 91 : 57} w={26} h={3} o={0.45} />
         </g>
       ))}
     </g>
   ),
 
-  /** Columns of cards: kanban, triage board, pipeline. */
-  board: (k, accent) => (
+  /** Bars with an axis and one column called out: spend, audits. */
+  chart: (k, a) => (
     <g key={k}>
-      {[0, 1, 2].map((c) => (
-        <g key={c} transform={`translate(${80 + c * 76} 0)`}>
-          <Line x={2} y={32} w={30 - c * 4} h={3} c={UI.bright} o={0.8} />
-          <rect x="0" y="40" width="68" height="70" rx="5" fill={UI.panel} />
-          {[0, 1, 2].map((r) => (
-            <g key={r} transform={`translate(0 ${r * 21})`}>
-              <rect x="5" y="46" width="58" height="16" rx="4" fill={UI.row}
-                    opacity={r === 2 && c === 2 ? 0 : 1} />
-              {r === 2 && c === 2 ? null : (
-                <>
-                  <rect x="9" y="50" width="4" height="4" rx="1"
-                        fill={c === 0 && r === 0 ? accent : UI.line} />
-                  <Line x={17} y={51} w={38 - r * 8} h={3} o={0.7} />
-                </>
-              )}
-            </g>
+      <Panel />
+      {[0, 1, 2].map((i) => (
+        <line key={i} x1="90" y1={48 + i * 20} x2="290" y2={48 + i * 20}
+              stroke={UI.line} strokeWidth="1" opacity=".5" />
+      ))}
+      {[26, 40, 31, 52, 38, 60, 45].map((h, i) => (
+        <rect key={i} x={94 + i * 28} width="15" y={104 - h} height={h} rx="2.5"
+              fill={i === 5 ? a : UI.row} />
+      ))}
+      <line x1="88" y1="106" x2="292" y2="106" stroke={UI.line} strokeWidth="1.5" />
+    </g>
+  ),
+
+  /** Criteria with ratings: scorecards, reviews. */
+  scorecard: (k, a) => (
+    <g key={k}>
+      <Panel />
+      {[0, 1, 2, 3].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 19})`}>
+          <Line x={88} y={40} w={62 - i * 6} h={4} c={i === 0 ? UI.bright : UI.text} />
+          {[0, 1, 2, 3, 4].map((n) => (
+            <circle key={n} cx={186 + n * 15} cy={42} r="4"
+                    fill={n <= 3 - (i % 3) ? a : UI.row} />
           ))}
         </g>
       ))}
     </g>
   ),
 
-  /** Bars with an axis and one highlighted column: audits, spend, coverage. */
-  chart: (k, accent) => (
+  /** Documents with an age bar, the stale ones flagged: freshness, coverage of docs. */
+  freshness: (k, a) => (
     <g key={k}>
-      <rect x="78" y="30" width="222" height="82" rx="5" fill={UI.panel} />
-      {[0, 1, 2].map((i) => (
-        <line key={i} x1="90" y1={48 + i * 20} x2="290" y2={48 + i * 20}
-              stroke={UI.line} strokeWidth="1" opacity=".55" />
-      ))}
-      {[26, 40, 31, 52, 38, 60, 45].map((h, i) => (
-        <rect key={i} x={94 + i * 28} width="15" y={104 - h} height={h} rx="2.5"
-              fill={i === 5 ? accent : UI.row} />
-      ))}
-      <line x1="88" y1="106" x2="292" y2="106" stroke={UI.line} strokeWidth="1.5" />
-    </g>
-  ),
-
-  /** A month grid with a couple of days marked: rotations, schedules, calendars. */
-  calendar: (k, accent) => (
-    <g key={k}>
-      <rect x="78" y="30" width="222" height="82" rx="5" fill={UI.panel} />
-      {[0, 1, 2, 3, 4, 5, 6].map((c) => (
-        <Line key={c} x={90 + c * 29} y={38} w={9} h={3} c={UI.line} />
-      ))}
-      {[0, 1, 2].map((r) => [0, 1, 2, 3, 4, 5, 6].map((c) => {
-        const on = (r === 0 && c === 3) || (r === 1 && c === 5) || (r === 2 && c === 1);
-        return (
-          <rect key={`${r}-${c}`} x={88 + c * 29} y={48 + r * 20} width="23" height="15"
-                rx="3" fill={on ? accent : UI.row} opacity={on ? 0.92 : 1} />
-        );
-      }))}
-    </g>
-  ),
-
-  /** Milestones on a line, with one open: incidents, releases, onboarding. */
-  timeline: (k, accent) => (
-    <g key={k}>
-      <rect x="78" y="30" width="222" height="82" rx="5" fill={UI.panel} />
-      <line x1="94" y1="71" x2="288" y2="71" stroke={UI.line} strokeWidth="2"
-            strokeLinecap="round" />
-      <line x1="94" y1="71" x2="196" y2="71" stroke={accent} strokeWidth="2"
-            strokeLinecap="round" />
+      <Panel />
       {[0, 1, 2, 3].map((i) => {
-        const done = i <= 1;
+        const stale = i === 1 || i === 3;
         return (
-          <g key={i} transform={`translate(${100 + i * 62} 0)`}>
-            <circle cx="0" cy="71" r={i === 1 ? 6 : 4.5}
-                    fill={done ? accent : UI.row}
-                    stroke={i === 1 ? "#0d1220" : "none"} strokeWidth="2" />
-            <Line x={-20} y={i % 2 ? 84 : 50} w={40} h={3.5}
-                  c={i === 1 ? UI.bright : UI.text} o={i === 1 ? 1 : 0.7} />
-            <Line x={-20} y={i % 2 ? 91 : 57} w={26} h={3} o={0.45} />
+          <g key={i} transform={`translate(0 ${i * 19})`}>
+            <Line x={88} y={40} w={54} h={4} c={stale ? UI.bright : UI.text} />
+            <rect x={152} y={38} width="96" height="7" rx="3.5" fill={UI.row} />
+            <rect x={152} y={38} width={stale ? 88 : 26 + i * 8} height="7" rx="3.5"
+                  fill={stale ? "#e0a33e" : a} />
+            <Line x={258} y={39} w={20} h={5} c={stale ? "#e0a33e" : UI.line} />
           </g>
         );
       })}
     </g>
   ),
+
+  /** A list beside the thing you are reading: triage inboxes. */
+  inbox: (k, a) => (
+    <g key={k}>
+      <Panel w={104} />
+      <Panel x={188} w={112} />
+      {[0, 1, 2, 3].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 19})`}>
+          <Row x={84} y={36} w={92} c={i === 0 ? UI.row : UI.panel} />
+          <circle cx="93" cy="44" r="3.5" fill={i === 0 ? a : UI.line} />
+          <Line x={101} y={42} w={62 - i * 8} h={3} c={i === 0 ? UI.bright : UI.text} />
+        </g>
+      ))}
+      <Line x={196} y={40} w={64} h={5} c={UI.bright} />
+      {[0, 1, 2, 3].map((i) => (
+        <Line key={i} x={196} y={54 + i * 11} w={i === 3 ? 52 : 92} h={3} o={0.5} />
+      ))}
+      <rect x="196" y="98" width="34" height="9" rx="4.5" fill={a} opacity=".9" />
+    </g>
+  ),
+
+  /** A month grid with days marked: calendars, change windows. */
+  calendar: (k, a) => (
+    <g key={k}>
+      <Panel />
+      {[0, 1, 2, 3, 4, 5, 6].map((c) => (
+        <Line key={c} x={90 + c * 29} y={38} w={9} h={3} c={UI.line} />
+      ))}
+      {[0, 1, 2].map((r) => [0, 1, 2, 3, 4, 5, 6].map((c) => {
+        const on = (r === 0 && c === 3) || (r === 1 && c === 5) || (r === 2 && c === 1);
+        return <rect key={`${r}-${c}`} x={88 + c * 29} y={48 + r * 20} width="23" height="15"
+                     rx="3" fill={on ? a : UI.row} />;
+      }))}
+    </g>
+  ),
+
+  /** Columns of cards: kanban, bug triage. */
+  board: (k, a) => (
+    <g key={k}>
+      {[0, 1, 2].map((c) => (
+        <g key={c} transform={`translate(${80 + c * 76} 0)`}>
+          <Line x={2} y={32} w={30 - c * 4} h={3} c={UI.bright} o={0.8} />
+          <rect x="0" y="40" width="68" height="70" rx="5" fill={UI.panel} />
+          {[0, 1, 2].map((r) => (
+            (r === 2 && c === 2) ? null : (
+              <g key={r} transform={`translate(0 ${r * 21})`}>
+                <Row x={5} y={46} w={58} />
+                <rect x="9" y="50" width="4" height="4" rx="1"
+                      fill={c === 0 && r === 0 ? a : UI.line} />
+                <Line x={17} y={51} w={38 - r * 8} h={3} o={0.7} />
+              </g>
+            )
+          ))}
+        </g>
+      ))}
+    </g>
+  ),
+
+  /** A numbered path with the current step open: onboarding, runbooks. */
+  steps: (k, a) => (
+    <g key={k}>
+      <Panel />
+      {[0, 1, 2, 3].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 19})`}>
+          <circle cx="94" cy="42" r="6" fill={i <= 1 ? a : UI.row} />
+          {i <= 1 ? (
+            <path d="M91.5 42 L93.5 44 L96.5 40" stroke="#0d1220" strokeWidth="1.6"
+                  fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          ) : null}
+          {i < 3 ? <line x1="94" y1="49" x2="94" y2="55" stroke={UI.line} strokeWidth="1.5" /> : null}
+          <Line x={106} y={40} w={i === 2 ? 96 : 66 - i * 6} h={4}
+                c={i === 2 ? UI.bright : UI.text} />
+          {i === 2 ? <Line x={106} y={47} w={130} h={3} o={0.45} /> : null}
+        </g>
+      ))}
+    </g>
+  ),
+
+  /** Two variants and a winner: pricing experiments, A/B logs. */
+  experiments: (k, a) => (
+    <g key={k}>
+      <Panel />
+      {[0, 1, 2].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 24})`}>
+          <Line x={88} y={40} w={34} h={4} c={UI.text} />
+          <rect x={130} y={36} width={i === 0 ? 62 : 40} height="10" rx="5"
+                fill={i === 0 ? a : UI.row} />
+          <rect x={198} y={36} width={i === 0 ? 34 : 56} height="10" rx="5" fill={UI.row} />
+          {i === 0 ? <circle cx="272" cy="41" r="5" fill={a} /> : null}
+        </g>
+      ))}
+    </g>
+  ),
+
+  /** Tiles that are up or down: vendor status, service health. */
+  statusgrid: (k, a) => (
+    <g key={k}>
+      {[0, 1, 2, 3, 4, 5].map((i) => {
+        const down = i === 4;
+        const x = 80 + (i % 3) * 74;
+        const y = 34 + Math.floor(i / 3) * 42;
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width="66" height="34" rx="5" fill={UI.panel} />
+            <circle cx={x + 11} cy={y + 12} r="4" fill={down ? "#e05c5c" : a} />
+            <Line x={x + 20} y={y + 10} w={34 - (i % 3) * 5} h={4} c={UI.text} />
+            <Line x={x + 8} y={y + 23} w={48} h={3} o={0.4} />
+          </g>
+        );
+      })}
+    </g>
+  ),
+
+  /** Dated entries, the newest expanded: decision logs, changelogs. */
+  log: (k, a) => (
+    <g key={k}>
+      <Panel />
+      <line x1="98" y1="36" x2="98" y2="106" stroke={UI.line} strokeWidth="1.5" />
+      {[0, 1, 2].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 25})`}>
+          <circle cx="98" cy="42" r={i === 0 ? 5 : 3.5} fill={i === 0 ? a : UI.row} />
+          <Line x={110} y={38} w={i === 0 ? 92 : 62} h={4}
+                c={i === 0 ? UI.bright : UI.text} />
+          {i === 0 ? <Line x={110} y={46} w={140} h={3} o={0.45} /> : null}
+          <Line x={252} y={39} w={26} h={3} c={UI.line} />
+        </g>
+      ))}
+    </g>
+  ),
+
+  /** A message being composed from entries: changelog to email. */
+  email: (k, a) => (
+    <g key={k}>
+      <Panel />
+      <Line x={88} y={38} w={30} h={3} c={UI.line} />
+      <Line x={124} y={38} w={74} h={3} c={UI.text} />
+      <line x1="88" y1="47" x2="290" y2="47" stroke={UI.line} strokeWidth="1" />
+      <Line x={88} y={54} w={110} h={5} c={UI.bright} />
+      {[0, 1, 2].map((i) => (
+        <Line key={i} x={88} y={66 + i * 9} w={i === 2 ? 120 : 196} h={3} o={0.45} />
+      ))}
+      <rect x="88" y="94" width="44" height="11" rx="5.5" fill={a} opacity=".92" />
+      <Line x={96} y={98} w={28} h={3} c="#0d1220" o={0.55} />
+    </g>
+  ),
+
+  /** A line climbing with its area filled: coverage, trends. */
+  trend: (k, a) => (
+    <g key={k}>
+      <Panel />
+      <path d="M92 96 L120 84 L148 88 L176 68 L204 72 L232 54 L260 46 L288 40 L288 106 L92 106 Z"
+            fill={a} opacity=".16" />
+      <polyline points="92,96 120,84 148,88 176,68 204,72 232,54 260,46 288,40"
+                fill="none" stroke={a} strokeWidth="2.5"
+                strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="288" cy="40" r="4" fill={a} />
+      <line x1="88" y1="106" x2="292" y2="106" stroke={UI.line} strokeWidth="1.5" />
+    </g>
+  ),
+
+  /** A table with a countdown on each row: expiries, renewals. */
+  expiry: (k, a) => (
+    <g key={k}>
+      <Panel />
+      <Line x={88} y={38} w={40} h={3} c={UI.line} />
+      <Line x={172} y={38} w={30} h={3} c={UI.line} />
+      <Line x={244} y={38} w={26} h={3} c={UI.line} />
+      {[0, 1, 2, 3].map((i) => {
+        const soon = i === 0 || i === 2;
+        return (
+          <g key={i} transform={`translate(0 ${i * 17})`}>
+            <Line x={88} y={50} w={64 - i * 6} h={4} c={UI.text} />
+            <Line x={172} y={50} w={44} h={3} o={0.5} />
+            <rect x={244} y={46} width="30" height="10" rx="5"
+                  fill={soon ? "#e0a33e" : a} opacity={soon ? 0.9 : 0.65} />
+          </g>
+        );
+      })}
+    </g>
+  ),
+
+  /** Code with something underlined: linters, style guides. */
+  lint: (k, a) => (
+    <g key={k}>
+      <Panel />
+      {[0, 1, 2, 3, 4].map((i) => (
+        <g key={i} transform={`translate(0 ${i * 15})`}>
+          <Line x={86} y={40} w={8} h={3} c={UI.line} />
+          <Line x={100} y={40} w={[120, 78, 150, 96, 62][i]} h={4}
+                c={i === 2 ? UI.bright : UI.text} o={i === 2 ? 1 : 0.7} />
+          {i === 2 ? (
+            <path d="M100 47 q4 3 8 0 t8 0 t8 0 t8 0" stroke="#e05c5c" strokeWidth="1.6"
+                  fill="none" />
+          ) : null}
+          {i === 2 ? <circle cx="286" cy="42" r="4" fill={a} /> : null}
+        </g>
+      ))}
+    </g>
+  ),
+
+  /** People against weeks: rotas, fairness. */
+  rota: (k, a) => (
+    <g key={k}>
+      <Panel />
+      {[0, 1, 2, 3].map((r) => (
+        <g key={r}>
+          <circle cx="90" cy={44 + r * 18} r="4.5" fill={UI.line} />
+          <Line x={100} y={42 + r * 18} w={26} h={3.5} c={UI.text} />
+          {[0, 1, 2, 3, 4, 5].map((c) => {
+            const on = (r + c) % 3 === 0;
+            return <rect key={c} x={134 + c * 26} y={38 + r * 18} width="21" height="12"
+                         rx="3" fill={on ? a : UI.row} opacity={on ? 0.9 : 1} />;
+          })}
+        </g>
+      ))}
+    </g>
+  ),
 };
 
+/** One layout per idea, by title. Mapping by glyph is what produced seven identical cards. */
 const MOCKUP_FOR: Record<string, keyof typeof MOCKUPS> = {
-  inbox: "list", people: "list", book: "list", shield: "list",
-  board: "board", tag: "board", route: "timeline", clock: "timeline",
-  spark: "timeline", chart: "chart", bell: "chart", map: "calendar",
+  "Incident timeline builder": "timeline",
+  "Subscription audit": "chart",
+  "Interview scorecard": "scorecard",
+  "Docs freshness board": "freshness",
+  "Lead triage inbox": "inbox",
+  "Change calendar": "calendar",
+  "Bug triage board": "board",
+  "Onboarding path": "steps",
+  "Pricing experiment log": "experiments",
+  "Vendor status watch": "statusgrid",
+  "Decision log": "log",
+  "Changelog to email": "email",
+  "Test coverage trend": "trend",
+  "Access expiry tracker": "expiry",
+  "Style guide linter": "lint",
+  "Rotation fairness board": "rota",
 };
+
 
 const GLYPHS = {
   board: "M3 5h18v14H3zM9 5v14M15 5v14",
@@ -1100,7 +1326,7 @@ export function AskBossHero({
                         <rect x="258" y="10" width="42" height="12" rx="6"
                               fill={accentFor(i.title)} opacity=".92" />
                         <Line x={266} y={15} w={26} h={3} c="#0d1220" o={0.55} />
-                        {MOCKUPS[MOCKUP_FOR[i.glyph] ?? "list"](i.title, accentFor(i.title))}
+                        {(MOCKUPS[MOCKUP_FOR[i.title] ?? "timeline"])(i.title, accentFor(i.title))}
                       </svg>
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
