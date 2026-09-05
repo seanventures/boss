@@ -613,10 +613,16 @@ def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     # being built, not because of a word somebody used. The prose check stays as the fallback
     # for callers that genuinely do not know.
     standards = platform_standards(f"{title}\n{instructions}", force=service)
+    # WHAT THE OPERATOR SAID TO BUILD AGAINST. In the shared preamble for the same reason the
+    # standards are: material read only at design time is forgotten by the time code is
+    # written, and this block is byte-identical across stages so the prompt cache is unaffected.
+    from .platform_standards import reference_material
+
+    references = reference_material()
     return (
         "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
         f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
-        f"{standards}\n"
+        f"{standards}{references}\n"
         "=== END TASK CONTEXT ===\n\n"
     )
 
@@ -1339,8 +1345,12 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # byte-identical (the prompt cache depends on that) and so a rule added mid-build cannot
     # change the instructions between stages of the same task.
     from .platform_standards import load_mandated_standards
+    from .platform_standards import load_reference_links
     with engine.begin() as _c:
         _n_mandated = load_mandated_standards(_c, project_id)
+    _n_refs = load_reference_links((spec or {}).get("reference_links"))
+    if _n_refs:
+        logger.info("code_task.reference_links run=%s count=%s", run_id, _n_refs)
     if _n_mandated:
         logger.info("code_task.mandated_standards run=%s count=%s", run_id, _n_mandated)
     ports = _engine_ports()

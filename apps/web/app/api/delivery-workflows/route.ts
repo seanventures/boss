@@ -19,6 +19,10 @@ const VIEWS: Record<string, (project: string) => string> = {
     `/v1/delivery-workflows/custom-steps?project_id=${encodeURIComponent(p)}`,
   installed: (p) => `/v1/delivery-workflows?project_id=${encodeURIComponent(p)}`,
   runs: (p) => `/v1/delivery-workflows/runs?project_id=${encodeURIComponent(p)}`,
+  // Where a build can go. The registry has always existed and nothing over HTTP could read it,
+  // so the form that starts work could not offer a choice and every build went to whatever the
+  // deployment's global default happened to be.
+  repositories: (p) => `/v1/projects/${encodeURIComponent(p)}/repositories`,
 };
 
 /** `view=spec&key=…` — the steps a workflow currently has, so the builder opens with them

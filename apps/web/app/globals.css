@@ -8030,6 +8030,104 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 .dw-new-hint { margin-left: auto; }
 .dw-new-error { margin: 0; font-size: 12px; color: var(--bad, #f85149); }
 
+/* THE NEW PROJECT WIZARD.
+   Starting a project is the one moment where a minute of the operator's attention is worth
+   more than any later intervention, and the console asked for the least there: one textarea
+   and a dropdown, with the repository, the criteria and anything to read first either
+   defaulted silently or never asked. Four steps, none of them mandatory past the first. */
+.dw-wizard {
+  padding: 16px 18px 14px;
+  border: 1px solid var(--border, #1C2740); border-radius: 16px;
+  background: rgba(4, 9, 22, .62);
+}
+
+/* The rail names the steps. Four unlabelled dots would be decoration; the names are what let
+   somebody decide whether to keep going or press Start now. */
+.dw-wiz-rail {
+  display: flex; flex-wrap: wrap; gap: 6px; list-style: none;
+  margin: 12px 0 14px; padding: 0 0 12px;
+  border-bottom: 1px solid var(--border, #1C2740);
+}
+.dw-wiz-crumb {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 5px 11px; border-radius: 999px; font-size: 12px;
+  background: transparent; border: 1px solid transparent; color: var(--ink-dim, #7C8CB0);
+}
+.dw-wiz-crumb:disabled { cursor: default; opacity: .55; }
+.dw-wiz-rail [data-state="current"] .dw-wiz-crumb {
+  background: color-mix(in srgb, var(--accent, #2F6FE0) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #2F6FE0) 42%, transparent);
+  color: var(--ink, #E8EEFC); font-weight: 600;
+}
+.dw-wiz-rail [data-state="done"] .dw-wiz-crumb { color: var(--accent-text, #2EC5C5); }
+.dw-wiz-num {
+  display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%;
+  font-size: 10px; font-weight: 700;
+  background: color-mix(in srgb, var(--ink, #E8EEFC) 10%, transparent);
+}
+.dw-wiz-rail [data-state="current"] .dw-wiz-num {
+  background: var(--accent, #2F6FE0); color: #fff;
+}
+
+.dw-wiz-body { display: grid; gap: 16px; }
+.dw-field { display: grid; gap: 5px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.dw-field-label { font-size: 13px; font-weight: 600; color: var(--ink, #E8EEFC); padding: 0; }
+/* The hint carries the REASON. "Who is it for" with no explanation gets a shrug; with "named
+   users change what gets built" it gets an answer, and the answer is what improves the spec. */
+.dw-field-hint { font-size: 11.5px; line-height: 1.5; color: var(--ink-dim, #7C8CB0); }
+.dw-field-label em { font-style: normal; font-weight: 400; color: var(--ink-dim, #7C8CB0); }
+.dw-crit-row { display: flex; gap: 8px; align-items: center; }
+.dw-crit-row .input { flex: 1 1 auto; min-width: 0; }
+.dw-crit-drop { flex: 0 0 auto; padding: 4px 10px; line-height: 1; }
+.dw-link-row { width: 100%; margin-top: 6px; }
+
+/* Choices as cards, not a <select>. A dropdown hides the descriptions, and the descriptions
+   are the whole reason a path or a repository is the right one. */
+.dw-wiz-choices { display: grid; gap: 8px; }
+.dw-wiz-choice {
+  display: grid; gap: 3px; text-align: left; cursor: pointer;
+  padding: 11px 13px; border-radius: 11px;
+  border: 1px solid var(--border, #1C2740);
+  background: var(--surface-2, #0F1830); color: var(--ink, #E8EEFC);
+  transition: border-color .14s ease, background-color .14s ease;
+}
+.dw-wiz-choice:hover { border-color: var(--border-strong, #2A3550); }
+.dw-wiz-choice[data-selected="true"] {
+  border-color: var(--accent, #2F6FE0);
+  background: color-mix(in srgb, var(--accent, #2F6FE0) 10%, var(--surface-2, #0F1830));
+}
+.dw-wiz-choice-name { font-weight: 600; font-size: 13px; }
+.dw-wiz-choice .detail { margin: 0; font-size: 11.5px; line-height: 1.45; }
+.dw-wiz-choice-meta { opacity: .85; }
+
+/* The review reads as a statement of what is about to happen, not as a fourth form. */
+.dw-wiz-review {
+  display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 6px 16px;
+  margin: 0; font-size: 13px;
+}
+.dw-wiz-review dt {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-dim, #7C8CB0); padding-top: 2px;
+}
+.dw-wiz-review dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.dw-wiz-review ul { margin: 0; padding-left: 18px; }
+.dw-wiz-warn {
+  margin: 14px 0 0; padding: 9px 12px; border-radius: 9px; font-size: 12px;
+  background: color-mix(in srgb, var(--warn, #d29922) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn, #d29922) 32%, transparent);
+}
+
+.dw-wiz-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border, #1C2740);
+}
+.dw-wiz-spacer { flex: 1 1 auto; }
+
+@media (max-width: 640px) {
+  .dw-wiz-review { grid-template-columns: 1fr; gap: 2px 0; }
+  .dw-wiz-review dd { margin-bottom: 8px; }
+}
+
 @media (max-width: 640px) {
   .dw-new-foot { align-items: stretch; }
   .dw-new-hint { display: none; }

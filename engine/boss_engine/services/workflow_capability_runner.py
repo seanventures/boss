@@ -80,6 +80,15 @@ def _resolve_inputs(
             field = str(value["from_input"])
             run_input = context.get("input") or {}
             if field not in run_input:
+                # AN OPTIONAL INPUT THAT WAS NOT SUPPLIED IS SIMPLY ABSENT.
+                #
+                # Same rule `from_step` has had all along, and it was missing here: any
+                # optional binding read from the run's input made that input MANDATORY, so
+                # binding something a wizard collects — a chosen repository, acceptance
+                # criteria — would have broken every run started from anywhere else. A
+                # workflow must accept extra information without requiring it.
+                if name in optional:
+                    continue
                 raise CapabilityExecutionError(
                     f"this workflow was started without '{field}', which this step needs."
                 )

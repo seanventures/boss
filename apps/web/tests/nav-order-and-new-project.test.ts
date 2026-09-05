@@ -175,7 +175,11 @@ describe("choosing the workflow", () => {
     // follow from now on". The first now lives in two places, each next to the work it
     // governs: the Workflow composer for a new project, the Iterate panel for a change.
     const DWP = codeOnly("app/delivery-workflows-ui.tsx");
-    expect(DWP).toContain('data-testid="dw-new-workflow"');
+    // It is a step in the New Project wizard now rather than a dropdown beside the box: one
+    // card per path, each carrying the description and the gates, because those are the whole
+    // reason one path is right and another is not — and a <select> hides them.
+    expect(DWP).toContain('data-testid={`dw-new-workflow-${w.workflow_key}`}');
+    expect(DWP).toContain('data-testid="dw-new-workflow-default"');
     expect(CT).toContain('data-testid="ct-iterate-workflow"');
     expect(CT).toContain('name="workflow_version_id"');
   });

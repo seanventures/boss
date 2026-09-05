@@ -10694,6 +10694,33 @@ def list_agent_threads_endpoint(project_id: str, actor: str, since_days: int = 7
         }
 
 
+@app.get("/v1/projects/{project_id}/repositories")
+def project_repositories_endpoint(project_id: str):
+    """The repositories this project can build in, primary first.
+
+    The registry has existed since multi-repo support landed and nothing over HTTP could read
+    it, so the New Project form had no way to offer a choice and every build silently went to
+    whatever the deployment's global default was. `suggested` is the one a form should
+    pre-select: the project's primary if it has one, otherwise the platform default, which is
+    named explicitly rather than left as an empty field meaning "somewhere".
+    """
+    from boss_engine.services import repo_registry as rr
+
+    with begin(engine) as connection:
+        try:
+            repositories = rr.list_repositories(connection, project_id, limit=100)
+        except Exception:  # noqa: BLE001 — a form must still open on a project with no registry
+            repositories = []
+        suggested, source = "", "none"
+        try:
+            target = rr.resolve_repository_target(connection, get_settings(), project_id)
+            suggested, source = target["full_name"], target["source"]
+        except Exception:  # noqa: BLE001 — nothing resolvable is a real answer, not an error
+            pass
+    return {"project_id": project_id, "repositories": repositories,
+            "suggested": suggested, "suggested_source": source}
+
+
 @app.get("/v1/agent/role-starters")
 def agent_role_starters_endpoint(project_id: str, role: str):
     """Questions worth asking THIS role, grounded in what it has actually seen here.

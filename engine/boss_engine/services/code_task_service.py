@@ -402,6 +402,7 @@ def start_code_task(
     substrate: Optional[str] = None, repo_host: Optional[str] = None,
     allow_duplicate: bool = False, simulated: bool = False,
     job_priority: Optional[int] = None,
+    reference_links: Optional[list[str]] = None,
 ) -> str:
     """Create the durable run row and enqueue the single `code.task` job.
 
@@ -487,6 +488,10 @@ def start_code_task(
                          else instructions + _DEPLOYABILITY_NOTE),
         "acceptance_criteria": acceptance_criteria or [],
         "test_commands": test_commands or [],
+        # Material the operator said to build AGAINST — an API doc, a repo whose conventions to
+        # follow. Kept on the spec rather than glued onto the instructions so it survives a
+        # relaunch intact and does not move the work fingerprint.
+        "reference_links": [str(link) for link in (reference_links or []) if str(link).strip()],
         "owner": owner, "repo": repo, "base_branch": base_branch,
     }
     if settings is not None:

@@ -407,6 +407,14 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                                    "primary. See list_repositories.",
                 },
                 "base_branch": {"type": "string", "description": "branch to build on (default main)"},
+                "reference_links": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "URLs the builder must read before writing code — an API "
+                                   "doc, a repo to follow the conventions of, a design. Given "
+                                   "to every stage as required reading. NOT indexed or "
+                                   "searched: an agent opens them, so they must be reachable "
+                                   "without a login.",
+                },
                 "workflow_run_id": {
                     "type": "string",
                     "description": "the outer workflow run this task belongs to, when a "
@@ -476,6 +484,7 @@ def _register_write_tools(reg: ToolRegistry) -> None:
                 instructions=instructions,
                 acceptance_criteria=args.get("acceptance_criteria") or [],
                 test_commands=args.get("test_commands") or [],
+                reference_links=args.get("reference_links") or [],
                 owner=target["owner"],
                 repo=target["repo"],
                 base_branch=base_branch,

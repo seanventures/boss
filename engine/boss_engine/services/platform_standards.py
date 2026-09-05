@@ -202,6 +202,42 @@ def _mandated_block(*, service: bool) -> str:
             "force as the platform's own) ===" + "".join(out))
 
 
+#: Links the operator told this build to work against, for the task currently being built.
+#: Same per-run snapshot mechanism as the mandated standards above, and for the same reason:
+#: `_ctx_block` is shared by eleven prompt builders and has no database handle.
+_REFERENCES: ContextVar[tuple[str, ...]] = ContextVar("boss_reference_links", default=())
+
+
+def load_reference_links(links) -> int:
+    """Hold the reference material for this run. Returns how many."""
+    clean = tuple(str(link).strip() for link in (links or []) if str(link).strip())
+    _REFERENCES.set(clean)
+    return len(clean)
+
+
+def reference_material() -> str:
+    """Required reading for this build, or "".
+
+    Deliberately worded as an instruction to OPEN them. The agent has a fetch tool; nothing
+    here is indexed, embedded or searched, and describing it as a knowledge base would promise
+    retrieval that does not exist. A link the agent cannot reach is reported as unreachable
+    rather than guessed at — a build that invents the contents of an API doc it could not open
+    is worse than one that says it could not open it.
+    """
+    links = _REFERENCES.get()
+    if not links:
+        return ""
+    listed = "\n".join(f"- {link}" for link in links)
+    return (
+        "\n\n=== REFERENCE MATERIAL FOR THIS BUILD (the operator chose these) ===\n"
+        "OPEN each of these before you design or write anything, and follow what they say over "
+        "your own assumptions. They are not indexed — fetch them.\n"
+        f"{listed}\n"
+        "If one cannot be reached, SAY SO in your output and continue; do not invent what it "
+        "would have contained."
+    )
+
+
 def platform_standards(instructions: str = "", *, force: bool = False) -> str:
     """The standards block to hand an agent, or "" when none apply.
 

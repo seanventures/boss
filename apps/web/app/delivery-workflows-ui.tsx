@@ -627,7 +627,7 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
                       onClick={() => setComposerOpen(false)}>Hide</button>
             ) : null}
             <NewProjectComposer
-              projectId={projectId} actor={actor} workflows={installed}
+              projectId={projectId} actor={actor} workflows={installed} catalogue={catalogue}
               onStarted={(runId) => {
                 if (runId) setOpenRun(runId);
                 setComposerOpen(false);
@@ -886,42 +886,152 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
   return out;
 }
 
+/** A repository this project can build in, from its registry. */
+type Repo = { id: string; full_name: string; role?: string | null; default_branch?: string };
+
+/** What the wizard has collected so far. One object so a Back button costs nothing. */
+type NewProjectDraft = {
+  title: string;
+  directive: string;
+  audience: string;
+  criteria: string[];
+  workflowKey: string;
+  repository: string;
+  links: string[];
+};
+
+const EMPTY_DRAFT: NewProjectDraft = {
+  title: "", directive: "", audience: "", criteria: [""],
+  workflowKey: "", repository: "", links: [],
+};
+
+const STEPS = ["What you are building", "How it gets built", "Where it lives", "Review"] as const;
+
+/** The brief, assembled the way the pipeline reads best.
+ *
+ * Not decoration. A one-line directive produces a panel arguing about one line: BOSS's own
+ * sample briefs are written as who-it-is-for plus what-it-does plus criteria, because that is
+ * what a spec review can actually review. The wizard collects the parts and joins them here,
+ * so the operator writes prose and the pipeline receives structure.
+ */
+export function briefFrom(draft: NewProjectDraft): string {
+  const parts = [draft.directive.trim()];
+  if (draft.audience.trim()) parts.push(`Who it is for: ${draft.audience.trim()}`);
+  return parts.filter(Boolean).join("\n");
+}
+
+/** Criteria worth sending: blank rows are UI, not requirements. */
+export function criteriaFrom(draft: NewProjectDraft): string[] {
+  return draft.criteria.map((c) => c.trim()).filter(Boolean);
+}
+
+/** Links worth sending, and only ones an agent could actually open. */
+export function linksFrom(draft: NewProjectDraft): string[] {
+  return draft.links
+    .map((l) => l.trim())
+    .filter((l) => /^https?:\/\//i.test(l));
+}
+
+/** What stops the operator moving on, said as the thing to do rather than as an error. */
+export function blockingReason(step: number, draft: NewProjectDraft): string {
+  if (step === 0) {
+    if (draft.directive.trim().length < 20) {
+      return "Describe what you want built — a sentence or two, not a title. "
+           + "The panel argues from this text, so a thin brief produces a thin spec.";
+    }
+  }
+  return "";
+}
+
 /**
  * STARTING WORK, WHERE THE WORK IS WATCHED.
  *
  * "New project" lived in Factory because Factory was where projects were listed. Now the
  * workflow drives — the press starts a run, and the run convenes the panel, waits for the
  * approval, builds, previews and asks before it deploys — so the page that shows those steps
- * is the page that should start them. Factory keeps its own entry for changing an app that
- * already exists, which is a different act.
+ * is the page that should start them.
+ *
+ * AND IT IS A WIZARD, NOT A BOX.
+ *
+ * It was one textarea and a workflow dropdown. Everything else a build needs — which repository
+ * the code goes in, what "done" means, anything the builder should read first — was either
+ * defaulted silently or not asked at all, and the first chance to correct any of it was the
+ * spec review, after a panel had already been convened on a guess. Starting a project is the
+ * one moment where a minute of the operator's attention is worth more than any later
+ * intervention, and it was the moment the console asked for the least.
+ *
+ * Four steps, each of which can be skipped by pressing on: nothing here is required except the
+ * description, because a wizard that demands ten answers is a wizard people route around.
  */
-function NewProjectComposer({ projectId, actor, workflows, onStarted }: {
+function NewProjectComposer({ projectId, actor, workflows, catalogue, onStarted }: {
   projectId: string; actor: string;
   workflows: Installed[];
+  catalogue: CatalogueEntry[];
   onStarted: (runId: string | null) => void;
 }) {
-  const [directive, setDirective] = useState("");
-  const [workflowKey, setWorkflowKey] = useState("");
+  const [step, setStep] = useState(0);
+  const [draft, setDraft] = useState<NewProjectDraft>(EMPTY_DRAFT);
+  const [repos, setRepos] = useState<Repo[]>([]);
+  const [suggested, setSuggested] = useState<{ name: string; source: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const set = <K extends keyof NewProjectDraft>(key: K, value: NewProjectDraft[K]) =>
+    setDraft((d) => ({ ...d, [key]: value }));
+
+  // WHERE THE CODE GOES, ANSWERED BEFORE IT IS ASKED.
+  //
+  // The project's registry knows its repositories and which one is primary; nothing over HTTP
+  // could read it, so this form could not offer them and every build went to the deployment's
+  // global default. Loaded on mount so the field arrives filled in — the operator confirms a
+  // real answer instead of composing one.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const r = await get<{ repositories: Repo[]; suggested: string; suggested_source: string }>(
+        "repositories", projectId);
+      // A project with no registry is a normal state, not an error to surface: the build
+      // resolves to the platform default and the step says so.
+      if (!alive || !r || "error" in r) return;
+      setRepos(r.repositories ?? []);
+      if (r.suggested) setSuggested({ name: r.suggested, source: r.suggested_source });
+    })();
+    return () => { alive = false; };
+  }, [projectId]);
+
+  /** The catalogue entry behind an installed workflow, for its description and gates. */
+  const describe = (key: string): CatalogueEntry | undefined =>
+    catalogue.find((c) => c.key === key);
+
+  const blocked = blockingReason(step, draft);
 
   const start = async () => {
-    const text = directive.trim();
+    const text = briefFrom(draft).trim();
     if (!text || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const title = text.length > 72 ? `${text.slice(0, 69)}…` : text;
+      const title = draft.title.trim()
+        || (text.length > 72 ? `${text.slice(0, 69)}…` : text);
+      const criteria = criteriaFrom(draft);
+      const links = linksFrom(draft);
       const r = await post("start", {
         project_id: projectId, actor,
-        // No key means "whatever this project maps for a new project" — the honest default,
-        // and the same resolution every other entry point uses.
-        ...(workflowKey ? { workflow_key: workflowKey } : { work_class: "project.new" }),
-        input: { title, directive: text },
+        ...(draft.workflowKey
+            ? { workflow_key: draft.workflowKey }
+            : { work_class: "project.new" }),
+        input: {
+          title, directive: text,
+          // Sent only when the operator gave one. An empty string here would read as a
+          // deliberate choice of "" further down and beat the project's own default.
+          ...(criteria.length ? { acceptance_criteria: criteria } : {}),
+          ...(links.length ? { reference_links: links } : {}),
+          ...(draft.repository ? { repository: draft.repository } : {}),
+        },
       });
       if (!r.ok) { setError(r.error ?? "Could not start it."); return; }
       const run = (r.data as { run?: { id?: string }; id?: string } | undefined);
-      setDirective("");
+      setDraft(EMPTY_DRAFT);
+      setStep(0);
       onStarted(String(run?.run?.id ?? run?.id ?? "") || null);
     } finally {
       setBusy(false);
@@ -929,53 +1039,296 @@ function NewProjectComposer({ projectId, actor, workflows, onStarted }: {
   };
 
   return (
-    <section className="dw-new" data-testid="dw-new-project">
+    <section className="dw-new dw-wizard" data-testid="dw-new-project">
       <div className="dw-new-head">
-        <h3>Start a project</h3>
+        <h3>New project</h3>
         <p className="detail">
           A panel specs it, you approve, then it builds, previews, and asks before it deploys.
         </p>
       </div>
-      {/* ONE FIELD AND ONE BUTTON. The composer read as a form — a bare box, a floating label,
-          a control the same weight as the thing it acts on. Everything lives inside one
-          bordered surface that lights on focus, the way the Command Center's composer does,
-          because they are the same act done from two places. */}
-      <div className="dw-new-box">
-        <textarea
-          className="dw-new-input" rows={3} value={directive} data-testid="dw-new-directive"
-          placeholder="A shift-swap board where staff can offer and claim shifts…"
-          onChange={(e) => setDirective(e.target.value)}
-          onKeyDown={(e) => {
-            // Send on ⌘/Ctrl+Enter, like every other composer in this console. Plain Enter
-            // stays a newline: a directive is usually more than one line.
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); void start(); }
-          }}
-        />
-        <div className="dw-new-foot">
-          <label className="dw-new-pick">
-            <span>Workflow</span>
-            <select className="mr-select" value={workflowKey} data-testid="dw-new-workflow"
-                    onChange={(e) => setWorkflowKey(e.target.value)}>
-              <option value="">This project&apos;s usual path</option>
-              {/* Keyed by workflow_key, not a version id: `start` resolves the ACTIVE version
-                  itself, so naming a version here would pin a run to whatever was current
-                  when the page happened to load. */}
-              {workflows.map((w) => (
-                <option key={w.id} value={w.workflow_key}>{w.name}</option>
-              ))}
-            </select>
+
+      {/* WHERE YOU ARE AND WHAT IS LEFT. Four unlabelled dots would be decoration; the names
+          are what let somebody decide whether to keep going or press Start now. */}
+      <ol className="dw-wiz-rail" data-testid="dw-wiz-rail">
+        {STEPS.map((label, i) => (
+          <li key={label} data-state={i === step ? "current" : i < step ? "done" : "todo"}>
+            <button type="button" className="dw-wiz-crumb"
+                    data-testid={`dw-wiz-crumb-${i}`}
+                    // Backwards freely; forwards only over ground already covered, so the
+                    // rail cannot be used to skip the one question that is required.
+                    disabled={i > step}
+                    onClick={() => setStep(i)}>
+              <span className="dw-wiz-num" aria-hidden>{i < step ? "✓" : i + 1}</span>
+              <span>{label}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+
+      {step === 0 ? (
+        <div className="dw-wiz-body" data-testid="dw-wiz-step-0">
+          <label className="dw-field">
+            <span className="dw-field-label">What should it do?</span>
+            <span className="dw-field-hint">
+              The panel argues from these words and the builder works from them. Say what it
+              does and what a person can accomplish with it — two or three sentences beats a
+              title.
+            </span>
+            <textarea
+              className="dw-new-input" rows={5} value={draft.directive}
+              data-testid="dw-new-directive"
+              placeholder={"A shift-swap board where staff can offer a shift they cannot work "
+                + "and colleagues can claim it, with the manager approving the swap."}
+              onChange={(e) => set("directive", e.target.value)}
+              onKeyDown={(e) => {
+                // ⌘/Ctrl+Enter starts with the defaults, as it did before the wizard and as
+                // every other composer in this console does. The remaining steps all have a
+                // defensible default, so the shortcut is not a way of skipping a decision —
+                // it is the same "Start with defaults" the footer offers, from the keyboard.
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  if (!blockingReason(0, draft)) void start();
+                }
+              }}
+            />
           </label>
-          <span className="detail dw-new-hint">⌘↵ to start</span>
-          <button type="button" className="cap-btn primary" disabled={busy || !directive.trim()}
-                  onClick={() => void start()} data-testid="dw-new-start">
-            {busy ? "Starting…" : "Start"}
-          </button>
+
+          <label className="dw-field">
+            <span className="dw-field-label">Who is it for? <em>optional</em></span>
+            <span className="dw-field-hint">
+              Named users change what gets built. &ldquo;A duty manager on a phone, mid-shift&rdquo;
+              produces a different app from &ldquo;staff&rdquo;.
+            </span>
+            <input className="input" value={draft.audience} data-testid="dw-new-audience"
+                   placeholder="a duty manager on a phone, mid-shift"
+                   onChange={(e) => set("audience", e.target.value)} />
+          </label>
+
+          <fieldset className="dw-field">
+            <legend className="dw-field-label">
+              How will you know it works? <em>optional</em>
+            </legend>
+            <span className="dw-field-hint">
+              These become the acceptance criteria the build is tested against. Leave them
+              blank and the panel will propose its own — this is your chance to be specific
+              before it does.
+            </span>
+            {draft.criteria.map((c, i) => (
+              <div className="dw-crit-row" key={i}>
+                <input className="input" value={c} data-testid={`dw-new-criterion-${i}`}
+                       placeholder={i === 0
+                         ? "a member of staff can offer a shift in under 30 seconds"
+                         : "another thing that must be true"}
+                       onChange={(e) => {
+                         const next = [...draft.criteria];
+                         next[i] = e.target.value;
+                         set("criteria", next);
+                       }} />
+                {draft.criteria.length > 1 ? (
+                  <button type="button" className="cap-btn dw-crit-drop"
+                          aria-label="Remove this criterion"
+                          onClick={() => set("criteria",
+                            draft.criteria.filter((_, j) => j !== i))}>×</button>
+                ) : null}
+              </div>
+            ))}
+            <button type="button" className="linklike" data-testid="dw-new-criterion-add"
+                    onClick={() => set("criteria", [...draft.criteria, ""])}>
+              + another
+            </button>
+          </fieldset>
         </div>
+      ) : null}
+
+      {step === 1 ? (
+        <div className="dw-wiz-body" data-testid="dw-wiz-step-1">
+          <span className="dw-field-label">Which path should it take?</span>
+          <span className="dw-field-hint">
+            Every path ends in software you can look at. They differ in how much argument,
+            evidence and gating happens on the way — which is a question about risk, not about
+            speed.
+          </span>
+          <div className="dw-wiz-choices" role="radiogroup" aria-label="Workflow">
+            <button type="button" role="radio" className="dw-wiz-choice"
+                    aria-checked={draft.workflowKey === ""}
+                    data-selected={draft.workflowKey === ""}
+                    data-testid="dw-new-workflow-default"
+                    onClick={() => set("workflowKey", "")}>
+              <span className="dw-wiz-choice-name">This project&apos;s usual path</span>
+              <span className="detail">
+                Whatever this project maps for new work. The same resolution every other entry
+                point uses.
+              </span>
+            </button>
+            {workflows.map((w) => {
+              const entry = describe(w.workflow_key);
+              return (
+                <button type="button" role="radio" className="dw-wiz-choice" key={w.id}
+                        aria-checked={draft.workflowKey === w.workflow_key}
+                        data-selected={draft.workflowKey === w.workflow_key}
+                        data-testid={`dw-new-workflow-${w.workflow_key}`}
+                        onClick={() => set("workflowKey", w.workflow_key)}>
+                  <span className="dw-wiz-choice-name">{w.name}</span>
+                  {entry ? <span className="detail">{entry.description}</span> : null}
+                  {entry ? (
+                    <span className="dw-wiz-choice-meta detail">
+                      {entry.step_count} steps
+                      {entry.gates?.length
+                        ? ` · you approve: ${entry.gates.join(", ")}`
+                        : " · no approval gates"}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {step === 2 ? (
+        <div className="dw-wiz-body" data-testid="dw-wiz-step-2">
+          <span className="dw-field-label">Which repository?</span>
+          <span className="dw-field-hint">
+            Where the branch and the pull request go.
+            {suggested
+              ? ` Pre-selected: ${suggested.name}${
+                  suggested.source === "registry_primary" ? " — this project's primary." : "."}`
+              : " This project has no repository registered, so the platform default is used."}
+          </span>
+          <div className="dw-wiz-choices" role="radiogroup" aria-label="Repository">
+            <button type="button" role="radio" className="dw-wiz-choice"
+                    aria-checked={draft.repository === ""}
+                    data-selected={draft.repository === ""}
+                    data-testid="dw-new-repo-default"
+                    onClick={() => set("repository", "")}>
+              <span className="dw-wiz-choice-name">
+                {suggested ? suggested.name : "The project default"}
+              </span>
+              <span className="detail">
+                {suggested
+                  ? "What this project resolves to today. Leave it unless you mean elsewhere."
+                  : "Resolved when the build starts."}
+              </span>
+            </button>
+            {repos
+              .filter((r) => r.full_name !== suggested?.name)
+              .map((r) => (
+                <button type="button" role="radio" className="dw-wiz-choice" key={r.id}
+                        aria-checked={draft.repository === r.full_name}
+                        data-selected={draft.repository === r.full_name}
+                        data-testid={`dw-new-repo-${r.full_name}`}
+                        onClick={() => set("repository", r.full_name)}>
+                  <span className="dw-wiz-choice-name">{r.full_name}</span>
+                  <span className="detail">
+                    {r.role ? `${r.role} · ` : ""}branch {r.default_branch || "main"}
+                  </span>
+                </button>
+              ))}
+          </div>
+
+          <fieldset className="dw-field">
+            <legend className="dw-field-label">
+              Anything it should read first? <em>optional</em>
+            </legend>
+            <span className="dw-field-hint">
+              Links the agents must open before designing or writing — an API doc, a repo whose
+              conventions to follow, a design. They are fetched and read, not indexed or
+              searched, so they have to be reachable without a login. A link that cannot be
+              opened is reported, never guessed at.
+            </span>
+            {[...draft.links, ""].map((link, i) => (
+              <input className="input dw-link-row" key={i} value={link}
+                     data-testid={`dw-new-link-${i}`}
+                     placeholder="https://docs.example.com/api"
+                     onChange={(e) => {
+                       const next = [...draft.links];
+                       if (i < next.length) next[i] = e.target.value;
+                       else next.push(e.target.value);
+                       set("links", next.filter((l, j) => l.trim() || j < next.length - 1));
+                     }} />
+            ))}
+          </fieldset>
+        </div>
+      ) : null}
+
+      {step === 3 ? (
+        <div className="dw-wiz-body" data-testid="dw-wiz-step-3">
+          {/* WHAT IS ABOUT TO HAPPEN, IN THE ORDER IT WILL HAPPEN. A confirmation screen that
+              only repeats the form is a second form. This says what the press DOES, including
+              the parts that cost money and the parts that will stop and wait for a person. */}
+          <dl className="dw-wiz-review">
+            <dt>Building</dt>
+            <dd data-testid="dw-review-directive">{briefFrom(draft) || "—"}</dd>
+            <dt>Path</dt>
+            <dd data-testid="dw-review-workflow">
+              {draft.workflowKey
+                ? (workflows.find((w) => w.workflow_key === draft.workflowKey)?.name
+                   ?? draft.workflowKey)
+                : "This project's usual path"}
+            </dd>
+            <dt>Repository</dt>
+            <dd data-testid="dw-review-repo">
+              {draft.repository || suggested?.name || "the project default"}
+            </dd>
+            {criteriaFrom(draft).length ? (
+              <>
+                <dt>Done when</dt>
+                <dd data-testid="dw-review-criteria">
+                  <ul>{criteriaFrom(draft).map((c) => <li key={c}>{c}</li>)}</ul>
+                </dd>
+              </>
+            ) : null}
+            {linksFrom(draft).length ? (
+              <>
+                <dt>Reads first</dt>
+                <dd data-testid="dw-review-links">
+                  <ul>{linksFrom(draft).map((l) => <li key={l}><code>{l}</code></li>)}</ul>
+                </dd>
+              </>
+            ) : null}
+          </dl>
+          <p className="detail dw-wiz-warn">
+            Starting spends model budget: research, a panel and a build. It will stop and ask
+            you before it deploys anything.
+          </p>
+        </div>
+      ) : null}
+
+      {blocked ? <p className="dw-new-error" data-testid="dw-wiz-blocked">{blocked}</p> : null}
+
+      <div className="dw-wiz-foot">
+        {step > 0 ? (
+          <button type="button" className="cap-btn" data-testid="dw-wiz-back"
+                  onClick={() => setStep((n) => n - 1)}>Back</button>
+        ) : null}
+        <span className="dw-wiz-spacer" />
+        {/* START IS AVAILABLE FROM THE FIRST STEP. Everything after the description has a
+            defensible default, so making somebody walk four screens to accept four defaults
+            would be ceremony. The wizard is there for the operator who wants it. */}
+        {step < STEPS.length - 1 ? (
+          <>
+            <button type="button" className="linklike" data-testid="dw-wiz-start-now"
+                    disabled={busy || !!blockingReason(0, draft)}
+                    onClick={() => void start()}>
+              {busy ? "Starting…" : "Start with defaults"}
+            </button>
+            <button type="button" className="cap-btn primary" data-testid="dw-wiz-next"
+                    disabled={!!blocked}
+                    onClick={() => setStep((n) => n + 1)}>Next</button>
+          </>
+        ) : (
+          <button type="button" className="cap-btn primary" data-testid="dw-new-start"
+                  disabled={busy || !!blockingReason(0, draft)}
+                  onClick={() => void start()}>
+            {busy ? "Starting…" : "Start the project"}
+          </button>
+        )}
       </div>
       {error ? <p className="dw-new-error" data-testid="dw-new-error">{error}</p> : null}
     </section>
   );
 }
+
 
 /**
  * The input a RE-RUN should start from.
