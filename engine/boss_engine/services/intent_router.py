@@ -1089,7 +1089,26 @@ class IntentRouter:
                     # difference was whether the tool ran, so that is what is checked — not
                     # whether the prose looks specific, which is a judgement the same model
                     # would be making about its own output.
-                    if role and reply and not any(
+                    # ...UNLESS IT ALREADY READ THE RECORD EARLIER IN THIS CONVERSATION.
+                    #
+                    # The first version demanded the tool on EVERY turn, which produced this,
+                    # live: asked "what did you just tell me was your biggest worry — quote
+                    # yourself", Security quoted itself exactly, and the answer was stamped
+                    # "NOT checked against Security's record on this project". The quote came
+                    # from two messages up; there was nothing to check it against and nothing
+                    # wrong with it. A caveat attached to a correct answer is not caution — it
+                    # teaches the operator that the caveat means nothing, which spends the
+                    # credibility the note needs on the turn that IS invented.
+                    #
+                    # The record is read once and stays in the thread's context, so the
+                    # question is whether this CONVERSATION is grounded, not this turn.
+                    read_before = any(
+                        isinstance(call, dict)
+                        and call.get("tool") == "recall_role_experience"
+                        for message in (messages or [])
+                        for call in (message.get("tool_calls") or [])
+                    )
+                    if role and reply and not read_before and not any(
                         c.get("tool") == "recall_role_experience" for c in tool_calls
                     ):
                         try:
