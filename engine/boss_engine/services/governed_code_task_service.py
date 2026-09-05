@@ -579,7 +579,7 @@ _IAC_QA_GUIDANCE = (
 )
 
 
-def _ctx_block(title, instructions, criteria) -> str:
+def _ctx_block(title, instructions, criteria, *, service: bool = False) -> str:
     """Identical task-context preamble for EVERY pipeline stage — byte-identical on
     purpose. The model API's prompt cache is keyed on the request prefix, so stages
     launched back-to-back (within the cache TTL) re-READ this block from cache instead
@@ -597,7 +597,22 @@ def _ctx_block(title, instructions, criteria) -> str:
     # stays byte-identical across them, so the prompt cache is unaffected.
     from .platform_standards import platform_standards
 
-    standards = platform_standards(f"{title}\n{instructions}")
+    # WHAT BOSS IS BUILDING, NOT WHAT THE BRIEF HAPPENS TO SAY.
+    #
+    # `applies_to` keyword-matches the prose for "http", "api", "service", "port". Real briefs
+    # are written in product language — "Build an incident timeline builder for an on-call
+    # engineer" — and match none of them. Checked against the directives BOSS has actually
+    # built from, it fired on ZERO of them: HookWatch, Vendor-Status-Watcher, the incident
+    # timeline builder, the docs freshness board. So the observability standard has been
+    # silently absent from every app the platform ever shipped, which is exactly why three of
+    # them reached a host with no /metrics and the monitoring page linked to dashboards for
+    # data nobody was collecting.
+    #
+    # The pipeline knows: `web_app_build` is set before any of this runs, and a web app BOSS
+    # deploys is a thing BOSS scrapes. Passing that in makes the rule apply because of what is
+    # being built, not because of a word somebody used. The prose check stays as the fallback
+    # for callers that genuinely do not know.
+    standards = platform_standards(f"{title}\n{instructions}", force=service)
     return (
         "=== TASK CONTEXT (shared verbatim across all pipeline stages) ===\n"
         f"TASK: {title}\n\n{instructions}\n\nACCEPTANCE CRITERIA:\n{crit}\n"
@@ -607,10 +622,11 @@ def _ctx_block(title, instructions, criteria) -> str:
 
 
 def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False, app_root=None):
+    service = bool(web or app_root)
     if web:
         scope = f"`{app_root}/`" if app_root else "the app directory"
         return (
-            _ctx_block(title, instructions, criteria)
+            _ctx_block(title, instructions, criteria, service=service)
             + "You are a QA engineer for a web application. Your ONLY job is to author tests "
             "that the authoritative `npm run verify` command will actually run.\n\n"
             "RULES:\n"
@@ -623,11 +639,11 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
             "- Do NOT create the product implementation.\n"
             f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}` inside {scope}.)\n"
             "- End with a one-line summary of the cases you wrote.\n"
-            + _metrics_tests_clause(title, instructions)
+            + _metrics_tests_clause(title, instructions, service=service)
             + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
         )
     return (
-        _ctx_block(title, instructions, criteria)
+        _ctx_block(title, instructions, criteria, service=service)
         + "You are a QA engineer. Your ONLY job is to author tests for the task above, BEFORE any "
         "implementation exists.\n\n"
         "RULES:\n"
@@ -637,12 +653,13 @@ def _qa_prompt(title, instructions, criteria, test_cmd, *, iac=False, web=False,
         "- Cover: happy path, the most likely failure, boundary/edge cases, and validation/error paths.\n"
         f"- Do NOT run anything and do NOT commit. (BOSS will run `{test_cmd}`.)\n"
         "- End with a one-line summary of the cases you wrote.\n"
-        + _metrics_tests_clause(title, instructions)
+        + _metrics_tests_clause(title, instructions, service=service)
         + (_IAC_GUIDANCE + _IAC_QA_GUIDANCE if iac else "")
     )
 
 
-def _metrics_tests_clause(title: str, instructions: str) -> str:
+def _metrics_tests_clause(title: str, instructions: str, *,
+                          service: bool = False) -> str:
     """QA's share of the observability standard, for anything that serves traffic.
 
     The standard told the BUILDER what to expose and said rendering "must be testable". Nothing
@@ -654,7 +671,7 @@ def _metrics_tests_clause(title: str, instructions: str) -> str:
     """
     from .platform_standards import METRICS_TEST_REQUIREMENT, applies_to
 
-    if not applies_to(f"{title}\n{instructions}"):
+    if not (service or applies_to(f"{title}\n{instructions}")):
         return ""
     return "\n\n" + METRICS_TEST_REQUIREMENT + "\n"
 
@@ -666,7 +683,7 @@ def _impl_prompt(title, instructions, test_files, test_cmd, *, criteria=(), iac=
         if app_root else ""
     )
     return (
-        _ctx_block(title, instructions, criteria)
+        _ctx_block(title, instructions, criteria, service=bool(ui or app_root))
         + "You are a software engineer. QA has ALREADY written the tests; implement the change to "
         "make those existing tests pass.\n\n"
         f"RULES:\n"

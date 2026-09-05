@@ -91,3 +91,61 @@ class TestItOnlyAppliesWhereItMakesSense:
         task = "A CSV sorting library that orders rows in place"
         assert not applies_to(task)
         assert "METRICS TESTS" not in _qa_prompt(task, task, [], "pytest")
+
+
+class TestTheStandardReachesRealBriefs:
+    """The gap that made all of the above decorative.
+
+    `applies_to` keyword-matches the prose for "http", "api", "service", "port". Real briefs are
+    written in product language, and checked against the directives BOSS has ACTUALLY built
+    from it fired on none of them:
+
+        "Build an incident timeline builder. Who it is for: an on-call engineer…"   -> no
+        "Vendor-Status-Watcher"                                                     -> no
+        "HookWatch"                                                                 -> no
+        "Docs freshness board — whoever owns docs nobody trusts any more."          -> no
+
+    So the observability standard was silently absent from every app the platform ever shipped.
+    Three of them are on a host right now with a monitoring page linking to dashboards for data
+    nobody was collecting. Strengthening the standard would have changed nothing.
+
+    The pipeline knows what it is building — `web_app_build` is set before any prompt is
+    composed — so the rule applies because of what is being built, not because of a word
+    somebody happened to use.
+    """
+
+    REAL_BRIEF = ("Build an incident timeline builder.\n"
+                  "Who it is for: an on-call engineer writing the post-mortem the morning after.")
+    CRITERIA = ["an engineer can paste an alert log and get a timeline"]
+
+    def test_the_prose_check_alone_would_still_miss_it(self):
+        """Kept as a fallback, and this is why it cannot be the only signal."""
+        assert not applies_to(self.REAL_BRIEF)
+
+    def test_a_web_app_build_gets_the_standard_anyway(self):
+        prompt = _qa_prompt(self.REAL_BRIEF, self.REAL_BRIEF, self.CRITERIA,
+                            "npm run verify", web=True, app_root="app")
+        assert "BOSS PLATFORM STANDARDS" in prompt
+        assert "METRICS TESTS ARE PART OF THE SUITE" in prompt
+
+    def test_an_app_root_is_enough_on_the_python_path_too(self):
+        """A deployed app is a thing BOSS scrapes, whatever it is written in."""
+        prompt = _qa_prompt(self.REAL_BRIEF, self.REAL_BRIEF, self.CRITERIA,
+                            "pytest", app_root="app")
+        assert "BOSS PLATFORM STANDARDS" in prompt
+        assert "METRICS TESTS ARE PART OF THE SUITE" in prompt
+
+    def test_the_implementation_stage_sees_it_as_well(self):
+        """A standard read only by QA is a standard the builder never applies."""
+        from boss_engine.services.governed_code_task_service import _impl_prompt
+
+        prompt = _impl_prompt(self.REAL_BRIEF, self.REAL_BRIEF, ["test_x.py"],
+                              "npm run verify", criteria=self.CRITERIA, app_root="app")
+        assert "BOSS PLATFORM STANDARDS" in prompt
+
+    def test_a_library_is_still_left_alone(self):
+        """The widening must not turn into "every task gets every rule"."""
+        prompt = _qa_prompt("A CSV sorting library", "sort rows in place",
+                            ["sorts numerically"], "pytest")
+        assert "BOSS PLATFORM STANDARDS" not in prompt
+        assert "METRICS TESTS" not in prompt
