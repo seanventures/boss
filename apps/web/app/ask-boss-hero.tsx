@@ -155,6 +155,26 @@ function Line({ x, y, w, h = 4, c = UI.text, o = 1 }: {
  *  data point — which is how real interfaces use colour and why this reads as a product
  *  instead of as decoration.
  */
+/** The file name a card's photograph would have, if one has been supplied.
+ *
+ *  REAL IMAGES, SERVED BY THIS APP. Not a CDN: the console is tailnet-only, so an image
+ *  fetched from the internet is a broken card the day that host is unreachable — which is why
+ *  the seeded-Picsum attempt was removed. `public/` is same-origin, needs no key, and the file
+ *  is in the repo, so what ships is what was reviewed.
+ *
+ *  A missing file is not an error. `onError` hides the <img> and the drawn mockup underneath
+ *  shows instead, so the strip is complete with none of these present, all sixteen present, or
+ *  any number in between — which is what makes it safe to add them one at a time.
+ */
+function photoFor(title: string): string {
+  return `/starters/${slugFor(title)}.jpg`;
+}
+
+/** The slug used for both the file name and the accent, so they cannot disagree. */
+function slugFor(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 /** A panel inside the window — the surface content sits on. */
 function Panel({ x = 78, y = 30, w = 222, h = 82 }: {
   x?: number; y?: number; w?: number; h?: number;
@@ -1328,6 +1348,12 @@ export function AskBossHero({
                         <Line x={266} y={15} w={26} h={3} c="#0d1220" o={0.55} />
                         {(MOCKUPS[MOCKUP_FOR[i.title] ?? "timeline"])(i.title, accentFor(i.title))}
                       </svg>
+                      {/* The photograph, if one has been supplied for this idea. It covers the
+                          drawing; when the file is absent it removes itself and the drawing is
+                          what you see, rather than a broken-image icon. */}
+                      <img className="askboss-idea-photo" src={photoFor(i.title)} alt=""
+                           loading="lazy" decoding="async"
+                           onError={(e) => { e.currentTarget.style.display = "none"; }} />
                       <span className="askboss-idea-mark">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">

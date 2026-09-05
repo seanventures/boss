@@ -184,3 +184,24 @@ describe("the starter strip is a gallery, not one image recoloured", () => {
     expect(CSS3).toContain(".askboss-idea > *:not(.askboss-idea-peek)");
   });
 });
+
+describe("supplied photographs replace the drawings", () => {
+  const HERO4 = codeOnly("app/ask-boss-hero.tsx");
+
+  it("serves them from this app, not a CDN", () => {
+    // The console is tailnet-only: an image fetched from the internet is a broken card the
+    // day that host is unreachable, which is why the seeded-Picsum attempt was removed.
+    expect(HERO4).toContain("`/starters/${slugFor(title)}.jpg`");
+    expect(HERO4).not.toMatch(/<img[^>]+https?:/);
+  });
+
+  it("falls back to the drawing when a file is absent", () => {
+    // Which is what lets them be added one at a time: none present, all sixteen present, or
+    // anything between, and the strip is complete either way.
+    expect(HERO4).toContain('e.currentTarget.style.display = "none"');
+  });
+
+  it("derives the file name from the title, so the two cannot drift", () => {
+    expect(HERO4).toContain("function slugFor");
+  });
+});

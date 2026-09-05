@@ -8219,3 +8219,12 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 
 /* A step that stood aside, with its reason on hover rather than two words that read as a bug. */
 .dw-node-skipped { cursor: help; }
+
+/* A supplied photograph for a starter card. Sits over the drawn mockup and under the wash and
+   the mark. Absent files hide themselves (see the onError in ask-boss-hero), so the drawing
+   shows through and the strip never renders a broken image. */
+.askboss-idea-photo {
+  position: absolute; inset: 0; z-index: 2;
+  width: 100%; height: 100%; object-fit: cover;
+  display: block;
+}
