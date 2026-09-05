@@ -178,12 +178,37 @@ class TestScopingToOneProjectOrAllOfThem:
         assert conn.writes[0][1]["p"] == "boss-dogfood"
         assert out["applies_to"] == "boss-dogfood"
 
-    def test_the_mandating_role_is_recorded_from_the_actor(self, tools):
+    def test_the_role_is_recorded_not_the_session_identity(self, tools):
+        """Every chat turn runs as the same actor. Recording that would attribute every rule
+        the workforce ever makes to one anonymous account, and 'who decided this' is the first
+        question anybody asks about a rule they have to follow. Observed live: Security's port
+        rule came back authored by 'orchestrator'."""
         conn = FakeConn()
         tools["mandate_standard"].handler(
-            FakeCtx(conn), project_id="boss-dogfood", actor="Security",
-            args={"key": "k", "title": "t", "body": "b", "rationale": "r"})
+            FakeCtx(conn), project_id="boss-dogfood", actor="orchestrator",
+            args={"key": "k", "title": "t", "body": "b", "rationale": "r",
+                  "role": "Security"})
         assert conn.writes[0][1]["r"] == "Security"
+
+    def test_without_a_role_it_falls_back_to_the_actor(self, tools):
+        conn = FakeConn()
+        tools["mandate_standard"].handler(
+            FakeCtx(conn), project_id="boss-dogfood", actor="ceo",
+            args={"key": "k", "title": "t", "body": "b", "rationale": "r"})
+        assert conn.writes[0][1]["r"] == "ceo"
+
+    def test_it_does_not_let_the_agent_believe_it_gated_the_deploy(self, tools):
+        """The first live mandate came back described to the operator as "will block
+        deployments that expose a port publicly". It will not: a standard is injected into
+        build instructions, and nothing checks it at release. A rule that promises enforcement
+        nobody performs is worse than none, because everyone downstream believes it is
+        covered."""
+        out = tools["mandate_standard"].handler(
+            FakeCtx(FakeConn()), project_id="boss-dogfood", actor="ceo",
+            args={"key": "k", "title": "t", "body": "b", "rationale": "r"})
+        assert "does NOT gate deploys" in out["note"]
+        assert "not a deploy-time gate" in tools["mandate_standard"].description.lower() \
+            or "NOT a deploy-time gate" in tools["mandate_standard"].description
 
     def test_a_rule_with_no_stated_reason_is_refused(self, tools):
         """Followed narrowly and ignored at the edges is what happens to rules with no why —

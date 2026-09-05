@@ -200,9 +200,9 @@ def _record_schema_apply(raw_connection, total: int, failures: list[str]) -> Non
     """Leave the result of this apply where a person can read it.
 
     "Did the schema actually migrate?" was answerable only by opening the API container's
-    stdout, which nobody on this project can do. So it went unanswered, and a missing table
-    presented as a feature returning nothing. One row per boot, queryable through the same
-    console as everything else.
+    stdout, which nobody on this project can do — so a silent partial apply and a clean one
+    looked exactly alike from outside, and a missing table would present as a feature returning
+    nothing. One row per boot, queryable through the same console as everything else.
 
     Created here rather than in schema.sql: the whole point is to survive the script failing.
     """
@@ -239,13 +239,14 @@ def ensure_schema(engine: Engine, settings: Optional[Settings] = None) -> None:
 
     STATEMENT BY STATEMENT, EACH IN ITS OWN SAVEPOINT — not one `cursor.execute(script)`.
     Sending the whole file as a single multi-statement makes it a single transaction, so ONE
-    statement that fails against live drift silently discards every statement after it. That is
-    not theoretical: a table added at the end of the file was simply absent in production after
-    a clean deploy, the API's `except` printed a line into a container log nobody can open, and
-    the feature that needed it failed as "no rows" rather than "no table". The apply reported
-    success throughout.
+    statement failing against live drift discards every statement after it. New tables are
+    appended, so the newest work is precisely what would be thrown away — and the caller's
+    `except Exception: print(...)` put the reason in a container log nobody on this project can
+    open, with the deploy still reporting success.
 
-    A failing statement is now isolated and NAMED, and the ones after it still run.
+    That combination is why "did the schema migrate?" was unanswerable without asking an agent
+    to query the database. A failing statement is now isolated and NAMED, the ones after it
+    still run, and the outcome of every apply is recorded in `schema_apply_runs`.
     """
     resolved = settings or get_settings()
     sql = resolved.schema_path.read_text(encoding="utf-8")

@@ -1,18 +1,19 @@
-"""A deploy said it migrated, and a table added at the end of the file was simply not there.
+"""Whether the schema migrated was, in practice, unanswerable.
 
-`engineering_standards` was appended to `db/schema.sql`, the API was deployed, the boot log said
-nothing, and the table did not exist. The feature that needed it degraded into "no rows" —
-indistinguishable, from the console, from "nobody has mandated a standard yet".
+`engineering_standards` was appended to `db/schema.sql` and deployed. Asked whether the table
+existed, there was no way to check: no SSH to the box, no log endpoint, and the API's migration
+step is `except Exception: print(...)` into a container log nobody on this project can open. It
+took asking the deployed agent to run a query. (It had applied fine — but the point is that a
+failure and a success looked identical from outside.)
 
-The cause was one line: the whole script went to `cursor.execute(sql)` as a single
-multi-statement, which Postgres runs as ONE transaction. Any statement that failed against live
+Underneath that was a real hazard. The whole script went to `cursor.execute(sql)` as a single
+multi-statement, which Postgres runs as ONE transaction. Any statement failing against live
 drift — a constraint that already exists in a different shape, an index on a column somebody
-renamed — aborted the transaction, and every statement AFTER it was discarded. Newest tables
-sit at the end of the file, so the newest work is exactly what gets thrown away, and the failure
-surfaced as `except Exception: print(...)` into a container log nobody on this project can open.
+renamed — aborts the transaction and discards every statement AFTER it. New tables are appended,
+so the newest work is exactly what would be thrown away, silently, on a deploy reporting success.
 
-So: each statement in its own savepoint, failures named individually, and the result of every
-apply written to a table, because "did the schema migrate?" must be answerable without SSH.
+So: each statement in its own savepoint, failures named individually with the database's own
+message, and the outcome of every apply written to a table anyone can query.
 """
 from __future__ import annotations
 
@@ -162,8 +163,9 @@ class TestOneBadStatementNoLongerDiscardsTheRest:
         assert "applied 3/3" in capsys.readouterr().out
 
     def test_the_result_is_written_somewhere_a_person_can_read(self, script):
-        """'Did the schema migrate?' had exactly one answer path — the container's stdout, which
-        nobody on this project can open. Hence a missing table that looked like empty data."""
+        """'Did the schema migrate?' had exactly one answer path — the container's stdout,
+        which nobody on this project can open. So a partial apply and a clean one looked
+        identical from outside, and a missing table would read as a feature with no data."""
         raw = FakeRawConnection()
         ensure_schema(FakeEngine(raw), FakeSettings(script))
         ran = " | ".join(raw.store.get("ran", []))

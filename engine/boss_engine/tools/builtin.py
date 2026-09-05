@@ -2287,9 +2287,20 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
         "Use when a finding is not about ONE app but about how every app of a kind should be "
         "built. Scope 'all_projects' is for rules true everywhere; otherwise it binds this "
         "project only. Write the body as instructions to a builder, and say WHY: an agent that "
-        "understands a constraint applies it to cases the text did not enumerate.",
+        "understands a constraint applies it to cases the text did not enumerate. "
+        "WHAT THIS DOES, EXACTLY: the rule is injected into every pipeline stage of every "
+        "matching build, with the same force as the platform's own standards. It instructs the "
+        "builder; it is NOT a deploy-time gate and it cannot by itself block a release. Write "
+        "'do X before Y', not 'block the deployment if X' — a rule that promises enforcement "
+        "nobody performs is worse than none, because everyone downstream believes it is "
+        "covered.",
         _obj({"key": {"type": "string",
                       "description": "short stable id, e.g. 'port_exposure_check'"},
+              "role": {"type": "string",
+                       "description": "the role whose judgement this is — 'Security', "
+                                      "'Operations', 'QA Lead'. Recorded as the author, so an "
+                                      "engineer reading the rule later knows who to argue "
+                                      "with. Use the role you are answering as, not 'BOSS'."},
               "title": {"type": "string"},
               "body": {"type": "string",
                        "description": "what a builder must do, concretely"},
@@ -2309,6 +2320,11 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
         title = str(args.get("title") or "").strip()
         body = str(args.get("body") or "").strip()
         why = str(args.get("rationale") or "").strip()
+        # The ROLE, not the session identity. Every chat turn runs as the same actor
+        # ("orchestrator"), so recording that would attribute every rule the workforce ever
+        # makes to the same anonymous account — and "who mandated this" is the first question
+        # anyone asks about a rule they have to follow.
+        role = str(args.get("role") or "").strip() or actor
         if not (key and title and body and why):
             return {"ok": False,
                     "error": "key, title, body and rationale are all required — a rule with "
@@ -2327,7 +2343,7 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
                     "UPDATE engineering_standards SET title=:t, body=:b, rationale=:w, "
                     "scope=:s, mandated_by_role=:r, status='active', updated_at=now() "
                     "WHERE id=:i"),
-                    {"t": title, "b": body, "w": why, "s": scope, "r": actor, "i": existing})
+                    {"t": title, "b": body, "w": why, "s": scope, "r": role, "i": existing})
                 sid = existing
             else:
                 from ..services.core import make_id
@@ -2338,12 +2354,14 @@ def _register_standard_tools(reg: ToolRegistry) -> None:
                     "body, scope, mandated_by_role, rationale, created_by) "
                     "VALUES (:i,:p,:k,:t,:b,:s,:r,:w,:by)"),
                     {"i": sid, "p": target, "k": key, "t": title, "b": body, "s": scope,
-                     "r": actor, "w": why, "by": actor})
-        return {"ok": True, "standard_id": sid, "key": key,
+                     "r": role, "w": why, "by": actor})
+        return {"ok": True, "standard_id": sid, "key": key, "mandated_by_role": role,
                 "applies_to": "every project" if everywhere else pid,
                 "scope": scope,
-                "note": "binding on every matching build from now — it is injected into each "
-                        "pipeline stage alongside the platform's own standards"}
+                "note": "From now on this is in the instructions for every matching build, "
+                        "alongside the platform's own standards. It does NOT gate deploys — "
+                        "tell the operator that plainly rather than implying releases will be "
+                        "blocked."}
 
     @reg.tool(
         "check_port_exposure",
