@@ -23239,15 +23239,43 @@ def redaction_redact(payload: RedactRequest) -> RedactResponse:
 
 
 @app.get("/v1/platform-standards", response_model=PlatformStandardsCatalogResponse)
-def platform_standards_catalog() -> PlatformStandardsCatalogResponse:
-    """List BOSS platform standards that agents must apply when building apps."""
+def platform_standards_catalog(project_id: str = "") -> PlatformStandardsCatalogResponse:
+    """List BOSS platform standards that agents must apply when building apps.
+
+    With `project_id`, also lists the standards this workforce has mandated for it — including
+    the ones scoped to every project. Those are written by agents, so they need to be readable
+    by a person without asking an agent what it did.
+    """
     from boss_engine.services.platform_standards import STANDARDS
 
     keys = sorted(STANDARDS.keys())
+    mandated: list[dict] = []
+    if project_id:
+        try:
+            with begin() as connection:
+                mandated = [
+                    dict(row)
+                    for row in connection.execute(
+                        text("SELECT standard_key, title, body, scope, mandated_by_role, "
+                             "rationale, project_id, created_at "
+                             "FROM engineering_standards "
+                             "WHERE status = 'active' "
+                             "  AND (project_id IS NULL OR project_id = :p) "
+                             "ORDER BY project_id NULLS FIRST, created_at"),
+                        {"p": project_id},
+                    ).mappings().all()
+                ]
+        except Exception:  # noqa: BLE001 — the platform catalog answers with or without them
+            mandated = []
+    for row in mandated:
+        row["applies_to"] = "every project" if row.get("project_id") is None else project_id
+        created = row.get("created_at")
+        row["created_at"] = created.isoformat() if created else None
     return PlatformStandardsCatalogResponse(
         keys=keys,
         standards={k: STANDARDS[k] for k in keys},
         count=len(keys),
+        mandated=mandated,
     )
 
 

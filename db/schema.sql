@@ -5796,3 +5796,44 @@ CREATE TABLE IF NOT EXISTS org_assignments (
 );
 CREATE INDEX IF NOT EXISTS idx_org_assignments_reports_to
   ON org_assignments(project_id, reports_to);
+
+
+-- A STANDARD A ROLE MANDATED, rather than one hardcoded in the platform.
+--
+-- `platform_standards` shipped as Python constants: observability, and nothing else. That is
+-- right for rules the platform itself guarantees, and it means the Security role can sit in
+-- every panel, conclude that ports must be checked for public exposure before they are
+-- assigned, say so — and have it apply to precisely nothing. The conclusion lived in one
+-- meeting's minutes and the next build never saw it.
+--
+-- A standard here is injected into every pipeline stage of every matching build, exactly like
+-- the hardcoded ones. That is what makes an agent's mandate durable instead of advisory.
+--
+-- `project_id IS NULL` means EVERY project: the case the operator asked for — "something that
+-- applies common to all projects". A row scoped to one project is the one-off.
+CREATE TABLE IF NOT EXISTS engineering_standards (
+  id TEXT PRIMARY KEY,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,   -- NULL = all projects
+  standard_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  -- Which builds it applies to. 'service' uses the same test as the observability standard;
+  -- 'all' reaches libraries and CLIs too, which most operational rules should NOT.
+  scope TEXT NOT NULL DEFAULT 'service' CHECK (scope IN ('service', 'all')),
+  -- WHO MANDATED IT. A standard with no author cannot be argued with, and the first question
+  -- about any rule is who decided it and why.
+  mandated_by_role TEXT NOT NULL,
+  rationale TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired')),
+  created_by TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (project_id, standard_key)
+);
+CREATE INDEX IF NOT EXISTS idx_engineering_standards_active
+  ON engineering_standards(status, project_id);
+-- UNIQUE (project_id, standard_key) does NOT constrain the all-projects rows: Postgres treats
+-- NULLs as distinct, so 'mandate this everywhere' twice would insert twice and the rule would
+-- appear in every prompt in duplicate. This index is what actually enforces one row per key.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_engineering_standards_global_key
+  ON engineering_standards(standard_key) WHERE project_id IS NULL;

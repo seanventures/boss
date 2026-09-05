@@ -10,6 +10,12 @@ from boss_engine.tools.registry import ToolError, ToolRegistry, ToolSpec
 #: Every tool the default registry is expected to carry. Present so a count mismatch can name
 #: what changed instead of reporting two integers.
 _EXPECTED_TOOLS: set[str] = {
+    # Rules the WORKFORCE mandates, as opposed to the ones the platform hardcodes. Security
+    # concluding in a panel that ports must be checked for public exposure used to change
+    # nothing — the conclusion lived in minutes no build ever read. `check_port_exposure` is
+    # here for the same reason: a role that mandates a check it cannot itself run has filed a
+    # request, not applied a control.
+    "mandate_standard", "list_standards", "check_port_exposure",
     # The spec an app was built from — PRD, criteria, review notes. BOSS could read
     # its own source, its logs and its hosts, and could not read the one document
     # that says what an app was FOR.
@@ -102,11 +108,11 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 66, (
+    assert len(reg.names()) == 69, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 42
-    assert len(write) == 24
+    assert len(read) == 44
+    assert len(write) == 25
     # the capabilities the user explicitly asked the agent to cover
     for name in (
         "project_status", "list_running_work", "get_task_preview",

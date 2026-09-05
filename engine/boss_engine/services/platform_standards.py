@@ -20,6 +20,10 @@ Two rules govern what belongs here:
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+
+from sqlalchemy import text as _sql
+
 # Applies to anything that serves HTTP. A CLI tool or a library has no endpoint to scrape, and
 # demanding one would produce cargo-culted dead code.
 OBSERVABILITY_STANDARD = """
@@ -137,13 +141,78 @@ def applies_to(text: str) -> bool:
     return any(hint in lowered for hint in _SERVICE_HINTS)
 
 
+#: Standards the workforce mandated, for the task currently being built.
+#:
+#: `_ctx_block` is called from eleven prompt builders and has no database handle, and threading
+#: one through all eleven to fetch the same rows eleven times would be worse than this. The run
+#: loads them once at the top (`load_mandated_standards`) and every stage of that task reads the
+#: same snapshot — which also means a standard mandated MID-BUILD cannot change the prompt
+#: halfway through and silently break the prompt cache the shared preamble exists to preserve.
+_MANDATED: ContextVar[tuple[dict, ...]] = ContextVar("boss_mandated_standards", default=())
+
+
+def load_mandated_standards(connection, project_id: str) -> int:
+    """Load this project's mandated standards for the current task. Returns how many.
+
+    Call once per run, before the first prompt is built.
+
+    The hardcoded standards are what the platform itself guarantees. These are what the
+    workforce has decided — the Security role concluding that a port must be checked for public
+    exposure before it is assigned, say. Before this table that conclusion lived in one
+    meeting's minutes and the next build never saw it, so a role could mandate precisely
+    nothing.
+
+    `project_id IS NULL` rows apply to EVERY project; that is the "common to all projects" case.
+    """
+    if connection is None or not project_id:
+        _MANDATED.set(())
+        return 0
+    try:
+        rows = connection.execute(
+            _sql("SELECT title, body, scope, mandated_by_role, rationale "
+                 "FROM engineering_standards "
+                 "WHERE status = 'active' AND (project_id IS NULL OR project_id = :p) "
+                 "ORDER BY project_id NULLS FIRST, created_at"),
+            {"p": project_id},
+        ).mappings().all()
+    except Exception:  # noqa: BLE001 — a build must not fail because a table is missing
+        _MANDATED.set(())
+        return 0
+    _MANDATED.set(tuple(dict(r) for r in rows))
+    return len(rows)
+
+
+def _mandated_block(*, service: bool) -> str:
+    """Render the loaded standards, or "" when none apply to this kind of build."""
+    rows = [r for r in _MANDATED.get()
+            if r.get("scope") == "all" or (r.get("scope") == "service" and service)]
+    if not rows:
+        return ""
+    out = []
+    for row in rows:
+        # The role and the reason are part of the standard, not decoration. A rule with no
+        # author cannot be argued with, and an agent that understands WHY applies it to the
+        # cases the text did not enumerate.
+        out.append(
+            f"\n\n### {row['title']} (mandated by {row['mandated_by_role']})\n"
+            + (f"WHY THIS EXISTS: {row['rationale']}\n" if row.get("rationale") else "")
+            + str(row["body"]).strip()
+        )
+    return ("\n\n=== STANDARDS THIS WORKFORCE HAS MANDATED (binding on this build, same "
+            "force as the platform's own) ===" + "".join(out))
+
+
 def platform_standards(instructions: str = "", *, force: bool = False) -> str:
     """The standards block to hand an agent, or "" when none apply.
 
     Returning an empty string matters: appending an empty heading to every prompt trains agents
     to skim past the section, and a standard nobody reads is not a standard.
     """
-    if not (force or applies_to(instructions)):
-        return ""
+    service = bool(force or applies_to(instructions))
+    mandated = _mandated_block(service=service)
+    if not service:
+        # A library still gets rules explicitly scoped to 'all' — an org-wide licence header,
+        # say — but not the operational ones, which would be cargo-culted dead code.
+        return mandated
     return ("\n\n=== BOSS PLATFORM STANDARDS (mandatory — these come from the platform, not "
-            "from this repository) ===\n" + STANDARDS["observability"])
+            "from this repository) ===\n" + STANDARDS["observability"] + mandated)

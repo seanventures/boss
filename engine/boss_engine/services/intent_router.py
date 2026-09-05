@@ -1074,6 +1074,58 @@ class IntentRouter:
                                 "label": result.get("label"),
                                 "why": result.get("why"),
                             })
+                    # ANSWERED AS A ROLE WITHOUT READING WHAT THAT ROLE HAS SEEN.
+                    #
+                    # Asked the same question as its colleagues — "what is your biggest concern
+                    # about shipping HookWatch?" — the Operations agent called describe_role,
+                    # skipped recall_role_experience, and wrote: "the deployment target record
+                    # shows the container publishing on port 8080, but the health-check URL
+                    # points to 8000 ... logged for the last three builds". The real value is
+                    # 8000 on both. It invented a number and claimed to have inspected records
+                    # it never opened.
+                    #
+                    # Its colleagues did not: QA read five deployments and quoted the actual
+                    # error strings, and Security found nothing recorded and SAID so. The
+                    # difference was whether the tool ran, so that is what is checked — not
+                    # whether the prose looks specific, which is a judgement the same model
+                    # would be making about its own output.
+                    if role and reply and not any(
+                        c.get("tool") == "recall_role_experience" for c in tool_calls
+                    ):
+                        try:
+                            reread = _with_transient_retry(lambda: self.agent.chat(
+                                project_id=project_id, actor=actor,
+                                message=(
+                                    f"You answered as {role} without calling "
+                                    "recall_role_experience, so nothing you said about this "
+                                    "project came from its record. Call it NOW, then give the "
+                                    "answer again: cite the briefs and positions you actually "
+                                    "find, and if there are none, say plainly that you have no "
+                                    "history here and are answering from the lens alone. Do "
+                                    "not repeat any specific number or record you did not read."
+                                ),
+                                history=[{"role": "assistant", "content": reply}],
+                                system=system, allow_writes=False, max_steps=4,
+                            ))
+                        except Exception:  # noqa: BLE001 — the first answer still stands
+                            reread = None
+                        for step in (getattr(reread, "trace", None) or []):
+                            tool_calls.append({"tool": step.get("tool"),
+                                               "args": step.get("args"),
+                                               "ok": bool((step.get("result") or {})
+                                                          .get("ok", True))})
+                        grounded = getattr(reread, "reply", "")
+                        if grounded and any(c.get("tool") == "recall_role_experience"
+                                            for c in tool_calls):
+                            reply = str(grounded).strip()
+                        else:
+                            # Could not ground it. Say which kind of answer this is rather
+                            # than letting it pass as experience.
+                            reply = reply.rstrip() + (
+                                "\n\n(Note, added by BOSS: this answer was NOT checked against "
+                                f"{role}'s record on this project — treat any specific figure "
+                                "in it as unverified.)")
+
                     # IT SAID IT DID IT. MAKE IT DO IT.
                     #
                     # Given the tool and explicit approval, BOSS read HookWatch's target, got

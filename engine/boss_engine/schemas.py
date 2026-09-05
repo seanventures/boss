@@ -8244,6 +8244,10 @@ class PlatformStandardsCatalogResponse(BaseModel):
     keys: list[str] = Field(default_factory=list)
     standards: dict[str, str] = Field(default_factory=dict)
     count: int = 0
+    #: Rules a ROLE mandated, not the platform. An agent can now change how every future build
+    #: is prompted, so the operator has to be able to see what was added, by whom and why —
+    #: an invisible standard is an ungovernable one.
+    mandated: list[dict] = Field(default_factory=list)
 
 
 class PlatformStandardsApplyRequest(BaseModel):

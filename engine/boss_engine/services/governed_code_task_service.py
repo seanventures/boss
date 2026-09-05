@@ -1335,6 +1335,14 @@ def run_governed_code_task(engine, settings: Settings, jobs, run_id: str,
     # VAG Phase 0: publish the run's identity so every run_role call below records an
     # llm_calls row with the right attribution (stage is set before each step).
     set_llm_context(db_engine=engine, project_id=project_id, run_id=run_id)
+    # Rules a ROLE mandated, loaded once for the whole run so every stage's shared preamble is
+    # byte-identical (the prompt cache depends on that) and so a rule added mid-build cannot
+    # change the instructions between stages of the same task.
+    from .platform_standards import load_mandated_standards
+    with engine.begin() as _c:
+        _n_mandated = load_mandated_standards(_c, project_id)
+    if _n_mandated:
+        logger.info("code_task.mandated_standards run=%s count=%s", run_id, _n_mandated)
     ports = _engine_ports()
     budget = ports.budget
     # Resolved here, before the factory is built, so the clone/branch/PR target and the token

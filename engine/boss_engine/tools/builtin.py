@@ -2242,6 +2242,172 @@ def _safe_path(rel: str, root: _Optional[str] = None) -> _Optional[str]:
     return candidate if candidate == real or candidate.startswith(real + _os.sep) else None
 
 
+def _register_standard_tools(reg: ToolRegistry) -> None:
+    """Let a role turn a conclusion into a rule that binds future builds.
+
+    The Security role can sit in every panel, conclude that a port must be checked for public
+    exposure before it is assigned, say so — and have it apply to nothing. The conclusion lived
+    in one meeting's minutes; the next build never saw it, because standards were Python
+    constants and only the platform could add one.
+
+    A mandated standard is injected into every pipeline stage of every matching build, exactly
+    like the hardcoded ones, and can be scoped to one project or to all of them.
+    """
+    @reg.tool(
+        "list_standards",
+        "The standards binding on builds here: the platform's own, plus any this workforce "
+        "has mandated, with who mandated each and why. Read before proposing a new one — a "
+        "second rule saying the same thing teaches agents that standards are noise.",
+        _obj({"project_id": {"type": "string"}}),
+        kind="read",
+    )
+    def list_standards(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text("SELECT id, project_id, standard_key, title, scope, mandated_by_role, "
+                      "rationale, status, created_at FROM engineering_standards "
+                      "WHERE status = 'active' AND (project_id IS NULL OR project_id = :p) "
+                      "ORDER BY project_id NULLS FIRST, created_at"),
+                {"p": pid}).mappings().all()
+        return {
+            "project_id": pid,
+            "platform_standards": ["observability (metrics, health, route cardinality)"],
+            "mandated": [
+                {**dict(r), "applies_to": ("every project" if r["project_id"] is None
+                                           else "this project"),
+                 "created_at": r["created_at"].isoformat() if r["created_at"] else None}
+                for r in rows
+            ],
+        }
+
+    @reg.tool(
+        "mandate_standard",
+        "Make a rule binding on future builds — the standing version of a recommendation. "
+        "Use when a finding is not about ONE app but about how every app of a kind should be "
+        "built. Scope 'all_projects' is for rules true everywhere; otherwise it binds this "
+        "project only. Write the body as instructions to a builder, and say WHY: an agent that "
+        "understands a constraint applies it to cases the text did not enumerate.",
+        _obj({"key": {"type": "string",
+                      "description": "short stable id, e.g. 'port_exposure_check'"},
+              "title": {"type": "string"},
+              "body": {"type": "string",
+                       "description": "what a builder must do, concretely"},
+              "rationale": {"type": "string", "description": "why — what goes wrong without it"},
+              "scope": {"type": "string",
+                        "description": "'service' (anything serving traffic, the default) or "
+                                       "'all' (also libraries and CLIs)"},
+              "all_projects": {"type": "boolean",
+                               "description": "true to bind every project, not just this one"},
+              "project_id": {"type": "string"}},
+             ["key", "title", "body", "rationale"]),
+        kind="write",
+    )
+    def mandate_standard(ctx, *, project_id, actor, args):
+        pid = args.get("project_id") or project_id
+        key = str(args.get("key") or "").strip()
+        title = str(args.get("title") or "").strip()
+        body = str(args.get("body") or "").strip()
+        why = str(args.get("rationale") or "").strip()
+        if not (key and title and body and why):
+            return {"ok": False,
+                    "error": "key, title, body and rationale are all required — a rule with "
+                             "no stated reason is followed narrowly and ignored at the edges"}
+        scope = "all" if str(args.get("scope") or "").lower() == "all" else "service"
+        everywhere = bool(args.get("all_projects"))
+        target = None if everywhere else pid
+
+        with ctx.begin() as c:
+            existing = c.execute(
+                _text("SELECT id FROM engineering_standards WHERE standard_key = :k "
+                      "AND project_id IS NOT DISTINCT FROM :p"),
+                {"k": key, "p": target}).scalar()
+            if existing:
+                c.execute(_text(
+                    "UPDATE engineering_standards SET title=:t, body=:b, rationale=:w, "
+                    "scope=:s, mandated_by_role=:r, status='active', updated_at=now() "
+                    "WHERE id=:i"),
+                    {"t": title, "b": body, "w": why, "s": scope, "r": actor, "i": existing})
+                sid = existing
+            else:
+                from ..services.core import make_id
+
+                sid = make_id("std")
+                c.execute(_text(
+                    "INSERT INTO engineering_standards (id, project_id, standard_key, title, "
+                    "body, scope, mandated_by_role, rationale, created_by) "
+                    "VALUES (:i,:p,:k,:t,:b,:s,:r,:w,:by)"),
+                    {"i": sid, "p": target, "k": key, "t": title, "b": body, "s": scope,
+                     "r": actor, "w": why, "by": actor})
+        return {"ok": True, "standard_id": sid, "key": key,
+                "applies_to": "every project" if everywhere else pid,
+                "scope": scope,
+                "note": "binding on every matching build from now — it is injected into each "
+                        "pipeline stage alongside the platform's own standards"}
+
+    @reg.tool(
+        "check_port_exposure",
+        "Is a port reachable from outside, and does anything else answer on it? Probes the "
+        "host's public address and reports what came back. Use before assigning a port to an "
+        "app, and when deciding whether a service is unintentionally public. Read-only: it "
+        "makes requests, it changes nothing.",
+        _obj({"host": {"type": "string", "description": "public address, e.g. 2.29.2.202"},
+              "ports": {"type": "array", "items": {"type": "integer"},
+                        "description": "ports to probe"},
+              "project_id": {"type": "string"}},
+             ["host", "ports"]),
+        kind="read",
+    )
+    def check_port_exposure(ctx, *, project_id, actor, args):
+        import socket
+
+        host = str(args.get("host") or "").strip()
+        ports = [int(p) for p in (args.get("ports") or []) if str(p).strip().isdigit()][:20]
+        if not host or not ports:
+            return {"ok": False, "error": "host and at least one port are required"}
+
+        findings = []
+        for port in ports:
+            # A TCP connect is the honest test of "reachable from here": an HTTP probe cannot
+            # tell a closed port from a service that speaks something other than HTTP.
+            reachable, detail = False, ""
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(4.0)
+            try:
+                sock.connect((host, port))
+                reachable = True
+            except OSError as exc:
+                detail = f"{type(exc).__name__}: {exc}"[:120]
+            finally:
+                sock.close()
+            findings.append({
+                "port": port,
+                "reachable_from_boss": reachable,
+                "detail": detail,
+                # Stated rather than implied: BOSS reaching it says it is open TO BOSS, which
+                # on a tailnet or inside a VPC is not the same as open to the internet.
+                "means": ("something is listening and BOSS can reach it — whether that is "
+                          "PUBLIC depends on where BOSS sits relative to this host"
+                          if reachable else "nothing accepted a connection from BOSS"),
+            })
+        with ctx.begin() as c:
+            taken = c.execute(
+                _text("SELECT app_name, domains FROM deployment_targets "
+                      "WHERE project_id = :p AND status = 'active'"),
+                {"p": args.get("project_id") or project_id}).mappings().all()
+        claimed = {}
+        for row in taken:
+            for domain in (row["domains"] or []):
+                head, _, tail = str(domain).rpartition(":")
+                if tail.isdigit() and head == host:
+                    claimed[int(tail)] = row["app_name"]
+        for f in findings:
+            f["already_assigned_to"] = claimed.get(f["port"])
+        return {"host": host, "findings": findings,
+                "note": "already_assigned_to comes from BOSS's own registry; a reachable port "
+                        "with no assignment is something BOSS did not put there"}
+
+
 def _register_role_experience_tools(reg: ToolRegistry) -> None:
     """What a role has actually argued, on this project, in its own words.
 
@@ -3410,6 +3576,7 @@ def build_default_registry() -> ToolRegistry:
     _register_image_tools(reg)
     _register_deployment_target_tools(reg)
     _register_role_experience_tools(reg)
+    _register_standard_tools(reg)
     _register_write_tools(reg)
     _register_operations_tools(reg)
     _register_governance_tools(reg)
@@ -3483,6 +3650,12 @@ _DISCUSS_OPERATIONS_TOOLS: frozenset[str] = frozenset({
     # customer otherwise keeps for good, since app_id is stamped at creation and never
     # re-derived. Reversible: merge_apps records what each identity was.
     "merge_apps",
+    # Turning a role's conclusion into a rule that binds future builds. Without this an agent
+    # can conclude that every service must have its ports checked for public exposure, say it
+    # in a meeting, and change nothing: standards were Python constants, so only the platform
+    # could add one and the workforce could mandate precisely nothing. Reversible — a standard
+    # is retired, not deleted, and carries who mandated it and why.
+    "mandate_standard",
     # Writing the fix. A customer's bug is repaired with code.
     "create_code_task",
     "create_discovery",
