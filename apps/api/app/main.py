@@ -20784,6 +20784,35 @@ def start_delivery_workflow(payload: dict) -> dict:
             status_code=400,
             detail="project_id and one of work_class or workflow_key are required",
         )
+
+    # "SURPRISE ME" — a real piece of work, chosen for THIS workflow's class.
+    #
+    # The catalogue's "Start one" sent {"directive": "Describe the work here"}. The panel then
+    # convened and debated that phrase, the spec review approved it, and the builder tried to
+    # build it: every step ran and none did anything, which demonstrates the workflow by
+    # showing it produce nothing.
+    #
+    # Chosen HERE rather than in the console because the sample has to know the project — a
+    # follow-up needs an app that exists, and a product idea must be one this project has not
+    # already built (duplicate work is refused at the build, so a repeat would end the demo on
+    # an error). A console cannot know either of those.
+    if payload.get("sample"):
+        from boss_engine.services.workflow_samples import sample_for, why_no_sample
+
+        with begin(engine) as connection:
+            wanted = work_class
+            if not wanted and workflow_key:
+                wanted = connection.execute(
+                    text("SELECT work_class FROM workflow_definitions "
+                         "WHERE project_id = :p AND workflow_key = :k LIMIT 1"),
+                    {"p": project_id, "k": workflow_key},
+                ).scalar() or ""
+            chosen = sample_for(connection, project_id, str(wanted or ""))
+        if not chosen:
+            # REFUSING IS THE CORRECT ANSWER when the project cannot supply an example. The
+            # alternative is a run against an app that does not exist.
+            raise HTTPException(status_code=409, detail=why_no_sample(str(wanted or "")))
+        run_input = {**chosen, **run_input}
     with begin(engine) as connection:
         version_id = None
         if workflow_key:

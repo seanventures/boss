@@ -659,10 +659,14 @@ export function DeliveryWorkflows({ projectId, actor }: { projectId: string; act
           onInstall={() => act("Install the catalogue", "install", {})}
           onApply={(key, workClass) =>
             act(`Apply ${key}`, "apply", { workflow_key: key, work_class: workClass })}
-          onStart={(key) =>
+          onStart={(key, workClass) =>
+            // NOT A PLACEHOLDER. This sent {"directive": "Describe the work here"}, so the
+            // panel debated that phrase, the spec review approved it and the builder tried to
+            // build it — every step ran and none did anything. The API picks a real piece of
+            // work for this workflow's CLASS, and refuses with a reason when the project
+            // cannot supply one, which is a better demonstration than a run that does nothing.
             act(`Start ${key}`, "start", {
-              workflow_key: key,
-              input: { directive: "Describe the work here", title: "New work" },
+              workflow_key: key, work_class: workClass, sample: true,
             })}
           onFork={async (key) => {
             const entry = catalogue.find((c) => c.key === key);
@@ -1952,7 +1956,8 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
   busy: string | null;
   onInstall: () => void;
   onApply: (key: string, workClass: string) => void;
-  onStart: (key: string) => void;
+  /** The work class travels with the key: the sample must fit the lane it runs in. */
+  onStart: (key: string, workClass: string) => void;
   onFork: (key: string) => void;
 }) {
   // Only the CATALOGUE ones count toward "installed". `installed` also holds the customer's own
@@ -2037,7 +2042,7 @@ function CatalogueView({ catalogue, installed, busy, onInstall, onApply, onStart
                     Apply to {entry.work_class}
                   </button>
                   <button type="button" className="cap-btn" disabled={!!busy}
-                          onClick={() => onStart(entry.key)}>Start one</button>
+                          onClick={() => onStart(entry.key, entry.work_class)}>Start one</button>
                   {/* Fork, never edit: the standard stays pristine so "reset" means something. */}
                   <button type="button" className="cap-btn" disabled={!!busy}
                           onClick={() => onFork(entry.key)}
