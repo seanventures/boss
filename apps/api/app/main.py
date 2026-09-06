@@ -10745,6 +10745,16 @@ def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
             raise HTTPException(status_code=404, detail=str(error)) from error
         except AgentThreadOwnershipError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
+        except Exception as error:  # noqa: BLE001
+            # A 500 reading "Internal Server Error" tells the operator nothing and tells the
+            # next engineer less: this API's stdout is not readable from anywhere they can get
+            # to. Logging it puts the traceback in `app_logs`, which the console and query_db
+            # can both read, and the message says which thread it was about.
+            LOGGER.exception("clear_thread failed for %s in %s", thread_id, project_id)
+            raise HTTPException(
+                status_code=500,
+                detail=f"could not clear that conversation: {type(error).__name__}: {error}",
+            ) from error
 
 
 @app.get("/v1/agent/threads/{thread_id}/progress")
