@@ -250,12 +250,20 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // The server records each step as it starts; this polls for them. "Working — reading the
   // system" for two minutes is indistinguishable from a turn that has died.
   const [steps, setSteps] = useState<string[]>([]);
+  // AND WHAT IS STILL WORKING AFTER THE TURN HAS ANSWERED.
+  //
+  // An investigation is a real debugging session — a shell, the repo, the fleet — and it runs
+  // for minutes AFTER the chat turn returns. Polling only while `busy` meant the most
+  // informative progress BOSS produces went to a table nobody read: the operator saw a
+  // finished answer and no sign that anything was still happening.
+  const [probe, setProbe] = useState<{ id: string; question: string } | null>(null);
   useEffect(() => {
-    if (!busy || !threadId) { setSteps([]); return; }
+    if (!threadId || (!busy && !probe)) { if (!busy) setSteps([]); return; }
     let alive = true;
     let cursor = 0;
     const tick = () => {
-      read<{ steps?: { id: number; label: string }[]; cursor?: number }>(
+      read<{ steps?: { id: number; label: string }[]; cursor?: number;
+             investigation?: { id: string; question: string } | null }>(
         { view: "progress", project_id: projectId, actor, thread_id: threadId,
           since: String(cursor) }, 4_000).then((d) => {
         if (!alive || !d) return;
@@ -263,12 +271,24 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           cursor = Number(d.cursor ?? cursor);
           setSteps((prev) => [...prev, ...d.steps!.map((s) => s.label)].slice(-6));
         }
+        const live = d.investigation ?? null;
+        setProbe((was) => {
+          // It just finished: its findings were posted into this thread as their own message,
+          // so reload rather than leaving the operator to wonder how it went.
+          if (was && !live) {
+            void read<Record<string, unknown>>(
+              { view: "messages", project_id: projectId, actor, thread_id: threadId })
+              .then((d) => { if (d?.messages) setMessages(d.messages as Msg[]); });
+            return null;
+          }
+          return live ? { id: live.id, question: live.question } : was;
+        });
       });
     };
     const id = window.setInterval(tick, 1500);
     tick();
     return () => { alive = false; window.clearInterval(id); };
-  }, [busy, threadId]);
+  }, [busy, threadId, probe]);
   useEffect(() => {
     if (!busy) { setElapsed(0); return; }
     const t0 = Date.now();
@@ -741,7 +761,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               the Send button changing to "…" at the far bottom of the panel. From the reading
               position — the bottom of the log — the operator saw their message and then dead
               air, and reasonably concluded the request had been lost. */}
-          {busy ? (
+          {busy || probe ? (
             <article className="agent-message assistant" data-testid="agent-working">
               <span>BOSS</span>
               <p className="detail agent-working" data-slow={elapsed >= AGENT_NORMAL_SECONDS}
@@ -752,12 +772,20 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                       turn is alive, and it tells the operator what is being looked at. */}
                   {steps.length
                     ? steps[steps.length - 1]
-                    : elapsed >= AGENT_NORMAL_SECONDS
-                      ? "Still working — this turn is running long. It has not been dropped; BOSS is chaining tools."
-                      : "Working — reading the system and choosing tools."}
+                    : probe
+                      ? "Debugging — reading the code, the database and the host. This takes a few minutes."
+                      : elapsed >= AGENT_NORMAL_SECONDS
+                        ? "Still working — this turn is running long. It has not been dropped; BOSS is chaining tools."
+                        : "Working — reading the system and choosing tools."}
                 </span>
                 <span className="agent-working-elapsed" data-testid="agent-elapsed">
-                  {elapsed}s{elapsed >= AGENT_NORMAL_SECONDS ? ` / ~${AGENT_STALL_SECONDS}s` : ""}
+                  {/* A stall warning against a 120s budget is wrong for a debugging session,
+                      which is EXPECTED to run for minutes. Saying "running long" about work
+                      that is going exactly to plan teaches the operator to ignore the warning
+                      on the turn that really has died. */}
+                  {busy
+                    ? `${elapsed}s${elapsed >= AGENT_NORMAL_SECONDS ? ` / ~${AGENT_STALL_SECONDS}s` : ""}`
+                    : "investigating"}
                 </span>
               </p>
               {/* The trail, oldest first. Six is enough to show it is chaining without the

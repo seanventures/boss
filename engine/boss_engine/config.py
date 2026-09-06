@@ -132,7 +132,9 @@ class Settings(BaseSettings):
     #: A SELECT-only Postgres role for investigations. Empty falls back to the ordinary
     #: connection with a statement guard in front of it — which stops the accidental
     #: route and not a determined one. Setting this is the real containment.
-    investigation_db_url: str = Field(default="", alias="BOSS_INVESTIGATION_DB_URL")
+    #: Where an investigation's sandbox calls BOSS back. Loopback by default: the sandbox
+    #: runs inside the API container, so the request never leaves it.
+    investigation_api_url: str = Field(default="", alias="BOSS_INVESTIGATION_API_URL")
     claude_cli_timeout: int = Field(default=240, alias="BOSS_CLAUDE_CLI_TIMEOUT")
 
     @model_validator(mode="after")

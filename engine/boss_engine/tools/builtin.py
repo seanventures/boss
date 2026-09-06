@@ -2371,11 +2371,25 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
         from ..services.debug_session import open_investigation
 
         wants_fix = bool(args.get("fix"))
-        if wants_fix and not args.get("_operator_confirmed"):
-            # THE ONE PLACE A MODEL MAY NOT DECIDE FOR ITSELF. A read-only investigation is a
-            # very capable pair of eyes; the same session with a writable shell on a production
-            # host is a different thing entirely, and on 2026-09-02 an agent with production
-            # credentials deleted 204 tables. The operator opens that one.
+        # WHO DECIDED, NOT WHICH FLAG WAS SET.
+        #
+        # This required `_operator_confirmed` — the marker only a button click sets — so a
+        # fixing investigation always needed a click even when the operator had just said "do
+        # anything to fix it". That is the same fault as the look-only gate refusing an
+        # explicit instruction, one layer up, and it makes "applying the fixes" unreachable by
+        # asking for it.
+        #
+        # The authority is already established before this line runs. A write tool is only
+        # reached when the turn granted write permission, and the turn grants it only on an
+        # INSTRUCTION — a question comes back as a button, unchanged. So an operator who told
+        # BOSS to fix something gets a fixing investigation, and one who asked a question gets
+        # an offer.
+        #
+        # What a fix investigation still cannot do is bounded elsewhere and does not move:
+        # cancelling work in flight, deleting data, DDL, and the irreversible shell verbs are
+        # refused in every mode, whoever asked.
+        licensed = bool(args.get("_operator_confirmed") or args.get("_writes_allowed"))
+        if wants_fix and not licensed:
             return {"ok": False, "requires_confirmation": True,
                     "error": "a fixing investigation gets a writable shell on the host; that "
                              "needs the operator's confirmation.",

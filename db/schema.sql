@@ -5889,3 +5889,12 @@ CREATE INDEX IF NOT EXISTS idx_investigations_project_created
   ON investigations(project_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_investigations_status
   ON investigations(status) WHERE status IN ('queued', 'running');
+-- The sandbox's own credential, minted per investigation and cleared when it finishes.
+--
+-- The alternative was baking the database URL and a console key into the working directory,
+-- which hands a shell a permanent credential and drags the KMS master key along with it. This
+-- token authorises exactly one investigation, for as long as it runs, and the endpoints it
+-- reaches enforce that investigation's own read/fix mode server-side.
+ALTER TABLE investigations ADD COLUMN IF NOT EXISTS token TEXT;
+CREATE INDEX IF NOT EXISTS idx_investigations_token ON investigations(token)
+  WHERE token IS NOT NULL;

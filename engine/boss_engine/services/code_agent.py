@@ -24,7 +24,7 @@ import subprocess
 import threading
 import logging
 import time
-from typing import Optional, Protocol
+from typing import Callable, Optional, Protocol
 
 from ..config import Settings
 from ..schemas import FileChange
@@ -597,6 +597,7 @@ class ClaudeCodeAgent:
         self, prompt: str, cwd: Path, *, read_only: bool = False, model: Optional[str] = None,
         allowed_tools: Optional[str] = None, resume_session_id: Optional[str] = None,
         max_turns: Optional[int] = None, seat: str = "agent",
+        on_turn: Optional[Callable[[dict], None]] = None,
     ) -> dict:
         timeout = int(self.settings.code_agent_timeout_seconds or 900)
         # A full web build (in-container / local_subprocess) needs well beyond the legacy 900s that
@@ -707,6 +708,17 @@ class ClaudeCodeAgent:
                                            model=live_model) or 0)
                 except Exception:  # noqa: BLE001
                     pass
+                # WATCHING IT WORK, not waiting for it to finish. An investigation runs for
+                # minutes; without this the operator sees a spinner and concludes it is stuck,
+                # which is the specific impression this whole effort is trying to remove.
+                # Best-effort by construction: a progress indicator that can fail the work it
+                # is reporting on is worse than no indicator.
+                for turn in produced:
+                    try:
+                        if on_turn:
+                            on_turn(turn)
+                    except Exception:  # noqa: BLE001
+                        pass
 
             return _on_line, parser, written
 

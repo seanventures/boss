@@ -175,7 +175,7 @@ class TestARealDebuggingSession:
         from boss_engine.agent import engine_agent
         from boss_engine.services import intent_router
 
-        assert 'args={**(self.ambient or {}), **args},' in inspect.getsource(engine_agent)
+        assert 'args={**(self.ambient or {}), **args,' in inspect.getsource(engine_agent)
         assert 'ambient = {"_thread_id": thread_id}' in inspect.getsource(intent_router)
 
     def test_only_one_runs_at_a_time_per_project(self):
@@ -303,22 +303,44 @@ class TestFreedomToLookIsNotFreedomToAct:
         assert "DATABASE_URL" in NEVER
         assert is_allowed("DATABASE_URL") is False
 
-    def test_and_the_limit_of_that_is_stated_rather_than_implied(self):
-        """An agent with a shell can read the script that holds the connection string. The real
-        containment is a Postgres role that cannot write; until then this is a speed bump on
-        the accidental route, and the code says so instead of pretending otherwise."""
+    def test_no_credential_reaches_the_sandbox_at_all(self):
+        """The first version baked the connection string into the working directory, and said
+        so honestly. It was still the wrong design — and worse than it looked, because the
+        commands ran in the sandbox's own stripped environment, so the first SSH call
+        auto-provisioned a REPLACEMENT KMS master key. The investigation found that itself and
+        called it "a silent wrong-key fallback if that var were ever unset".
+
+        The commands are HTTP clients now. The database url, the KMS key and the SSH keys never
+        leave the API process."""
+        from boss_engine.services import debug_session
+
+        for script in (debug_session._DB_SCRIPT, debug_session._HOST_SCRIPT,
+                       debug_session._DO_SCRIPT):
+            assert "DATABASE_URL" not in script
+            assert "create_engine" not in script
+            assert "resolve_target_secret" not in script
+            assert "urllib.request" in script
+
+    def test_the_only_thing_it_carries_is_a_token_for_itself(self):
         from boss_engine.services.debug_session import _install_toolbelt
 
         body = inspect.getsource(_install_toolbelt)
-        assert "HONEST LIMIT" in body
-        assert "BOSS_INVESTIGATION_DB_URL" in body
+        assert "__BOSS_TOKEN__" in body
         assert "0o700" in body
 
-    def test_a_read_only_role_is_used_the_moment_one_exists(self):
+    def test_the_token_authorises_one_investigation_while_it_runs(self):
+        from boss_engine.services.debug_session import authorise
+
+        body = inspect.getsource(authorise)
+        assert "WHERE id = :i AND token = :t" in body
+        assert "status\"] not in (\"queued\", \"running\")" in body
+
+    def test_and_is_cleared_when_it_ends(self):
+        """A sandbox is torn down, but a token recovered from one must open nothing."""
         from boss_engine.services.debug_session import run_investigation
 
-        assert 'getattr(settings, "investigation_db_url", "")' \
-            in inspect.getsource(run_investigation)
+        body = inspect.getsource(run_investigation)
+        assert body.count("token = NULL") == 2      # the completed path and the failed one
 
 
 class TestItMustEndWithEvidence:
@@ -564,3 +586,268 @@ class TestTheHostDescriptionQueryIsValid:
         i = body.index("FROM deployment_targets WHERE project_id=:p AND host_id=:h")
         select = body[body.rindex("SELECT", 0, i):i]
         assert "app_port" not in select and " domain," not in select
+
+
+class TestWritingIsAnOperationBeforeItIsAStatement:
+    """The operator's call: "we need to have write access to the postgres DB url to kick off the
+    retries, performing additional operations etc... if we create any operations through APIs it
+    is working right.. the BOSS agent also should take same path".
+
+    Exactly right, and it settles the design question the first version dodged. An investigation
+    that can diagnose a stuck retry and not clear it is half a capability. But the path is
+    BOSS's own operations, not a shell with a connection string: `redeploy` resolves the
+    target's key, reserves budget, records a deployment run and health-checks the result, and a
+    hand-written UPDATE gets some of that right and leaves no trace of the rest — which is what
+    the INSERT against deployment_targets already demonstrated.
+    """
+
+    @pytest.mark.parametrize("statement", [
+        "SELECT * FROM jobs",
+        "WITH x AS (SELECT 1) SELECT * FROM x",
+    ])
+    def test_reading_needs_no_permission(self, statement):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        assert sql_is_allowed(statement, allow_write=False)[0]
+
+    @pytest.mark.parametrize("statement", [
+        "UPDATE workflow_step_runs SET status = 'queued' WHERE id = 'wsr_1'",
+        "INSERT INTO deployment_targets (id) VALUES ('deptgt_1')",
+        "DELETE FROM jobs WHERE id = 'job_1'",
+    ])
+    def test_a_fixing_investigation_may_write_rows(self, statement):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        assert sql_is_allowed(statement, allow_write=True)[0], statement
+
+    @pytest.mark.parametrize("statement", [
+        "UPDATE jobs SET status = 'done'",
+        "DELETE FROM workflow_step_runs",
+    ])
+    def test_but_never_unqualified(self, statement):
+        """One wrong statement becoming an outage rather than a fix."""
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        allowed, why = sql_is_allowed(statement, allow_write=True)
+        assert allowed is False
+        assert "every row" in why
+
+    @pytest.mark.parametrize("statement", [
+        "DROP TABLE events",
+        "TRUNCATE jobs",
+        "ALTER TABLE jobs ADD COLUMN x TEXT",
+        "GRANT ALL ON jobs TO someone",
+    ])
+    def test_and_never_the_shape_of_the_database(self, statement):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        allowed, why = sql_is_allowed(statement, allow_write=True)
+        assert allowed is False
+        assert "migration" in why
+
+    def test_a_read_only_investigation_is_told_what_to_do_instead(self):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        _allowed, why = sql_is_allowed("UPDATE jobs SET status='x' WHERE id='1'",
+                                       allow_write=False)
+        assert "put it in `fix`" in why
+
+    def test_operations_run_through_the_registry_the_console_uses(self):
+        from boss_engine.services.debug_session import run_operation
+
+        body = inspect.getsource(run_operation)
+        assert "build_default_registry()" in body
+        assert '"_operator_confirmed": True' in body
+
+    def test_a_read_only_investigation_may_not_run_them(self):
+        from boss_engine.services.debug_session import run_operation
+
+        out = run_operation(None, {"allow_fix": False, "project_id": "p", "actor": "ceo"},
+                            "redeploy", {"run_id": "crun_1"})
+        assert out["ok"] is False
+        assert "read-only" in out["error"]
+        assert "redeploy" in out["available_in_a_fixing_investigation"]
+
+    @pytest.mark.parametrize("tool", ["cancel_job", "cancel_code_task", "close_orphaned_runs",
+                                      "waive_gates", "run_on_host", "write_db"])
+    def test_throwing_work_away_is_never_an_investigation(self, tool):
+        """The operator's rule, in their words: cancelling "should be prevented at all cost".
+        An investigation exists to make something work; nothing in that job needs to kill a
+        running build, waive a gate, or run free-form SQL that the guarded path already covers.
+        """
+        from boss_engine.services.debug_session import run_operation
+
+        out = run_operation(None, {"allow_fix": True, "project_id": "p", "actor": "ceo"},
+                            tool, {})
+        assert out["ok"] is False
+        assert "not something an investigation may do" in out["error"]
+
+    def test_the_fixes_it_needs_are_all_there(self):
+        from boss_engine.services.debug_session import _NOT_FOR_INVESTIGATIONS
+        from boss_engine.tools import build_default_registry
+
+        writes = {s.name for s in build_default_registry().specs(kind="write")}
+        available = writes - _NOT_FOR_INVESTIGATIONS
+        for needed in ("redeploy", "retry_code_task", "create_deployment_target",
+                       "retarget_app", "deploy_app", "extend_code_task", "steer_code_task"):
+            assert needed in available, needed
+
+    def test_a_read_only_investigation_is_still_the_default(self):
+        from boss_engine.services.debug_session import open_investigation
+
+        body = inspect.getsource(open_investigation)
+        assert "allow_fix: bool = False" in body
+
+    def test_the_prompt_says_to_prefer_an_operation_to_a_statement(self):
+        from boss_engine.services import debug_session
+
+        assert "PREFER boss-do OVER SQL" in debug_session._PROMPT
+        assert "leaves no trace of the rest" in debug_session._PROMPT
+
+    def test_and_to_report_the_operation_that_was_missing(self):
+        """Every time it reaches for SQL, that is a gap in the operation set worth closing."""
+        from boss_engine.services import debug_session
+
+        assert "which operation was missing" in debug_session._PROMPT
+
+
+class TestTheOperatorCanSeeItThinking:
+    """"56s for a deep diagnostic against 2.4s before ==> this could be a concern, instead can we
+    display all the debugging info that it's doing during the investigation... just to show that
+    it's doing something rather giving the feeling to user that it's stuck."
+
+    The chat turn already streamed its steps. The investigation did not, and it is the long one.
+    An operator who believes a system is stuck interrupts it — which is how the incident that
+    started all of this began."""
+
+    def test_the_runner_can_report_each_turn_as_it_happens(self):
+        from boss_engine.services.code_agent import ClaudeCodeAgent
+
+        body = inspect.getsource(ClaudeCodeAgent._invoke)
+        assert "on_turn: Optional[Callable[[dict], None]] = None" in body
+
+    def test_reporting_can_never_break_the_work(self):
+        """A progress indicator that can fail the thing it reports on is worse than none."""
+        from boss_engine.services import code_agent
+
+        body = inspect.getsource(code_agent)
+        i = body.index("if on_turn:")
+        assert "except Exception" in body[i:i + 260]
+
+    def test_the_investigation_reports_into_the_thread_that_asked(self):
+        from boss_engine.services.debug_session import run_investigation
+
+        body = inspect.getsource(run_investigation)
+        assert "_progress_reporter(project_id" in body
+        assert "on_turn=_tell_the_operator" in body
+
+    @pytest.mark.parametrize("turn,expected", [
+        ({"direction": "tool_call", "tool_name": "Bash",
+          "content": {"command": './.boss-bin/boss-db "SELECT * FROM deployment_targets"'}},
+         'querying the database: "SELECT * FROM deployment_targets"'),
+        ({"direction": "tool_call", "tool_name": "Bash",
+          "content": {"command": "./.boss-bin/boss-host hetzner-ci-01 docker ps"}},
+         "on the host: hetzner-ci-01 docker ps"),
+        ({"direction": "tool_call", "tool_name": "Read",
+          "content": {"file_path": "/x/src/server.ts"}}, "reading /x/src/server.ts"),
+        ({"direction": "tool_call", "tool_name": "Grep", "content": {"pattern": "listen("}},
+         "searching listen("),
+    ])
+    def test_it_says_what_it_is_doing_in_words(self, turn, expected):
+        from boss_engine.services.debug_session import _what_it_is_doing
+
+        assert _what_it_is_doing(turn) == expected
+
+    def test_its_own_reasoning_is_the_most_informative_thing_on_offer(self):
+        """"the container binds 8000 but the target says 3000" tells the operator more than any
+        tool name could."""
+        from boss_engine.services.debug_session import _what_it_is_doing
+
+        assert _what_it_is_doing({
+            "direction": "completion",
+            "content": "The container binds 8000 but the target says 3000."}) \
+            == "The container binds 8000 but the target says 3000."
+
+    def test_noise_is_not_reported(self):
+        from boss_engine.services.debug_session import _what_it_is_doing
+
+        assert _what_it_is_doing({"direction": "tool_result", "content": "x"}) == ""
+        assert _what_it_is_doing({"direction": "completion", "content": "   "}) == ""
+
+    def test_a_line_is_bounded(self):
+        from boss_engine.services.debug_session import _what_it_is_doing
+
+        line = _what_it_is_doing({"direction": "completion", "content": "x" * 4000})
+        assert 0 < len(line) <= 180
+
+    def test_the_console_is_told_when_one_is_running(self):
+        import pathlib
+
+        main = pathlib.Path("apps/api/app/main.py").read_text()
+        assert "FROM investigations \"\n                 \"WHERE thread_id = :t AND status IN" in main
+        assert '"investigation": ({"id": live["id"]' in main
+
+
+class TestWhoDecidedNotWhichFlagWasSet:
+    """"we need to have write access... to kick off the retries, performing additional
+    operations etc.. including the investigation and applying the fixes."
+
+    A fixing investigation required `_operator_confirmed` — the marker only a button click sets
+    — so it needed a click even when the operator had just said "do anything to fix it". That is
+    the same fault as the look-only gate refusing an explicit instruction, one layer up, and it
+    made "applying the fixes" unreachable by asking for it.
+
+    The authority is established before the tool runs: a write tool is only reached when the
+    turn granted write permission, and the turn grants it only on an INSTRUCTION."""
+
+    class _Ctx:
+        def begin(self):
+            raise AssertionError("OPENED")
+
+    def _investigate(self, args):
+        return build_default_registry().invoke(
+            "investigate", self._Ctx(), project_id="p", actor="ceo", args=args)
+
+    def test_an_instruction_opens_a_fixing_investigation(self):
+        out = self._investigate({"question": "fix the deploy", "fix": True,
+                                 "_writes_allowed": True})
+        assert "OPENED" in str(out.get("error") or ""), out
+
+    def test_a_click_still_does_too(self):
+        out = self._investigate({"question": "fix the deploy", "fix": True,
+                                 "_operator_confirmed": True})
+        assert "OPENED" in str(out.get("error") or ""), out
+
+    def test_a_question_gets_an_offer(self):
+        """Writes are withheld on a question, so the turn never sets the marker — and the
+        operator is shown the button instead of having a shell opened on their behalf."""
+        out = self._investigate({"question": "fix the deploy", "fix": True,
+                                 "_writes_allowed": False})
+        assert out["ok"] is False and out["requires_confirmation"] is True
+        assert out["proposed_args"]["fix"] is True
+
+    def test_a_read_only_investigation_never_needed_either(self):
+        out = self._investigate({"question": "why is it broken"})
+        assert "OPENED" in str(out.get("error") or ""), out
+
+    def test_the_loop_records_who_authorised_the_turn(self):
+        from boss_engine.agent import engine_agent
+
+        body = inspect.getsource(engine_agent)
+        assert '"_writes_allowed": bool(allow_writes)' in body
+
+    def test_the_marker_never_reaches_a_button(self):
+        from boss_engine.services.intent_router import _offered_args
+
+        assert _offered_args({"proposed_args": {"fix": True, "_writes_allowed": True}}, {}) \
+            == {"fix": True}
+
+    def test_what_a_fix_investigation_still_cannot_do_did_not_move(self):
+        """Widening WHO may open one must not widen WHAT one may do."""
+        from boss_engine.services.debug_session import (
+            _NOT_FOR_INVESTIGATIONS, host_command_allowed, sql_is_allowed,
+        )
+
+        assert "cancel_job" in _NOT_FOR_INVESTIGATIONS
+        assert host_command_allowed("rm -rf /data", allow_write=True)[0] is False
+        assert sql_is_allowed("DROP TABLE events", allow_write=True)[0] is False

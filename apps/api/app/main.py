@@ -7217,6 +7217,66 @@ def run_investigation_endpoint(investigation_id: str):
     return run_investigation(engine, settings, investigation_id=investigation_id)
 
 
+def _investigation_caller(investigation_id: str, request: Request) -> dict:
+    """Resolve the token an investigation's sandbox is calling with.
+
+    The sandbox holds this and nothing else — no database url, no KMS key, no SSH key. Those
+    stay in this process, which is the whole reason these endpoints exist: the first version
+    baked the connection string into the working directory, and because the commands ran in the
+    sandbox's own stripped environment, the first SSH call auto-provisioned a replacement KMS
+    master key. The investigation found that itself and called it "a silent wrong-key fallback".
+    """
+    from boss_engine.services.debug_session import authorise
+
+    token = request.headers.get("x-investigation-token") or ""
+    with begin(engine) as connection:
+        try:
+            return authorise(connection, investigation_id, token)
+        except PermissionError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+
+@app.post("/v1/investigations/{investigation_id}/db")
+def investigation_db_endpoint(investigation_id: str, payload: dict, request: Request):
+    """SQL for an investigation — SELECT always, writes when it was opened to fix something."""
+    from boss_engine.services.debug_session import run_db
+
+    record = _investigation_caller(investigation_id, request)
+    with begin(engine) as connection:
+        return run_db(connection, record, str(payload.get("sql") or ""))
+
+
+@app.post("/v1/investigations/{investigation_id}/host")
+def investigation_host_endpoint(investigation_id: str, payload: dict, request: Request):
+    """A command on a fleet host, with the fleet's own credential resolution."""
+    from boss_engine.services.debug_session import run_on_investigation_host
+
+    record = _investigation_caller(investigation_id, request)
+    return run_on_investigation_host(
+        host=str(payload.get("host") or ""), command=str(payload.get("command") or ""),
+        project_id=str(record["project_id"]), allow_write=bool(record["allow_fix"]))
+
+
+@app.post("/v1/investigations/{investigation_id}/do")
+def investigation_do_endpoint(investigation_id: str, payload: dict, request: Request):
+    """One of BOSS's own operations, run exactly as a console button runs it."""
+    from boss_engine.context import EngineContext
+    from boss_engine.services.debug_session import _NOT_FOR_INVESTIGATIONS, run_operation
+    from boss_engine.tools import build_default_registry
+
+    record = _investigation_caller(investigation_id, request)
+    if payload.get("list"):
+        registry = build_default_registry()
+        return {"operations": [
+            {"tool": s.name, "reversibility": s.reversibility,
+             "description": s.description[:240]}
+            for s in registry.specs(kind="write")
+            if s.name not in _NOT_FOR_INVESTIGATIONS]}
+    return run_operation(
+        EngineContext(settings=settings, engine=engine), record,
+        str(payload.get("tool") or ""), dict(payload.get("args") or {}))
+
+
 @app.get("/v1/investigations")
 def list_investigations_endpoint(project_id: str, limit: int = 10):
     """What BOSS has investigated, newest first — the console's window onto the deep work."""
@@ -10839,11 +10899,25 @@ def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
                  "WHERE thread_id = :t AND id > :since ORDER BY id LIMIT 50"),
             {"t": thread_id, "since": int(since or 0)},
         ).mappings().all()
+        # AND WHETHER SOMETHING IS STILL WORKING WHEN THE TURN IS NOT.
+        #
+        # An investigation outlives the request that started it — the chat turn returns in
+        # seconds and the debugging session runs for minutes afterwards. The console stopped
+        # polling the moment the turn ended, so the most informative progress BOSS produces was
+        # written to a table nobody was reading, and the operator watched a finished answer sit
+        # there while work continued invisibly.
+        live = connection.execute(
+            text("SELECT id, status, question FROM investigations "
+                 "WHERE thread_id = :t AND status IN ('queued', 'running') "
+                 "ORDER BY created_at DESC LIMIT 1"),
+            {"t": thread_id}).mappings().first()
     return {"thread_id": thread_id,
             "steps": [{"id": r["id"], "label": r["label"],
                        "at": r["created_at"].isoformat() if r["created_at"] else None}
                       for r in rows],
-            "cursor": rows[-1]["id"] if rows else int(since or 0)}
+            "cursor": rows[-1]["id"] if rows else int(since or 0),
+            "investigation": ({"id": live["id"], "status": live["status"],
+                               "question": str(live["question"])[:200]} if live else None)}
 
 
 @app.get("/v1/agent/role-starters")

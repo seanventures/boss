@@ -501,5 +501,9 @@ class EngineAgent:
             # in the model's head. Asking the model to pass one would produce an invented
             # `athr_...`, which is the exact failure mode `_placeholder_argument` exists for.
             name, self.ctx, project_id=project_id, actor=actor,
-            args={**(self.ambient or {}), **args},
+            # `_writes_allowed` records WHO decided, which a tool cannot otherwise tell. The
+            # write gate above has already passed, so reaching this line means the operator
+            # instructed an action rather than asking a question — the distinction a tool that
+            # escalates its own permissions (a fixing investigation) has to be able to make.
+            args={**(self.ambient or {}), **args, "_writes_allowed": bool(allow_writes)},
         )

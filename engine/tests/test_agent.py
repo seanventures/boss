@@ -80,7 +80,12 @@ def test_write_runs_when_allowed():
     ag = _agent([_tool_call_msg("redeploy", '{"app":"x"}'),
                  _final_msg("Redeployed.")], calls)
     turn = ag.chat(project_id="p", actor="u", message="redeploy x", allow_writes=True)
-    assert calls == [{"app": "x"}]  # the write handler ran once
+    # The model's own arguments, plus the ambient markers the loop stamps on every call
+    # (`_writes_allowed` records who authorised the turn — see engine_agent). Asserting on the
+    # model's arguments rather than on the whole dict keeps this about the write gate.
+    assert [{k: v for k, v in c.items() if not k.startswith("_")} for c in calls] \
+        == [{"app": "x"}]  # the write handler ran once
+    assert calls[0]["_writes_allowed"] is True
     assert turn.trace[0]["result"]["run_id"] == "crun_x"
     assert turn.pending_writes == []
 
