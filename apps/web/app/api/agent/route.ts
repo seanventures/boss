@@ -112,3 +112,52 @@ export async function GET(req: Request) {
     { status: 400 },
   );
 }
+
+
+/**
+ * The one write here, and it is the operator's own: clear THIS conversation.
+ *
+ * A POST rather than another `view` because it changes something, and it lives beside the reads
+ * for the same reason they moved — a Server Action would queue behind the console's own
+ * re-render, and a Clear button that takes twenty seconds is a Clear button nobody trusts.
+ */
+export async function POST(req: Request) {
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return NextResponse.json({ error: "body must be JSON" }, { status: 400 });
+  }
+  const action = String(body.action ?? "");
+  const project = String(body.project_id ?? "").trim();
+  const actor = String(body.actor ?? "").trim();
+  const thread = String(body.thread_id ?? "").trim();
+
+  if (action !== "clear") {
+    return NextResponse.json({ error: `unknown action '${action}'. Known: clear` },
+                             { status: 400 });
+  }
+  if (!project || !thread) {
+    return NextResponse.json({ error: "clear needs project_id and thread_id" },
+                             { status: 400 });
+  }
+  // ONE THREAD ID. Bounded to this agent's chat by construction — there is no wildcard here
+  // to get wrong, and no way to express "every conversation".
+  try {
+    const r = await fetch(
+      `${API_URL}/v1/agent/threads/${encodeURIComponent(thread)}/clear`
+      + `?project_id=${encodeURIComponent(project)}&actor=${encodeURIComponent(actor)}`,
+      { method: "POST", headers: authHeaders({}), cache: "no-store" },
+    );
+    if (!r.ok) {
+      let detail = "";
+      try { detail = String((await r.json())?.detail ?? ""); } catch { /* not JSON */ }
+      return NextResponse.json({ error: detail || `API returned ${r.status}` },
+                               { status: r.status });
+    }
+    return NextResponse.json(await r.json());
+  } catch (e) {
+    return NextResponse.json({ error: String((e as Error)?.message ?? e) }, { status: 502 });
+  }
+}
+

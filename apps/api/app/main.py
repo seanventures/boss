@@ -10721,6 +10721,32 @@ def project_repositories_endpoint(project_id: str):
             "suggested": suggested, "suggested_source": source}
 
 
+@app.post("/v1/agent/threads/{thread_id}/clear")
+def clear_agent_thread_endpoint(thread_id: str, project_id: str, actor: str):
+    """Start one conversation again, leaving every other conversation alone.
+
+    Scoped to a single thread id, so "clear this agent's chat" cannot reach another agent's.
+    The thread is closed and archived rather than deleted — the messages stay readable, and
+    what actually makes the chat look clear is freeing the `external_ref` so the next message
+    opens a fresh thread.
+    """
+    from boss_engine.services.agent_service import (
+        AgentThreadNotFoundError,
+        AgentThreadOwnershipError,
+    )
+
+    with begin(engine) as connection:
+        require_project_actor(connection, project_id, actor, "agent_chat")
+        try:
+            return orchestration_agent.clear_thread(
+                connection, project_id=project_id, actor=actor, thread_id=thread_id
+            )
+        except AgentThreadNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except AgentThreadOwnershipError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+
+
 @app.get("/v1/agent/threads/{thread_id}/progress")
 def agent_thread_progress_endpoint(thread_id: str, since: int = 0):
     """What BOSS is doing in this thread right now.

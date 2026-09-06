@@ -6330,6 +6330,15 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 
+/* Clear this conversation. Deliberately quiet — it sits beside the role's name and undoing a
+   chat is not the reason anybody opened the panel. */
+.agent-clear {
+  float: right; font-size: 11.5px; opacity: .75;
+  color: var(--faint, var(--muted));
+}
+.agent-clear:hover:not(:disabled) { opacity: 1; color: var(--ink, #E6EDF3); }
+.agent-clear:disabled { cursor: default; opacity: .5; }
+
 /* The steps behind a turn in flight. Dim and small: it is evidence the work is alive, not
    content to read — the answer is what the operator is waiting for. */
 .agent-steps {
@@ -7600,6 +7609,11 @@ a.sp-node:hover .sp-label { color: var(--ink); }
    new one arrived. One row that scrolls sideways keeps the composer where the eye left it,
    however many suggestions there are. */
 .agent-suggests-bar {
+  /* NEVER SQUASHED. It is a flex item of the chat column, so without this it defaults to
+     `flex-shrink: 1` and the column takes the space it needs from here — the chips rendered as
+     a sliver a few pixels tall, with the top of each one visible above the composer and the
+     text unreadable. The composer got `flex: 0 0 auto` for the same reason; this was missed. */
+  flex: 0 0 auto;
   max-width: none; justify-content: flex-start; flex-wrap: nowrap;
   gap: 6px; padding: 8px 2px 2px; overflow-x: auto; scrollbar-width: thin;
   border-top: 1px solid var(--border);

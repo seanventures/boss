@@ -521,6 +521,38 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     runTurn(fd);
   }, [input, busy, runTurn]);
 
+  /**
+   * Clear THIS conversation, and only this one.
+   *
+   * Scoped to the thread id the panel is currently showing, so a role's chat cannot reach
+   * another role's — there is no wildcard to get wrong. The thread is archived rather than
+   * deleted: the messages stay readable by id, and what makes the panel look clear is the
+   * server freeing the find-or-create key so the next message opens a fresh thread.
+   */
+  const [clearing, setClearing] = useState(false);
+  const clearChat = useCallback(async () => {
+    if (!threadId || clearing) return;
+    setClearing(true);
+    try {
+      const r = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "clear", project_id: projectId, actor,
+                               thread_id: threadId }),
+      });
+      if (!r.ok) return;
+      // Local state last, and only on success: clearing the panel before the server agreed
+      // would show an empty conversation that comes back on the next load.
+      setMessages([]); setProposed([]); setTrail([]); setPendingPlan(null);
+      setThreadId(null);
+      refreshThreads();
+    } catch {
+      /* the conversation is still there; the button can be pressed again */
+    } finally {
+      setClearing(false);
+    }
+  }, [threadId, clearing, projectId, actor, refreshThreads]);
+
   const acceptAction = useCallback((action: ProposedAction) => {
     startTransition(async () => {
       const r = await runAgentActionAction(projectId, actor, action.tool, action.args, threadId ?? undefined);
@@ -627,6 +659,14 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
                    : roleName
                      ? `Ask ${roleName}`
                      : "What do you want to do?"}</h2>
+            {threadId && messages.length ? (
+              <button type="button" className="linklike agent-clear" data-testid="agent-clear"
+                      disabled={clearing} onClick={() => void clearChat()}
+                      title={`Start ${roleName ?? "this"} conversation again. The messages are `
+                             + "archived, not deleted, and no other chat is touched."}>
+                {clearing ? "Clearing…" : "Clear this chat"}
+              </button>
+            ) : null}
             {threadId ? (
               roleName ? (
                 <p className="detail">Picking up where you left off — this conversation is kept

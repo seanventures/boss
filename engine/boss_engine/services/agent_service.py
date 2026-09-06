@@ -183,6 +183,63 @@ class AgentService:
         ).mappings().all()
         return [self._serialize_message(row) for row in rows]
 
+    def clear_thread(
+        self,
+        connection: Connection,
+        *,
+        project_id: str,
+        actor: str,
+        thread_id: str,
+    ) -> dict[str, Any]:
+        """Start this conversation again, without destroying the one that was there.
+
+        "Clear all" on a role's chat, bounded to that role. It acts on ONE thread id, so it
+        cannot reach another agent's conversation by construction — there is no wildcard here
+        to get wrong.
+
+        ARCHIVED, NOT DELETED. The thread is closed and its `external_ref` is stamped with its
+        own id, which is what actually does the work: the ref is the find-or-create key
+        (`role:Engineering Captain`), and freeing it is what lets the next message open a clean
+        thread. The messages stay exactly where they were and remain readable by id, so a chat
+        cleared by mistake is a lookup rather than a loss.
+        """
+        row = connection.execute(
+            text(
+                """
+                SELECT id, project_id, actor, external_ref, status
+                FROM agent_threads WHERE id = :id FOR UPDATE
+                """
+            ),
+            {"id": thread_id},
+        ).mappings().first()
+        if row is None:
+            raise AgentThreadNotFoundError(f"no thread {thread_id}")
+        if row["project_id"] != project_id:
+            # The same fence every other thread operation uses: a console actor authorised for
+            # one project must not be able to clear another's conversation.
+            raise AgentThreadOwnershipError("that conversation belongs to another project")
+        if not row["external_ref"] and row["actor"] != actor:
+            raise AgentThreadOwnershipError("that conversation belongs to another actor")
+
+        ref = row["external_ref"]
+        connection.execute(
+            text(
+                """
+                UPDATE agent_threads
+                SET status = 'closed',
+                    external_ref = CASE WHEN :ref IS NULL THEN NULL
+                                        ELSE :ref || '#cleared-' || id END,
+                    updated_at = now()
+                WHERE id = :id
+                """
+            ),
+            {"id": thread_id, "ref": ref},
+        )
+        return {"ok": True, "thread_id": thread_id, "was": ref,
+                "note": "closed and archived — the messages are kept, and the next one starts "
+                        "a fresh conversation"}
+
+
     def list_threads(
         self,
         connection: Connection,
