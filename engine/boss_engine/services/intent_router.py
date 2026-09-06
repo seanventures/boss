@@ -447,6 +447,10 @@ def _recover_printed_actions(reply: str, known_tools, existing) -> tuple[list, s
     kept.append(reply[last:])
     out = "".join(kept)
     out = re.sub(r"\b[a-z][a-z0-9_]{2,40}\s*\(\s*\)", "", out)   # `propose_action()`
+    # And the bare name when its arguments were the thing cut out — `propose_action` alone on
+    # a line is meaningless to the operator and looks like a leaked internal.
+    out = re.sub(r"(?m)^\s*propose_action\s*\(?\s*$", "", out)
+    out = re.sub(r"\bpropose_action\s*\(?(?=\s|$)", "", out)
     out = re.sub(r"```(?:json)?\s*```", "", out)                    # an emptied fence
     out = re.sub(r"[ \t]*\)\s*$", "", out, flags=re.MULTILINE)      # a dangling paren
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
@@ -640,7 +644,13 @@ _GAVE_UP = re.compile(
 #: A question back to the operator that does their thinking for them in the wrong direction.
 _YES_NO_BACK = re.compile(
     r"(would you like me to|do you want me to|shall i|should i (?:go ahead|proceed|investigate)"
-    r"|let me know if you(?:'d| would) like|if you want me to)",
+    r"|let me know if you(?:'d| would) like|if you want me to"
+    # ASKING FOR SOMETHING BOSS CAN LOOK UP. Observed live: "we need the specific run
+    # identifier so we can run diagnose_run" — about a run it had listed one tool call earlier.
+    # Every id in this system is discoverable, so asking for one is a refusal wearing a
+    # question mark.
+    r"|we need the (?:specific|exact)|please provide|could you (?:provide|share|tell me)"
+    r"|provide the (?:run|job|task) (?:id|identifier)|what is the (?:run|job) id)",
     re.IGNORECASE,
 )
 
@@ -1146,6 +1156,10 @@ class IntentRouter:
             "standard tour of the subject when a specific thing was asked — and do not repeat "
             "anything you have already said in this conversation; build on it.\n\n"
             "NEVER HAND THE PROBLEM BACK.\n"
+            "NEVER ASK THE OPERATOR FOR AN IDENTIFIER. Every run, job, task and target id in "
+            "this system is discoverable — list_code_tasks, list_running_work, query_db. If "
+            "they named an app, find its run yourself. \"We need the specific run identifier\" "
+            "is a refusal wearing a question mark.\n"
             "\"I could not determine it\" is a finding only when it names the next specific "
             "step; it is never an ending. And never ask the operator a yes/no question — no "
             "\"would you like me to investigate further?\". If you need a decision, present "

@@ -144,6 +144,26 @@ class TestGivingUpIsNotAnEnding:
         assert len(model.calls) >= 2, f"sent without a direction: {ending!r}"
         assert "handing the problem back" in model.calls[1]["message"]
 
+    def test_asking_for_an_identifier_is_handing_it_back(self, monkeypatch):
+        """Observed live. "To pinpoint the exact cause we need the specific run identifier so
+        we can run diagnose_run" — about a run it had listed one tool call earlier. Every id in
+        this system is discoverable, so asking for one is a refusal wearing a question mark."""
+        _turn, model = run(monkeypatch, "the Interview Scorecard App build is stuck, why?", [
+            ("To pinpoint the exact cause we need the specific run identifier.", SIX_READS),
+            ("It hung on `npm run verify`.", SIX_READS),
+        ])
+        assert len(model.calls) >= 2
+
+    def test_the_leaked_tool_name_does_not_reach_the_operator(self, monkeypatch):
+        """When the arguments are cut out, the bare name must go with them — `propose_action`
+        alone on a line is a leaked internal, not a sentence."""
+        turn, _ = run(monkeypatch, "why is crun_1 stuck?", [
+            ('It hung on npm run verify.\n\npropose_action({"tool": "retry_code_task", '
+             '"args": {"run_id": "crun_1"}, "label": "Retry"})', SIX_READS),
+        ])
+        assert "propose_action" not in turn.reply
+        assert turn.proposed_actions
+
     def test_but_an_offer_counts_as_a_direction(self, monkeypatch):
         """"I could not determine the cause" WITH a button is a real answer — the operator has
         somewhere to go."""
