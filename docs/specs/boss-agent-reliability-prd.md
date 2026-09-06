@@ -377,6 +377,57 @@ clarify flow. Both are additive and neither blocks the safety or resolution prop
 
 ---
 
+### 4.7 The follow-up incident, and what it changed (thread `athr_2284c6b8`)
+
+Everything in 4.5 was live, and BOSS still looped. It is worth being precise about how, because
+the answer is not "it needed more capability".
+
+Across three turns it gave the same correct diagnosis — port 8000 in use, 8001 free, verified
+against the host's own listening sockets — and changed nothing. `inspect_host` (read-only SSH),
+`retarget_app` and `redeploy` were all registered, all self-executable, and all in its hands the
+whole time. **No tool was missing. No infra access was missing.**
+
+Three faults, in the order they mattered:
+
+1. **The look-only gate refused an instruction.** *"I told you already to redeploy to different
+   port, check yourself before applying to the new port... dont keep asking me, you have full
+   freedom on the host"* was classified as a question, because the imperative sits after "to" and
+   the word "check" appears. R2's own safety gate — added in 4.1 to stop the unasked cancel —
+   withheld writes from a sentence handing over the host. **A gate that turns that into a refusal
+   is not being careful, it is being deaf.** Fixed with two overrides: handed-over authority
+   (`you have full freedom`, `whatever it takes`, `dont keep asking me`) and explicit instruction
+   (`I told/asked/want/need you to <verb>`). The question cases the gate exists for are pinned in
+   the same test class, so widening it into uselessness fails the suite.
+2. **A prescription ended the turn.** "The fix is to retarget the app to port 8001" satisfied
+   every existing check — it was substantive, specific, grounded, and not a yes/no. Nothing
+   anywhere asked whether the thing the operator wanted had happened.
+   `described_a_fix_without_doing_it` now treats prescribe-without-act-or-offer as a fault; a
+   proposal button counts as acting, because a button carries the arguments and one click runs it.
+3. **Saying it again counted as progress.** No reply was ever compared to the previous one.
+   `going_in_circles` scores containment against the last assistant message and forces a
+   different approach above 0.45. Measured on the real pair: 0.50 for the rephrased repeat, 0.00
+   for a genuinely different answer.
+
+One capability gap was real, and it is small: BOSS reached "8001 is free" by reading raw socket
+output and eyeballing it. `find_free_port` answers it properly — a port is free only when nothing
+is listening **and** BOSS's registry has not promised it to another app, because a port idle
+between deploys is not free and taking it reproduces the collision one app along.
+
+**The lesson for the next round:** the failure was not in what BOSS could do. It was that three
+separate mechanisms each accepted "described the fix accurately" as a finished turn. The property
+worth defending is *did the operator's problem change state*, and every check added here is a
+proxy for it.
+
+Separately, the sentence that started the thread — "the capability reported failure without a
+reason" — is gone. It is the absence of an error message dressed as one: it names nothing to look
+at and implies the system knows what happened when it does not. A failing capability now reports
+whatever it returned, however unplanned the keys; where it returned nothing, it says so, says the
+defect is the capability's rather than the app's, and names the two things to read next. The
+step's `output` also survives the failure, which it did not before — the stored value was `{}`,
+so BOSS could not explain the failure to the operator either.
+
+---
+
 ## 5. Explicitly out of scope
 
 - Making BOSS more cautious in general. It should still act when told to; see P6.
