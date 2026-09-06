@@ -47,6 +47,39 @@ class TestTheSweepReachesAFailedStep:
         assert "if successor:" in block[:600]
 
 
+class TestAFailedRunCanStillBeRevived:
+    """Chicken and egg, and the reason the first version of this fix changed nothing.
+
+    The tick scans `running` and `waiting` runs, which is right for doing work. A run whose
+    build failed is `failed` — so it was never swept, so it stayed failed for ever, while the
+    retry ran to completion underneath it.
+    """
+
+    def test_failed_runs_are_scanned_for_a_retry(self):
+        body = inspect.getsource(runner.tick)
+        assert "AND r.status = 'failed'" in body
+
+    def test_only_those_with_a_failed_code_task_step(self):
+        """A run that failed for some other reason has nothing here to reconsider."""
+        body = inspect.getsource(runner.tick)
+        assert "s.output->'await'->>'kind' = 'code_task'" in body
+
+    def test_reviving_is_not_running(self):
+        """They go to resume_awaited and nothing else — no claiming, no gates, no new work.
+        Once revived the run is `waiting` and the ordinary loop takes it from there."""
+        body = inspect.getsource(runner.tick)
+        block = body[body.index("for run in revivable:"):]
+        head = block[:block.index("for run in runs:")]
+        assert "resume_awaited(" in head
+        for forbidden in ("_claim", "_resume_answered_gates", "_open_gate"):
+            assert forbidden not in head, forbidden
+
+    def test_a_revival_failure_never_breaks_the_tick(self):
+        body = inspect.getsource(runner.tick)
+        block = body[body.index("for run in revivable:"):]
+        assert "except Exception" in block[:600]
+
+
 class TestWhatCountsAsTheSameWork:
     def test_lineage_alone_would_have_missed_the_real_case(self):
         """The live rows, and the reason this is not just a lineage match:

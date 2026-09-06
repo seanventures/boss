@@ -1700,7 +1700,47 @@ def tick(
         {"project_id": project_id},
     ).mappings().all()
 
+    # A FAILED RUN IS NEVER TICKED, SO IT COULD NEVER RECOVER.
+    #
+    # The scan above takes `running` and `waiting` only, which is right for doing work. But a
+    # run whose build failed is `failed`, and the operator's next move is to retry that build —
+    # after which nothing looked at the run again. Chicken and egg: failed, therefore never
+    # swept, therefore failed for ever, while a new build ran to completion underneath it.
+    #
+    # These runs are handed to `resume_awaited` and nothing else. On a failed run it asks its
+    # failed steps one question — is there a live later attempt at this work — and reopens only
+    # those. No claiming, no gates, no new work: reviving a run is not the same as running it,
+    # and once revived it is `waiting` and the ordinary loop takes it from there.
+    revivable = connection.execute(
+        text(
+            """
+            SELECT r.id, r.actor, r.status, d.workflow_key, d.namespace
+            FROM workflow_runs r
+            JOIN workflow_definitions d ON d.id = r.workflow_definition_id
+            WHERE r.project_id = :project_id
+              AND r.status = 'failed'
+              AND COALESCE(d.namespace, 'system') = 'product'
+              AND EXISTS (
+                    SELECT 1 FROM workflow_step_runs s
+                    WHERE s.workflow_run_id = r.id AND s.status = 'failed'
+                      AND s.output->'await'->>'kind' = 'code_task'
+              )
+            ORDER BY r.updated_at DESC
+            LIMIT 20
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().all()
+
     performed: list[dict[str, Any]] = []
+    for run in revivable:
+        try:
+            performed.extend(resume_awaited(
+                connection, project_id=project_id, run_id=run["id"], worker_id=worker_id
+            ))
+        except Exception as error:  # noqa: BLE001 — a revival must never break the tick
+            log.warning("could not revive %s: %s", run["id"], error)
+
     for run in runs:
         if len(performed) >= limit:
             break
