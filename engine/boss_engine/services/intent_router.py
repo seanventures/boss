@@ -500,7 +500,7 @@ def _recover_described_actions(reply: str, known_tools, existing) -> list:
         label = _strip_md(row.get("button label", "") or row.get("action", "")) or tool
         why = _strip_md(row.get("what it does (cost)", "") or row.get("what it does", ""))
         rows.append({"id": make_id("act"), "tool": tool, "args": args,
-                     "label": label[:80], "why": why[:240] or None})
+                     "label": label[:80], "why": why[:240]})
     seen, out = set(), []
     for r in rows:
         key = (r["tool"], json.dumps(r["args"], sort_keys=True))
@@ -855,6 +855,19 @@ def acted_without_checking(actions: list, tool_calls: list) -> bool:
     # target, probing the URL, reading the run. Naming specific tools here would go stale the
     # first time a better check was added.
     return not any(n and n not in acted for n in names[last_write + 1:])
+
+
+def _button_label(result: dict, step: dict) -> str:
+    """Text for an offered action, never empty.
+
+    Prefers what the tool said, then the tool's own name in words — "create deployment target"
+    beats a blank button, and both beat losing the turn to a validation error.
+    """
+    for candidate in (result.get("label"), result.get("tool"), step.get("tool")):
+        text = str(candidate or "").strip()
+        if text:
+            return text.replace("_", " ")
+    return "run this action"
 
 
 def _say_what_did_not_work(reply: str, tool_calls: list) -> str:
@@ -1733,8 +1746,17 @@ class IntentRouter:
                                 "id": make_id("act"),
                                 "tool": result.get("tool") or step.get("tool"),
                                 "args": result.get("args") or {},
-                                "label": result.get("label"),
-                                "why": result.get("why"),
+                                # A BUTTON WITH NO TEXT ON IT CRASHED THE WHOLE TURN.
+                                #
+                                # AgentChatResponse types these as strings, and a tool that
+                                # proposed without a label produced None — so the reply, the
+                                # trace and every other action in the turn were lost to a
+                                # pydantic ValidationError the operator saw as "Internal Server
+                                # Error". The offer is the LAST thing that should be able to do
+                                # that: a nameless button is a cosmetic problem, and dropping
+                                # the answer is not.
+                                "label": _button_label(result, step),
+                                "why": str(result.get("why") or ""),
                             })
                     # ANSWERED AS A ROLE WITHOUT READING WHAT THAT ROLE HAS SEEN.
                     #
@@ -1968,8 +1990,8 @@ class IntentRouter:
                                     "id": make_id("act"),
                                     "tool": result.get("tool") or step.get("tool"),
                                     "args": result.get("args") or {},
-                                    "label": result.get("label"),
-                                    "why": result.get("why"),
+                                    "label": _button_label(result, step),
+                                    "why": str(result.get("why") or ""),
                                 })
                         improved = str(getattr(better, "reply", "") or "").strip()
                         if improved:

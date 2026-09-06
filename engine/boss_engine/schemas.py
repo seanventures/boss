@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 DataBoundary = Literal["public", "internal", "confidential", "restricted", "local-only"]
 
@@ -1180,8 +1180,17 @@ class ProposedAction(BaseModel):
     id: str
     tool: str
     args: dict[str, Any] = Field(default_factory=dict)
-    label: str
+    #: NEVER REQUIRED, AND NEVER NONE. A tool that offered an action without naming it produced
+    #: label=None, pydantic rejected the whole response, and the operator got "Internal Server
+    #: Error" — losing the reply, the trace and every other action in the turn to a missing
+    #: button caption. A nameless button is a cosmetic problem; dropping the answer is not.
+    label: str = ""
     why: str = ""
+
+    @field_validator("label", "why", mode="before")
+    @classmethod
+    def _never_none(cls, value: Any) -> str:
+        return "" if value is None else str(value)
 
 
 class AgentActionRunRequest(BaseModel):

@@ -484,3 +484,64 @@ class TestTheLogToolPointsSomewhereReal:
         names = build_discuss_read_registry().names()
         for tool in ("get_run_activity", "read_run_turns", "diagnose_run", "query_db"):
             assert tool in names, tool
+
+
+class TestANamelessButtonMustNotLoseTheTurn:
+    """Measured live: asking BOSS to open an investigation returned HTTP 500 and the five words
+    "Internal Server Error". The cause was two missing strings:
+
+        ValidationError: 2 validation errors for AgentChatResponse
+        proposed_actions.0.label  Input should be a valid string, input_value=None
+        proposed_actions.0.why    Input should be a valid string, input_value=None
+
+    A tool offered an action without naming it, `label` was typed `str`, and pydantic rejected
+    the WHOLE response — the reply, the tool trace and every other action in the turn, lost to a
+    missing button caption. Latent for any tool that proposes without a label; the new one
+    happened to be the first that did.
+    """
+
+    def test_the_label_is_derived_rather_than_left_none(self):
+        from boss_engine.services.intent_router import _button_label
+
+        assert _button_label({"tool": "create_deployment_target"}, {}) \
+            == "create deployment target"
+
+    def test_what_the_tool_said_wins(self):
+        from boss_engine.services.intent_router import _button_label
+
+        assert _button_label({"label": "Create staging target", "tool": "x"}, {}) \
+            == "Create staging target"
+
+    def test_it_falls_back_to_the_step_when_the_result_says_nothing(self):
+        from boss_engine.services.intent_router import _button_label
+
+        assert _button_label({}, {"tool": "redeploy"}) == "redeploy"
+
+    def test_it_is_never_empty(self):
+        from boss_engine.services.intent_router import _button_label
+
+        assert _button_label({}, {}).strip()
+        assert _button_label({"label": "   ", "tool": None}, {"tool": ""}).strip()
+
+    def test_the_response_model_no_longer_requires_it(self):
+        """Belt and braces: the label is produced properly AND cannot crash a turn if some
+        future path forgets. Losing the answer is the worse failure by far."""
+        from boss_engine.schemas import ProposedAction
+
+        action = ProposedAction(id="act_1", tool="redeploy", label=None, why=None)
+        assert action.label == "" and action.why == ""
+
+    def test_a_real_proposal_is_unaffected(self):
+        from boss_engine.schemas import ProposedAction
+
+        action = ProposedAction(id="act_1", tool="redeploy", label="Redeploy", why="it failed")
+        assert action.label == "Redeploy" and action.why == "it failed"
+
+    def test_no_builder_still_emits_none(self):
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert '"why": why[:240] or None' not in body
+        assert '"label": result.get("label"),' not in body
