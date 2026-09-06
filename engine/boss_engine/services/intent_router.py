@@ -323,6 +323,66 @@ def _recover_tagged_actions(reply: str, known_tools, existing) -> tuple[list, st
     return found, _PROPOSE_TAG.sub(_take, reply)
 
 
+#: A fenced JSON block that describes a proposal instead of being one.
+_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def _recover_json_actions(reply: str, known_tools, existing) -> tuple[list, str]:
+    """Turn a proposal the model PRINTED into a real button, and take the JSON out of the text.
+
+    Observed live, on the very question this work exists for. BOSS diagnosed the hung build
+    correctly, decided the right fix, and then wrote:
+
+        ```json
+        {"tool": "retry_code_task", "args": {"run_id": "crun_33a0…"},
+         "label": "Retry Interview Scorecard App", "why": "…"}
+        ```
+
+    which is the shape of a perfect offer and is not one. The operator gets a code block where
+    a button should be, and the fix they were promised is something they now have to ask for
+    again. Two sibling recoveries already existed for the tag form and the table form; a model
+    that has been told to emit structured proposals will reach for JSON, and it did.
+
+    Same validation as its siblings — the tool must exist, the args must be an object, no
+    placeholder values — and the block is stripped either way, because unparseable markup is
+    never something the operator should be reading.
+    """
+    if not reply or "```" not in reply:
+        return [], reply
+    from ..tools.builtin import _placeholder_argument
+
+    found: list = []
+    have = {(a.get("tool"), json.dumps(a.get("args") or {}, sort_keys=True)) for a in existing}
+
+    def _take(match: "re.Match[str]") -> str:
+        try:
+            payload = json.loads(match.group(1))
+        except Exception:  # noqa: BLE001 — a code block that is not JSON is left alone
+            return match.group(0)
+        if not isinstance(payload, dict):
+            return match.group(0)
+        tool = str(payload.get("tool") or "").strip()
+        # Only a block that is UNAMBIGUOUSLY a proposal. A JSON sample the operator asked to see
+        # must survive intact, so this needs the tool name to be real and an args object.
+        if tool not in known_tools or not isinstance(payload.get("args"), dict):
+            return match.group(0)
+        args = payload["args"]
+        if _placeholder_argument(args):
+            return ""
+        key = (tool, json.dumps(args, sort_keys=True))
+        if key not in have:
+            have.add(key)
+            found.append({
+                "id": make_id("act"), "tool": tool, "args": args,
+                "label": str(payload.get("label") or tool.replace("_", " ")),
+                "why": str(payload.get("why") or ""),
+            })
+        return ""
+
+    cleaned = _JSON_BLOCK.sub(_take, reply).strip()
+    return found, (cleaned or reply)
+
+
 def _recover_described_actions(reply: str, known_tools, existing) -> list:
     """Turn a proposal TABLE the model wrote into real, validated offers.
 
@@ -1592,6 +1652,8 @@ class IntentRouter:
             _known = set()
         tagged, reply = _recover_tagged_actions(reply, _known, proposed)
         proposed.extend(tagged)
+        from_json, reply = _recover_json_actions(reply, _known, proposed)
+        proposed.extend(from_json)
         proposed.extend(_recover_described_actions(reply, _known, proposed))
         reply = _no_button_was_promised(reply, proposed)
         # AND THAT IT DID NOT CLAIM TO HAVE ACTED. `actions` holds the writes that really ran;

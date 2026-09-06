@@ -209,6 +209,49 @@ class TestSayingItOnce:
         assert turn.reply.strip()
 
 
+class TestAPrintedOfferBecomesAButton:
+    """Observed live on the very question this work exists for. BOSS diagnosed the hung build,
+    decided the right fix, and printed it as a fenced JSON block — the shape of a perfect offer,
+    which is not one. The operator got a code block where a button should be."""
+
+    PRINTED = ('The run stopped because the final Bash command never returned.\n\n'
+               '**Fix:** retry the same run.\n\n'
+               '```json\n{\n "tool": "retry_code_task",\n'
+               ' "args": {"run_id": "crun_33a0a77e6ccf4d17b36e"},\n'
+               ' "label": "Retry Interview Scorecard App",\n'
+               ' "why": "re-run the cancelled implement phase"\n}\n```')
+
+    def test_the_offer_is_recovered(self, monkeypatch):
+        turn, _ = run(monkeypatch, "why is crun_33a0a77e6ccf4d17b36e stuck?",
+                      [(self.PRINTED, SIX_READS)])
+        assert [p["tool"] for p in turn.proposed_actions] == ["retry_code_task"]
+        assert turn.proposed_actions[0]["args"] == {"run_id": "crun_33a0a77e6ccf4d17b36e"}
+        assert turn.proposed_actions[0]["label"] == "Retry Interview Scorecard App"
+
+    def test_and_the_json_is_taken_out_of_the_text(self, monkeypatch):
+        """Leaving it shows the operator raw markup beside the button that now does the same
+        thing — worse than the missing button was."""
+        turn, _ = run(monkeypatch, "why is crun_33a0a77e6ccf4d17b36e stuck?",
+                      [(self.PRINTED, SIX_READS)])
+        assert "```json" not in turn.reply
+        assert "The run stopped because" in turn.reply
+
+    def test_a_json_sample_the_operator_asked_for_survives(self, monkeypatch):
+        """Not every fenced block is a proposal. One that does not name a real tool with an
+        args object is left exactly as written."""
+        sample = 'Here is the shape:\n\n```json\n{"status": "running", "attempts": 3}\n```'
+        turn, _ = run(monkeypatch, "what does a code task row look like?", [(sample, [])])
+        assert "```json" in turn.reply
+        assert turn.proposed_actions == []
+
+    def test_an_invented_argument_is_not_offered(self, monkeypatch):
+        """A button that fails on click is worse than no button."""
+        printed = ('```json\n{"tool": "retry_code_task", '
+                   '"args": {"run_id": "crun_placeholder"}, "label": "Retry"}\n```')
+        turn, _ = run(monkeypatch, "why is crun_33a0 stuck?", [(printed, SIX_READS)])
+        assert turn.proposed_actions == []
+
+
 class TestActingWhenActuallyTold:
     """P6: refusing to act is a failure too. The safety work must not have made BOSS passive."""
 
