@@ -112,6 +112,90 @@ class TestAPrescriptionIsNotAFix:
             "It hung on `npm run verify`, which never returned.", [], []) is False
 
 
+class TestAnOptionYouNameIsAnOptionYouOffer:
+    """Measured against the deployed build after the fixes above, asked why a Deploy step failed:
+
+        The Deploy step failed because the app has no deployment target for the requested
+        environment...
+
+        | Option | What it does | Button |
+        |--------|--------------|--------|
+        | Deploy the successful build to an existing staging environment | ... |  |
+        | Create a production deployment target for this app | ... |  |
+
+        (No button was attached to this answer, so there is nothing to click. Tell me to go
+        ahead and I will run the action directly.)
+
+    Seven lookups, a correct and specific diagnosis — and a table of options the operator cannot
+    click, ending in a request that they type the instruction themselves. `propose_action` is a
+    READ tool and was available for the whole turn.
+
+    The prescription fault was suppressed on look-only turns, on the reasoning that describing
+    the fix IS the answer to a question. It is not: on a question turn the fault is not failing
+    to act, it is failing to OFFER.
+    """
+    REAL_REPLY = (
+        "The Deploy step failed because the app has no deployment target for the requested "
+        "environment. What you can do:\n\n"
+        "| Option | What it does | Button |\n|---|---|---|\n"
+        "| Deploy the build to an existing staging environment | Ships crun_7f38 to staging |  |\n"
+        "| Create a production deployment target | Adds a new target |  |\n")
+
+    def test_the_reply_is_recognised_as_a_prescription(self):
+        assert described_a_fix_without_doing_it(self.REAL_REPLY, [], []) is True
+
+    def test_a_button_settles_it(self):
+        assert described_a_fix_without_doing_it(
+            self.REAL_REPLY, [], [{"tool": "redeploy", "args": {}}]) is False
+
+    def test_the_fault_is_no_longer_suppressed_on_a_question(self):
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert "_prescribed = described_a_fix_without_doing_it(reply, actions, proposed)" in body
+        assert "_prescribed = (not _looking_only" not in body
+
+    def test_the_question_turn_is_told_to_offer_rather_than_to_act(self):
+        """Instructing a look-only turn to "call the tool that performs it" would undo the gate
+        that stops an unasked cancel. It is told to attach the button instead."""
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert "if _prescribed and _looking_only:" in body
+        assert "You described a fix and attached no button" in body
+        assert "propose_action changes " in body
+
+    def test_the_instruction_turn_is_still_told_to_act(self):
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert "elif _prescribed:" in body
+        assert "You described a fix and did not apply it" in body
+
+    def test_a_continuation_never_acquires_writes_the_turn_lacked(self):
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert body.count("allow_writes=not _looking_only") == 2
+
+    def test_the_prompt_forbids_an_empty_button_column(self):
+        import inspect
+
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert "AN OPTION YOU NAME IS AN OPTION YOU OFFER." in body
+        assert "empty button column" in body
+
+
 class TestSayingItAgainIsNotProgress:
     #: The two consecutive replies from the transcript.
     FIRST = ("The deployment failed because the host already has port 8000 in use, so the "

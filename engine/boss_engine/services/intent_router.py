@@ -1252,7 +1252,13 @@ class IntentRouter:
             "done a fraction of the job. Every diagnosis that has a known fix ENDS with that "
             "fix offered — the exact tool with real arguments, via propose_action — so the "
             "operator is one click from done. A build that hung: offer the retry. A target "
-            "pointing at the wrong port: offer the correction.\n\n"
+            "pointing at the wrong port: offer the correction.\n"
+            "AN OPTION YOU NAME IS AN OPTION YOU OFFER. If you list what the operator could do, "
+            "every row of that list is a propose_action call with real arguments. Never write an "
+            "options table with an empty button column, and never end with \"tell me to go ahead\" "
+            "— that is asking them to type the thing you could have handed them. propose_action "
+            "changes nothing by itself, so it is available even when you have been asked only to "
+            "look.\n\n"
             "ANSWER THE QUESTION THAT WAS ASKED.\n"
             "The first sentence is the answer, not the preamble. Asked why something is stuck, "
             "the first sentence names the cause. Evidence goes underneath. Do not deliver a "
@@ -1712,8 +1718,14 @@ class IntentRouter:
                     # retarget the app to an unused port and redeploy", with retarget_app and
                     # redeploy both in its hands. The operator replied "I told you already" —
                     # what a person says to a system that answers instead of working.
-                    _prescribed = (not _looking_only
-                                   and described_a_fix_without_doing_it(reply, actions, proposed))
+                    #
+                    # AND ON A QUESTION TURN THE FAULT IS NOT ACTING, IT IS NOT OFFERING.
+                    # Measured on the deployed build, asked why a Deploy step failed: a correct
+                    # diagnosis, then a two-row "What you can do" table with an EMPTY Button
+                    # column and "tell me to go ahead". `propose_action` is a READ tool and was
+                    # available the whole time. Suppressing this fault on look-only turns left
+                    # the operator holding a table of options they could not click.
+                    _prescribed = described_a_fix_without_doing_it(reply, actions, proposed)
                     _repeating = going_in_circles(reply, history)
                     if reply and (_thin or _handed_back or _prescribed or _repeating):
                         gaps = []
@@ -1725,7 +1737,17 @@ class IntentRouter:
                                 "question if you have not, then read_logs, then the code — you "
                                 "have a budget of twelve steps and answering early is how a "
                                 "normal build gets called a stall.")
-                        if _prescribed:
+                        if _prescribed and _looking_only:
+                            gaps.append(
+                                "You described a fix and attached no button. This turn was a "
+                                "question, so you were right not to change anything — but naming "
+                                "an option the operator cannot click is the same as not offering "
+                                "it. For EACH option you named, call propose_action with the real "
+                                "tool and the real arguments you looked up (propose_action changes "
+                                "nothing; it is available on a question turn). Never write an "
+                                "options table with an empty button column, and never say 'tell me "
+                                "to go ahead' in place of an offer.")
+                        elif _prescribed:
                             gaps.append(
                                 "You described a fix and did not apply it. The operator asked "
                                 "you to fix this; a sentence beginning 'the fix is to' is a "
