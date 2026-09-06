@@ -815,6 +815,23 @@ def execute_deployment(engine, settings: Settings, deployment_run_id: str, *,
                 return {"status": status, "applied": applied, "healthy": False}
 
         with rec.step("observe", label="Health check") as h:
+            # THE TARGET APPLY() WROTE, NOT THE ONE READ BEFORE IT.
+            #
+            # `apply()` allocates the real port — `_ensure_port` picks one on the machine and
+            # persists it — but it does that in its own copy, so `target` here is still the row
+            # as it was BEFORE the deployment. The health check therefore probed the port the
+            # target was created with rather than the one the container is published on: a
+            # first deployment of a new target went out fine, answered fine, and was recorded
+            # as unhealthy against a port with nothing on it. Measured on Change Calendar —
+            # container published 3013, health check probed 3000, "Connection refused".
+            #
+            # Found by an investigation, with the line numbers, while fixing something else.
+            with begin(engine) as c:
+                _fresh = c.execute(
+                    sql("SELECT * FROM deployment_targets WHERE id = :i"),
+                    {"i": target["id"]}).mappings().first()
+            if _fresh:
+                target = dict(_fresh)
             health = conn.observe(target, settings)
             h.log(json.dumps(health, default=str)[:2000])
             if not health.get("healthy"):

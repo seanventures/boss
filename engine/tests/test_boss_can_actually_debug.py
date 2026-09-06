@@ -1016,3 +1016,79 @@ class TestAnInvestigationTheContainerOutlived:
         body = inspect.getsource(run_investigation)
         i = body.index('beats["n"] % 10 == 0')
         assert "except Exception" in body[i:i + 420]
+
+
+class TestWhatTheFirstFIXINGInvestigationFound:
+    """It worked. 84 turns, 641 seconds, `applied: true`, and it verified its own writes by
+    re-reading every row and re-probing the app. It also found three things nobody asked it to.
+
+    THE HEALTH CHECK PROBED THE WRONG PORT, with the line numbers:
+
+        "delivery_pipeline.py:724 reads the deployment target ONCE before apply(), while
+         apply()'s _ensure_port (deployment_connectors.py:797) allocates the real port (3013)
+         into a new local dict... so observe() at :818 builds its URL from the pre-apply target
+         and probes the target's stale port 3000."
+
+    Every first deployment of a new target health-checked a port with nothing on it. Change
+    Calendar deployed correctly, answered 200 on 3013, and was recorded unhealthy against 3000.
+
+    AND A DEFECT IN MY OWN GUARD: boss-db rejected any statement containing a semicolon, even
+    inside a string literal — so an honest `last_error` could not be written.
+    """
+
+    def test_the_health_check_reads_the_target_apply_wrote(self):
+        from boss_engine.services.delivery_pipeline import execute_deployment
+
+        body = inspect.getsource(execute_deployment)
+        i = body.index('rec.step("observe"')
+        block = body[i:i + 1400]
+        assert "SELECT * FROM deployment_targets WHERE id = :i" in block
+        assert block.index("SELECT * FROM deployment_targets") < block.index("conn.observe(")
+
+    def test_a_stale_port_is_corrected_rather_than_accepted(self):
+        from boss_engine.services.deployment_connectors import domain_with_port
+
+        # The case that produced a false red: domain says 3000, the app is on 3013.
+        assert domain_with_port("2.29.2.202:3000", "2.29.2.202", 3013) == "2.29.2.202:3013"
+
+    def test_a_correct_port_still_means_nothing_to_change(self):
+        from boss_engine.services.deployment_connectors import domain_with_port
+
+        assert domain_with_port("2.29.2.202:3013", "2.29.2.202", 3013) is None
+
+    def test_a_bare_domain_still_gains_the_port(self):
+        from boss_engine.services.deployment_connectors import domain_with_port
+
+        assert domain_with_port("2.29.2.202", "2.29.2.202", 3013) == "2.29.2.202:3013"
+
+    def test_something_unparseable_is_left_alone(self):
+        from boss_engine.services.deployment_connectors import domain_with_port
+
+        assert domain_with_port("app.example.com:staging", "h", 3013) is None
+
+    @pytest.mark.parametrize("statement", [
+        "UPDATE workflow_step_runs SET last_error = 'reconciled; deploy succeeded' WHERE id='x'",
+        "SELECT * FROM t WHERE name = 'a;b'",
+    ])
+    def test_a_semicolon_inside_a_string_is_not_a_second_statement(self, statement):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        assert sql_is_allowed(statement, allow_write=True)[0], statement
+
+    def test_a_real_second_statement_is_still_refused(self):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        assert sql_is_allowed("SELECT 1; DELETE FROM jobs", allow_write=True)[0] is False
+
+    def test_and_a_keyword_quoted_as_data_is_not_a_migration(self):
+        from boss_engine.services.debug_session import sql_is_allowed
+
+        assert sql_is_allowed("UPDATE x SET note = 'drop table y' WHERE id = 'z'",
+                              allow_write=True)[0] is True
+
+    def test_blanking_preserves_the_shape(self):
+        from boss_engine.services.debug_session import _without_string_literals
+
+        original = "UPDATE t SET a = 'x;y' WHERE b = 'q'"
+        assert len(_without_string_literals(original)) == len(original)
+        assert ";" not in _without_string_literals(original)

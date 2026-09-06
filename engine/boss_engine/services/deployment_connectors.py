@@ -195,7 +195,19 @@ def domain_with_port(existing: Optional[str], host: str, port: int) -> Optional[
     if not base:
         return None
     if ":" in base:
-        return None
+        # A STALE PORT IS NOT "NOTHING NEEDS CHANGING".
+        #
+        # Any port at all counted as correct, so a target created with one port and deployed on
+        # another kept pointing at the first — Change Calendar's domain said :3000 while the
+        # container published :3013, and the health check dutifully probed the empty port and
+        # called a working app unhealthy. Returning None when the port is WRONG is how the one
+        # function that exists to keep these in step let them drift.
+        head, _, tail = base.rpartition(":")
+        if tail.isdigit() and int(tail) == int(port):
+            return None                      # genuinely nothing to change
+        if tail.isdigit() and head:
+            return f"{head}:{int(port)}"     # correct it
+        return None                          # not a port we understand; leave it alone
     return f"{base}:{int(port)}"
 
 

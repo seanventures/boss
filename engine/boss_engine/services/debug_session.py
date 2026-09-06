@@ -142,6 +142,27 @@ _SQL_NEVER = re.compile(r"\b(drop|truncate|alter|grant|revoke|create\s+(?:table|
                         r"vacuum|reindex|copy)\b", re.I)
 
 
+def _without_string_literals(statement: str) -> str:
+    """The statement with quoted text blanked, so a guard reads SQL rather than data.
+
+    Keeps the same length and shape — only the contents of '...' and "..." become spaces — so
+    every offset and every word boundary outside the quotes is unchanged.
+    """
+    out: list[str] = []
+    quote = ""
+    for char in statement or "":
+        if quote:
+            out.append(" " if char != quote else char)
+            if char == quote:
+                quote = ""
+        elif char in ("'", '"'):
+            quote = char
+            out.append(char)
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 def sql_is_allowed(statement: str, *, allow_write: bool) -> tuple[bool, str]:
     """Whether an investigation may run this statement.
 
@@ -153,10 +174,17 @@ def sql_is_allowed(statement: str, *, allow_write: bool) -> tuple[bool, str]:
     body = (statement or "").strip().rstrip(";")
     if not body:
         return False, "empty statement"
-    if ";" in body:
-        return False, "one statement at a time"
+    # A SEMICOLON INSIDE A STRING IS NOT A SECOND STATEMENT.
+    #
+    # The naive check rejected every reconciliation whose text happened to contain one — an
+    # investigation hit it writing an honest `last_error` and reported it as a defect in my own
+    # guard, which it was. What "one statement at a time" is defending against is a second
+    # statement, so look outside the quotes.
+    if ";" in _without_string_literals(body):
+        return False, ("one statement at a time (a semicolon inside a quoted string is fine; "
+                       "this one separates statements)")
     head = body.split(None, 1)[0].lower() if body.split() else ""
-    if _SQL_NEVER.search(body):
+    if _SQL_NEVER.search(_without_string_literals(body)):
         return False, ("schema changes, grants and bulk copies are refused in every mode — "
                        "that is a migration, not an investigation")
     if head in ("select", "with", "explain", "table", "show"):
