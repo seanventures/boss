@@ -828,6 +828,31 @@ def hid_a_failed_action(reply: str, tool_calls: list) -> bool:
     return not _OWNS_A_FAILURE.search(reply)
 
 
+def _say_what_did_not_work(reply: str, tool_calls: list) -> str:
+    """Append the attempts that failed, when the reply left them out.
+
+    The continuation asks the model to own them; this is what happens when it does not. Kept
+    short and factual — the tool and the first line of what came back — because the point is
+    that the operator can see the dead end, not that the message is longer.
+    """
+    if not reply or not hid_a_failed_action(reply, tool_calls):
+        return reply
+    lines = []
+    for call in (tool_calls or []):
+        if not isinstance(call, dict) or call.get("ok") is not False:
+            continue
+        name = str(call.get("tool") or "")
+        detail = str(call.get("error") or "").strip().splitlines()[0:1]
+        lines.append(f"{name}{f' — {detail[0][:160]}' if detail else ''}")
+        if len(lines) >= 3:
+            break
+    if not lines:
+        return reply
+    return reply.rstrip() + (
+        "\n\n(Tried and did not work this turn: " + "; ".join(lines)
+        + ". Said here because it is part of the answer, not noise.)")
+
+
 def going_in_circles(reply: str, history: list) -> bool:
     """Is this the same answer again?
 
@@ -1647,7 +1672,10 @@ class IntentRouter:
                         result = step.get("result") or {}
                         tool_calls.append({"tool": step.get("tool"),
                                            "args": step.get("args"),
-                                           "ok": bool(result.get("ok", True))})
+                                           "ok": bool(result.get("ok", True)),
+                                           # WHY it failed, so the reply can say so rather
+                                           # than only that something did.
+                                           "error": str(result.get("error") or "")})
                         if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                             actions.append({"kind": str(step.get("tool")),
                                             "args": step.get("args"),
@@ -1724,7 +1752,9 @@ class IntentRouter:
                             tool_calls.append({"tool": step.get("tool"),
                                                "args": step.get("args"),
                                                "ok": bool((step.get("result") or {})
-                                                          .get("ok", True))})
+                                                          .get("ok", True)),
+                                               "error": str((step.get("result") or {})
+                                                            .get("error") or "")})
                         grounded = getattr(reread, "reply", "")
                         if grounded and any(c.get("tool") == "recall_role_experience"
                                             for c in tool_calls):
@@ -1861,7 +1891,8 @@ class IntentRouter:
                             result = step.get("result") or {}
                             tool_calls.append({"tool": step.get("tool"),
                                                "args": step.get("args"),
-                                               "ok": bool(result.get("ok", True))})
+                                               "ok": bool(result.get("ok", True)),
+                                               "error": str(result.get("error") or "")})
                             if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                                 actions.append({"kind": str(step.get("tool")),
                                                 "args": step.get("args"), "result": result})
@@ -1919,7 +1950,8 @@ class IntentRouter:
                             result = step.get("result") or {}
                             tool_calls.append({"tool": step.get("tool"),
                                                "args": step.get("args"),
-                                               "ok": bool(result.get("ok", True))})
+                                               "ok": bool(result.get("ok", True)),
+                                               "error": str(result.get("error") or "")})
                             if _is_acting(str(step.get("tool"))) and not result.get("proposed"):
                                 actions.append({"kind": str(step.get("tool")),
                                                 "args": step.get("args"), "result": result})
@@ -1974,6 +2006,12 @@ class IntentRouter:
         # a claim of completion with an empty list is a fabrication, and the trace is right
         # here to check it against.
         reply = _no_action_was_claimed(reply, actions)
+        # AND THAT WHAT IT TRIED IS ON THE RECORD. Asking the model again is a request; this is
+        # the guarantee. Measured on the deployed build: `read_logs` failed, the continuation
+        # fired, and the rewritten answer still opened with a "What I did" list that left it
+        # out. The operator's own conclusion, twice over, was that BOSS "could not fix the
+        # problem" — a system that quietly drops its dead ends is unreadable from outside.
+        reply = _say_what_did_not_work(reply, tool_calls)
         reply = _boss_cannot_call_you_back(reply)
         # SAY IT ONCE. Applied last, after every reconciler has had its say, so a correction
         # note is never mistaken for a repetition and stripped.

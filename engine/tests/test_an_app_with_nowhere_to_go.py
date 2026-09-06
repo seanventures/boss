@@ -42,7 +42,10 @@ import inspect
 import pytest
 
 from boss_engine.services import delivery_pipeline
-from boss_engine.services.intent_router import hid_a_failed_action
+from boss_engine.services.intent_router import (
+    _say_what_did_not_work,
+    hid_a_failed_action,
+)
 from boss_engine.tools import build_default_registry, build_discuss_read_registry
 
 
@@ -340,3 +343,61 @@ class TestTheInstructionIsNotATemplate:
 
     def test_it_still_forbids_the_yes_no_ending(self):
         assert "never with a plan, and never with a yes/no question" in self.BODY
+
+
+class TestTheDeadEndIsAppendedWhenTheModelWillNotSayIt:
+    """The continuation ASKS the model to own its failed attempts. This is what happens when it
+    does not — measured on the deployed build: `read_logs` failed, the continuation fired, and
+    the rewritten answer still opened with a "What I did" list that left it out.
+
+    A guarantee, not a request. The operator concluded twice that BOSS "could not fix the
+    problem"; a system that quietly drops its own dead ends is unreadable from outside, and the
+    dropped step is often the most informative thing in the turn.
+    """
+    # staticmethod: assigning the function in the class body would bind `self` as
+    # its first argument.
+    _note = staticmethod(_say_what_did_not_work)
+
+    CALLS = [{"tool": "read_logs", "ok": False, "error": "no container named worker"},
+             {"tool": "diagnose_run", "ok": True}]
+
+    def test_it_is_appended_when_the_reply_omits_it(self):
+        out = self._note("The build succeeded and there is no deployment target.", self.CALLS)
+        assert "read_logs" in out
+        assert "no container named worker" in out
+
+    def test_the_original_answer_is_left_intact(self):
+        reply = "The build succeeded and there is no deployment target."
+        assert self._note(reply, self.CALLS).startswith(reply)
+
+    def test_nothing_is_appended_when_the_reply_already_says_it(self):
+        reply = "I tried read_logs and it failed, so I used diagnose_run instead."
+        assert self._note(reply, self.CALLS) == reply
+
+    def test_nothing_is_appended_when_nothing_failed(self):
+        reply = "All good."
+        assert self._note(reply, [{"tool": "query_db", "ok": True}]) == reply
+
+    def test_it_stops_at_three(self):
+        calls = [{"tool": f"tool_{i}", "ok": False, "error": "x"} for i in range(9)]
+        assert self._note("Answer.", calls).count(";") <= 2
+
+    def test_a_failure_with_no_message_still_names_the_tool(self):
+        assert "read_logs" in self._note("Answer.", [{"tool": "read_logs", "ok": False}])
+
+    def test_the_error_is_carried_onto_the_call_record(self):
+        """Without this the note could say something failed and never say what."""
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert body.count('"error": str(result.get("error") or "")') >= 2
+
+    def test_it_runs_after_the_reconcilers_and_before_the_repetition_filter(self):
+        """Appended too early it would be stripped as a repetition; too late and a reconciler
+        would not see the text it added."""
+        from boss_engine.services import intent_router
+
+        body = inspect.getsource(intent_router)
+        assert body.index("_no_action_was_claimed(reply, actions)") \
+            < body.index("_say_what_did_not_work(reply, tool_calls)") \
+            < body.index("without_what_was_already_said(reply, history)")
