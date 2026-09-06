@@ -1284,7 +1284,27 @@ async def programming_error_fail_closed(_request: Request, exc: ProgrammingError
     response = undefined_table_response(exc)
     if response is not None:
         return response
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    LOGGER.exception("programming error")
+    # NOT "Internal Server Error". A ProgrammingError names the exact statement and column that
+    # was wrong, and replacing that with five words meant every schema mismatch in production
+    # arrived as an unreadable 500 — including one that took an afternoon to find by elimination
+    # because the message existed the whole time and was thrown away here.
+    return JSONResponse(status_code=500,
+                        content={"detail": f"{type(exc).__name__}: {str(exc)[:400]}"})
+
+
+@app.exception_handler(Exception)
+async def unhandled_fail_loudly(_request: Request, exc: Exception):
+    """Say what broke.
+
+    Starlette's default 500 is the string "Internal Server Error", which names nothing and can
+    be acted on by nobody — the same emptiness as "the capability reported failure without a
+    reason", arriving where a customer sees it. The class and message are enough to act on and
+    leak nothing; the stack goes to the log.
+    """
+    LOGGER.exception("unhandled error")
+    return JSONResponse(status_code=500,
+                        content={"detail": f"{type(exc).__name__}: {str(exc)[:400]}"})
 
 
 def extract_api_token(request: Request) -> Optional[str]:
