@@ -110,11 +110,26 @@ class TestWhatCountsAsTheSameWork:
         is explicit so the clause cannot become a wildcard by accident."""
         assert ":wfr <> ''" in code_only(runner._successor_attempt)
 
-    def test_only_a_live_attempt_counts(self):
-        """If the retry has also finished, the step should reach its own verdict on it the
-        ordinary way rather than chasing a chain of dead attempts."""
+    def test_a_completed_successor_counts_too(self):
+        """The first version accepted only running/queued, reasoning that a finished attempt
+        should reach its verdict the ordinary way. A FAILED step has no ordinary way — it is
+        terminal. So by the time the operator looked, the retry had completed, the step was
+        still failed, and the recovery declined to act on the most valuable case of all: the
+        build worked and the workflow should move on."""
         body = inspect.getsource(runner._successor_attempt)
-        assert "'running', 'queued'" in body
+        assert "'running', 'queued', 'completed'" in body
+
+    def test_but_a_dead_successor_is_not_progress(self):
+        """Following a cancelled or failed retry would only move the stuck point."""
+        body = inspect.getsource(runner._successor_attempt)
+        assert "cancelled" not in body.split("r.status IN")[1][:60]
+        assert "'failed'" not in body.split("r.status IN")[1][:60]
+
+    def test_following_a_completed_run_still_checks_for_a_pull_request(self):
+        """Re-parking hands it to the ordinary terminal path, which refuses a build that opened
+        no PR. The recovery must not become a way around that."""
+        body = inspect.getsource(runner.resume_awaited)
+        assert 'if kind == "code_task" and not evidence.get("pull_request_url")' in body
 
     def test_the_awaited_run_is_never_its_own_successor(self):
         body = inspect.getsource(runner._successor_attempt)

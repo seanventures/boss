@@ -1314,8 +1314,19 @@ def _successor_attempt(
 
     Never matched on title. Two builds named "Interview Scorecard App" can be different work,
     and a workflow following a stranger because the names matched is worse than one that stays
-    stuck. Only a LIVE successor counts — a finished one should get its own verdict the ordinary
-    way rather than starting a chase through dead attempts.
+    stuck.
+
+    A COMPLETED SUCCESSOR COUNTS TOO, and the first version of this got that wrong. It accepted
+    only `running`/`queued`, on the reasoning that a finished attempt should reach its verdict
+    the ordinary way — but a FAILED step has no ordinary way; it is terminal. So by the time the
+    operator looked, the retry had completed, the step was still failed, and the recovery
+    declined to act on the single most valuable case: the build worked, and the workflow should
+    move on to preview and deploy.
+    Following it re-parks the step, and the very next sweep sees a completed run and finishes
+    the step properly — including the "did it open a PR" check, which is not skipped.
+
+    Dead ends are still dead ends: a successor that was itself cancelled or failed is not
+    progress, and chasing one would only move the stuck point.
     """
     try:
         row = connection.execute(
@@ -1329,7 +1340,7 @@ def _successor_attempt(
                 FROM code_task_runs r, target t
                 WHERE r.project_id = :p
                   AND r.id <> :awaited
-                  AND r.status IN ('running', 'queued')
+                  AND r.status IN ('running', 'queued', 'completed')
                   AND (
                         COALESCE(NULLIF(r.finalize_ctx->>'root_run_id', ''), r.id) = t.root
                      OR (:wfr <> '' AND r.finalize_ctx->>'workflow_run_id' = :wfr)
