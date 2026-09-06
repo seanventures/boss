@@ -348,7 +348,16 @@ def _register_read_tools(reg: ToolRegistry) -> None:
                 return {"error": f"no host matching {needle!r} in this project"}
             apps = c.execute(
                 _text(
-                    "SELECT id, name, status, app_port, domain, updated_at "
+                    # THREE COLUMNS THAT DO NOT EXIST. `deployment_targets` has app_name,
+                    # domains and no app_port at all — so "what is running on this host" raised
+                    # `column "name" does not exist` every single time it was called.
+                    #
+                    # Found by BOSS itself, mid-answer, and reported the way this whole effort
+                    # is about: it named the tool, quoted the error, said the defect was in the
+                    # framework rather than the operator's app, gave its confidence without it,
+                    # and named the next check. The tool it could not use was the one for
+                    # "is the host healthy".
+                    "SELECT id, app_name, environment, status, domains, updated_at "
                     "FROM deployment_targets WHERE project_id=:p AND host_id=:h "
                     "ORDER BY updated_at DESC LIMIT 50"
                 ),

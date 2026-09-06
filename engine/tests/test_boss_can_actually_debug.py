@@ -519,3 +519,48 @@ class TestTheImperativeIsAnchored:
         from boss_engine.services.intent_router import told_to_run_a_tool
 
         assert told_to_run_a_tool(message) is True, message
+
+
+class TestTheHostDescriptionQueryIsValid:
+    """`describe_deployment_host` selected `name`, `app_port` and `domain` from
+    `deployment_targets`. None of those columns exist — the table has `app_name`, `domains` and
+    no port column — so the tool raised `column "name" does not exist` on every call, and the
+    one tool for "what is running on this host" had never worked.
+
+    Found by BOSS, mid-answer, once it was on a model that noticed."""
+
+    def _columns(self):
+        import pathlib
+        import re
+
+        schema = pathlib.Path("db/schema.sql").read_text()
+        block = schema[schema.index("CREATE TABLE IF NOT EXISTS deployment_targets"):]
+        block = block[:block.index("\n);")]
+        columns = {m.group(1) for m in re.finditer(r"^\s{2}([a-z_]+)\s", block, re.M)}
+        for m in re.finditer(r"ALTER TABLE deployment_targets[\s\S]{0,200}?"
+                             r"ADD COLUMN IF NOT EXISTS ([a-z_]+)", schema):
+            columns.add(m.group(1))
+        return columns
+
+    def test_every_selected_column_exists(self):
+        import inspect
+
+        from boss_engine.tools import builtin
+
+        body = inspect.getsource(builtin)
+        i = body.index("FROM deployment_targets WHERE project_id=:p AND host_id=:h")
+        select = body[body.rindex("SELECT", 0, i):i]
+        selected = {c.strip().strip('"') for c in
+                    select.replace("SELECT", "").replace('"', " ").split(",") if c.strip()}
+        missing = selected - self._columns()
+        assert not missing, f"columns that do not exist: {sorted(missing)}"
+
+    def test_the_names_it_used_to_ask_for_are_gone(self):
+        import inspect
+
+        from boss_engine.tools import builtin
+
+        body = inspect.getsource(builtin)
+        i = body.index("FROM deployment_targets WHERE project_id=:p AND host_id=:h")
+        select = body[body.rindex("SELECT", 0, i):i]
+        assert "app_port" not in select and " domain," not in select
