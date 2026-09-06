@@ -166,7 +166,11 @@ class TestAClaimBecomesAnAttempt:
 
     def test_a_claim_with_no_action_triggers_another_attempt(self):
         body = self._router()
-        assert "if reply and not actions and _ACTION_CLAIM.search(reply):" in body
+        # Now gated on the turn being an instruction. That retry tells the model "they have
+        # already approved it — call the tool NOW", which is false on a question and would
+        # take the action the write gate had just declined.
+        assert "not _looking_only" in body
+        assert "and _ACTION_CLAIM.search(reply)" in body
         assert "Call the tool that performs it NOW" in body
 
     def test_the_retry_may_write(self):

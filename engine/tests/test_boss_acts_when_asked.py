@@ -46,8 +46,21 @@ def test_the_deployment_fix_is_reachable_from_a_question():
 
 
 def test_the_answer_path_may_actually_act():
+    """Told to fix something, BOSS fixes it. Still true — and now conditional on having been
+    TOLD: asked "can you check why this is stuck?", it cancelled the build. See
+    test_a_question_is_not_an_instruction. The flag is the same flag; what changed is that a
+    question no longer sets it."""
     src = inspect.getsource(IntentRouter)
-    assert "allow_writes=True, max_steps=12" in src
+    assert "allow_writes=not _looking_only, max_steps=12" in src
+
+
+def test_and_an_instruction_still_reaches_that_path():
+    """The regression this pairs with. If the question gate ever widened to swallow orders,
+    BOSS would be back to answering "let me know if you would like me to"."""
+    from boss_engine.services.intent_router import asked_only_to_look
+
+    for order in ("fix and retry the deployment", "redeploy it", "cancel that job", "go ahead"):
+        assert asked_only_to_look(order) is False, order
 
 
 def test_boss_can_recover_work_that_already_exists():

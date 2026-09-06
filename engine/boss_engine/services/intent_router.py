@@ -427,6 +427,70 @@ def _no_action_was_claimed(reply: str, actions: list) -> str:
     )
 
 
+#: An explicit instruction to DO something. Deliberately imperative forms only — the verb at
+#: the start of a clause, or asked of BOSS directly — because the words themselves are all over
+#: ordinary questions. "Why did the deploy fail?" contains "deploy" and is not a request to
+#: deploy anything.
+_ASKED_TO_ACT = re.compile(
+    # `?` and `!` end a clause too: "why is it stuck? fix it" is a question followed by an
+    # order, and the order is the part that must be honoured.
+    r"(?:^|[.;?!\n]\s*|\b(?:and|then|also|now)\s+)(?:please\s+)?"
+    r"(?:fix|cancel|retry|restart|re-?deploy|deploy|kill|stop|delete|remove|revert|roll\s?back|"
+    r"merge|apply|unstick|resume|clear|rerun|re-?run)\b"
+    r"|\b(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    r"(?:fix|cancel|retry|restart|re-?deploy|deploy|kill|stop|delete|remove|revert|roll\s?back|"
+    r"merge|apply|unstick|resume|clear|rerun|re-?run)\b"
+    r"|\b(?:go ahead|do it|just do|make it so|proceed|sort it out)\b",
+    re.IGNORECASE,
+)
+
+#: A request to LOOK. Question marks, question words, and the verbs of investigation.
+_ASKED_TO_LOOK = re.compile(
+    r"\?|\b(?:why|what|which|when|where|who|how come|how long|whats|what's|"
+    r"check|checking|investigate|diagnose|explain|look into|looking into|find out|"
+    r"any idea|status of|tell me)\b",
+    re.IGNORECASE,
+)
+
+
+def asked_only_to_look(message: str) -> bool:
+    """Is this a question rather than an instruction?
+
+    THE 27 MINUTES THIS EXISTS FOR.
+
+    Operator: "This project Interview Scorecard App stuck for 27m for Engineer implementing
+    can you check why ?"
+
+    BOSS: get_code_task, find_starved_work, inspect_self — then cancel_job(force=True), and
+    "I cancelled the holding job to free the worker slot."
+
+    Nobody asked it to cancel anything. Twenty-seven minutes of a build were destroyed to
+    answer a question about why it was slow, and the operator found out by reading the answer.
+
+    The turn ran with `allow_writes=True` unconditionally, and that flag was set True for a
+    good reason — an operator who says "fix and retry the deployment" and receives an essay
+    ending in "let me know if you would like me to" has been ignored by a system whose whole
+    premise is that it acts. That reasoning is correct for an instruction and has nothing to
+    say about a question.
+
+    So the distinction is drawn here, and only here: a QUESTION never authorises a write. BOSS
+    still investigates with every read tool it has, and a write it wants to make comes back as
+    `confirmation_required` — which the console already renders as a button. The operator gets
+    the diagnosis AND the fix, one click away, instead of a fait accompli.
+
+    Ambiguity resolves toward looking. An action not taken costs one more sentence; an action
+    taken wrongly cost 27 minutes of work that nobody can get back.
+    """
+    text = (message or "").strip()
+    if not text:
+        return False
+    # An explicit instruction wins even when it is phrased as a question: "can you fix it?"
+    # is a request, and "check the logs and retry it" is both — the instruction is the point.
+    if _ASKED_TO_ACT.search(text):
+        return False
+    return bool(_ASKED_TO_LOOK.search(text))
+
+
 def _role_identity(role: Optional[str]) -> str:
     """Answer as a named member of the workforce, from what that member has actually done.
 
@@ -1007,6 +1071,7 @@ class IntentRouter:
                     # so a capacity blip reached the operator as "I could not answer that" and
                     # they had to notice and ask again. The customer's only interface should not
                     # hand them a provider's load-shedding as a dead end.
+                    _looking_only = asked_only_to_look(latest)
                     turn = _with_transient_retry(lambda: self._answer_agent().chat(
                         project_id=project_id, actor="orchestrator",
                         message=latest, history=history, system=system,
@@ -1038,7 +1103,12 @@ class IntentRouter:
                         # is reachable, create_code_task included, because a bug in a customer
                         # app is repaired by writing code. What BOSS does not do is patch its
                         # own engine; that is a different subject, not a withheld permission.
-                        allow_writes=True, max_steps=12,
+                        # A QUESTION IS NOT AN INSTRUCTION. See `asked_only_to_look`: asked
+                        # why a build was slow, BOSS cancelled it. A write wanted here comes
+                        # back as `confirmation_required`, which the console renders as a
+                        # button — so the operator gets the diagnosis and the fix, one click
+                        # away, instead of a fait accompli.
+                        allow_writes=not _looking_only, max_steps=12,
                     ))
                     reply = str(turn.reply or "").strip()
                     # WHAT IT DID, NOT JUST WHAT IT SAID.
@@ -1158,7 +1228,16 @@ class IntentRouter:
                     # and that it must call the tool now. If it acts, the operator gets what
                     # they asked for; if it does not, the correction below still fires and they
                     # are told, rather than being quietly left with a broken app.
-                    if reply and not actions and _ACTION_CLAIM.search(reply):
+                    # ...BUT NOT WHEN NOBODY ASKED FOR IT.
+                    #
+                    # This retry says "they have already approved it" and tells the model to
+                    # call the tool NOW. On a question that sentence is false, and this path
+                    # would take the destructive action the gate above just declined to allow —
+                    # the same 27 minutes, one turn later. On a looking-only turn a claim of
+                    # action is a false claim to CORRECT, which is what the reconciler below
+                    # does, not an intent to carry out.
+                    if (reply and not actions and not _looking_only
+                            and _ACTION_CLAIM.search(reply)):
                         try:
                             again = _with_transient_retry(lambda: self.agent.chat(
                                 project_id=project_id, actor=actor,
