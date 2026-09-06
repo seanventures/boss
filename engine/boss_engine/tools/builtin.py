@@ -3597,10 +3597,25 @@ def _register_investigation_tools(reg: ToolRegistry) -> None:
                 lines = [ln for ln in lines if rx.search(ln)]
             tail = [ln.rstrip()[:500] for ln in lines[-limit:]]
             return {"service": service, "source": path, "lines": len(tail), "log": tail}
+        # A DEAD END IS NOT AN ANSWER, AND THIS ONE IS PERMANENT IN PRODUCTION.
+        #
+        # The services log to stdout in their containers, so this always fails there — and the
+        # advice it gave was "read them with `docker logs`, or set BOSS_WORKER_LOG", neither of
+        # which BOSS can do from inside its own container. Measured live: read_logs failed, and
+        # the model treated the whole logging question as closed.
+        #
+        # BOSS records every model interaction and every step transition in its OWN tables,
+        # which is the record the operator means when they say "check the activity logs". Those
+        # tools work here, so the refusal names them.
         return {"ok": False, "service": service,
-                "error": ("no log file readable from this process. In a container the service "
-                          "logs to stdout — read them with `docker logs`, or set "
-                          f"BOSS_{service.upper()}_LOG to a path.")}
+                "error": ("no log file readable from this process — in a container these "
+                          "services log to stdout, so this tool cannot reach them and will not "
+                          "start working later. Use BOSS's own record instead, which is more "
+                          "detailed than the service log: get_run_activity(run_id=...) for what "
+                          "a run did and when, read_run_turns(run_id=...) for the model's "
+                          "actual turns, diagnose_run for a build, and query_db over `events` "
+                          "for anything else. Do not report this as 'the logs are unavailable'."),
+                "use_instead": ["get_run_activity", "read_run_turns", "diagnose_run", "query_db"]}
 
 
     @reg.tool(

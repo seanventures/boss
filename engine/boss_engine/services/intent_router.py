@@ -828,6 +828,12 @@ def hid_a_failed_action(reply: str, tool_calls: list) -> bool:
     return not _OWNS_A_FAILURE.search(reply)
 
 
+#: The question is about where the app RUNS, not about the build that produced it.
+_DEPLOY_SUBJECT = re.compile(
+    r"\b(deploy(?:ed|ment|ing)?|redeploy|ship(?:ped|ping)?|staging|production|"
+    r"deployment target|host|port|url|live)\b", re.I)
+
+
 def _say_what_did_not_work(reply: str, tool_calls: list) -> str:
     """Append the attempts that failed, when the reply left them out.
 
@@ -1816,11 +1822,24 @@ class IntentRouter:
                                 "the failure was a rejected argument or a wrong table name, that "
                                 "is information: fix it and try again this turn.")
                         if _thin:
+                            # AND LOOK AT THE SUBJECT THEY ASKED ABOUT. Asked why a staging
+                            # DEPLOY failed, BOSS ran diagnose_run twice, read the app's code,
+                            # and answered about the build — never once looking at the
+                            # deployment target, which was the entire answer. The generic chain
+                            # (diagnose_run → read_logs → code) is right for a stalled build and
+                            # points away from anything else.
+                            _chain = ("diagnose_run on the run in question if you have not, then "
+                                      "read_logs, then the code")
+                            if _DEPLOY_SUBJECT.search(latest):
+                                _chain = ("describe_deployment_target and list_deployments for "
+                                          "THIS app, then preflight_deployment_target, then "
+                                          "find_free_port or inspect_host on the machine. A "
+                                          "deploy question is answered by the deployment, not by "
+                                          "the build that produced it")
                             gaps.append(
                                 f"You answered an operational question after "
                                 f"{len([c for c in tool_calls if c.get('tool')])} lookups. "
-                                "That is not enough to be sure. Call diagnose_run on the run in "
-                                "question if you have not, then read_logs, then the code — you "
+                                f"That is not enough to be sure. Call {_chain} — you "
                                 "have a budget of twelve steps and answering early is how a "
                                 "normal build gets called a stall.")
                         if _prescribed and _looking_only:

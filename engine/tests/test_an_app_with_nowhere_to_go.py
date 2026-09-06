@@ -401,3 +401,86 @@ class TestTheDeadEndIsAppendedWhenTheModelWillNotSayIt:
         assert body.index("_no_action_was_claimed(reply, actions)") \
             < body.index("_say_what_did_not_work(reply, tool_calls)") \
             < body.index("without_what_was_already_said(reply, history)")
+
+
+class TestADeployQuestionIsAnsweredByTheDeployment:
+    """Asked why a STAGING DEPLOY failed, BOSS ran diagnose_run twice, read the app's code, and
+    answered about the build — never once looking at the deployment target, which was the whole
+    answer. The thin-answer instruction named diagnose_run → read_logs → the code, which is the
+    right chain for a stalled build and points away from everything else."""
+
+    @staticmethod
+    def _body():
+        from boss_engine.services import intent_router
+
+        return inspect.getsource(intent_router)
+
+    def test_a_deploy_question_gets_the_deployment_chain(self):
+        body = self._body()
+        assert "_DEPLOY_SUBJECT.search(latest)" in body
+        assert "describe_deployment_target and list_deployments for " in body
+
+    def test_it_says_why(self):
+        assert "answered by the deployment, not by " in self._body()
+
+    def test_the_build_chain_is_still_there_for_a_build_question(self):
+        # Split across source lines in the literal; the sentence is what matters.
+        assert "read_logs, then the code" in self._body()
+
+    @pytest.mark.parametrize("message", [
+        "The staging Deploy step for Change Calendar failed. Why?",
+        "why is the deployment broken",
+        "the app's url returns nothing",
+        "which port is it on?",
+        "is it live yet",
+    ])
+    def test_these_are_deploy_questions(self, message):
+        from boss_engine.services.intent_router import _DEPLOY_SUBJECT
+
+        assert _DEPLOY_SUBJECT.search(message), message
+
+    @pytest.mark.parametrize("message", [
+        "why is the build stuck",
+        "what changed today?",
+        "why did the tests fail",
+    ])
+    def test_and_these_are_not(self, message):
+        from boss_engine.services.intent_router import _DEPLOY_SUBJECT
+
+        assert not _DEPLOY_SUBJECT.search(message), message
+
+
+class TestTheLogToolPointsSomewhereReal:
+    """`read_logs` cannot work in production — the services log to stdout in their containers —
+    and its refusal said "read them with `docker logs`, or set BOSS_WORKER_LOG", neither of which
+    BOSS can do from inside its own container. So the model treated logging as a closed door.
+
+    BOSS records every model turn and every step transition in its own tables. That is what the
+    operator means by "check the activity logs", and those tools work."""
+
+    @staticmethod
+    def _error():
+        from boss_engine.tools import builtin
+
+        body = inspect.getsource(builtin)
+        i = body.index("no log file readable from this process")
+        return body[i:i + 1200]
+
+    def test_it_names_the_tools_that_do_work(self):
+        error = self._error()
+        for tool in ("get_run_activity", "read_run_turns", "diagnose_run", "query_db"):
+            assert tool in error, tool
+
+    def test_it_says_the_failure_is_permanent_rather_than_transient(self):
+        assert "will not " in self._error() and "start working later" in self._error()
+
+    def test_it_forbids_reporting_the_logs_as_unavailable(self):
+        assert "Do not report this as" in self._error()
+
+    def test_the_alternatives_are_machine_readable_too(self):
+        assert '"use_instead"' in self._error()
+
+    def test_those_tools_actually_exist(self):
+        names = build_discuss_read_registry().names()
+        for tool in ("get_run_activity", "read_run_turns", "diagnose_run", "query_db"):
+            assert tool in names, tool
