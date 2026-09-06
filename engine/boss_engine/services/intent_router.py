@@ -323,6 +323,38 @@ def _recover_tagged_actions(reply: str, known_tools, existing) -> tuple[list, st
     return found, _PROPOSE_TAG.sub(_take, reply)
 
 
+def _json_objects_in(text: str):
+    r"""Every balanced {...} in the text, with its span. Nested braces and all.
+
+    A non-greedy `\{.*?\}` stops at the FIRST closing brace, which truncates every proposal
+    that has an args object inside it — i.e. all of them. Counting braces is the only way to
+    take the whole object, and doing it here means the four places a model might write one can
+    share a single scanner.
+    """
+    depth = start = 0
+    in_string = escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth:
+                depth -= 1
+                if depth == 0:
+                    yield start, i + 1, text[start:i + 1]
+
+
 def _unwrap_proposal(tool: str, args: dict) -> tuple[str, dict]:
     """A proposal OF a proposal is the inner one.
 
@@ -341,66 +373,90 @@ def _unwrap_proposal(tool: str, args: dict) -> tuple[str, dict]:
     return tool, (args if isinstance(args, dict) else {})
 
 
-#: A fenced JSON block that describes a proposal instead of being one.
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+#: `propose_action({...})` or `retry_code_task({...})` written out in prose. The fourth shape a
+#: model reached for after the tag, the table and the fenced block were each recovered — which
+#: is why this is a scanner over shapes rather than another special case.
+_CALL_LITERAL = re.compile(r"\b([a-z][a-z0-9_]{2,40})\s*\(\s*(?=\{)")
 
 
-def _recover_json_actions(reply: str, known_tools, existing) -> tuple[list, str]:
-    """Turn a proposal the model PRINTED into a real button, and take the JSON out of the text.
+def _recover_printed_actions(reply: str, known_tools, existing) -> tuple[list, str]:
+    """Turn a proposal the model WROTE OUT into a real button, and take the text out.
 
-    Observed live, on the very question this work exists for. BOSS diagnosed the hung build
-    correctly, decided the right fix, and then wrote:
+    Observed live, four different ways, on the same question:
 
-        ```json
-        {"tool": "retry_code_task", "args": {"run_id": "crun_33a0…"},
-         "label": "Retry Interview Scorecard App", "why": "…"}
-        ```
+        ```json {"tool": "retry_code_task", …}```          — a fenced block
+        propose_action({"tool": "retry_code_task", …})     — a call literal in prose
+        <propose_action tool="…" />                        — a tag  (sibling recovery)
+        | Tool | Arguments |                               — a table (sibling recovery)
 
-    which is the shape of a perfect offer and is not one. The operator gets a code block where
-    a button should be, and the fix they were promised is something they now have to ask for
-    again. Two sibling recoveries already existed for the tag form and the table form; a model
-    that has been told to emit structured proposals will reach for JSON, and it did.
+    Every one is the shape of a perfect offer and none of them is one: the operator gets markup
+    where a button should be, and the fix they were just promised is something they have to ask
+    for again. Chasing the shapes one at a time is how this recurs, so this scans for a JSON
+    object that NAMES A REAL TOOL wherever it appears, in a fence or bare.
 
-    Same validation as its siblings — the tool must exist, the args must be an object, no
-    placeholder values — and the block is stripped either way, because unparseable markup is
-    never something the operator should be reading.
+    Validation is the same as its siblings — the tool must exist, args must be an object, no
+    placeholder values — and a matched proposal is stripped either way, because unparseable
+    markup is never something the operator should be reading. An object that does not name a
+    real tool is left exactly as written, so a JSON sample the operator asked to see survives.
     """
-    if not reply or "```" not in reply:
+    if not reply or "{" not in reply:
         return [], reply
     from ..tools.builtin import _placeholder_argument
 
     found: list = []
     have = {(a.get("tool"), json.dumps(a.get("args") or {}, sort_keys=True)) for a in existing}
+    cuts: list[tuple[int, int]] = []
 
-    def _take(match: "re.Match[str]") -> str:
+    for start, end, blob in _json_objects_in(reply):
         try:
-            payload = json.loads(match.group(1))
-        except Exception:  # noqa: BLE001 — a code block that is not JSON is left alone
-            return match.group(0)
+            payload = json.loads(blob)
+        except Exception:  # noqa: BLE001 — not JSON; leave it alone
+            continue
         if not isinstance(payload, dict):
-            return match.group(0)
+            continue
         tool = str(payload.get("tool") or "").strip()
-        # Only a block that is UNAMBIGUOUSLY a proposal. A JSON sample the operator asked to see
-        # must survive intact, so this needs the tool name to be real and an args object.
-        if tool not in known_tools or not isinstance(payload.get("args"), dict):
-            return match.group(0)
-        tool, args = _unwrap_proposal(tool, payload["args"])
+        args = payload.get("args")
+        if tool not in known_tools or not isinstance(args, dict):
+            continue
+        tool, args = _unwrap_proposal(tool, args)
         if tool not in known_tools or tool == "propose_action":
-            return ""
-        if _placeholder_argument(args):
-            return ""
-        key = (tool, json.dumps(args, sort_keys=True))
-        if key not in have:
-            have.add(key)
-            found.append({
-                "id": make_id("act"), "tool": tool, "args": args,
-                "label": str(payload.get("label") or tool.replace("_", " ")),
-                "why": str(payload.get("why") or ""),
-            })
-        return ""
+            cuts.append((start, end))
+            continue
+        if not _placeholder_argument(args):
+            key = (tool, json.dumps(args, sort_keys=True))
+            if key not in have:
+                have.add(key)
+                found.append({
+                    "id": make_id("act"), "tool": tool, "args": args,
+                    "label": str(payload.get("label") or tool.replace("_", " ")),
+                    "why": str(payload.get("why") or ""),
+                })
+        cuts.append((start, end))
 
-    cleaned = _JSON_BLOCK.sub(_take, reply).strip()
-    return found, (cleaned or reply)
+    if not cuts:
+        return [], reply
+
+    # Cut the objects, then tidy what they were written inside. Doing the tidy with a couple of
+    # passes over the finished string beats index arithmetic against the original: the wrapper
+    # can be a fence, a call literal or nothing at all, and an off-by-one leaves the operator
+    # looking at `propose_action(` with the useful part removed.
+    kept, last = [], 0
+    for cut_start, cut_end in cuts:
+        kept.append(reply[last:cut_start])
+        last = cut_end
+    kept.append(reply[last:])
+    out = "".join(kept)
+    out = re.sub(r"\b[a-z][a-z0-9_]{2,40}\s*\(\s*\)", "", out)   # `propose_action()`
+    out = re.sub(r"```(?:json)?\s*```", "", out)                    # an emptied fence
+    out = re.sub(r"[ \t]*\)\s*$", "", out, flags=re.MULTILINE)      # a dangling paren
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+
+    if not out:
+        # The whole reply WAS the proposal. Returning the raw markup instead would undo the
+        # point of recovering it, so say the one sentence the button cannot say for itself.
+        out = ("Here is what I can do about it — nothing runs until you choose:"
+               if found else reply)
+    return found, out
 
 
 def _recover_described_actions(reply: str, known_tools, existing) -> list:
@@ -1672,8 +1728,8 @@ class IntentRouter:
             _known = set()
         tagged, reply = _recover_tagged_actions(reply, _known, proposed)
         proposed.extend(tagged)
-        from_json, reply = _recover_json_actions(reply, _known, proposed)
-        proposed.extend(from_json)
+        printed, reply = _recover_printed_actions(reply, _known, proposed)
+        proposed.extend(printed)
         proposed.extend(_recover_described_actions(reply, _known, proposed))
         reply = _no_button_was_promised(reply, proposed)
         # AND THAT IT DID NOT CLAIM TO HAVE ACTED. `actions` holds the writes that really ran;

@@ -209,6 +209,54 @@ class TestSayingItOnce:
         assert turn.reply.strip()
 
 
+class TestEveryShapeAPrintedOfferTakes:
+    """Four shapes, one question, four deploys apart.
+
+    Each time a shape was recovered the model reached for the next one — a fenced block, then a
+    call literal in prose. That is the "it breaks easily" pattern exactly, and chasing shapes
+    one at a time is how it recurs. The recovery is now a scanner for a JSON object that names
+    a real tool, wherever it appears.
+    """
+
+    @pytest.mark.parametrize("shape,text", [
+        ("fenced",
+         'Fix:\n\n```json\n{"tool": "retry_code_task", "args": {"run_id": "crun_1"}, '
+         '"label": "Retry it"}\n```'),
+        ("call literal in prose",
+         'Fix – retry:\n\n propose_action({"args": {"run_id": "crun_1"}, "label": "Retry it", '
+         '"tool": "retry_code_task", "why": "resume"})'),
+        ("wrapper, fenced",
+         '```json\n{"tool": "propose_action", "args": {"tool": "retry_code_task", '
+         '"args": {"run_id": "crun_1"}}, "label": "Retry it"}\n```'),
+        ("bare object",
+         'Do this: {"tool": "retry_code_task", "args": {"run_id": "crun_1"}, "label": "Retry it"}'),
+    ])
+    def test_it_becomes_a_button(self, monkeypatch, shape, text):
+        turn, _ = run(monkeypatch, "why is crun_1 stuck?", [(text, SIX_READS)])
+        assert [p["tool"] for p in turn.proposed_actions] == ["retry_code_task"], shape
+        assert turn.proposed_actions[0]["args"] == {"run_id": "crun_1"}, shape
+        assert turn.proposed_actions[0]["label"] == "Retry it", shape
+
+    def test_the_markup_never_survives_beside_the_button(self, monkeypatch):
+        turn, _ = run(monkeypatch, "why is crun_1 stuck?", [
+            ('The build hung.\n\npropose_action({"tool": "retry_code_task", '
+             '"args": {"run_id": "crun_1"}, "label": "Retry"})\n\nThat is the fix.', SIX_READS),
+        ])
+        assert "propose_action(" not in turn.reply
+        assert "{" not in turn.reply
+        assert "The build hung." in turn.reply and "That is the fix." in turn.reply
+
+    def test_a_reply_that_was_nothing_but_the_offer_still_says_something(self, monkeypatch):
+        """Returning the raw markup because the text emptied would undo the recovery."""
+        turn, _ = run(monkeypatch, "why is crun_1 stuck?", [
+            ('```json\n{"tool": "retry_code_task", "args": {"run_id": "crun_1"}, '
+             '"label": "Retry"}\n```', SIX_READS),
+        ])
+        assert turn.reply.strip()
+        assert "```" not in turn.reply
+        assert turn.proposed_actions
+
+
 class TestAPrintedOfferBecomesAButton:
     """Observed live on the very question this work exists for. BOSS diagnosed the hung build,
     decided the right fix, and printed it as a fenced JSON block — the shape of a perfect offer,
