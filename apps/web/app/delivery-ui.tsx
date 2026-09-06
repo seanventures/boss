@@ -160,12 +160,40 @@ export function isHealthUnconfigured(health: Health | null | undefined): boolean
   return (health.targets?.length ?? 0) === 0 || (health.summary?.total ?? 0) === 0;
 }
 
-export function DeploymentHealth({ health }: { health?: Health | null }) {
+/** Where an app's dashboard and scrape target live, keyed `app|environment`. */
+export type DashboardIndex = Map<string, { dashboard_url: string | null; scrape_url: string }>;
+
+export const dashboardKey = (app: string, environment: string) =>
+  `${(app || "").trim().toLowerCase()}|${(environment || "").trim().toLowerCase()}`;
+
+export function DeploymentHealth({ health, dashboards, footer, watch }: {
+  health?: Health | null;
+  /** ONE PANEL, NOT TWO. Health and the observability stack listed the same three apps in two
+   *  blocks — the same names, the same environments, one telling you it was up and the other
+   *  where to look at it. Whether an app is healthy and where its dashboard is are the same
+   *  question asked twice, so the dashboard link belongs on the row it describes. */
+  dashboards?: DashboardIndex;
+  /** The stack's own machinery — redeploy, Grafana, container uptimes — as a footer rather
+   *  than a second panel repeating the app list above it. */
+  footer?: React.ReactNode;
+  /** `app|environment` to scroll to and mark, handed over by the workflow's monitoring step.
+   *  Without it that step said "watching Meeting cost meter · staging" and offered nowhere to
+   *  go, for a step whose whole subject is that one app. */
+  watch?: string;
+}) {
   if (!health) return null;
   if (health.error) {
     return <div className="detail" style={{ color: "#f85149" }}>Health: {health.error}</div>;
   }
   const { summary, targets } = health;
+
+  // Bring it into view once. A link that lands you at the top of a list of every deployed app,
+  // with the one you asked for somewhere below, has not really taken you anywhere.
+  React.useEffect(() => {
+    if (!watch) return;
+    const node = document.getElementById(`watch-${watch}`);
+    if (node) node.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [watch]);
 
   // Zero targets is not a fleet status. Rendering "● not_deployed · 0 up · 0 down" looks
   // like an operations dashboard for a running system; it is not — nothing is registered.
@@ -197,7 +225,11 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
 
       <div style={{ display: "grid", gap: 12 }}>
         {targets.map((t) => (
-          <div key={t.target_id} style={{
+          <div key={t.target_id}
+               id={`watch-${dashboardKey(t.app_name, t.environment)}`}
+               data-watched={watch === dashboardKey(t.app_name, t.environment) ? "yes" : undefined}
+               className="dh-row"
+               style={{
             border: "1px solid rgba(255,255,255,.09)", borderRadius: 8, padding: 12,
             display: "flex", gap: 18, flexWrap: "wrap", alignItems: "flex-start",
           }}>
@@ -224,6 +256,25 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
                   ? "registered as a destination; nothing has been deployed here yet"
                   : t.status_since ? `${t.status} since ${sinceLabel(t.status_since)}` : "never probed"}
               </span>
+              {/* THE DASHBOARD, ON THE ROW IT BELONGS TO. Previously in a second table below,
+                  listing the same apps again — so "is it up?" and "show me its graphs" were two
+                  panels apart for the same three names. */}
+              {(() => {
+                const d = dashboards?.get(dashboardKey(t.app_name, t.environment));
+                if (!d) return null;
+                return (
+                  <span style={{ display: "flex", gap: 10, alignItems: "baseline",
+                                 flexWrap: "wrap", fontSize: 11 }}>
+                    {d.dashboard_url
+                      ? <a href={d.dashboard_url} target="_blank" rel="noreferrer"
+                           data-testid={`health-dashboard-${t.app_name}`}>Open dashboard ↗</a>
+                      : <span className="detail">no dashboard yet</span>}
+                    <span className="detail" style={{ fontFamily: "monospace" }}>
+                      scraped at {d.scrape_url}
+                    </span>
+                  </span>
+                );
+              })()}
             </div>
 
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12 }}>
@@ -267,6 +318,7 @@ export function DeploymentHealth({ health }: { health?: Health | null }) {
           </div>
         ))}
       </div>
+      {footer ? <div className="dh-stack-foot">{footer}</div> : null}
     </section>
   );
 }

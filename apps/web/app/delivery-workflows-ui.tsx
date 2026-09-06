@@ -849,6 +849,22 @@ function stepLinks(output: Record<string, unknown>): Array<{ label: string; href
   if (meeting) {
     out.push({ label: "open the panel", href: link({ area: "meetings", meeting }) });
   }
+  // THE APP IT IS WATCHING, not the monitoring landing page. "Set up monitoring" said
+  // "watching Meeting cost meter · staging" and offered nowhere to go — the operator had to
+  // find the Monitoring area and then find that app in it, for a step whose whole subject is
+  // that one app. `?watch=` names it, and the monitoring panel scrolls to it and marks it.
+  if (Array.isArray(output.targets)) {
+    for (const raw of output.targets as unknown[]) {
+      const t = raw as { app_name?: string; environment?: string };
+      const app = String(t.app_name ?? "").trim();
+      if (!app) continue;
+      const env = String(t.environment ?? "").trim();
+      out.push({
+        label: `monitor ${app}`,
+        href: link({ area: "monitoring", watch: env ? `${app}|${env}` : app }),
+      });
+    }
+  }
   const discovery = str("discovery_id") || (awaited.kind === "discovery" ? awaited.id ?? "" : "");
   if (discovery) {
     out.push({ label: "open the research", href: link({ area: "discovery", run: discovery }) });

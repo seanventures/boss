@@ -6330,6 +6330,34 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 
+/* The app a link brought you to. A ring rather than a fill: it says "this one" without
+   changing what the row reports, and it fades so it does not become permanent decoration. */
+.dh-row[data-watched="yes"] {
+  outline: 2px solid var(--accent, #2F6FE0);
+  outline-offset: 2px;
+  animation: dh-watch-fade 6s ease-out forwards;
+}
+@keyframes dh-watch-fade {
+  0%, 55% { outline-color: var(--accent, #2F6FE0); }
+  100%    { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Still marked, just not animated — the point is finding the row, not the transition. */
+  .dh-row[data-watched="yes"] { animation: none; }
+}
+
+/* The observability stack, as a footer inside the health panel rather than a second card
+   repeating the same app list. Separated by a rule, not a border: it is the machinery behind
+   the rows above, not a peer of them. */
+.dh-stack-foot {
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--border, #1C2740);
+}
+.dh-stack-title {
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: var(--ink-soft, #C7D3EA); margin-bottom: 6px;
+}
+
 /* Clear this conversation. Deliberately quiet — it sits beside the role's name and undoing a
    chat is not the reason anybody opened the panel. */
 .agent-clear {

@@ -339,8 +339,12 @@ export function isObservabilityUnconfigured(data: Observability | null | undefin
   return !data.deployed && (data.apps?.length ?? 0) === 0;
 }
 
-export function MonitoringPanel({ initial, hostTargetId }: {
+export function MonitoringPanel({ initial, hostTargetId, compact = false }: {
   initial?: Observability | null; hostTargetId?: string;
+  /** Rendered inside the health panel as its footer: the stack's own machinery only, without
+   *  the app table — those rows now sit on the health rows they describe, so repeating them
+   *  here is the duplication this merge removed. */
+  compact?: boolean;
 }) {
   const { busy, run: perform } = useBusyAction();
   const [msg, setMsg] = useState<string | null>(null);
@@ -382,9 +386,19 @@ export function MonitoringPanel({ initial, hostTargetId }: {
   }
 
   const running = data.status?.running;
+  // A footer inside the health panel, not a panel of its own: a nested `ct-block` would draw a
+  // second bordered card and undo the merge it exists to complete.
+  const Frame = compact
+    ? ({ children }: { children: React.ReactNode }) =>
+        <div data-empty-state={data.deployed ? "stack-deployed" : "stack-pending"}>{children}</div>
+    : ({ children }: { children: React.ReactNode }) =>
+        <section className="ct-block"
+                 data-empty-state={data.deployed ? "stack-deployed" : "stack-pending"}>
+          {children}
+        </section>;
   return (
-    <section className="ct-block" data-empty-state={data.deployed ? "stack-deployed" : "stack-pending"}>
-      <div className="ct-block-title">
+    <Frame>
+      <div className={compact ? "dh-stack-title" : "ct-block-title"}>
         Observability stack{" "}
         <span style={{ fontSize: 12,
                        color: running ? "#3fb950" : running === false ? "#d29922" : "#8b949e" }}>
@@ -396,8 +410,8 @@ export function MonitoringPanel({ initial, hostTargetId }: {
 
       <div className="detail" style={{ marginBottom: 10 }}>
         One OpenTelemetry collector, one Prometheus and one Grafana for every app.
-        {" "}The scrape config is generated from the deployment targets below — onboarding an app
-        is what puts it on a dashboard, so the two cannot drift.
+        {" "}The scrape config is generated from the deployment targets {compact ? "above" : "below"} —
+        onboarding an app is what puts it on a dashboard, so the two cannot drift.
       </div>
 
       <div style={{ ...box, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
@@ -427,6 +441,16 @@ export function MonitoringPanel({ initial, hostTargetId }: {
         {msg && <span className="detail" style={{ fontSize: 12 }}>{msg}</span>}
       </div>
 
+      {/* The app table lives on the HEALTH rows now — same apps, same environments, and the
+          question "is it up and where do I look at it" is one question. Kept for the standalone
+          panel, which still has to stand alone. */}
+      {compact ? (
+        data.apps.length === 0 ? (
+          <div className="detail" style={{ marginTop: 8 }}>
+            No active deployment targets, so there is nothing to scrape yet.
+          </div>
+        ) : null
+      ) : (
       <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", marginTop: 12 }}>
         <thead><tr style={{ textAlign: "left", opacity: .7 }}>
           <th>app</th><th>environment</th><th>scraped at</th><th>dashboard</th>
@@ -453,13 +477,14 @@ export function MonitoringPanel({ initial, hostTargetId }: {
           ))}
         </tbody>
       </table>
+      )}
 
       {data.status?.containers && data.status.containers.length > 0 && (
         <div className="detail" style={{ fontSize: 11, marginTop: 8 }}>
           {data.status.containers.map((c) => `${c.name}: ${c.status}`).join(" · ")}
         </div>
       )}
-    </section>
+    </Frame>
   );
 }
 
