@@ -114,6 +114,52 @@ def _looks_like_shell(command: str) -> bool:
     return False
 
 
+#: How long to keep reading a killed command's output before giving up on it. The command is
+#: already dead; this only bounds how long a grandchild holding the pipe open can cost us.
+_DRAIN_SECONDS = 10
+
+
+def _kill_process_group(proc) -> None:
+    """Kill the command AND anything it started.
+
+    Killing only the process we spawned leaves Playwright's webServer, a vite dev server, or a
+    stray node running — each of which holds the stdout pipe open, which is the thing that
+    turns a timeout into a permanent hang. `start_new_session=True` at spawn is what makes
+    there be a group to kill.
+    """
+    import signal
+
+    # `os.getpgid(proc.pid)` IS NOT ENOUGH, and the case where it fails is the case that
+    # matters. By the time a command has hung this way the parent has usually already exited
+    # and been reaped, so its pid no longer resolves — getpgid raises ProcessLookupError — while
+    # the process GROUP is very much alive with the grandchild in it. Falling back to
+    # `proc.kill()` there kills a process that is already dead and leaves the server holding the
+    # pipe, which is silently doing nothing in the one situation this function exists for.
+    #
+    # Spawned with `start_new_session=True`, the child is the group leader, so the group id IS
+    # its pid — usable whether or not the process itself still exists.
+    for target in (_pgid_of(proc), proc.pid):
+        if target is None:
+            continue
+        try:
+            os.killpg(target, signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001 — best effort; the drain that follows is still bounded
+        pass
+
+
+def _pgid_of(proc):
+    """The process group, while the process still exists to ask about."""
+    try:
+        return os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError, AttributeError):
+        return None
+
+
 class SandboxError(RuntimeError):
     pass
 
@@ -354,15 +400,49 @@ class EphemeralSandbox:
         try:
             # npm install / build / playwright run in the API's own container; at normal
             # priority they starve it. See services/scheduling.py.
-            completed = subprocess.run(
+            # NOT subprocess.run. THE TIMEOUT DOES NOT BOUND IT.
+            #
+            # A build sat silent for eighteen minutes and forty-three seconds on one command:
+            #
+            #   turn 99  tool_call  Bash  {"command": "rm -rf .e2e-data && npm run verify",
+            #                              "timeout": 180000}      23:49:36
+            #   (no tool_result, ever)                             cancelled 00:08:19
+            #
+            # 46 tool calls in that run, 45 results. The three-minute timeout should have ended
+            # it at 23:52:36 and did not.
+            #
+            # `subprocess.run(timeout=...)` kills the DIRECT CHILD and then calls communicate()
+            # a second time to reap the pipes — with no timeout on that call. `npm run verify`
+            # runs Playwright, Playwright starts the app's webServer, and that grandchild
+            # inherits the stdout pipe. Killing npm leaves the server alive holding the write
+            # end open, so the pipe never reaches EOF and the second communicate() blocks
+            # forever. The stage stops producing turns and nothing anywhere times out.
+            #
+            # Two changes fix it. `start_new_session` puts the command in its own process
+            # group, so the kill reaches the whole tree rather than just the process we
+            # spawned; and the post-kill drain is BOUNDED, so even a pipe held open by
+            # something we failed to kill costs ten seconds instead of the rest of the run.
+            proc = subprocess.Popen(  # noqa: S603 — argv is allowlisted above
                 low_priority(argv),
                 cwd=workdir,
                 env=env,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=limit,
-                check=False,
+                start_new_session=True,
             )
+            try:
+                _out, _err = proc.communicate(timeout=limit)
+            except subprocess.TimeoutExpired:
+                _kill_process_group(proc)
+                try:
+                    _out, _err = proc.communicate(timeout=_DRAIN_SECONDS)
+                except subprocess.TimeoutExpired:
+                    # Something still holds the pipe. Report the timeout and move on: a
+                    # truncated stdout is a far smaller harm than a stage that never ends.
+                    _out, _err = "", ""
+                raise subprocess.TimeoutExpired(argv, limit, output=_out, stderr=_err)
+            completed = subprocess.CompletedProcess(argv, proc.returncode, _out, _err)
             _ms = int((time.monotonic() - started) * 1000)
             # WHICH COMMAND ATE THE FIVE MINUTES.
             #
