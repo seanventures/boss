@@ -227,8 +227,12 @@ class AgentService:
                 """
                 UPDATE agent_threads
                 SET status = 'closed',
-                    external_ref = CASE WHEN :ref IS NULL THEN NULL
-                                        ELSE :ref || '#cleared-' || id END,
+                    -- CAST, because psycopg 3 will not infer a bare parameter's type inside a
+                    -- CASE: "could not determine data type of parameter $1". Prod runs psycopg
+                    -- 3 and this laptop runs psycopg2, which infers happily — so the statement
+                    -- passed every local test and 500'd on the first real click.
+                    external_ref = CASE WHEN CAST(:ref AS TEXT) IS NULL THEN NULL
+                                        ELSE CAST(:ref AS TEXT) || '#cleared-' || id END,
                     updated_at = now()
                 WHERE id = :id
                 """
