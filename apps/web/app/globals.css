@@ -6330,6 +6330,28 @@ a.sp-node:hover .sp-label { color: var(--ink); }
 }
 
 
+/* The probe history. Collapsed it is a strip you can read at a glance; expanded it is the
+   operations view — every probe, the incidents, and whether latency was measured at all. */
+.dh-history { width: 100%; display: grid; gap: 4px; }
+.dh-history-toggle {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 2px 0; border: 0; background: transparent; cursor: pointer;
+  color: inherit; font: inherit; text-align: left;
+}
+.dh-history-caret { margin-left: auto; opacity: .5; font-size: 10px; }
+.dh-history-toggle:hover .dh-history-caret { opacity: 1; }
+.dh-history[data-open="yes"] {
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--surface-2, rgba(255,255,255,.03));
+  border: 1px solid var(--border, #1C2740);
+}
+.dh-history-detail { display: grid; gap: 10px; margin-top: 8px; }
+.dh-history-facts { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; }
+.dh-history-incidents {
+  margin: 0; padding-left: 16px; font-size: 11.5px; line-height: 1.6;
+  color: var(--ink-dim, #8092B3);
+}
+
 /* The app a link brought you to. A ring rather than a fill: it says "this one" without
    changing what the row reports, and it fades so it does not become permanent decoration. */
 .dh-row[data-watched="yes"] {

@@ -132,25 +132,111 @@ const HEALTH_LABEL: Record<string, string> = { not_deployed: "never deployed" };
 
 /** Latency over time as inline SVG. Failures are drawn, not dropped — a gap in a line reads
  *  as "no data", which is the opposite of what a failed probe means. */
-function HealthGraph({ series }: { series: HealthTarget["series"] }) {
-  const W = 260, H = 40;
+function HealthGraph({ series, expanded }: {
+  series: HealthTarget["series"]; expanded?: boolean;
+}) {
+  const W = expanded ? 720 : 260;
+  const H = expanded ? 120 : 40;
   if (!series.length) return <span className="detail" style={{ fontSize: 11 }}>no samples yet</span>;
+
+  // UP OR DOWN, WHICH IS THE QUESTION. This drew a LATENCY line, and on a fleet whose probes
+  // were being skipped entirely that meant a flat green stroke at zero — a graph of nothing,
+  // reported as health. The bar per probe answers what an operator actually asks: was it
+  // answering, at each point in time. Latency is drawn UNDER it, faintly, because how slow it
+  // was is a second question and only meaningful where the probe ran at all.
+  const dx = W / series.length;
+  const bw = Math.max(1, dx - (expanded ? 1 : 0.5));
   const oks = series.filter((p) => p.ok && p.ms != null).map((p) => p.ms as number);
   const max = Math.max(1, ...oks);
-  const dx = series.length > 1 ? W / (series.length - 1) : W;
-
-  const line = series
-    .map((p, i) => (p.ok && p.ms != null ? `${i === 0 ? "M" : "L"}${(i * dx).toFixed(1)},${(H - (p.ms / max) * (H - 6) - 3).toFixed(1)}` : null))
-    .filter(Boolean).join(" ");
+  const down = series.filter((p) => !p.ok).length;
+  // A probe that ran and answered in 0ms is not the same as one that never ran. The health
+  // sweep records `ms: null` for the latter, and drawing it as a floor value would invent data.
+  const measured = series.some((p) => p.ok && p.ms != null && p.ms > 0);
 
   return (
-    <svg width={W} height={H} role="img" aria-label="latency history"
-         style={{ display: "block", overflow: "visible" }}>
-      {line && <path d={line} fill="none" stroke="#3fb950" strokeWidth="1.5" opacity={0.9} />}
-      {series.map((p, i) => !p.ok && (
-        <rect key={i} x={Math.max(0, i * dx - 1)} y={0} width={2} height={H} fill="#f85149" opacity={0.85} />
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" preserveAspectRatio="none"
+         aria-label={`health history — ${series.length} probes, ${down} failed`}
+         style={{ display: "block", height: H, overflow: "visible" }}>
+      {/* Latency, behind. Omitted when nothing was measured rather than drawn along the floor
+          pretending to be a reading. */}
+      {measured && series.map((p, i) => (p.ok && p.ms != null ? (
+        <rect key={`l${i}`} x={i * dx} width={bw}
+              y={H - Math.max(1, (p.ms / max) * (H - 4))}
+              height={Math.max(1, (p.ms / max) * (H - 4))}
+              fill="#2EC5C5" opacity={0.22} />
+      ) : null))}
+      {/* Health, in front: one bar per probe. Green answered, red did not, grey never ran. */}
+      {series.map((p, i) => (
+        <rect key={`h${i}`} x={i * dx} width={bw}
+              y={p.ok ? H * 0.55 : 0} height={p.ok ? H * 0.45 : H}
+              fill={p.ok ? "#3fb950" : "#f85149"}
+              opacity={p.ok ? 0.95 : 0.9}>
+          <title>
+            {`${formatDateTime(p.at)} — ${p.ok ? "answered" : "did not answer"}`
+             + (p.ms != null ? ` in ${p.ms}ms` : "")}
+          </title>
+        </rect>
       ))}
     </svg>
+  );
+}
+
+/** The row's graph, with the detail an operations dashboard shows once you look closer. */
+function HealthHistory({ target }: { target: HealthTarget }) {
+  const [open, setOpen] = useState(false);
+  const series = target.series ?? [];
+  const down = series.filter((p) => !p.ok).length;
+  const measured = series.filter((p) => p.ok && p.ms != null && p.ms > 0);
+
+  return (
+    <div className="dh-history" data-open={open ? "yes" : undefined}>
+      <button type="button" className="dh-history-toggle"
+              data-testid={`health-graph-${target.app_name}`}
+              aria-expanded={open} onClick={() => setOpen((v) => !v)}
+              title={open ? "Collapse" : "Expand — probe history and incidents"}>
+        <span className="detail" style={{ fontSize: 11 }}>
+          health · {series.length} probe{series.length === 1 ? "" : "s"}
+          {down ? ` · ${down} failed` : ""}
+          {/* SAY WHEN THE NUMBER IS NOT A MEASUREMENT. Every probe on this fleet recorded 0ms
+              because the check was being skipped; a latency of "0ms" read as "very fast". */}
+          {series.length && !measured.length ? " · no latency recorded" : ""}
+        </span>
+        <span className="dh-history-caret" aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      <HealthGraph series={series} expanded={open} />
+      {open ? (
+        <div className="dh-history-detail">
+          <div className="dh-history-facts">
+            <Fact label="probes" value={String(series.length)} />
+            <Fact label="failed" value={String(down)} />
+            <Fact label="first" value={series[0] ? formatDateTime(series[0].at) : "—"} />
+            <Fact label="latest"
+                  value={series.length
+                    ? formatDateTime(series[series.length - 1].at) : "—"} />
+            <Fact label="latency" value={measured.length
+              ? `${Math.round(measured.reduce((a, p) => a + (p.ms ?? 0), 0) / measured.length)}ms avg`
+              : "not measured"} />
+          </div>
+          {target.incidents?.length ? (
+            <ul className="dh-history-incidents">
+              {target.incidents.slice(0, 8).map((i, n) => (
+                <li key={n}>
+                  {formatDateTime(i.started_at)} —{" "}
+                  {i.ended_at
+                    ? `${Math.round((i.duration_seconds ?? 0) / 60)}m`
+                    : "ONGOING"}
+                  {i.error ? ` · ${i.error}` : ""}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="detail" style={{ fontSize: 11, margin: 0 }}>
+              No failed probe recorded in this window.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -288,12 +374,7 @@ export function DeploymentHealth({ health, dashboards, footer, watch }: {
               <Fact label="checked" value={sinceLabel(t.last_checked)} />
             </div>
 
-            <div style={{ display: "grid", gap: 3 }}>
-              <span style={{ opacity: .55, fontSize: 11, fontFamily: "monospace" }}>
-                latency · {t.sample_count} samples
-              </span>
-              <HealthGraph series={t.series} />
-            </div>
+            <HealthHistory target={t} />
 
             {t.last_error && (
               <div className="detail" style={{ color: "#f85149", fontSize: 12, width: "100%" }}>

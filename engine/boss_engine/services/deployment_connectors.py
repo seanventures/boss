@@ -23,6 +23,7 @@ from __future__ import annotations
 import json as _json
 import os
 import shlex
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Optional, Protocol
@@ -97,6 +98,66 @@ class DeploymentConnector(Protocol):
 
     def apply(self, engine, settings: Settings, target: dict, run_id: str,
               plan: dict, ref: Optional[str] = None) -> dict: ...
+def _check_kind(check: dict) -> str:
+    """What kind of probe this check describes.
+
+    THE FIELD WAS NEVER WRITTEN. Every target in production stores
+
+        {"path": "/", "scheme": "http", "expect_status": 200}
+
+    and `observe` asked for `check["kind"] == "http"`, so every check was skipped — and a
+    skipped check left `healthy` at its optimistic default. Three apps reported "up · 100%
+    uptime · 0ms latency" for two days with nothing ever probed. A green light that is not
+    wired to anything is worse than a red one.
+
+    So the kind is INFERRED from the shape when it is not declared: a `scheme` or a `path`
+    describes an HTTP request, and a bare port describes a socket.
+    """
+    kind = str(check.get("kind") or "").strip().lower()
+    if kind:
+        return kind
+    if check.get("scheme") or check.get("path") is not None:
+        return "http"
+    if check.get("port"):
+        return "tcp"
+    return ""
+
+
+def _expected_status(check: dict) -> int:
+    """Both spellings. The writer used `expect_status`, the reader asked for `expect`."""
+    for key in ("expect_status", "expect", "expected_status"):
+        value = check.get(key)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 200
+
+
+def tcp_probe(host: str, port: int, *, timeout: float = 8.0) -> dict:
+    """Can anything be connected to on that port?
+
+    The honest floor of a health check, and the one an operator asks for by name: not "does the
+    page render" but "is the socket open". It needs no path, no status code and no cooperation
+    from the app, so it is the check that still works when everything else is unconfigured — and
+    unlike a skipped check, it always answers.
+    """
+    import socket
+
+    started = time.monotonic()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect((host, int(port)))
+        return {"ok": True, "latency_ms": int((time.monotonic() - started) * 1000)}
+    except OSError as exc:
+        return {"ok": False, "latency_ms": int((time.monotonic() - started) * 1000),
+                "error": f"{type(exc).__name__}: {exc}"[:120]}
+    finally:
+        sock.close()
+
+
     def observe(self, target: dict, settings: Settings) -> dict: ...
     def rollback(self, engine, settings: Settings, target: dict,
                  to: dict) -> dict: ...
@@ -842,17 +903,40 @@ class SSHContainerConnector:
         """
         checks = target.get("health_checks") or []
         domains = target.get("domains") or []
-        if not checks or not domains:
-            return {"healthy": None, "reason": "no health check or domain declared"}
+        if not domains:
+            return {"healthy": None, "reason": "no domain declared"}
+
+        # NO CHECK IS NOT A PASS — IT IS A PORT TO KNOCK ON.
+        #
+        # A target with nothing declared used to return healthy=None and, from the sweep's point
+        # of view, an unexplained blank. The socket is always available and always answers: it
+        # needs no path, no status code and no cooperation from the app.
+        if not checks:
+            checks = [{"kind": "tcp"}]
 
         results = []
         healthy = True
+        probed = 0
         for check in checks:
-            if check.get("kind") != "http":
-                results.append({"check": check, "skipped": "unsupported kind"})
+            kind = _check_kind(check)
+            if kind == "tcp":
+                host_part, _, port_part = str(domains[0]).partition(":")
+                port = int(check.get("port") or port_part or _app_port(target, default=0) or 0)
+                if not port:
+                    results.append({"check": check,
+                                    "skipped": "no port to connect to on this target"})
+                    continue
+                probed += 1
+                outcome = tcp_probe(host_part, port)
+                results.append({"socket": f"{host_part}:{port}", **outcome})
+                healthy = healthy and bool(outcome["ok"])
                 continue
+            if kind != "http":
+                results.append({"check": check, "skipped": f"unsupported kind {kind!r}"})
+                continue
+            probed += 1
             url = _health_url(domains[0], check, _app_port(target, default=0) or None)
-            expect = int(check.get("expect", 200))
+            expect = _expected_status(check)
             try:
                 req = urllib.request.Request(url, method="GET")
                 with urllib.request.urlopen(req, timeout=15) as resp:
@@ -874,6 +958,15 @@ class SSHContainerConnector:
                 continue
             healthy = healthy and ok
             results.append({"url": url, "status": code, "expected": expect, "ok": ok})
+
+        # A SKIPPED CHECK IS NOT A PASS. `healthy` started True and only a FAILING check set it
+        # False, so a target whose every check was skipped came back healthy having probed
+        # nothing — which is exactly what happened for two days across three apps. Unknown is
+        # the honest answer, and the sweep records it as unknown rather than as up.
+        if not probed:
+            return {"healthy": None,
+                    "reason": "nothing was probed: no check on this target could be run",
+                    "checks": results}
         return {"healthy": healthy, "checks": results}
 
     # -- rollback ---------------------------------------------------------------
