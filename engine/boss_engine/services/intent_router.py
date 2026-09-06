@@ -456,12 +456,35 @@ _ASKED_TO_LOOK = re.compile(
 #: A question about a specific piece of running or failed work. These are the ones the operator
 #: needs RESOLVED, and the ones where answering from two lookups is how a normal build gets
 #: called a stall.
-_OPERATIONAL = re.compile(
-    r"\b(crun_[a-z0-9]+|wfr_[a-z0-9]+|job_[a-z0-9]+"
-    r"|stuck|stall(?:ed|ing)?|hang(?:ing|s)?|slow|latency|failing|failed|broken|error"
-    r"|not working|no preview|timed? ?out|why is|what happened|progress)\b",
-    re.IGNORECASE,
-)
+#: An id names one piece of work outright.
+_WORK_ID = re.compile(r"\b(crun_[a-z0-9]+|wfr_[a-z0-9]+|job_[a-z0-9]+)\b", re.IGNORECASE)
+
+#: The thing being asked about.
+_WORK_NOUN = re.compile(
+    r"\b(build|builds|run|runs|task|tasks|job|jobs|deploy(?:ment)?|preview|workflow|project|"
+    r"app|pipeline|step|phase|engineer|implement(?:ing|ation)?)\b", re.IGNORECASE)
+
+#: What is wrong with it.
+_SYMPTOM = re.compile(
+    r"\b(stuck|stall(?:ed|ing)?|hang(?:ing|s)?|slow|latency|fail(?:s|ed|ing|ure)?|"
+    r"broken|error|crash(?:ed|ing)?|"
+    r"not working|no preview|timed? ?out|why is|what happened|progress|taking (?:so )?long)\b",
+    re.IGNORECASE)
+
+#: Counting and listing. "How many runs failed last week" is a reporting question about a SET,
+#: not a complaint about one piece of work — and pushing it through an investigation aimed at a
+#: single run produces "please give me a run id", which is the hijack again in another costume.
+_AGGREGATE = re.compile(
+    r"\b(how many|how much|count|list|show me all|which ones|summar(?:y|ise|ize)|"
+    r"across (?:all|the) (?:projects|runs|apps)|last (?:week|month|day))\b", re.IGNORECASE)
+
+#: The operator driving a tool directly. "Use query_db and run this SELECT" is an instruction
+#: about HOW to answer, and forcing a six-lookup investigation onto it produces the opposite of
+#: what was asked — observed live, where a plain SQL request came back as "please provide the
+#: run ID and I will run the full diagnosis".
+_DRIVING_A_TOOL = re.compile(
+    r"\b(use|call|run)\s+(query_db|read_logs|diagnose_run|read_run_turns|search_code|"
+    r"explain_run|describe_schema)\b|\bselect\b.+\bfrom\b", re.IGNORECASE)
 
 #: How many lookups an operational answer must be built on before it is allowed to be an answer.
 #:
@@ -557,8 +580,20 @@ def without_what_was_already_said(reply: str, history: list) -> str:
 
 
 def is_operational_question(message: str) -> bool:
-    """Is this about a specific piece of work that is running, slow or broken?"""
-    return bool(_OPERATIONAL.search(message or ""))
+    """Is this about a specific piece of work that is running, slow or broken?
+
+    BOTH a subject and a symptom, not either. A single keyword is too loose: asked to run
+    `SELECT statements, failed FROM schema_apply_runs`, the word "failed" alone made this an
+    operational question, the investigation floor fired, and BOSS answered a direct SQL request
+    with "please provide the run ID and I'll run the full diagnosis". A guard that hijacks a
+    plain instruction is worse than no guard.
+    """
+    text = message or ""
+    if _DRIVING_A_TOOL.search(text) or _AGGREGATE.search(text):
+        return False
+    if _WORK_ID.search(text):
+        return True
+    return bool(_WORK_NOUN.search(text) and _SYMPTOM.search(text))
 
 
 def under_investigated(tool_calls: list, message: str) -> bool:

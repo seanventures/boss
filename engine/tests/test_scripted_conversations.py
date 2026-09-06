@@ -153,6 +153,24 @@ class TestGivingUpIsNotAnEnding:
         ])
         assert len(model.calls) == 1
 
+    def test_a_direct_tool_instruction_is_not_hijacked(self, monkeypatch):
+        """Observed live. Asked to run `SELECT statements, failed FROM schema_apply_runs`, the
+        word "failed" alone made this an operational question, the floor fired, and BOSS
+        answered a plain SQL request with "please provide the run ID and I'll run the full
+        diagnosis". A guard that hijacks a direct instruction is worse than no guard."""
+        _turn, model = run(monkeypatch,
+                           "Use query_db once, raw row only: SELECT statements, failed "
+                           "FROM schema_apply_runs ORDER BY id DESC LIMIT 1",
+                           [("statements: 667, failed: 0", [("query_db", {}, {"ok": True})])])
+        assert len(model.calls) == 1
+
+    def test_a_symptom_alone_is_not_enough(self, monkeypatch):
+        """One keyword is too loose; it needs a subject AND a symptom."""
+        from boss_engine.services.intent_router import is_operational_question
+
+        assert is_operational_question("how many runs failed last week?") is False
+        assert is_operational_question("why is the build failing?") is True
+
     def test_a_non_operational_question_is_not_forced_to_investigate(self, monkeypatch):
         """"What can you do?" does not need six lookups. The floor is for questions about work
         that is running or broken."""
