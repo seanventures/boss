@@ -93,6 +93,39 @@ describe("the wait starts with something on screen", () => {
   });
 });
 
+describe("the bar stays up while the page is still filling", () => {
+  const SHELL = readFileSync(join(APP, "ConsoleShell.tsx"), "utf8");
+
+  it("it waits for the DOM to stop changing, not just for the document to finish", () => {
+    // Measured on goldeneye: the stream ends at 7.95s and `load` fires — and React then
+    // hydrates a 6 MB payload, which is when sections visibly appear. The indicator went off
+    // at exactly the moment the expensive part began.
+    expect(SHELL).toContain("new MutationObserver");
+    expect(SHELL).toContain("Promise.all([documentDone, settledDom])");
+  });
+
+  it("quiet means quiet for long enough to mean it", () => {
+    // A gap between two React commits must not read as finished.
+    expect(SHELL).toMatch(/setTimeout\(\(\) => \{ observer\.disconnect\(\); resolve\(\); \}, 700\)/);
+  });
+
+  it("it watches the content, not the whole document", () => {
+    expect(SHELL).toContain('document.querySelector(".bx-content")');
+    expect(SHELL).toContain("{ childList: true, subtree: true }");
+  });
+
+  it("and it can still never get stuck on", () => {
+    // The failure the previous indicator had: permanent furniture that explained nothing.
+    // Both guards stay — a ceiling, and a resolve when there is no observer to use.
+    expect(SHELL).toContain("window.setTimeout(finish, 60_000)");
+    expect(SHELL).toContain('typeof MutationObserver === "undefined"');
+  });
+
+  it("the floor is still there so a fast page does not blink", () => {
+    expect(SHELL).toContain("window.setTimeout(r, 1200)");
+  });
+});
+
 describe("a background refresh is visible without hunting for it", () => {
   const SHELL = readFileSync(join(APP, "ConsoleShell.tsx"), "utf8");
   const CSS = readFileSync(join(APP, "globals.css"), "utf8");

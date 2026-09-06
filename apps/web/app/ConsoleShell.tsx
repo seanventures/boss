@@ -341,16 +341,47 @@ export default function ConsoleShell({
     // is still arriving looks exactly like a list that is short, and the honest conclusion
     // from a page that has stopped saying it is busy is that the rest is not coming.
     //
-    // `load` is the right signal because this console STREAMS its HTML: it fires when the
-    // document and its subresources are done, which is the moment the last card lands.
+    // `load` IS NOT THE END OF THE PAGE FILLING UP. Measured on goldeneye:
+    //
+    //     loading fallback   0.3s      (the route skeleton)
+    //     content streams    6.8s -> 7.95s
+    //     stream ends        7.95s     -> `load` fires -> this bar used to clear
+    //
+    // and React then hydrates a 6 MB payload, which is when sections visibly appear. So the
+    // indicator went off at exactly the moment the expensive part began, and the operator
+    // watched projects arrive into a page that had stopped saying it was busy — "not all
+    // projects loading in the console, but there's no indicator", reported twice.
+    //
+    // What the bar claims is "this page is still filling up", so it now MEASURES that: the
+    // document being done, AND the content having stopped changing. A MutationObserver over
+    // the content is the direct observation; `load` alone was a proxy that stopped being true
+    // once a route-level skeleton split the wait in two.
     let done = false;
     const finish = () => { if (!done) { done = true; setSettling(false); } };
 
     // A floor, so a genuinely fast page does not blink the bar on and straight off.
     const floor = new Promise<void>((r) => window.setTimeout(r, 1200));
-    const arrived = document.readyState === "complete"
+    const documentDone = document.readyState === "complete"
       ? Promise.resolve()
       : new Promise<void>((r) => window.addEventListener("load", () => r(), { once: true }));
+
+    // QUIET FOR LONG ENOUGH TO MEAN IT. 700ms of no DOM changes under the content: long enough
+    // that a gap between two React commits does not read as finished, short enough that the bar
+    // does not linger over a page nobody is waiting for. Resolves immediately where there is no
+    // observer to use, rather than holding the bar up for ever.
+    const settledDom = new Promise<void>((resolve) => {
+      const target = document.querySelector(".bx-content") ?? document.body;
+      if (typeof MutationObserver === "undefined" || !target) { resolve(); return; }
+      let quiet: number | undefined;
+      const arm = () => {
+        window.clearTimeout(quiet);
+        quiet = window.setTimeout(() => { observer.disconnect(); resolve(); }, 700);
+      };
+      const observer = new MutationObserver(arm);
+      observer.observe(target, { childList: true, subtree: true });
+      arm();
+    });
+    const arrived = Promise.all([documentDone, settledDom]).then(() => undefined);
     // A ceiling, because an indicator that CANNOT go away is the failure the last one had —
     // it became permanent furniture that explained nothing.
     const ceiling = window.setTimeout(finish, 60_000);
