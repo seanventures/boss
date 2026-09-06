@@ -2373,6 +2373,9 @@ def _register_debug_session_tools(reg: ToolRegistry) -> None:
                     "do_this": ("call propose_action with tool='investigate', these exact args "
                                 "and a label saying what it will try to fix. Or run it "
                                 "read-only by leaving fix unset — that answers most questions."),
+                    "label": "Investigate and fix on the host",
+                    "why": ("opens a debugging session with a writable shell on the machine; "
+                            "read-only otherwise"),
                     "proposed_args": {**{k: v for k, v in args.items()
                                          if k in ("question", "run_id")}, "fix": True}}
         with ctx.begin() as c:

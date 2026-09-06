@@ -391,3 +391,131 @@ class TestAWriteIsNotFinishedUntilItIsChecked:
     def test_the_step_budget_is_configurable_and_not_small(self):
         assert Settings().chat_max_steps >= 12
         assert Settings().chat_continuation_steps >= 8
+
+
+class TestTheOfferSurvivesTheGate:
+    """Both bugs measured live, on the first real call to the new tool.
+
+        TOOLS     [('investigate', False), ...]
+        PROPOSED  [{"tool": "investigate", "args": {}, "label": "investigate", "why": ""}]
+
+    Two failures in one line. The message was "Use the investigate tool now: find out why
+    Change Calendar cannot be deployed" — an instruction — and the look-only gate read it as a
+    question, because the new capability's NAME is a look-word. So the write was withheld and
+    the operator was handed a button for the thing they had just told BOSS to do.
+
+    And that button had no arguments. A withheld write comes back as {"proposed": {tool, args}}
+    while `propose_action` returns {tool, args}; only the second shape was read. The offered
+    `investigate` would have run with no question in it.
+    """
+
+    def test_naming_a_tool_and_saying_run_it_is_an_instruction(self):
+        from boss_engine.services.intent_router import asked_only_to_look
+
+        assert asked_only_to_look(
+            "Use the investigate tool now: find out why Change Calendar cannot be deployed "
+            "to staging, and what exactly needs to change.") is False
+
+    @pytest.mark.parametrize("message", [
+        "run investigate on this",
+        "open an investigation",
+        "call diagnose_run on crun_123",
+        "kick off an investigation",
+        "use the investigate tool",
+    ])
+    def test_the_imperatives(self, message):
+        from boss_engine.services.intent_router import asked_only_to_look
+
+        assert asked_only_to_look(message) is False, message
+
+    @pytest.mark.parametrize("message", [
+        "should I run investigate?",
+        "can you use the investigate tool?",
+        "would it be worth running an investigation?",
+        "why is it stuck?",
+        "what changed today?",
+    ])
+    def test_asking_about_running_one_is_still_a_question(self, message):
+        """The gate exists because a question got a build cancelled. Widening it until every
+        mention of a tool licenses a write would give that back."""
+        from boss_engine.services.intent_router import asked_only_to_look
+
+        assert asked_only_to_look(message) is True, message
+
+    def test_a_withheld_write_keeps_its_arguments(self):
+        from boss_engine.services.intent_router import _offered_args
+
+        withheld = {"ok": False, "status": "confirmation_required",
+                    "proposed": {"tool": "investigate",
+                                 "args": {"question": "why can it not deploy",
+                                          "run_id": "crun_e917"}}}
+        assert _offered_args(withheld, {}) == {"question": "why can it not deploy",
+                                               "run_id": "crun_e917"}
+
+    def test_a_propose_action_offer_still_works(self):
+        from boss_engine.services.intent_router import _offered_args
+
+        assert _offered_args({"tool": "redeploy", "args": {"run_id": "crun_1"}}, {}) \
+            == {"run_id": "crun_1"}
+
+    def test_the_confirmation_shape_is_read_too(self):
+        from boss_engine.services.intent_router import _offered_args
+
+        assert _offered_args({"proposed_args": {"question": "q", "fix": True}}, {}) \
+            == {"question": "q", "fix": True}
+
+    def test_it_falls_back_to_the_call_the_model_made(self):
+        """A withheld write IS the call the model tried to make; losing it would produce a
+        button that does something other than what was proposed."""
+        from boss_engine.services.intent_router import _offered_args
+
+        assert _offered_args({"ok": False}, {"args": {"question": "from the call"}}) \
+            == {"question": "from the call"}
+
+    def test_internal_markers_never_reach_the_button(self):
+        from boss_engine.services.intent_router import _offered_args
+
+        assert _offered_args({"proposed_args": {"fix": True, "_operator_confirmed": True,
+                                                "_thread_id": "athr_1"}}, {}) == {"fix": True}
+
+    def test_the_fixing_investigation_offers_itself_with_words(self):
+        class Ctx:
+            def begin(self):
+                raise AssertionError("should not have opened one")
+
+        out = build_default_registry().invoke(
+            "investigate", Ctx(), project_id="p", actor="ceo",
+            args={"question": "fix it", "fix": True})
+        assert out["label"] and out["why"]
+        assert "writable shell" in out["why"]
+
+
+class TestTheImperativeIsAnchored:
+    """The first version of `told_to_run_a_tool` matched "which RUN failed and why" — a
+    question about a run, read as an order to run something. That is the same class of mistake
+    as the gate it was added to, made while fixing it, and the existing question corpus caught
+    it. Anchoring the verb to a clause boundary is what makes "run investigate" an imperative
+    and "which run failed" a noun."""
+
+    @pytest.mark.parametrize("message", [
+        "which run failed and why",
+        "why did the run fail",
+        "what happened to the build?",
+        "the run started at 9am, when did it finish?",
+        "is the open target still active?",
+    ])
+    def test_a_verb_in_the_middle_of_a_question_is_not_an_order(self, message):
+        from boss_engine.services.intent_router import told_to_run_a_tool
+
+        assert told_to_run_a_tool(message) is False, message
+
+    @pytest.mark.parametrize("message", [
+        "run investigate on this",
+        "please run investigate",
+        "look at the target, then run investigate",
+        "Use the investigate tool now",
+    ])
+    def test_but_at_the_start_of_one_it_is(self, message):
+        from boss_engine.services.intent_router import told_to_run_a_tool
+
+        assert told_to_run_a_tool(message) is True, message

@@ -857,6 +857,28 @@ def acted_without_checking(actions: list, tool_calls: list) -> bool:
     return not any(n and n not in acted for n in names[last_write + 1:])
 
 
+def _offered_args(result: dict, step: dict) -> dict:
+    """The arguments a proposed action should carry.
+
+    A BUTTON THAT LOSES ITS ARGUMENTS IS A BUTTON THAT DOES THE WRONG THING. Two shapes reach
+    here and only one was read: `propose_action` returns {tool, args}, while the write gate in
+    the agent loop returns {"proposed": {tool, args}} for a write it withheld. The second was
+    rendered with `result.get("args")` — absent — so an offered `investigate` arrived with `{}`
+    and would have run with no question in it.
+
+    The tool's own call arguments are the last resort, because a withheld write is exactly the
+    call the model tried to make.
+    """
+    for candidate in (result.get("args"),
+                      (result.get("proposed") or {}).get("args")
+                      if isinstance(result.get("proposed"), dict) else None,
+                      result.get("proposed_args"),
+                      step.get("args")):
+        if isinstance(candidate, dict) and candidate:
+            return {k: v for k, v in candidate.items() if not str(k).startswith("_")}
+    return {}
+
+
 def _button_label(result: dict, step: dict) -> str:
     """Text for an offered action, never empty.
 
@@ -977,6 +999,38 @@ _INSTRUCTED_TO = re.compile(
 )
 
 
+#: "Use the investigate tool", "run diagnose_run on it", "open an investigation".
+#:
+#: NAMING A TOOL AND TELLING IT TO RUN IS AN INSTRUCTION, and this one had to be written
+#: because a capability arrived whose NAME is a look-word. "Use the investigate tool now" was
+#: classified as a question — the gate saw "investigate" — so the write was withheld and the
+#: operator got a button for the thing they had just said to do.
+#: ANCHORED TO A CLAUSE, because an unanchored verb is a different word. The first version
+#: matched "which RUN failed and why" — a question about a run, read as an order to run
+#: something — which is the same class of mistake as the gate this was added to.
+_RUN_THIS_TOOL = re.compile(
+    r"(?:^|[.;:!?\n]|\bplease\b|\bnow\b|\bthen\b|\band\b|\bgo\s+ahead\s+and\b)\s*"
+    r"(?:use|run|call|invoke|start|open|kick\s?off|fire)\s+"
+    r"(?:the\s+|an?\s+)?(?:new\s+)?[a-z][a-z0-9_]{2,40}(?:\s+tool)?\b",
+    re.IGNORECASE,
+)
+
+#: …but not when it is a question ABOUT running one. "Should I run it?" is not an instruction,
+#: and neither is "can you use the investigate tool?" — the operator is asking, not telling.
+_ASKING_ABOUT_RUNNING = re.compile(
+    r"\b(?:should|shall|could|would|can|may|do you think|is it worth|what if)\b",
+    re.IGNORECASE,
+)
+
+
+def told_to_run_a_tool(message: str) -> bool:
+    """An imperative naming something to run."""
+    text = (message or "").strip()
+    if not text or _ASKING_ABOUT_RUNNING.search(text):
+        return False
+    return bool(_RUN_THIS_TOOL.search(text))
+
+
 def asked_only_to_look(message: str) -> bool:
     """Is this a question rather than an instruction?
 
@@ -1011,6 +1065,8 @@ def asked_only_to_look(message: str) -> bool:
     # An explicit instruction wins even when it is phrased as a question: "can you fix it?"
     # is a request, and "check the logs and retry it" is both — the instruction is the point.
     if _ASKED_TO_ACT.search(text) or _AUTHORISED.search(text) or _INSTRUCTED_TO.search(text):
+        return False
+    if told_to_run_a_tool(text):
         return False
     return bool(_ASKED_TO_LOOK.search(text))
 
@@ -1745,7 +1801,7 @@ class IntentRouter:
                             proposed.append({
                                 "id": make_id("act"),
                                 "tool": result.get("tool") or step.get("tool"),
-                                "args": result.get("args") or {},
+                                "args": _offered_args(result, step),
                                 # A BUTTON WITH NO TEXT ON IT CRASHED THE WHOLE TURN.
                                 #
                                 # AgentChatResponse types these as strings, and a tool that
@@ -1989,7 +2045,7 @@ class IntentRouter:
                                 proposed.append({
                                     "id": make_id("act"),
                                     "tool": result.get("tool") or step.get("tool"),
-                                    "args": result.get("args") or {},
+                                    "args": _offered_args(result, step),
                                     "label": _button_label(result, step),
                                     "why": str(result.get("why") or ""),
                                 })
