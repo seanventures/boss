@@ -6,11 +6,6 @@ import { Markdown } from "./markdown";
 
 import {
   askBossAction,
-  loadAgentProgressAction,
-  loadAgentWorkspaceAction,
-  loadRoleStartersAction,
-  loadTaskContextAction,
-  loadThreadMessagesAction,
   runAgentActionAction,
 } from "./actions";
 
@@ -127,6 +122,36 @@ type ProposedAction = {
   why?: string;
 };
 
+/**
+ * The dock's reads, off the Server Action path.
+ *
+ * "Loading conversation… is stuck when I click Ask for Engineering Captain." It was not stuck,
+ * it was QUEUED: these were Server Actions, Next serialises those against each other and
+ * against `router.refresh()`, and the console refreshes itself on a live interval into a
+ * re-render of a 6 MB page. A dock opened during that window waited behind it.
+ *
+ * A route handler does not queue. The timeout is the second half: a read that never answers
+ * must not hold the panel in "Loading…" for ever — the panel opens empty and usable, which is
+ * a far better failure than a spinner with no end.
+ */
+async function read<T>(params: Record<string, string>, ms = 12_000): Promise<T | null> {
+  const query = new URLSearchParams(params).toString();
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), ms);
+    const r = await fetch(`/api/agent?${query}`, {
+      cache: "no-store", signal: controller.signal,
+    });
+    window.clearTimeout(timer);
+    if (!r.ok) return null;
+    const body = await r.json();
+    return (body && typeof body === "object" && "error" in body) ? null : (body as T);
+  } catch {
+    return null;                      // aborted, offline, or malformed — the caller recovers
+  }
+}
+
+
 export function AgentChat({ projectId, actor, initialTaskId, initialMessage, roleName }: {
   projectId: string; actor: string; initialTaskId?: string;
   /** Text to seed the composer with, handed in as a PROP rather than read from the URL.
@@ -230,9 +255,10 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     let alive = true;
     let cursor = 0;
     const tick = () => {
-      loadAgentProgressAction(threadId, cursor).then((r) => {
-        if (!alive || !r.ok || !r.data) return;
-        const d = r.data as { steps?: { id: number; label: string }[]; cursor?: number };
+      read<{ steps?: { id: number; label: string }[]; cursor?: number }>(
+        { view: "progress", project_id: projectId, actor, thread_id: threadId,
+          since: String(cursor) }, 4_000).then((d) => {
+        if (!alive || !d) return;
         if (Array.isArray(d.steps) && d.steps.length) {
           cursor = Number(d.cursor ?? cursor);
           setSteps((prev) => [...prev, ...d.steps!.map((s) => s.label)].slice(-6));
@@ -272,9 +298,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     setThreadId(threadId);
     if (!threadId) { setLoadingThread(false); return; }   // New chat: nothing to fetch
     setLoadingThread(true);
-    loadThreadMessagesAction(threadId, projectId, actor).then((r) => {
-      if (r.ok && r.data) {
-        const d = r.data as Record<string, unknown>;
+    read<Record<string, unknown>>(
+      { view: "messages", project_id: projectId, actor, thread_id: threadId }).then((d) => {
+      if (d) {
         setMessages((d.messages as Msg[]) ?? []);
         setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
@@ -293,9 +319,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     setThreadId(th?.thread_id ?? null);
     const jobs: Promise<unknown>[] = [];
     if (th?.thread_id) {
-      jobs.push(loadThreadMessagesAction(th.thread_id, projectId, actor).then((r) => {
-        if (r.ok && r.data) {
-          const d = r.data as Record<string, unknown>;
+      jobs.push(read<Record<string, unknown>>(
+        { view: "messages", project_id: projectId, actor, thread_id: th.thread_id }).then((d) => {
+        if (d) {
           setMessages((d.messages as Msg[]) ?? []);
           setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
         setProposed(Array.isArray(d.proposed_actions) ? (d.proposed_actions as ProposedAction[]) : []);
@@ -303,8 +329,9 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
       }));
     }
     if (id !== GENERAL) {
-      jobs.push(loadTaskContextAction(id, projectId).then((r) => {
-        if (r.ok && r.data) setContext(r.data as { task?: Record<string, unknown>; code_tasks?: CodeTask[] });
+      jobs.push(read<{ task?: Record<string, unknown>; code_tasks?: CodeTask[] }>(
+        { view: "task-context", project_id: projectId, actor, task_id: id }).then((d) => {
+        if (d) setContext(d);
       }));
     }
     Promise.all(jobs).finally(() => setLoadingThread(false));
@@ -322,18 +349,21 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     // A role chat resumes even before the workspace list lands: it is the common case in the
     // dock, and waiting on the task list to paint a role's history makes the panel flash empty.
     if (roleRef) setLoadingThread(true);
-    loadAgentWorkspaceAction(projectId, actor).then((r) => {
-      if (!alive || !r.ok || !r.data) { if (alive) setLoadingThread(false); return; }
-      const ts = ((r.data as Record<string, unknown>).tasks as Task[]) ?? [];
-      const ths = ((r.data as Record<string, unknown>).threads as Thread[]) ?? [];
+    read<{ tasks?: Task[]; threads?: Thread[] }>(
+      { view: "workspace", project_id: projectId, actor }).then((d) => {
+      if (!alive) return;
+      if (!d) { setLoadingThread(false); return; }
+      const ts = d.tasks ?? [];
+      const ths = d.threads ?? [];
       setTasks(ts); setThreads(ths);
       const mine = roleRef ? ths.find((t) => (t.external_ref ?? null) === roleRef) : undefined;
       if (mine?.thread_id) {
         setThreadId(mine.thread_id);
-        loadThreadMessagesAction(mine.thread_id, projectId, actor).then((m) => {
+        read<Record<string, unknown>>(
+          { view: "messages", project_id: projectId, actor,
+            thread_id: mine.thread_id }).then((d) => {
           if (!alive) return;
-          if (m.ok && m.data) {
-            const d = m.data as Record<string, unknown>;
+          if (d) {
             setMessages((d.messages as Msg[]) ?? []);
             setPendingPlan((d.pending_confirmation as Record<string, unknown>) ?? null);
             setProposed(Array.isArray(d.proposed_actions)
@@ -358,20 +388,20 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   useEffect(() => {
     if (!roleName) return;
     let alive = true;
-    loadRoleStartersAction(projectId, roleName).then((r) => {
-      if (!alive || !r.ok || !r.data) return;
-      const list = (r.data as Record<string, unknown>).starters;
+    read<{ starters?: unknown }>(
+      { view: "starters", project_id: projectId, actor, role: roleName }).then((d) => {
+      if (!alive || !d) return;
+      const list = d.starters;
       if (Array.isArray(list) && list.length && list.every((x) => typeof x === "string")) {
         setSuggestions(list as string[]);
       }
     });
     return () => { alive = false; };
-  }, [projectId, roleName]);
+  }, [projectId, actor, roleName]);
 
   const refreshThreads = useCallback(() => {
-    loadAgentWorkspaceAction(projectId, actor).then((w) => {
-      if (w.ok && w.data) setThreads(((w.data as Record<string, unknown>).threads as Thread[]) ?? []);
-    });
+    read<{ threads?: Thread[] }>({ view: "workspace", project_id: projectId, actor })
+      .then((d) => { if (d) setThreads(d.threads ?? []); });
   }, [projectId, actor]);
 
   const runTurn = useCallback((fd: FormData) => {

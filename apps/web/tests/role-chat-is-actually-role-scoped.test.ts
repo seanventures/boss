@@ -66,15 +66,15 @@ describe("a role's conversation survives closing the panel", () => {
   it("the history is loaded when the panel opens, not after the first message", () => {
     // `codeOnly` strips comments, so anchor on code: the mount effect runs from the workspace
     // load to the starters effect.
-    const mount = UI.slice(UI.indexOf("loadAgentWorkspaceAction(projectId, actor).then"),
-                           UI.indexOf("loadRoleStartersAction(projectId, roleName)"));
+    const mount = UI.slice(UI.indexOf('view: "workspace", project_id: projectId, actor'),
+                           UI.indexOf('view: "starters"'));
     expect(mount).toContain("ths.find((t) => (t.external_ref ?? null) === roleRef)");
-    expect(mount).toContain("loadThreadMessagesAction");
+    expect(mount).toContain('view: "messages"');
   });
 
   it("a role with no history opens clean rather than borrowing the general thread", () => {
-    const mount = UI.slice(UI.indexOf("loadAgentWorkspaceAction(projectId, actor).then"),
-                           UI.indexOf("loadRoleStartersAction(projectId, roleName)"));
+    const mount = UI.slice(UI.indexOf('view: "workspace", project_id: projectId, actor'),
+                           UI.indexOf('view: "starters"'));
     expect(mount).toContain("if (roleRef) { setLoadingThread(false); return; }");
   });
 
@@ -88,12 +88,16 @@ describe("a role's conversation survives closing the panel", () => {
 
 describe("the starters are about the role", () => {
   it("they come from the server, which grounds them in that role's record", () => {
-    expect(UI).toContain("loadRoleStartersAction(projectId, roleName)");
-    expect(ACTIONS).toContain("/v1/agent/role-starters");
+    // Read through the route handler, not a Server Action: Next serialises those against
+    // router.refresh(), and the dock's reads were queueing behind an 8-20s console re-render —
+    // which is what "Loading conversation… is stuck" actually was.
+    expect(UI).toContain('view: "starters"');
+    const ROUTE = codeOnly("app/api/agent/route.ts");
+    expect(ROUTE).toContain("/v1/agent/role-starters");
   });
 
   it("the fixed status prompts are not what a named role offers", () => {
-    const effect = UI.slice(UI.indexOf("loadRoleStartersAction(projectId, roleName)"),
+    const effect = UI.slice(UI.indexOf('view: "starters"'),
                             UI.indexOf("const refreshThreads"));
     expect(effect).toContain("setSuggestions(list as string[])");
     // The generic three remain as the fallback for the GENERAL agent, which is a dashboard-ish
