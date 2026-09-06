@@ -2732,6 +2732,10 @@ def fail_step(
     error: str,
     retryable: bool = True,
     retry_delay_seconds: int = 0,
+    #: Whatever the capability returned. Kept because a failed step stored `{}` and the only
+    #: record of what happened was one sentence — which, on the deploy gate that prompted this,
+    #: read "the capability reported failure without a reason". Evidence outlives the summary.
+    output: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     row = connection.execute(
         text(
@@ -2756,6 +2760,9 @@ def fail_step(
             SET status=:status, last_error=:error, run_after=:run_after,
                 lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
                 completed_at=CASE WHEN :terminal THEN now() ELSE NULL END,
+                -- MERGED, not replaced: a step that parked and then failed keeps the await
+                -- handle it was waiting on, which is how anything can be reconstructed later.
+                output = COALESCE(output, '{}'::jsonb) || CAST(:output AS JSONB),
                 updated_at=now()
             WHERE id=:id RETURNING *
             """
@@ -2766,6 +2773,7 @@ def fail_step(
             "error": _clean_text(error, "error"),
             "run_after": run_after,
             "terminal": not can_retry,
+            "output": json.dumps(output or {}),
         },
     ).mappings().one()
     run = _run_row(connection, row["workflow_run_id"])

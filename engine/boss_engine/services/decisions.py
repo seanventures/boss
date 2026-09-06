@@ -1007,15 +1007,42 @@ class DecisionService:
         # The link was there to be read the whole time: a gate step records its decision in
         # `workflow_step_runs.decision_id`. One query turns "this approval" into "the run this
         # approval belongs to".
+        # THE DECISION LINK IS NOT WRITTEN YET WHEN THIS RUNS. Measured on the duplicate that
+        # got through after the first version of this fix:
+        #
+        #     05:53:02  decision approved      <- this code runs, finds nothing
+        #     05:53:23  code task created      <- opens a SECOND workflow run
+        #     05:53:26  step.decision_id set   <- the link appears, three seconds too late
+        #
+        # A spec_review gate ADOPTS a decision the meeting already created, so at approval time
+        # the workflow has not claimed it. The meeting HAS been claimed — the run's own meeting
+        # step produced it — and that link exists well before anyone approves anything.
+        #
+        # Decision first because it is exact; meeting second because it is available earlier.
         governing_run_id = None
-        try:
-            governing_run_id = connection.execute(
-                text("SELECT workflow_run_id FROM workflow_step_runs "
-                     "WHERE decision_id = :d ORDER BY created_at DESC LIMIT 1"),
-                {"d": row["id"]},
-            ).scalar()
-        except Exception:  # noqa: BLE001 — an unlinked decision still builds, as it always did
-            governing_run_id = None
+        meeting_id = (origin_ctx or {}).get("meeting_run_id")
+        for sql_text, params in (
+            ("SELECT workflow_run_id FROM workflow_step_runs "
+             "WHERE decision_id = :d ORDER BY created_at DESC LIMIT 1",
+             {"d": row["id"]}),
+            # Live runs only: a finished run is not governing anything, and attaching this build
+            # to it would hide the build rather than place it.
+            ("SELECT s.workflow_run_id FROM workflow_step_runs s "
+             "JOIN workflow_runs r ON r.id = s.workflow_run_id "
+             "WHERE s.project_id = :p AND r.status IN ('running', 'waiting') "
+             "  AND (s.output->>'meeting_run_id' = :m "
+             "       OR s.output->'await'->>'id' = :m) "
+             "ORDER BY s.created_at DESC LIMIT 1",
+             {"p": row["project_id"], "m": meeting_id}),
+        ):
+            if params.get("m") is None and "meeting_run_id" in sql_text:
+                continue
+            try:
+                governing_run_id = connection.execute(text(sql_text), params).scalar()
+            except Exception:  # noqa: BLE001 — an unlinked decision still builds, as before
+                governing_run_id = None
+            if governing_run_id:
+                break
         if governing_run_id:
             origin_ctx = {**(origin_ctx or {}), "workflow_run_id": str(governing_run_id)}
 

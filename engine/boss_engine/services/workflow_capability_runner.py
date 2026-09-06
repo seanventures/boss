@@ -341,6 +341,36 @@ def _this_runs_app(connection: Connection, context: dict[str, Any]) -> Optional[
     return identity_key(display) if display and display != "Untitled app" else None
 
 
+def _reason_of_last_resort(output: dict[str, Any], step: dict[str, Any]) -> str:
+    """What to say when a capability failed and offered no explanation.
+
+    Never "without a reason". That sentence is the absence of an error message dressed as one:
+    it names nothing to look at, nothing to try, and no reason to believe the system knows what
+    happened — which, in the case that produced it, it did not.
+    """
+    capability = str(output.get("capability") or step.get("step_id") or "the step")
+    tool = output.get("tool")
+
+    # Anything the capability did say, even under a key nobody planned for. A returned dict is
+    # evidence and belongs in front of the operator, not summarised into silence.
+    said = {
+        k: v for k, v in (output or {}).items()
+        if k not in ("capability", "tool", "status", "inputs") and v not in (None, "", [], {})
+    }
+    if said:
+        rendered = "; ".join(f"{k}={str(v)[:160]}" for k, v in list(said.items())[:6])
+        return (f"{capability} failed and gave no error message. What it did return: {rendered}. "
+                f"Read the activity log for this run, or ask BOSS about this step.")
+
+    return (
+        f"{capability} failed and returned nothing at all"
+        + (f" (tool: {tool})" if tool else "")
+        + ". There is no error text because the capability produced none — that is a defect in "
+          "the capability, not a description of your app. Next: read_logs(service='worker') "
+          "around this step's time, and diagnose_run on the build this step was shipping."
+    )
+
+
 def _observed_monitoring(
     connection: Connection, project_id: str, context: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1902,11 +1932,25 @@ def tick(
                             for p in problems)
                     else:
                         detail = ""
-                    reason = str(output.get("error") or detail or output.get("note")
-                                 or "the capability reported failure without a reason")
+                    reason = str(output.get("error") or detail or output.get("note") or "")
+                    if not reason.strip():
+                        # "the capability reported failure without a reason" is what an operator
+                        # actually saw on a deploy gate, and it is not an error message — it is
+                        # the absence of one. It told them nothing, and it told the next engineer
+                        # less, because the step's stored output was `{}` as well.
+                        #
+                        # A failure with nothing to say should be impossible: whatever the
+                        # capability DID return is evidence, so it is reported rather than
+                        # summarised away. Where it returned nothing at all, say that plainly and
+                        # name the thing to look at next.
+                        reason = _reason_of_last_resort(output, claimed)
                     workflows.fail_step(
                         connection, project_id=project_id, step_run_id=claimed["id"],
                         worker_id=worker_id, error=reason[:500], retryable=True,
+                        # THE OUTPUT SURVIVES THE FAILURE. It was dropped, so a step that failed
+                        # stored `{}` and the only record of what happened was the one sentence
+                        # above — which in this case said nothing.
+                        output=output,
                     )
                     performed.append({
                         "run_id": run_id, "step_id": claimed["step_id"],

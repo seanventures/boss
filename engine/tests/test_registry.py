@@ -25,6 +25,9 @@ _EXPECTED_TOOLS: set[str] = {
     # makes a duration mean something. A prompt can be skipped under pressure; a routine
     # cannot.
     "diagnose_run",
+    # Choosing a port without guessing. BOSS worked out "8000 is in use, 8001 is free" by
+    # reading raw socket output; the next number up is a guess that happened to be right.
+    "find_free_port",
     # The spec an app was built from — PRD, criteria, review notes. BOSS could read
     # its own source, its logs and its hosts, and could not read the one document
     # that says what an app was FOR.
@@ -117,10 +120,10 @@ def test_default_registry_shape():
     read = {s.name for s in reg.specs(kind="read")}
     write = {s.name for s in reg.specs(kind="write")}
     assert read | write == set(reg.names())
-    assert len(reg.names()) == 71, (
+    assert len(reg.names()) == 72, (
         f"tool set changed: unexpected={sorted(set(reg.names()) - _EXPECTED_TOOLS)}, "
         f"missing={sorted(_EXPECTED_TOOLS - set(reg.names()))}")
-    assert len(read) == 46
+    assert len(read) == 47
     assert len(write) == 25
     # the capabilities the user explicitly asked the agent to cover
     for name in (

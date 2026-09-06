@@ -753,6 +753,78 @@ def under_investigated(tool_calls: list, message: str) -> bool:
     return len([c for c in (tool_calls or []) if c.get("tool")]) < _MIN_LOOKUPS_FOR_OPERATIONAL
 
 
+#: A reply that PRESCRIBES rather than performs. "The fix is to retarget the app to an unused
+#: port and redeploy" is a correct diagnosis and a completed sentence, and it is not a fix.
+_PRESCRIBES_A_FIX = re.compile(
+    r"\b(the fix is|the solution is|you (?:should|need to|can|could)|"
+    r"it (?:should|needs to) be|we (?:should|need to)|"
+    r"(?:can|could) be (?:fixed|resolved|solved) by|"
+    r"recommend(?:ed|ation)?\s+(?:is\s+)?to|next step is to)\b",
+    re.IGNORECASE,
+)
+
+
+def described_a_fix_without_doing_it(reply: str, actions: list, proposed: list) -> bool:
+    """Did it write the prescription and not fill it?
+
+    The transcript this exists for, three turns running, each after the operator asked for the
+    deployment to be FIXED:
+
+        "The fix is to retarget the app to an unused port (e.g., 8001) and redeploy."
+        "The deployment failed because the host already has port 8000 in use... port 8001 is
+         free."
+        "The deployment was stuck because the host already has port 8000 bound. I verified the
+         host's sockets..."
+
+    The diagnosis was right every time. `retarget_app` and `redeploy` were both in its hands.
+    Nothing ran, nothing was offered, and the operator said "I told you already" — which is what
+    a person says to a system that answers instead of working.
+
+    An offer counts as doing something: a button carries the arguments and one click runs it.
+    Prose does not.
+    """
+    if not reply or actions or proposed:
+        return False
+    return bool(_PRESCRIBES_A_FIX.search(reply))
+
+
+def going_in_circles(reply: str, history: list) -> bool:
+    """Is this the same answer again?
+
+    Repetition after an instruction is the signature of an agent that has stopped making
+    progress and has not noticed. The words differ each time — "the fix is to retarget" becomes
+    "the deployment failed because port 8000 is in use" — so exact matching sees three distinct
+    replies; what repeats is the CONTENT.
+
+    Compared on significant words rather than sentences, and only against the immediately
+    previous answer, because a conversation that returns to a subject is normal and only
+    consecutive restatement is a loop.
+    """
+    if not reply or not history:
+        return False
+    previous = ""
+    for message in reversed(history):
+        if str(message.get("role")) == "assistant":
+            previous = str(message.get("content") or "")
+            break
+    if not previous:
+        return False
+
+    def bag(text: str) -> set:
+        return {w for w in re.findall(r"[a-z0-9]{5,}", text.lower())}
+
+    now, before = bag(reply), bag(previous)
+    if len(now) < 8 or len(before) < 8:
+        return False
+    # CONTAINMENT, NOT JACCARD, and the threshold comes from the real pair rather than a guess.
+    # The two consecutive port-8000 answers share half their significant words but score only
+    # 0.32 on Jaccard, because each adds detail the other lacks — which is exactly what a
+    # rephrased repeat looks like. Two answers about genuinely different things scored 0.00, so
+    # there is a wide gap to sit in.
+    overlap = len(now & before) / min(len(now), len(before))
+    return overlap >= 0.45
+
+
 def hands_the_problem_back(reply: str, proposed: list) -> bool:
     """Does this reply end without a direction the operator can act on?
 
@@ -765,6 +837,37 @@ def hands_the_problem_back(reply: str, proposed: list) -> bool:
     if proposed:
         return False           # there is a button; that is a direction
     return bool(_GAVE_UP.search(reply) or _YES_NO_BACK.search(reply))
+
+
+#: The operator handing over authority in as many words. When any of these appears, the message
+#: is an INSTRUCTION however it is phrased around it.
+#:
+#: From the transcript this exists for:
+#:
+#:     "I told you already to redeploy to different port, check yourself before applying to the
+#:      new port and ensure that it's good.. dont keep asking me, you have full freedom on the
+#:      host"
+#:
+#: — classified as look-only, because the imperative sat after "to" rather than at the start of
+#: a clause and the word "check" appeared. Writes were withheld, BOSS re-described the problem
+#: it had already diagnosed, and the operator said it again. A safety gate that turns "you have
+#: full freedom" into a refusal is not being careful; it is being deaf.
+_AUTHORISED = re.compile(
+    r"\b(you have full freedom|whatever it takes|do what(?:ever)?(?:\s+\w+){0,2}\s+need(?:ed|s)?"
+    r"|don'?t (?:keep )?ask(?:ing)? me|do not (?:keep )?ask|stop asking"
+    r"|i told you|i already told you|as i said|like i said"
+    r"|without asking|no need to ask|just get it done|make it work)\b",
+    re.IGNORECASE,
+)
+
+#: An instruction phrased as a report of one — "I told you to redeploy", "I want you to fix it".
+#: The imperative is there; it is simply not at the start of a clause.
+_INSTRUCTED_TO = re.compile(
+    r"\b(?:told|asked|want|need|expect)(?:ed)?\s+(?:you\s+)?to\s+"
+    r"(?:fix|cancel|retry|restart|re-?deploy|deploy|kill|stop|delete|remove|revert|roll\s?back|"
+    r"merge|apply|unstick|resume|clear|rerun|re-?run|change|move|switch|update|set)\b",
+    re.IGNORECASE,
+)
 
 
 def asked_only_to_look(message: str) -> bool:
@@ -800,7 +903,7 @@ def asked_only_to_look(message: str) -> bool:
         return False
     # An explicit instruction wins even when it is phrased as a question: "can you fix it?"
     # is a request, and "check the logs and retry it" is both — the instruction is the point.
-    if _ASKED_TO_ACT.search(text):
+    if _ASKED_TO_ACT.search(text) or _AUTHORISED.search(text) or _INSTRUCTED_TO.search(text):
         return False
     return bool(_ASKED_TO_LOOK.search(text))
 
@@ -1602,7 +1705,17 @@ class IntentRouter:
                     # because "try harder" is not an instruction a model can act on.
                     _thin = under_investigated(tool_calls, latest)
                     _handed_back = hands_the_problem_back(reply, proposed)
-                    if reply and (_thin or _handed_back):
+                    # A PRESCRIPTION IS NOT A FIX, AND A REPEAT IS NOT AN ANSWER.
+                    #
+                    # Three turns running, each after the operator asked for the deployment to be
+                    # fixed, BOSS wrote a correct diagnosis and did nothing: "the fix is to
+                    # retarget the app to an unused port and redeploy", with retarget_app and
+                    # redeploy both in its hands. The operator replied "I told you already" —
+                    # what a person says to a system that answers instead of working.
+                    _prescribed = (not _looking_only
+                                   and described_a_fix_without_doing_it(reply, actions, proposed))
+                    _repeating = going_in_circles(reply, history)
+                    if reply and (_thin or _handed_back or _prescribed or _repeating):
                         gaps = []
                         if _thin:
                             gaps.append(
@@ -1612,6 +1725,24 @@ class IntentRouter:
                                 "question if you have not, then read_logs, then the code — you "
                                 "have a budget of twelve steps and answering early is how a "
                                 "normal build gets called a stall.")
+                        if _prescribed:
+                            gaps.append(
+                                "You described a fix and did not apply it. The operator asked "
+                                "you to fix this; a sentence beginning 'the fix is to' is a "
+                                "prescription, not a repair. CALL the tool that performs it now "
+                                "— retarget_app, redeploy, retry_code_task, whichever it is — "
+                                "with concrete arguments you have looked up. If you genuinely "
+                                "cannot, offer it with propose_action so it is one click away, "
+                                "and say which tool you lack.")
+                        if _repeating:
+                            gaps.append(
+                                "This is the same answer you just gave. Repeating a diagnosis "
+                                "the operator has already read is not progress — they can see "
+                                "you are stuck even if you cannot. Do something DIFFERENT this "
+                                "turn: run a tool you have not run, read a source you have not "
+                                "read (the host, the container, the app's code on its branch, "
+                                "the service logs), or ACT on the conclusion you have already "
+                                "reached. Do not restate it a third time.")
                         if _handed_back:
                             gaps.append(
                                 "Your answer ends by handing the problem back. Never end on "

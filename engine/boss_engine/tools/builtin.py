@@ -2444,6 +2444,90 @@ def _register_diagnosis_tools(reg: ToolRegistry) -> None:
         }
 
 
+def _register_port_tools(reg: ToolRegistry) -> None:
+    """Choosing a port, without guessing.
+
+    From the transcript: "the host already has port 8000 in use, so the container cannot bind.
+    I verified the host's listening sockets and found port 8000 occupied, while port 8001 is
+    free." Correct — and reached by reading raw socket output and eyeballing it. The next port
+    up is a guess that happened to be right; the one after it might be a neighbour's.
+
+    Two sources have to agree for a port to be genuinely free: nothing is listening on the host,
+    and BOSS's own registry has not promised it to another app. Either alone produces a
+    collision — a port that is free right now but assigned to an app that is between deploys is
+    not free.
+    """
+    @reg.tool(
+        "find_free_port",
+        "A port on this host that is actually free — nothing listening AND not already assigned "
+        "to another app in BOSS's registry. Use before retarget_app instead of picking the next "
+        "number up: 'is 8001 free' needs both answers, and a port that is idle right now but "
+        "promised to an app between deploys is not free.",
+        _obj({"host": {"type": "string", "description": "address, e.g. 2.29.2.202"},
+              "start": {"type": "integer", "description": "first port to consider (default 3000)"},
+              "count": {"type": "integer", "description": "how many to report (default 3)"},
+              "project_id": {"type": "string"}},
+             ["host"]),
+        kind="read",
+    )
+    def find_free_port(ctx, *, project_id, actor, args):
+        import socket
+
+        host = str(args.get("host") or "").strip()
+        if not host:
+            return {"ok": False, "error": "host is required"}
+        start = max(1024, int(args.get("start") or 3000))
+        want = max(1, min(int(args.get("count") or 3), 10))
+        pid = args.get("project_id") or project_id
+
+        with ctx.begin() as c:
+            rows = c.execute(
+                _text("SELECT app_name, domains FROM deployment_targets "
+                      "WHERE status = 'active'"),
+            ).mappings().all()
+        # Every port BOSS has promised on this host, whatever project owns it: a collision with
+        # another project's app is still a collision.
+        assigned: dict[int, str] = {}
+        for row in rows:
+            for domain in (row["domains"] or []):
+                head, _, tail = str(domain).rpartition(":")
+                if tail.isdigit() and head == host:
+                    assigned[int(tail)] = row["app_name"]
+
+        free: list[int] = []
+        checked = 0
+        port = start
+        while len(free) < want and checked < 200 and port < 65535:
+            checked += 1
+            if port in assigned:
+                port += 1
+                continue
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            try:
+                sock.connect((host, port))
+                listening = True          # something answered: not free
+            except OSError:
+                listening = False
+            finally:
+                sock.close()
+            if not listening:
+                free.append(port)
+            port += 1
+
+        return {
+            "host": host, "project_id": pid,
+            "free_ports": free,
+            "assigned_on_this_host": [{"port": k, "app": v} for k, v in sorted(assigned.items())],
+            "scanned": checked,
+            "note": ("A port is reported free only when nothing answered AND BOSS has not "
+                     "assigned it. If free_ports is empty, widen `start` rather than picking "
+                     "one anyway."
+                     if free else
+                     "Nothing free in the range scanned — try a higher `start`."),
+        }
+
+
 def _register_run_turn_tools(reg: ToolRegistry) -> None:
     """The turn-by-turn record of what a build was actually doing.
 
@@ -3914,6 +3998,7 @@ def build_default_registry() -> ToolRegistry:
     _register_deployment_target_tools(reg)
     _register_role_experience_tools(reg)
     _register_standard_tools(reg)
+    _register_port_tools(reg)
     _register_run_turn_tools(reg)
     _register_diagnosis_tools(reg)
     _register_write_tools(reg)

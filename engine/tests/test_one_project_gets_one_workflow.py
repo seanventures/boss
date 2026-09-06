@@ -54,8 +54,33 @@ class TestTheApprovalKnowsWhichRunItBelongsTo:
         a lookup came back empty — the behaviour there is exactly what it was."""
         body = inspect.getsource(decisions)
         block = body[body.index("governing_run_id = None"):]
-        assert "except Exception" in block[:900]
-        assert "if governing_run_id:" in block[:1200]
+        assert "except Exception" in block[:1600]
+        assert "if governing_run_id:" in block[:2400]
+
+    def test_the_meeting_is_tried_when_the_decision_link_is_not_written_yet(self):
+        """Measured on the duplicate that got through after the first version of this fix:
+
+            05:53:02  decision approved      <- the lookup runs, finds nothing
+            05:53:23  code task created      <- opens a SECOND workflow run
+            05:53:26  step.decision_id set   <- the link appears, three seconds too late
+
+        A spec_review gate ADOPTS a decision the meeting already made, so the workflow has not
+        claimed it at approval time. The meeting has been claimed since the run's own meeting
+        step produced it."""
+        body = inspect.getsource(decisions)
+        assert "s.output->>'meeting_run_id' = :m" in body
+        assert "meeting_id = (origin_ctx or {}).get(\"meeting_run_id\")" in body
+
+    def test_only_a_live_run_can_claim_the_build(self):
+        """A finished run is not governing anything; attaching a build to it would hide the
+        build rather than place it."""
+        body = inspect.getsource(decisions)
+        assert "r.status IN ('running', 'waiting')" in body
+
+    def test_the_exact_decision_link_is_still_preferred(self):
+        """It is the precise answer when it exists; the meeting is the earlier-available one."""
+        body = inspect.getsource(decisions)
+        assert body.index("WHERE decision_id = :d") < body.index("meeting_run_id' = :m")
 
 
 class TestTheGuardSeesIt:
