@@ -520,6 +520,23 @@ def open_investigation(connection, *, project_id: str, question: str, actor: str
     """Record the intent and queue the work. Returns immediately — this takes minutes."""
     from .jobs import enqueue_job
 
+    # AN INVESTIGATION THE CONTAINER OUTLIVED IS NOT STILL RUNNING.
+    #
+    # It executes inside the API process, so a deploy — or a crash — leaves the row `running`
+    # with nobody working on it. Combined with the one-at-a-time guard below, that meant the
+    # first restart during an investigation permanently disabled the feature for that project:
+    # every later attempt was refused in favour of a session that had stopped existing.
+    #
+    # `updated_at` moves on every state change, so a row that has not moved in the window is
+    # abandoned. Marked, not silently reused, because "it stopped when the API restarted" is
+    # something the operator should be able to read afterwards.
+    connection.execute(
+        sql("UPDATE investigations SET status = 'abandoned', token = NULL, "
+            "error = 'the process running it stopped (deploy or restart) before it finished', "
+            "finished_at = now(), updated_at = now() "
+            "WHERE project_id = :p AND status IN ('queued', 'running') "
+            "  AND updated_at < now() - INTERVAL '25 minutes'"),
+        {"p": project_id})
     live = connection.execute(
         sql("SELECT id FROM investigations WHERE project_id = :p "
             "AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1"),
@@ -739,10 +756,24 @@ def run_investigation(engine, settings: Settings, *, investigation_id: str) -> d
 
             report = _progress_reporter(project_id, str(record.get("thread_id") or ""))
 
+            beats = {"n": 0}
+
             def _tell_the_operator(turn: dict) -> None:
                 line = _what_it_is_doing(turn)
                 if line and report:
                     report(line)
+                # A HEARTBEAT, so "stale" means stalled rather than merely long. Without it the
+                # abandonment sweep would have to guess a window longer than the slowest
+                # investigation, and would still reclaim a live one eventually. Every tenth
+                # turn: often enough to be unambiguous, rare enough to be free.
+                beats["n"] += 1
+                if beats["n"] % 10 == 0:
+                    try:
+                        with begin(engine) as hb:
+                            hb.execute(sql("UPDATE investigations SET updated_at = now() "
+                                           "WHERE id = :i"), {"i": investigation_id})
+                    except Exception:  # noqa: BLE001 — a heartbeat must not fail the work
+                        pass
 
             data = ClaudeCodeAgent(settings)._invoke(  # noqa: SLF001 — the pipeline's own entry
                 prompt, sandbox.path,

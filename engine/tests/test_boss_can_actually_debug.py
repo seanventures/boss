@@ -965,3 +965,54 @@ class TestALongConversationIsNotAnArgument:
         i = body.index("child.stdin.write(stdin_prompt)")
         assert "child.stdin.close()" in body[i:i + 200]
         assert body.index("child.stdin.close()") < body.index("_drain(child")
+
+
+class TestAnInvestigationTheContainerOutlived:
+    """Measured: a fixing investigation was running when I deployed, the API container was
+    recreated under it, and the row stayed `running` forever. Combined with the one-at-a-time
+    guard, that meant the first restart during an investigation permanently disabled the feature
+    for that project — every later attempt refused in favour of a session that had stopped
+    existing."""
+
+    def test_a_stalled_run_is_reclaimed(self):
+        from boss_engine.services.debug_session import open_investigation
+
+        body = inspect.getsource(open_investigation)
+        assert "status = 'abandoned'" in body
+        assert "updated_at < now() - INTERVAL '25 minutes'" in body
+
+    def test_it_is_marked_rather_than_silently_reused(self):
+        """"it stopped when the API restarted" is something the operator should be able to read
+        afterwards."""
+        from boss_engine.services.debug_session import open_investigation
+
+        body = inspect.getsource(open_investigation)
+        assert "the process running it stopped (deploy or restart) before it finished" in body
+
+    def test_the_sweep_runs_before_the_one_at_a_time_check(self):
+        from boss_engine.services.debug_session import open_investigation
+
+        body = inspect.getsource(open_investigation)
+        assert body.index("status = 'abandoned'") < body.index("live = connection.execute")
+
+    def test_and_its_token_dies_with_it(self):
+        from boss_engine.services.debug_session import open_investigation
+
+        i = inspect.getsource(open_investigation).index("status = 'abandoned'")
+        assert "token = NULL" in inspect.getsource(open_investigation)[i:i + 200]
+
+    def test_a_live_one_heartbeats_so_stale_means_stalled(self):
+        """Without it the window would have to exceed the slowest investigation, and would
+        still reclaim a live one eventually."""
+        from boss_engine.services.debug_session import run_investigation
+
+        body = inspect.getsource(run_investigation)
+        assert 'beats["n"] % 10 == 0' in body
+        assert "UPDATE investigations SET updated_at = now() " in body
+
+    def test_the_heartbeat_cannot_fail_the_work(self):
+        from boss_engine.services.debug_session import run_investigation
+
+        body = inspect.getsource(run_investigation)
+        i = body.index('beats["n"] % 10 == 0')
+        assert "except Exception" in body[i:i + 420]
