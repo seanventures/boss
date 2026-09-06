@@ -93,6 +93,17 @@ describe("archived, not deleted", () => {
   });
 });
 
+describe("a cleared conversation leaves the list", () => {
+  it("closed threads are not listed", () => {
+    // Without this, clearing a GENERAL chat archived it correctly and left it in the rail —
+    // press Clear, the conversation is still there, which reads as the button doing nothing.
+    // A cleared ROLE chat disappears either way because its key is stamped, so the gap was
+    // invisible on the surface it was built for.
+    const fn = SERVICE.slice(SERVICE.indexOf("def list_threads"));
+    expect(fn.slice(0, 2000)).toContain("t.status <> 'closed'");
+  });
+});
+
 describe("the panel only clears if the server agreed", () => {
   it("local state is emptied after the response, not before", () => {
     // Clearing optimistically shows an empty conversation that comes back on the next load,

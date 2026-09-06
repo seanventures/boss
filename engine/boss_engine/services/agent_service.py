@@ -267,6 +267,13 @@ class AgentService:
                           WHERE m.thread_id = t.id) AS message_count
                 FROM agent_threads t
                 WHERE t.project_id = :p AND t.surface = 'chat'
+                  -- A cleared conversation is closed, and closed means gone from the list.
+                  -- Without this, clearing a GENERAL chat archived it correctly and left it
+                  -- sitting in the rail — the operator presses Clear and the conversation is
+                  -- still there, which reads as the button having done nothing. (A cleared
+                  -- ROLE chat disappears either way, because its find-or-create key is
+                  -- stamped, so this gap was invisible on the surface it was built for.)
+                  AND t.status <> 'closed'
                   -- Task threads (external_ref set) are SHARED per task -> visible to every project
                   -- actor; general threads (no external_ref) stay private to their actor.
                   AND (t.actor = :a OR t.external_ref IS NOT NULL)
