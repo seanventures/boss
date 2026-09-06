@@ -621,18 +621,63 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // These are two bounded single calls (~0.8s each, measured) running inside the same
   // Promise.all as the other ~30 feeds, so the cost is a rounding error against the render
   // they join. Correctness beats an optimisation nobody can see.
-  const [workforceData, orgChartData] = await Promise.all([
-    fetchWorkforce(activeProjectId),
-    fetchOrgChart(activeProjectId),
-  ]);
+  // EVERYTHING BELOW NEEDS activeProjectId AND NOTHING ELSE, SO IT ALL STARTS NOW.
+  //
+  // Measured: 6.5 seconds to first byte, and the feeds themselves total only ~0.8 MB and under
+  // a second each. The time was not fetch volume — it was EIGHT sequential `await Promise.all`
+  // batches, each waiting for the slowest member of the one before it, when the only real
+  // dependency in the chain is searchParams -> orgs -> activeProjectId -> everything.
+  //
+  // These are started here, together, and awaited where their values are used. The destructuring
+  // below is unchanged; what changes is that the requests are in flight concurrently instead of
+  // in four separate round trips. Nothing is reordered and nothing is dropped — a batch that
+  // genuinely depends on an earlier result (costInsights, the assurance-derived feeds) still
+  // waits for it.
+  const workforceP = fetchWorkforce(activeProjectId);
+  const orgChartP = fetchOrgChart(activeProjectId);
+  const budgetP = loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive });
+  const infraP = loadInfraAreaData({ projectId: activeProjectId, active: infraActive });
+  const assuranceP = loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive });
+  const projectsP = fetchProjectFeed(activeProjectId);
+  // Behind the 66-feed wave for no reason: these need the project id and nothing that wave
+  // produces, so they were a whole round trip spent waiting.
+  const reliabilityWaveP = Promise.all([
+    fetchReliabilityFeed(activeProjectId),
+    fetchAiSreCapabilities(activeProjectId),
+    fetchDeliveryMetrics(activeProjectId, 7),
+    fetchInFlight(activeProjectId, 6),
+  ] as const);
+
+  const [workforceData, orgChartData] = await Promise.all([workforceP, orgChartP]);
 
   const [budgetArea, infraArea, assuranceArea] = await Promise.all([
-    loadBudgetAreaData({ projectId: activeProjectId, active: budgetActive }),
-    loadInfraAreaData({ projectId: activeProjectId, active: infraActive }),
-    loadAssuranceAreaData({ projectId: activeProjectId, active: assuranceActive }),
+    budgetP, infraP, assuranceP,
   ]);
   const assuranceFeed = assuranceArea.assuranceFeed;
-  const projects = await fetchProjectFeed(activeProjectId);
+  // The platform-ops feeds. They need the project id and `assuranceArea`, both of which exist
+  // here — so waiting until after the 66-feed wave cost a third round trip for nothing.
+  const platformOpsWaveP = Promise.all([
+    fetchIdentityProvidersFeed(activeProjectId),
+    fetchOncallSreStatus(activeProjectId),
+    Promise.resolve(assuranceArea.securityScanners),
+    Promise.resolve(assuranceArea.latestSecurityScan),
+    fetchReleaseStatus(activeProjectId),
+    fetchReleaseBoard(activeProjectId),
+    fetchReleases(activeProjectId),
+    fetchWorkerAutoscalingStatus(activeProjectId),
+    fetchWorkerAutoscalingHistory(activeProjectId),
+    fetchTokenScorecard(activeProjectId),
+    fetchTokenConsumption(activeProjectId),
+    fetchTokenPolicies(activeProjectId),
+    fetchTokenRecommendations(activeProjectId),
+    fetchObservabilitySuiteFeed(activeProjectId, obsHost),
+    fetchKnowledgeGraphFeed(activeProjectId),
+    fetchCICDCatalog(),
+    fetchCICDStatus(activeProjectId),
+    fetchLiveJobsFeed(activeProjectId),
+    fetchQaScorecardFeed(activeProjectId),
+  ]);
+  const projects = await projectsP;
   const activeProject = projects.items.find(
     (project) => project.id === activeProjectId,
   );
@@ -803,12 +848,7 @@ export default async function HomePage({ searchParams }: HomePageProps) {
   // page paid for them one after the other: reliability ~0.8s THEN ai-sre ~4.5s. Nothing
   // depends on the first, and /v1/ai-sre/capabilities is the slowest endpoint the console
   // calls, so serialising it was pure waste on every single render.
-  const [reliabilityFeed, aiSreFeed, deliveryMetrics, inFlight] = await Promise.all([
-    fetchReliabilityFeed(activeProjectId),
-    fetchAiSreCapabilities(activeProjectId),
-    fetchDeliveryMetrics(activeProjectId, 7),
-    fetchInFlight(activeProjectId, 6),
-  ]);
+  const [reliabilityFeed, aiSreFeed, deliveryMetrics, inFlight] = await reliabilityWaveP;
   const [costInsights, llmSpend] = await Promise.all([
     Promise.resolve(budgetArea.costInsights),
     Promise.resolve(budgetArea.llmSpend),
@@ -834,27 +874,8 @@ export default async function HomePage({ searchParams }: HomePageProps) {
     cicdStatus,
     liveJobs,
     qaScorecard,
-  ] = await Promise.all([
-    fetchIdentityProvidersFeed(activeProjectId),
-    fetchOncallSreStatus(activeProjectId),
-    Promise.resolve(assuranceArea.securityScanners),
-    Promise.resolve(assuranceArea.latestSecurityScan),
-    fetchReleaseStatus(activeProjectId),
-    fetchReleaseBoard(activeProjectId),
-    fetchReleases(activeProjectId),
-    fetchWorkerAutoscalingStatus(activeProjectId),
-    fetchWorkerAutoscalingHistory(activeProjectId),
-    fetchTokenScorecard(activeProjectId),
-    fetchTokenConsumption(activeProjectId),
-    fetchTokenPolicies(activeProjectId),
-    fetchTokenRecommendations(activeProjectId),
-    fetchObservabilitySuiteFeed(activeProjectId, obsHost),
-    fetchKnowledgeGraphFeed(activeProjectId),
-    fetchCICDCatalog(),
-    fetchCICDStatus(activeProjectId),
-    fetchLiveJobsFeed(activeProjectId),
-    fetchQaScorecardFeed(activeProjectId),
-  ]);
+  ] = await platformOpsWaveP;
+
 
   const deadletterCount = deadletters.items.length;
   const disableCommandEntry = !status.apiReachable || !status.databaseConnected;
