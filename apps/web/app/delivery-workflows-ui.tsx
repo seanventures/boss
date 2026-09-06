@@ -89,7 +89,7 @@ type Installed = {
   namespace: string;
 };
 
-type RunStep = {
+export type RunStep = {
   step_id: string;
   kind: string;
   status: string;
@@ -109,6 +109,10 @@ type RunStep = {
   // The gate's decision, which is what makes Approve/Deny answerable here rather than only in
   // the Approvals area.
   decision_id: string | null;
+  /** The gate's OWN state. The step's status does not carry it: a step stays `waiting` until a
+   *  worker picks the answer up, so an approved gate looked identical to an unanswered one. */
+  decision_status?: string | null;
+  decision_approved_at?: string | null;
   /** The preview running RIGHT NOW for this run's build, resolved when the runs are read.
    *  The one recorded in `output` was live when the step ran, and previews expire. The whole
    *  record, because turning one into an openable link is a rule the console already owns. */
@@ -1611,8 +1615,30 @@ export function runToOpen(runs: Run[]): string | null {
 }
 
 /** A step needing a person, right now. The one thing on this page that is an instruction. */
-function needsYou(step: RunStep): boolean {
-  return Boolean(step.decision_id) && step.status === "waiting";
+/** Gate states that can still be answered. Anything else has been decided or has lapsed. */
+const OPEN_GATE = new Set(["pending", "delegated"]);
+
+export function needsYou(step: RunStep): boolean {
+  // THE GATE'S STATE, NOT ONLY THE STEP'S.
+  //
+  // This was `decision_id && status === "waiting"`, which is true for a gate nobody has
+  // answered AND for one answered thirty seconds ago — the step stays `waiting` until a worker
+  // picks the answer up. So an operator approved a deploy, came back to the workflow, and was
+  // shown the same "Review and decide" button as before, with no sign their click had landed.
+  //
+  // It is worse for an expired gate: the step waits forever, and the button leads to a decision
+  // that cannot be answered from there.
+  if (!step.decision_id || step.status !== "waiting") return false;
+  // Unknown (an older API, or a decision row that has gone) keeps the old behaviour: offering
+  // an answerable gate is recoverable, hiding one is not.
+  return !step.decision_status || OPEN_GATE.has(step.decision_status);
+}
+
+/** A gate that has been answered but whose step has not moved yet. */
+export function decidedButNotMoved(step: RunStep): string {
+  if (!step.decision_id || step.status !== "waiting" || !step.decision_status) return "";
+  if (OPEN_GATE.has(step.decision_status)) return "";
+  return step.decision_status;
 }
 
 /**
@@ -2327,6 +2353,50 @@ function StepDetail({ step, capability, targets, hosts, runInput, onRetry, onSet
               ? `${(step.approval as { approver_role?: string }).approver_role} signs this off.`
               : "Opens the approval with its recommendation, cost and risk."}
           </span>
+        </div>
+      ) : null}
+
+      {/* THE CLICK LANDED. SAY SO.
+          An operator approved a deploy, came back here, and saw the identical "waiting · gate ·
+          Review and decide" they had left — because the step stays `waiting` until a worker
+          picks the answer up, and this view read only the step. Their reasonable conclusion was
+          that the approval had not worked. It had. */}
+      {decidedButNotMoved(step) ? (
+        <div className="dw-step-decided" data-testid="dw-step-decided">
+          {decidedButNotMoved(step) === "approved" ? (
+            <>
+              <strong>Approved — starting.</strong>{" "}
+              <span className="detail">
+                The gate is signed off; the step moves as soon as a worker picks it up, usually
+                within a minute. This view refreshes on its own.
+              </span>
+            </>
+          ) : decidedButNotMoved(step) === "expired" ? (
+            <>
+              <strong>The gate expired before anyone answered it.</strong>{" "}
+              <span className="detail">
+                Nothing was applied — the default was to hold — so this step is waiting on a
+                question that can still be answered. Opening it reopens the decision.
+              </span>{" "}
+              <a className="cap-btn dw-decide-btn" data-testid="dw-step-reopen"
+                 href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
+                                   { area: "decisions", decision: step.decision_id })}>
+                Answer it now →
+              </a>
+            </>
+          ) : (
+            <>
+              <strong>Decided: {decidedButNotMoved(step)}.</strong>{" "}
+              <span className="detail">
+                This step is still marked waiting; it will not proceed on its own.
+              </span>{" "}
+              <a className="cap-btn dw-decide-btn"
+                 href={consoleHref(typeof window !== "undefined" ? window.location.search : "",
+                                   { area: "decisions", decision: step.decision_id })}>
+                Open the decision →
+              </a>
+            </>
+          )}
         </div>
       ) : null}
 

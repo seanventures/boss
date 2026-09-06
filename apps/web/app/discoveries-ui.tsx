@@ -142,6 +142,17 @@ export function DiscoveriesHome({
   initialDiscoveryId?: string | null;
 }) {
   const [selected, setSelected] = useState<string | null>(initialDiscoveryId ?? null);
+  // THE PROP IS READ ON EVERY NAVIGATION, NOT ONLY THE FIRST MOUNT.
+  //
+  // The console renders all fifty areas at once and shows one, so this component has ALREADY
+  // mounted — with no dossier in the URL — long before the operator clicks "open the research"
+  // on a workflow step. `useState(initialDiscoveryId)` captures its argument once, so the id
+  // arriving in the URL changed the prop and nothing else: every link landed on the list of
+  // every discovery the project had run, which is exactly what it looks like when a link is
+  // broken. The plumbing was right and the state ignored it.
+  useEffect(() => {
+    setSelected(initialDiscoveryId ?? null);
+  }, [initialDiscoveryId]);
   const anyLive = discoveries.some((d) => d.status === "running");
   useLiveRefresh(anyLive);
 

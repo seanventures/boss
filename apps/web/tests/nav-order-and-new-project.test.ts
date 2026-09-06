@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { codeOnly } from "./_helpers/source";
+import { needsYou } from "../app/delivery-workflows-ui";
 
 /**
  * The Run group opens with the place work is DONE, and a project can be started from anywhere.
@@ -235,9 +236,21 @@ describe("watching the outer workflow, step by step", () => {
   it("only offers the decision on a step actually waiting on one", () => {
     // The condition lives in `needsYou`, which the path view also uses to mark the node — so
     // the control and the highlight can never disagree about who is being asked.
+    //
+    // Asserted as BEHAVIOUR, not as the source of the expression. This pinned the exact text
+    // `Boolean(step.decision_id) && step.status === "waiting"`, so teaching the gate to read
+    // the DECISION's status — the fix for an approved gate that kept offering itself — broke a
+    // test that has nothing to say about that. See an-approved-gate-stops-asking.test.ts.
     expect(DW).toContain("function needsYou");
-    expect(DW).toContain('Boolean(step.decision_id) && step.status === "waiting"');
     expect(DW).toContain("{needsYou(step) ? (");
+    const gate = (over: Record<string, unknown>) => needsYou({
+      step_id: "deploy", kind: "gate", status: "waiting", capability: null, output: {},
+      evidence: [], error: null, approval: {}, due_at: null, timeout_applied: null,
+      attempt: 1, started_at: null, completed_at: null, decision_id: "dec_1", ...over,
+    } as never);
+    expect(gate({ decision_status: "pending" })).toBe(true);
+    expect(gate({ decision_id: null })).toBe(false);
+    expect(gate({ status: "succeeded" })).toBe(false);
   });
 
   it("drops the panel that showed the coding pipeline's own phase", () => {

@@ -20322,12 +20322,20 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
         steps = connection.execute(
             text(
                 """
-                SELECT workflow_run_id, step_id, step_kind, status, output, evidence,
-                       last_error, decision_id, binding_snapshot,
-                       started_at, completed_at, attempt
-                FROM workflow_step_runs
-                WHERE workflow_run_id = ANY(:ids)
-                ORDER BY created_at, iteration
+                SELECT s.workflow_run_id, s.step_id, s.step_kind, s.status, s.output,
+                       s.evidence, s.last_error, s.decision_id, s.binding_snapshot,
+                       s.started_at, s.completed_at, s.attempt,
+                       -- WHETHER THE GATE HAS BEEN ANSWERED, which the step's own status does
+                       -- not say. A step stays `waiting` until a worker picks the answer up —
+                       -- 50 seconds on a good run — and the console read only the step, so an
+                       -- approved gate carried on offering "Review and decide" as though the
+                       -- click had not happened. Worse for a decision that EXPIRED: the step
+                       -- waits forever and the button leads to a dead gate.
+                       d.status AS decision_status, d.approved_at AS decision_approved_at
+                FROM workflow_step_runs s
+                LEFT JOIN decisions d ON d.id = s.decision_id
+                WHERE s.workflow_run_id = ANY(:ids)
+                ORDER BY s.created_at, s.iteration
                 """
             ),
             {"ids": ids},
@@ -20381,6 +20389,9 @@ def list_delivery_runs(project_id: str, limit: int = 25) -> dict:
             "evidence": step["evidence"] or [],
             "error": step["last_error"],
             "decision_id": step["decision_id"],
+            "decision_status": step["decision_status"],
+            "decision_approved_at": (step["decision_approved_at"].isoformat()
+                                     if step["decision_approved_at"] else None),
             # What an operator asks about a waiting step: who, and by when.
             "approval": snapshot.get("approval") or {},
             "due_at": snapshot.get("due_at"),
