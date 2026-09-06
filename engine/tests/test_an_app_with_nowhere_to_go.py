@@ -545,3 +545,63 @@ class TestANamelessButtonMustNotLoseTheTurn:
         body = inspect.getsource(intent_router)
         assert '"why": why[:240] or None' not in body
         assert '"label": result.get("label"),' not in body
+
+
+class TestADirectiveIsNotAnAppName:
+    """BOSS, on the Deploy step: "'Lead-Triage Inbox' has no 'staging' deployment target of its
+    own... The 5 'staging' targets belong to other apps (Build a lead triage inbox.Who it is
+    for: a small team drowning in in…, Change Calendar, …)".
+
+    The target EXISTED. It is the first one in its own list:
+
+        deptgt_68bc4259  "Build a lead triage inbox.Who it is for: a small team drowning in in…"
+                         staging · active · 2.29.2.202:3014 · created_by executive_console
+
+    The Set-target form on that step defaulted its app-name field to the run's raw title, so one
+    click created a target under a name that identity matching could never find. The form is
+    fixed, but the form is one caller — this endpoint is where a directive has to stop being
+    accepted as a name."""
+
+    @staticmethod
+    def _endpoint():
+        # The whole function, taken by its own source rather than a byte window — a window
+        # silently truncated the repair and the test "passed" on half the endpoint.
+        import inspect
+
+        from apps.api.app import main as module
+
+        return inspect.getsource(module.setup_deployment_for_code_task_endpoint)
+
+    def test_the_name_is_normalised_before_anything_is_written(self):
+        body = self._endpoint()
+        assert "from boss_engine.services.naming import project_name as _project_name" in body
+        assert "app_name = _display" in body
+
+    def test_the_normalisation_is_the_namer_the_console_uses(self):
+        """A second namer here would drift from the one deploy resolution matches against, and
+        the failure mode of that drift is exactly this bug."""
+        from boss_engine.services.naming import identity_key, project_name
+
+        display, _b, _l = project_name(
+            "Build a lead triage inbox.\nWho it is for: a small team drowning in inbound leads")
+        assert identity_key(display) == identity_key("Lead-Triage Inbox")
+
+    def test_an_existing_target_is_matched_on_identity_not_on_the_string(self):
+        """An exact match could never find a row stored under the damaged name, so the app would
+        get a SECOND target on a second port and end up deployed twice — worse than the state
+        being repaired."""
+        body = self._endpoint()
+        assert "from boss_engine.services.naming import identity_key as _identity_key" in body
+        assert "_identity_key(_stored) == _wanted" in body
+        assert "_identity_key(_named) == _wanted" in body
+
+    def test_and_the_damaged_name_is_repaired_in_place(self):
+        body = self._endpoint()
+        assert "UPDATE deployment_targets SET app_name = :a" in body
+        assert "renamed: %r -> %r" in body
+
+    def test_a_name_that_is_already_a_name_is_untouched(self):
+        from boss_engine.services.naming import project_name
+
+        for name in ("Change Calendar", "Meeting cost meter", "Vendor-Status-Watcher"):
+            assert project_name(name)[0] == name

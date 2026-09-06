@@ -19,7 +19,10 @@ type CodeTask = { id?: string; status?: string; phase?: string; pull_request_url
 // REPORTING bound, not a cancellation: the turn may still land server-side, so the wording
 // must not claim the work was stopped.
 const AGENT_NORMAL_SECONDS = 20;
-const AGENT_STALL_SECONDS = 120;
+// The turn is genuinely longer since the answering agent moved to Opus and its step
+// budget went up: a deep diagnostic was measured at 192s doing 27 lookups. 120 gave
+// control back in the middle of work that was going fine.
+const AGENT_STALL_SECONDS = 240;
 
 const GENERAL = "__general__";
 const tid = (t: Task): string => String(t.id ?? t.task_id ?? "");
@@ -257,8 +260,11 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
   // informative progress BOSS produces went to a table nobody read: the operator saw a
   // finished answer and no sign that anything was still happening.
   const [probe, setProbe] = useState<{ id: string; question: string } | null>(null);
+  //: A turn that outran the reporting bound. The work is still going and its answer lands in
+  //: the thread by itself, so the console watches for it instead of asking the operator to.
+  const [landing, setLanding] = useState(false);
   useEffect(() => {
-    if (!threadId || (!busy && !probe)) { if (!busy) setSteps([]); return; }
+    if (!threadId || (!busy && !probe && !landing)) { if (!busy && !landing) setSteps([]); return; }
     let alive = true;
     let cursor = 0;
     const tick = () => {
@@ -288,7 +294,36 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
     const id = window.setInterval(tick, 1500);
     tick();
     return () => { alive = false; window.clearInterval(id); };
-  }, [busy, threadId, probe]);
+  }, [busy, threadId, probe, landing]);
+  // WATCH FOR THE ANSWER THAT OUTRAN THE BOUND.
+  //
+  // The turn was never cancelled — it is still running server-side and writes its reply into
+  // this thread when it finishes. Polling for that is the difference between "reopen this in a
+  // moment and see" and the answer simply appearing, which is what the operator expected when
+  // they pressed send.
+  useEffect(() => {
+    if (!landing || !threadId) return;
+    let alive = true;
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      if (!alive) return;
+      // Twenty minutes: longer than any turn measured, and it stops rather than polling for
+      // ever if the turn really did die.
+      if (Date.now() - started > 20 * 60_000) { setLanding(false); return; }
+      void read<{ messages?: Msg[] }>(
+        { view: "messages", project_id: projectId, actor, thread_id: threadId }).then((d) => {
+        if (!alive || !d?.messages) return;
+        const last = d.messages[d.messages.length - 1];
+        // The note this component added locally is not in the thread, so any assistant message
+        // that IS there and is newer than the note is the real answer.
+        if (last && last.role === "assistant") {
+          setMessages(d.messages);
+          setLanding(false);
+        }
+      });
+    }, 4000);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [landing, threadId, projectId, actor]);
   useEffect(() => {
     if (!busy) { setElapsed(0); return; }
     const t0 = Date.now();
@@ -475,10 +510,16 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
           window.setTimeout(() => res(stalled), AGENT_STALL_SECONDS * 1000)),
       ]);
       if (r === stalled) {
+        // "REOPEN THIS THREAD IN A MOMENT" IS WORK THE CONSOLE CAN DO ITSELF.
+        //
+        // The bound exists to give the composer back, and that part was right. Telling the
+        // operator to come back and look was not: the turn IS still running, its steps are
+        // still streaming into this very panel, and the answer lands in the thread by itself.
+        // Watching for it is one poll.
+        setLanding(true);
         setMessages((m) => [...m, { role: "assistant", content:
-          `⚠ No answer after ${AGENT_STALL_SECONDS}s. The turn may still be running on the ` +
-          "server — nothing was cancelled. Reopen this thread in a moment to see whether it " +
-          "landed, or send the message again." }]);
+          `Still working — past ${AGENT_STALL_SECONDS}s. Nothing was cancelled and you can ` +
+          "type again; the answer will appear here on its own when it lands." }]);
         // NOT refreshThreads() HERE.
         //
         // It fires a server action, and server actions serialise: this one queues behind the
@@ -761,7 +802,7 @@ export function AgentChat({ projectId, actor, initialTaskId, initialMessage, rol
               the Send button changing to "…" at the far bottom of the panel. From the reading
               position — the bottom of the log — the operator saw their message and then dead
               air, and reasonably concluded the request had been lost. */}
-          {busy || probe ? (
+          {busy || probe || landing ? (
             <article className="agent-message assistant" data-testid="agent-working">
               <span>BOSS</span>
               <p className="detail agent-working" data-slow={elapsed >= AGENT_NORMAL_SECONDS}

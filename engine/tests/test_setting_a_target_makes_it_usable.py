@@ -30,7 +30,12 @@ class TestBindingRevivesARetiredTarget:
     def test_it_reads_the_status_before_deciding(self):
         """It selected only id and host_id, so retirement was invisible to it."""
         body = self._source()
-        assert re.search(r"SELECT id, host_id, status FROM deployment_targets", body)
+        # The PROPERTY — the status is read before the bind decision — not the column list.
+        # The lookup now matches on app IDENTITY rather than an exact name, because a target
+        # stored under a directive could never be found by string equality; that changed the
+        # query and broke a test with nothing to say about reviving a retired target.
+        assert re.search(r"SELECT id, host_id, status(?:, app_name)? FROM deployment_targets",
+                         body)
 
     def test_a_retired_target_is_set_active_again(self):
         body = self._source()

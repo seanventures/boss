@@ -9263,12 +9263,60 @@ def setup_deployment_for_code_task_endpoint(run_id: str, payload: dict):
         app_name = str(payload.get("app_name") or "").strip()
         if not app_name:
             raise HTTPException(status_code=422, detail="app_name is required")
+        # A DIRECTIVE IS NOT A NAME, and this endpoint is where that has to be caught.
+        #
+        # The console's Set-target form defaulted this field to the run's whole title, so one
+        # click created a target called "Build a lead triage inbox.Who it is for: a small team
+        # drowning in in…". Target resolution matches on app IDENTITY, so the app then had no
+        # target it could recognise and the deploy refused with "no 'staging' target of its
+        # own" — while listing that very target among the ones belonging to other apps.
+        #
+        # The form is fixed too, but the form is one caller. `project_name` is the same namer
+        # the console titles cards with and the same one deploy resolution matches against, so
+        # normalising here means a target cannot be created under a name the deploy will never
+        # find, whoever asked for it.
+        from boss_engine.services.naming import project_name as _project_name
+
+        _display, _blurb, _label = _project_name(app_name)
+        if _display and _display != "Untitled app" and _display != app_name:
+            LOGGER.info("deployment target name normalised: %r -> %r", app_name, _display)
+            app_name = _display
         environment = str(payload.get("environment") or "staging")
 
-        existing = connection.execute(
-            text("SELECT id, host_id, status FROM deployment_targets WHERE project_id = :p "
-                 "AND app_name = :a AND environment = :e"),
-            {"p": run["project_id"], "a": app_name, "e": environment}).mappings().first()
+        # MATCH THE APP, NOT THE STRING IT WAS STORED UNDER.
+        #
+        # An exact match could never find a target created before the normalisation above,
+        # because the name stored there is the whole directive. So an app whose target already
+        # existed under the damaged name would get a SECOND target on a second port, the old one
+        # would be orphaned, and the app would end up deployed twice — a worse state than the
+        # one being repaired.
+        #
+        # Both sides go through the namer and then through identity, so "Build a lead triage
+        # inbox.\nWho it is for: …" and "Lead-Triage Inbox" resolve to the same app. When the
+        # stored name is the damaged one, it is repaired in place: that is what makes pressing
+        # Set target once fix the app rather than duplicate it.
+        from boss_engine.services.naming import identity_key as _identity_key
+
+        _wanted = _identity_key(app_name)
+        existing = None
+        for _row in connection.execute(
+            text("SELECT id, host_id, status, app_name FROM deployment_targets "
+                 "WHERE project_id = :p AND environment = :e"),
+            {"p": run["project_id"], "e": environment},
+        ).mappings().all():
+            _stored = str(_row["app_name"] or "")
+            _named, _b, _l = _project_name(_stored)
+            if _identity_key(_stored) == _wanted or (
+                _named and _named != "Untitled app" and _identity_key(_named) == _wanted
+            ):
+                existing = _row
+                if _stored != app_name:
+                    LOGGER.info("deployment target %s renamed: %r -> %r",
+                                _row["id"], _stored, app_name)
+                    connection.execute(
+                        text("UPDATE deployment_targets SET app_name = :a, updated_at = now() "
+                             "WHERE id = :i"), {"a": app_name, "i": _row["id"]})
+                break
         if existing:
             # SETTING A TARGET MEANS THE OPERATOR WANTS IT USABLE.
             #

@@ -18,11 +18,11 @@ const UI = codeOnly("app/agent-ui.tsx");
 
 describe("the indicator survives the turn that started the work", () => {
   it("polls while an investigation is running, not only while the turn is in flight", () => {
-    expect(UI).toContain("if (!threadId || (!busy && !probe))");
+    expect(UI).toContain("!busy && !probe");
   });
 
   it("keeps showing the working line", () => {
-    expect(UI).toContain("{busy || probe ? (");
+    expect(UI).toContain("{busy || probe");
   });
 
   it("reads whether one is live from the same poll", () => {

@@ -42,7 +42,23 @@ describe("ask boss does not lock the operator out", () => {
   });
 
   it("bounds the wait rather than the work", () => {
-    // Nothing is cancelled server-side; the transcript says so instead of implying it stopped.
-    expect(SRC).toContain("nothing was cancelled");
+    // Nothing is cancelled server-side, and the transcript says so instead of implying it
+    // stopped. The wording moved when the console stopped telling the operator to come back
+    // and look: it now watches for the answer itself, so the sentence says the work continues
+    // AND that they can keep typing.
+    expect(SRC).toContain("Nothing was cancelled");
+    expect(SRC).toContain("will appear here on its own");
+  });
+
+  it("and then actually waits for it", () => {
+    // "Reopen this thread in a moment" is work the console can do itself: the turn writes its
+    // reply into the thread when it lands, and polling for that is one interval.
+    expect(SRC).toContain("setLanding(true);");
+    expect(SRC).toContain("if (!landing || !threadId) return;");
+    expect(SRC).toContain('view: "messages"');
+  });
+
+  it("but gives up eventually rather than polling for ever", () => {
+    expect(SRC).toContain("20 * 60_000");
   });
 });

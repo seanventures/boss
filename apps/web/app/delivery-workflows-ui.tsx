@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { identityKey } from "./app-identity";
+import { appIdentity, identityKey, type AppRun } from "./app-identity";
 import { uniqueWorkflowName } from "./workflow-names";
 import { consoleHref, readNewProjectIntent } from "./url-intent";
 import { isLoopbackPreviewUrl, operatorPreviewOpenHref } from "../lib/code-tasks";
@@ -1823,7 +1823,18 @@ function DeployWhere({ targets, hosts, runInput, buildRunId, busy,
 }) {
   const chosenId = typeof runInput.target_id === "string" ? runInput.target_id : "";
   const chosen = targets.find((t) => t.id === chosenId);
-  const appName = typeof runInput.title === "string" ? runInput.title : "";
+  // THE APP'S NAME, NOT THE BRIEF IT WAS BUILT FROM.
+  //
+  // This was the raw title — the operator's whole directive — and it is the DEFAULT VALUE of
+  // the "Set target" form, so pressing that button created a deployment target called
+  // "Build a lead triage inbox.Who it is for: a small team drowning in in…". Target resolution
+  // matches on app identity, so the app then had no target it could recognise, and the deploy
+  // refused with "no 'staging' target of its own" while listing that very target among the
+  // ones belonging to OTHER apps. Measured on deptgt_68bc4259, created by executive_console.
+  //
+  // `appIdentity` is the namer the rest of the console titles cards with; the form should have
+  // been using it all along.
+  const appName = appIdentity(runInput as AppRun).name;
   // A target for THIS app, not one of the others. Matching by name is how the API keys them.
   const mine = targets.filter((t) => t.app_name === appName);
 
